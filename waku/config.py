@@ -84,6 +84,10 @@ class Settings:
 
     # --- Optional gateway
     telegram_token: str = field(default_factory=lambda: os.getenv("TELEGRAM_BOT_TOKEN", ""))
+    whatsapp_token: str = field(default_factory=lambda: os.getenv("WHATSAPP_TOKEN", ""))
+    whatsapp_phone_number_id: str = field(
+        default_factory=lambda: os.getenv("WHATSAPP_PHONE_NUMBER_ID", "")
+    )
 
     # --- Tracing (JSONL always; OTel exports if an endpoint is set)
     otel_endpoint: str = field(

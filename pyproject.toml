@@ -39,7 +39,6 @@ gcal = [
     "google-api-python-client>=2.0",
     "google-auth>=2.0",
     "google-auth-httplib2>=0.2",
-    "google-auth-oauthlib>=1.0",
     "httplib2>=0.22",
     # The browser consent flow. Without it the only way in is `gcloud auth
     # application-default login`, which is a developer ritual, not a sign-in.
@@ -48,6 +47,9 @@ gcal = [
 # Optional gateway: message Waku from Discord
 discord = [
     "discord.py>=2.4",
+# Optional gateway: WhatsApp via Meta Cloud API (needs a public URL — see docstring)
+whatsapp = [
+    "httpx>=0.25",
 ]
 # Optional gateway: talk to your laptop. TTS uses macOS `say` by default;
 # for the neural British voice: pip install kokoro soundfile (pulls torch).

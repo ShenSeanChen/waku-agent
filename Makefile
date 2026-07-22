@@ -9,6 +9,7 @@
 PY := $(shell [ -x .venv/bin/python ] && echo .venv/bin/python || echo python)
 
 .PHONY: run voice telegram discord brief dashboard trace eval eval-judge gate lint
+.PHONY: run voice telegram whatsapp brief dashboard trace eval eval-judge gate lint
 
 run:            ## chat with Waku in the terminal
 	$(PY) -m waku
@@ -21,6 +22,8 @@ telegram:       ## phone → laptop (needs TELEGRAM_BOT_TOKEN in .env)
 
 discord:        ## Discord → laptop (needs DISCORD_BOT_TOKEN in .env)
 	$(PY) -m waku discord
+whatsapp:       ## WhatsApp → laptop (needs WHATSAPP_TOKEN in .env, public URL)
+	$(PY) -m waku whatsapp
 
 brief:          ## morning briefing from calendar + mail + memory
 	$(PY) -m waku brief
