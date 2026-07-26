@@ -47,7 +47,32 @@
   footer{max-width:1300px;margin:26px auto 0;padding:0 6px;color:var(--muted);font-size:13px}
   footer a{color:var(--blue);text-decoration:none}
   @media (max-width:720px){.cap{grid-template-columns:1fr}h1{font-size:24px}}
+  /* Superseded notice — added 2026-07-26. See the <!-- SUPERSEDED --> block. */
+  .superseded{
+    margin:0 0 22px; padding:14px 18px; border-radius:10px;
+    border:2px solid var(--orange); background:var(--orange-soft); color:var(--ink);
+    font:15px/1.5 system-ui, -apple-system, sans-serif;
+  }
+  .superseded b{ color:var(--orange); }
+  .superseded a{ color:inherit; }
 </style>
+
+<!-- SUPERSEDED -------------------------------------------------------------
+     This diagram is from the original launch (last real edit 2026-07-11) and is
+     now WRONG, not merely old: it predates the Discord gateway, the model
+     Arena, delegate_task -> pi, the Notion episodic backend and Google
+     Calendar. Nothing in the repo links here; it is kept only so the first
+     picture of waku isn't lost. The current diagrams live in docs/whiteboards/.
+     If you are looking for how waku works TODAY, start with the README and
+     waku/ops/README.md.
+------------------------------------------------------------------------- -->
+<div class="superseded">
+  <b>Superseded — this is the launch-day diagram, kept for history.</b><br>
+  It predates the Discord gateway, the model Arena, <code>delegate_task &rarr; pi</code>,
+  the Notion memory backend and Google Calendar. For how waku works today see the
+  <a href="https://github.com/ShenSeanChen/waku-agent#readme">README</a> and
+  <code>docs/whiteboards/waku-architecture.excalidraw</code>.
+</div>
 
 <header>
   <h1><span class="hl">waku-agent</span> &mdash; the readable Waku</h1>
