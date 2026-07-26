@@ -217,7 +217,7 @@ def _compare_one(message: str, spec: str) -> dict:
         tin = tout = 0
         ledger = home / "usage.jsonl"
         if ledger.exists():
-            for line in ledger.read_text().splitlines():
+            for line in ledger.read_text(encoding="utf-8").splitlines():
                 try:
                     r = json.loads(line)
                     tin, tout = tin + r.get("in", 0), tout + r.get("out", 0)
@@ -330,7 +330,7 @@ def compare_stream(message: str, specs: list, emit, judge: bool = False,
             tin = tout = 0
             ledger = home / "usage.jsonl"
             if ledger.exists():
-                for line in ledger.read_text().splitlines():
+                for line in ledger.read_text(encoding="utf-8").splitlines():
                     try:
                         r = json.loads(line)
                         tin, tout = tin + r.get("in", 0), tout + r.get("out", 0)
@@ -560,7 +560,7 @@ def usage_summary(home) -> dict:
     recs = []
     path = home / "usage.jsonl"
     if path.exists():
-        for line in path.read_text().splitlines():
+        for line in path.read_text(encoding="utf-8").splitlines():
             try:
                 recs.append(json.loads(line))
             except json.JSONDecodeError:
@@ -749,19 +749,19 @@ def collect() -> dict:
     eval_report = None
     report_path = home / "eval_report.json"
     if report_path.exists():
-        eval_report = json.loads(report_path.read_text())
+        eval_report = json.loads(report_path.read_text(encoding="utf-8"))
 
     eval_history = []
     hist_path = home / "eval_runs.jsonl"
     if hist_path.exists():
-        for line in hist_path.read_text().splitlines()[-20:]:
+        for line in hist_path.read_text(encoding="utf-8").splitlines()[-20:]:
             try:
                 eval_history.append(json.loads(line))
             except json.JSONDecodeError:
                 pass
     eval_history.reverse()
 
-    outbox = [{"name": p.name, "text": p.read_text()[:400]}
+    outbox = [{"name": p.name, "text": p.read_text(encoding="utf-8")[:400]}
               for p in sorted((home / "outbox").glob("*.txt"), reverse=True)[:20]]
 
     # --- state.db introspection: the actual SQLite tables, so the persistence
@@ -818,7 +818,7 @@ def collect() -> dict:
         "episodes": episodes_data["items"],
         "episodes_source": episodes_data["source"],
         "episodes_error": episodes_data["error"],
-        "soul": (home / "SOUL.md").read_text() if (home / "SOUL.md").exists() else "",
+        "soul": (home / "SOUL.md").read_text(encoding="utf-8") if (home / "SOUL.md").exists() else "",
         "chat_pending": conn.execute("SELECT COUNT(*) FROM chat_log WHERE consolidated=0").fetchone()[0],
         "chat_log": rows("SELECT role, content, consolidated, source, session_id, created_at FROM chat_log ORDER BY id DESC LIMIT 80")[::-1],
         "sessions": session_list(conn),
@@ -910,7 +910,7 @@ def tools_info() -> dict:
     if mcp_path.exists():
         mcp["configured"] = True
         try:
-            mcp["servers"] = [s.get("name", "?") for s in json.loads(mcp_path.read_text()).get("servers", [])]
+            mcp["servers"] = [s.get("name", "?") for s in json.loads(mcp_path.read_text(encoding="utf-8")).get("servers", [])]
         except (json.JSONDecodeError, OSError):
             pass
 
@@ -1337,7 +1337,7 @@ def pinned_specs() -> list[str]:
     p = _models_json()
     if p.exists():
         try:
-            return json.loads(p.read_text()).get("pinned", [])
+            return json.loads(p.read_text(encoding="utf-8")).get("pinned", [])
         except (json.JSONDecodeError, OSError):
             pass
     return default_pinned_specs()
