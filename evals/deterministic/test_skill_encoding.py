@@ -47,7 +47,7 @@ def test_skill_loader_reads_utf8_when_platform_default_cannot(tmp_path, monkeypa
     def reject_implicit_encoding(path, encoding=None, *args, **kwargs):
         if encoding is None:
             raise UnicodeDecodeError("gbk", b"\x94", 0, 1, "illegal multibyte sequence")
-        return original_read_text(path, encoding=encoding, *args, **kwargs)
+        return original_read_text(path, *args, encoding=encoding, **kwargs)
 
     monkeypatch.setattr(Path, "read_text", reject_implicit_encoding)
 
@@ -75,7 +75,7 @@ def test_installed_skill_is_written_as_utf8(
     home = tmp_path / "home"
     source = (
         f"---\nname: installed-report\ndescription: {DESCRIPTION}\n---\n\n{BODY}\n"
-    ).encode("utf-8")
+    ).encode()
     monkeypatch.setenv("WAKU_HOME", str(home))
     monkeypatch.setattr(installer.urllib.request, "urlopen", lambda *args, **kwargs: BytesIO(source))
 

@@ -22,7 +22,7 @@ def _osa(script: str, timeout: int = _TIMEOUT) -> tuple[bool, str]:
     if sys.platform != "darwin":
         return False, "Apple tools are macOS-only."
     try:
-        r = subprocess.run(["osascript", "-e", script], capture_output=True, text=True, timeout=timeout)
+        r = subprocess.run(["osascript", "-e", script], capture_output=True, text=True, timeout=timeout, check=False)
     except subprocess.TimeoutExpired:
         return False, "timed out — the app may be showing a permission dialog; approve it and retry."
     except OSError as exc:

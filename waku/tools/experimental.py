@@ -6,8 +6,21 @@ agent by Mario Zechner — through its headless print mode (`pi -p "task"`).
 The division of labor is the teaching point: Waku is the orchestrator (memory,
 working-memory assembly, evals, the human's context) and pi is the specialist
 contractor (read/bash/edit/write, pure coding craft). Waku hires; pi codes;
-Waku's release gate can then inspect the work. v2 idea: run `pi --mode json`
-and stream its per-turn events into the dashboard's Loop tab.
+Waku's release gate can then inspect the work.
+
+v2 is now wired: when pi supports `--mode json` we run it that way and get its
+native event stream on stdout — one JSON object per line. Two things fall out:
+
+  * OBSERVABILITY — curated events (tool calls, text deltas, turn ends) are
+    relayed through the loop's observer as kind="subagent", so the dashboard
+    can show the sub-agent working live instead of a black box that returns a
+    summary. (pi's own critique of built-in sub-agents, answered.)
+  * HONEST COST — pi's per-message token usage is appended to the SAME
+    usage.jsonl ledger as the loop's own calls (kind="subagent"). Before this,
+    a delegated coding run burned tokens the arena never counted, silently
+    understating every coding score's cost.
+
+Older pi builds without --mode json fall back to the plain `-p` text path.
 
 The other three boxes are still SKELETONS on purpose: each shows the *shape* of
 a capability and returns an honest "coming soon" (terminal/browser tools need a
@@ -17,16 +30,142 @@ real sandbox + safety surface first). Everything here is OFF by default; set
 
 from __future__ import annotations
 
+import json
 import os
+import queue
 import shutil
 import subprocess
-from datetime import datetime
+import threading
+import time
+from datetime import UTC, datetime
 from pathlib import Path
 
 from waku.config import Settings
 from waku.tools.registry import Tool
 
 PI_INSTALL_HINT = "npm install -g --ignore-scripts @earendil-works/pi-coding-agent"
+
+# Does this pi understand --mode json? Checked once per process (via --help so
+# no model call is made); None = not probed yet.
+_PI_JSON_MODE: bool | None = None
+
+
+def _pi_supports_json(pi_bin: str) -> bool:
+    global _PI_JSON_MODE
+    if _PI_JSON_MODE is None:
+        try:
+            probe = subprocess.run([pi_bin, "--help"], capture_output=True, text=True,
+                                   timeout=10, check=False)
+            _PI_JSON_MODE = "--mode" in (probe.stdout or "")
+        except (OSError, subprocess.TimeoutExpired):
+            _PI_JSON_MODE = False
+    return _PI_JSON_MODE
+
+
+def _project_pi_flags() -> list[str]:
+    """Hand the delegated pi this repo's own extensions and skills.
+
+    This is the "pi x waku" payoff: waku upgrades its coding contractor without
+    touching pi's source. pi auto-discovers project resources from cwd upward,
+    but delegated runs happen in waku_workspace/ (outside the repo), so we pass
+    explicit --extension / --skill flags with absolute paths. Any *.ts under
+    .pi/extensions/ and every skill under .agents/skills/ rides along — drop a
+    file in, and the next delegated run is stronger. No-op if the dirs are empty.
+    """
+    root = Path(__file__).resolve().parents[2]
+    flags: list[str] = []
+    for ext in sorted((root / ".pi" / "extensions").glob("*.ts")):
+        flags += ["--extension", str(ext)]
+    skills = root / ".agents" / "skills"
+    if skills.is_dir():
+        flags += ["--skill", str(skills)]
+    return flags
+
+
+def _record_subagent_usage(settings: Settings, tin: int, tout: int) -> None:
+    """Append the sub-agent's spend to the SAME permanent ledger the loop uses
+    (see Tracer._record_usage — tokens are the ground truth, dollars are
+    derived). kind="subagent" so the ledger stays auditable line by line."""
+    if not (tin or tout):
+        return
+    record = {"ts": datetime.now(UTC).isoformat(timespec="milliseconds"),
+              "provider": settings.provider, "model": settings.model or "",
+              "kind": "subagent", "in": tin, "out": tout}
+    path = settings.home / "usage.jsonl"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(record) + "\n")
+
+
+def _run_pi_json(cmd: list, workdir: Path, timeout: int, notify):
+    """Run pi in --mode json, relaying curated events through `notify` as they
+    stream. Returns (returncode, reply_text, stderr, raw_lines, tin, tout,
+    cost) — returncode None means we killed it at the deadline.
+
+    A reader thread feeds a queue so the deadline holds even if pi goes silent
+    mid-line (a blocking readline can't be interrupted; a queue.get(timeout)
+    can)."""
+    proc = subprocess.Popen(cmd, cwd=workdir, stdin=subprocess.DEVNULL,
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    lines: queue.Queue = queue.Queue()
+    stderr_parts: list[str] = []
+
+    def _pump_stdout():
+        for ln in proc.stdout:
+            lines.put(ln)
+        lines.put(None)  # sentinel: stdout closed, pi is done
+
+    def _pump_stderr():
+        stderr_parts.append(proc.stderr.read() or "")
+
+    threading.Thread(target=_pump_stdout, daemon=True).start()
+    threading.Thread(target=_pump_stderr, daemon=True).start()
+
+    deadline = time.monotonic() + timeout
+    raw, reply, tin, tout, cost = [], "", 0, 0, 0.0
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            proc.kill()
+            return None, reply, "".join(stderr_parts), raw, tin, tout, cost
+        try:
+            line = lines.get(timeout=min(0.5, remaining))
+        except queue.Empty:
+            continue
+        if line is None:  # stdout closed — pi is done
+            break
+        raw.append(line)
+        try:
+            ev = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        kind = ev.get("type", "")
+        if kind == "message_update":
+            delta = (ev.get("assistantMessageEvent") or {})
+            if delta.get("type") == "text_delta" and delta.get("delta"):
+                notify("subagent", {"agent": "pi", "type": "text", "delta": delta["delta"]})
+        elif kind == "message_end":
+            msg = ev.get("message") or {}
+            if msg.get("role") != "assistant":
+                continue
+            usage = msg.get("usage") or {}
+            tin += int(usage.get("input", 0) or 0)
+            tout += int(usage.get("output", 0) or 0)
+            cost += float(((usage.get("cost") or {}).get("total", 0)) or 0)
+            texts, tools_called = [], []
+            for c in msg.get("content") or []:
+                if c.get("type") == "text":
+                    texts.append(c.get("text", ""))
+                elif c.get("type") == "toolCall":
+                    tools_called.append(c.get("name", "?"))
+            if texts:
+                reply = "\n".join(t for t in texts if t)
+            for name in tools_called:
+                notify("subagent", {"agent": "pi", "type": "tool", "tool": name})
+        elif kind == "turn_end":
+            notify("subagent", {"agent": "pi", "type": "turn_end",
+                                "tokens_in": tin, "tokens_out": tout})
+    return proc.wait(), reply, "".join(stderr_parts), raw, tin, tout, cost
 
 # Still-skeleton boxes: name → what it will do, and its box on the whiteboard.
 PLANNED = [
@@ -50,7 +189,9 @@ def make_delegate_tool(settings: Settings) -> Tool:
     for the voice gateway to speak. The full pi transcript goes to the outbox.
     """
 
-    def delegate_task(task: str = "", cwd: str = "", timeout_seconds: int = 0) -> str:
+    def delegate_task(task: str = "", cwd: str = "", timeout_seconds: int = 0,
+                      _notify=None) -> str:
+        notify = _notify or (lambda kind, ev: None)
         if not task.strip():
             return ("delegate_task needs a 'task' — a plain-English description of the "
                     "coding job, e.g. 'fix the failing test in this repo'.")
@@ -84,28 +225,54 @@ def make_delegate_tool(settings: Settings) -> Tool:
             key = _key_for(settings.provider)
             if key:
                 cmd += ["--api-key", key]
+        json_mode = _pi_supports_json(pi_bin)
+        if json_mode:
+            cmd += ["--mode", "json"]
+        cmd += _project_pi_flags()   # the repo's own extensions + skills ride along
         cmd += ["-p", task, "-a", "--no-session"]
-        try:
-            result = subprocess.run(cmd, cwd=workdir, stdin=subprocess.DEVNULL,
-                                    capture_output=True, text=True, timeout=timeout, check=False)
-        except subprocess.TimeoutExpired:
-            return (f"pi was still working after {timeout}s so I stopped it — try a smaller "
-                    f"task, or raise WAKU_DELEGATE_TIMEOUT.")
-        except OSError as exc:
-            return f"Couldn't launch pi: {exc}"
 
-        # Full pi transcript alongside the work (workspace) or in the outbox.
+        raw_events: list[str] = []
+        cost = 0.0
+        if json_mode:
+            try:
+                code, reply, stderr, raw_events, tin, tout, cost = _run_pi_json(
+                    cmd, workdir, timeout, notify)
+            except OSError as exc:
+                return f"Couldn't launch pi: {exc}"
+            _record_subagent_usage(settings, tin, tout)   # the arena's cost now sees pi
+            if code is None:
+                return (f"pi was still working after {timeout}s so I stopped it — try a smaller "
+                        f"task, or raise WAKU_DELEGATE_TIMEOUT.")
+            stdout_text = reply
+        else:
+            try:
+                result = subprocess.run(cmd, cwd=workdir, stdin=subprocess.DEVNULL,
+                                        capture_output=True, text=True, timeout=timeout, check=False)
+            except subprocess.TimeoutExpired:
+                return (f"pi was still working after {timeout}s so I stopped it — try a smaller "
+                        f"task, or raise WAKU_DELEGATE_TIMEOUT.")
+            except OSError as exc:
+                return f"Couldn't launch pi: {exc}"
+            code, stdout_text, stderr = result.returncode, result.stdout, result.stderr
+
+        # Full pi transcript alongside the work (workspace) or in the outbox;
+        # in json mode the raw event stream is preserved too (pi-events.jsonl).
         transcript = (workdir / "pi-transcript.log") if in_workspace else (
             settings.home / "outbox" / f"delegate-{datetime.now():%Y%m%d-%H%M%S}.log")
         transcript.parent.mkdir(parents=True, exist_ok=True)
         transcript.write_text(f"$ {' '.join(cmd[:-4])} -p {task!r}   (cwd: {workdir})\n\n"
-                              f"--- stdout ---\n{result.stdout}\n--- stderr ---\n{result.stderr}",
+                              f"--- reply ---\n{stdout_text}\n--- stderr ---\n{stderr}",
                               encoding="utf-8")
+        if raw_events:
+            transcript.with_name(transcript.stem + "-events.jsonl").write_text(
+                "".join(raw_events), encoding="utf-8")
 
-        if result.returncode != 0:
-            err = (result.stderr or result.stdout).strip()[-200:] or "no output"
+        if code != 0:
+            err = (stderr or stdout_text).strip()[-200:] or "no output"
             return f"pi hit an error: {err} (full log: {transcript})"
-        summary = result.stdout.strip()[-500:] or "(pi finished but printed nothing)"
+        summary = (stdout_text or "").strip()[-500:] or "(pi finished but printed nothing)"
+        if cost:
+            summary += f"\n(sub-agent spend: ~${cost:.4f}, logged to usage.jsonl)"
 
         if not in_workspace:
             return f"pi finished the delegated task in {workdir}.\n{summary}\n(full log: {transcript})"
@@ -143,6 +310,7 @@ def make_delegate_tool(settings: Settings) -> Tool:
             "required": ["task"],
         },
         fn=delegate_task,
+        wants_notify=True,   # streams pi's live events through the loop's observer
     )
 
 

@@ -209,7 +209,17 @@ async function runCompare(){
         if (ev.kind === "start"){ R[s] = {spec:s, provider:ev.provider, model:ev.model, streaming:true, tools:[], gate:null}; render(); }
         else if (ev.kind === "gate" && R[s]){ R[s].gate = {decision:ev.decision, reason:ev.reason}; render(); }
         else if (ev.kind === "tool" && R[s]){ (R[s].tools = R[s].tools||[]).push({tool:ev.tool}); render(); }
-        else if (ev.kind === "result" && s){ R[s] = ev; saveCompare(); render(); }
+        // The sub-agent (pi) streams its own events through delegate_task —
+        // accumulate them per card so the contractor's work is watchable live
+        // instead of a black box that returns a summary.
+        else if (ev.kind === "subagent" && R[s]){
+          const sub = R[s].sub = R[s].sub || {text:"", tools:[], tokens_in:0, tokens_out:0};
+          if (ev.type === "text" && ev.delta) sub.text = (sub.text + ev.delta).slice(-4000);
+          else if (ev.type === "tool") sub.tools.push(ev.tool);
+          else if (ev.type === "turn_end"){ sub.tokens_in = ev.tokens_in||0; sub.tokens_out = ev.tokens_out||0; }
+          render();
+        }
+        else if (ev.kind === "result" && s){ const sub = R[s] && R[s].sub; R[s] = ev; if (sub) R[s].sub = sub; saveCompare(); render(); }
         else if (ev.kind === "grading"){ compareState.grading = ev; render(); }   // post-race referee pass begins
         else if (ev.kind === "grade" && R[s]){ R[s].quality = ev.quality; if (compareState.grading) compareState.grading.done = (compareState.grading.done||0)+1; saveCompare(); render(); }
         else if (ev.kind === "done"){ compareState.grading = null; if (ev.error) compareState.raceError = ev.error; }
@@ -239,10 +249,52 @@ function compareErrorReason(err){
   if (e.includes("not found") || e.includes("no longer available")) return "model id not available";
   return null;
 }
+// "knows to 2026-01" next to the model name — each brain's knowledge cutoff,
+// so a confidently-wrong answer about recent events reads as stale knowledge,
+// not low capability (a model can't know about releases after its cutoff).
+// Server-supplied (MODEL_CUTOFF in dashboard.py); absent = vendor unpublished.
+function cutoffTag(cutoff){
+  return cutoff ? ` <span class="meta" style="font-size:11px;white-space:nowrap"
+    title="knowledge cutoff — this model's world knowledge ends here; it cannot know releases after this date">knows to ${esc(cutoff)}</span>` : "";
+}
+// The sub-agent's receipt: pi working inside this card. Live = a small
+// terminal window (last lines, cleaned of markdown fences). Finished = one
+// quiet summary row that expands on click — the reply below already shows the
+// final code, so the pane must not repeat it. Full stream: pi-transcript-events.jsonl.
+function subPane(sub, live, spec){
+  const seq = [];   // collapse repeats: write, bash, bash -> write · bash ×2
+  for (const t of sub.tools||[]){
+    const last = seq[seq.length-1];
+    if (last && last.t === t) last.n++; else seq.push({t, n:1});
+  }
+  const toolStr = seq.map(x => x.n>1 ? `${x.t} ×${x.n}` : x.t).join(" · ");
+  const tok = sub.tokens_in ? `${(sub.tokens_in/1000).toFixed(1)}k tok` : "";
+  const clean = (sub.text||"").replace(/```[a-zA-Z]*\n?/g, "").trim();
+  const tail = clean.split("\n").filter(Boolean).slice(-4).map(esc).join("\n");
+  const head = `<span class="mm-prov">pi</span><span class="subterm-t">${esc(toolStr)||"…"}</span>` +
+    (tok ? `<span class="meta" title="the sub-agent's tokens — billed to this card's cost">${tok}</span>` : "");
+  if (live) return `<div class="subterm live"><div class="subterm-h">${head}<span class="live-dot"></span></div><pre>${tail||"spawning…"}</pre></div>`;
+  // remember open/closed across re-renders — render() rebuilds the DOM every
+  // refresh tick, which would otherwise snap an expanded pane shut mid-read
+  return `<details class="subterm"${sub.open?" open":""} ontoggle="const r=compareState.results['${esc(spec)}']; if(r&&r.sub) r.sub.open=this.open">
+    <summary class="subterm-h">${head}</summary><pre>${tail}</pre></details>`;
+}
+// Long replies are the cards' vertical hog (a coding answer pastes whole
+// programs). Clamp past a threshold with a fade + toggle; open state lives on
+// the card's state so the refresh tick doesn't snap it shut.
+function replyBlock(res){
+  const r = res.reply||"";
+  // height comes from LINES, not characters — 20 short code lines are taller
+  // than a 400-char paragraph
+  const long = r.length > 400 || (r.match(/\n/g)||[]).length > 8;
+  if (!long) return `<div class="r cmp-reply">${renderMarkdown(res.reply||"")}</div>`;
+  return `<div class="r cmp-reply ${res.replyOpen?"":"clamped"}">${renderMarkdown(res.reply||"")}</div>
+    <a class="reveal cmp-more" onclick="const r=compareState.results['${esc(res.spec)}']; if(r){r.replyOpen=!r.replyOpen; render();}">${res.replyOpen?"show less":"show full reply"}</a>`;
+}
 function compareCol(res){
   if (res.error){
     const why = compareErrorReason(res.error);
-    return `<div class="cmp-col err"><div class="cmp-h"><span class="mm-prov">${esc(res.provider)}</span> <code>${esc(res.model)}</code>
+    return `<div class="cmp-col err"><div class="cmp-h"><span class="mm-prov">${esc(res.provider)}</span> <code>${esc(res.model)}</code>${cutoffTag(res.cutoff)}
       <span class="srcpill apple">error</span></div>
       ${why?`<div class="meta" style="color:var(--bad)"><b>${esc(why)}</b></div>`:""}
       <div class="meta" style="opacity:.7">${esc(res.error)}</div></div>`;
@@ -253,10 +305,11 @@ function compareCol(res){
   const gateBadgeHtml = `<span class="badge ${res.gate&&res.gate.decision==="retrieve"?"retrieve":""}">gate · ${esc(res.gate?res.gate.decision:"…")}</span>`;
   if (res.streaming){
     return `<div class="cmp-col">
-      <div class="cmp-h"><span class="mm-prov">${esc(res.provider)}</span> <code>${esc(res.model)}</code>
+      <div class="cmp-h"><span class="mm-prov">${esc(res.provider)}</span> <code>${esc(res.model)}</code>${cutoffTag(res.cutoff)}
         <span class="live-dot"></span></div>
       <div class="cmp-stats">${gateBadgeHtml}</div>
       ${tools?`<div class="stages" style="flex-wrap:wrap">${tools}</div>`:""}
+      ${res.sub?subPane(res.sub, true):""}
       <div class="meta">${(res.tools||[]).length?"running tools…":"thinking…"} <span class="caret"></span></div>
     </div>`;
   }
@@ -267,7 +320,7 @@ function compareCol(res){
   // per-card grade button — grade just this card if the referee skipped it (429)
   const gradeBtn = `<a class="reveal cmp-grade1" title="grade this card with the referee" onclick="gradeCard('${esc(res.spec)}')">${res._grading?"grading…":(q&&q.score!=null?"re-grade":"grade")}</a>`;
   return `<div class="cmp-col${c?(c.passed?" solved":" failed"):""}">
-    <div class="cmp-h"><span class="mm-prov">${esc(res.provider)}</span> <code>${esc(res.model)}</code>${completionBadge}${qualityBadge}${gradeBtn}</div>
+    <div class="cmp-h"><span class="mm-prov">${esc(res.provider)}</span> <code>${esc(res.model)}</code>${cutoffTag(res.cutoff)}${completionBadge}${qualityBadge}${gradeBtn}</div>
     <div class="cmp-stats">
       ${gateBadgeHtml}
       <span class="chip ${compareState.sortBy==="latency"?"sorted":""}">${secs(res.latency_ms)}</span>
@@ -276,7 +329,8 @@ function compareCol(res){
       <span class="chip ${compareState.sortBy==="tokens"?"sorted":""}">${(res.tokens_in||0)+(res.tokens_out||0)} tok</span>
     </div>
     ${tools?`<div class="stages" style="flex-wrap:wrap">${tools}</div>`:""}
-    <div class="r cmp-reply">${renderMarkdown(res.reply||"")}</div>
+    ${res.sub?subPane(res.sub, false, res.spec):""}
+    ${replyBlock(res)}
   </div>`;
 }
 
@@ -384,7 +438,7 @@ function boardAggregate(){
       const r = (compareState.results || {})[spec];
       if (!r || r.streaming) return;   // column not finished yet
       const a = map[spec] || (map[spec] = {spec, provider: r.provider, model: r.model,
-        runs: 0, ok: 0, total_latency_ms: 0, total_tokens_in: 0, total_tokens_out: 0,
+        cutoff: r.cutoff, runs: 0, ok: 0, total_latency_ms: 0, total_tokens_in: 0, total_tokens_out: 0,
         total_tokens: 0, total_cost_usd: 0, cases_passed: 0, cases_scored: 0,
         _qsum: 0, quality_n: 0, quality_avg: null});
       a.runs += 1;
@@ -479,9 +533,10 @@ function compareHistoryHtml(){
       <a class="reveal" style="margin-left:auto;font-size:12px" onclick="clearCompareHistory()">clear all</a></h2>
     ${costQualityScatter(agg)}
     <div class="card" style="padding:4px 8px"><table>
-      <tr><th>model</th>${th("cases_passed","solved")}<th class="cmp-th ${bs.key==="quality_avg"?"on":""}" onclick="setBoardSort('quality_avg')" title="referee's mean 0-10 grade on the replies (correctness, honesty, concision) — referee is not a racing model">grade${arrow("quality_avg")}</th>${th("runs","races")}<th>ok</th>${th("total_latency_ms","total time")}${th("total_tokens_in","in tok")}${th("total_tokens_out","out tok")}${th("total_tokens","total tok")}<th title="list price per million tokens, input / output">rate $/M</th>${th("total_cost_usd","total cost")}</tr>
+      <tr><th>model</th><th title="knowledge cutoff — when each model's world knowledge ends; it cannot know releases after this date">cutoff</th>${th("cases_passed","solved")}<th class="cmp-th ${bs.key==="quality_avg"?"on":""}" onclick="setBoardSort('quality_avg')" title="referee's mean 0-10 grade on the replies (correctness, honesty, concision) — referee is not a racing model">grade${arrow("quality_avg")}</th>${th("runs","races")}<th>ok</th>${th("total_latency_ms","total time")}${th("total_tokens_in","in tok")}${th("total_tokens_out","out tok")}${th("total_tokens","total tok")}<th title="list price per million tokens, input / output">rate $/M</th>${th("total_cost_usd","total cost")}</tr>
       ${rows.map(a=>`<tr>
         <td><span class="mm-prov">${esc(a.provider)}</span> <code>${esc(a.model)}</code></td>
+        <td class="meta">${a.cutoff?esc(a.cutoff):"—"}</td>
         <td>${a.cases_scored?`<span class="cmp-score ${a.cases_passed===a.cases_scored?"pass":(a.cases_passed?"part":"fail")}">${a.cases_passed}/${a.cases_scored}</span>`:'<span class="meta">—</span>'}</td>
         <td>${a.quality_avg!=null?`<span class="cmp-q ${a.quality_avg>=7?"hi":a.quality_avg>=4?"mid":"lo"}">${a.quality_avg}</span>`:'<span class="meta">—</span>'}</td>
         <td class="meta">${a.runs}</td><td class="meta">${a.ok}/${a.runs}</td>

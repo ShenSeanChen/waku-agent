@@ -288,7 +288,7 @@ make shootout RUNS="kimi:kimi-k3 anthropic:claude-opus-4-8"
 #   → also writes a timestamped .md + .json to .waku/shootout/
 
 # Live arena — race every pinned model on one prompt, watch it stream
-make dashboard            # localhost:7777 → Compare tab
+make dashboard            # localhost:7777 → Arena tab
 
 # Judged answer quality (never let a contestant judge itself)
 make eval-judge

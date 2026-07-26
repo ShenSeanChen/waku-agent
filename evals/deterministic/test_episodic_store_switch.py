@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sys
 import types
+from typing import ClassVar
 
 import pytest
 
@@ -18,7 +19,7 @@ class _FakeNotionClient:
     Pages are class-level so a store created inside dashboard code sees the
     same rows as one created in the test body."""
 
-    _pages: list[dict] = []
+    _pages: ClassVar[list[dict]] = []
     _init_count = 0     # Client constructions — the dashboard must build ONE
     _query_count = 0    # data-source queries — the result cache throttles these
     _query_fails = False   # simulate a Notion outage after a successful fetch

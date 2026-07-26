@@ -14,6 +14,7 @@ import os
 import re
 import subprocess
 import sys
+from datetime import UTC
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -29,7 +30,7 @@ def run(suite: str) -> tuple[int, dict]:
     print(f"\n=== {suite} ===")
     proc = subprocess.run(
         [sys.executable, "-m", "pytest", "-q", str(REPO / "evals" / suite)],
-        cwd=REPO, capture_output=True, text=True,
+        cwd=REPO, capture_output=True, text=True, check=False,
     )
     print(proc.stdout, end="")
     print(proc.stderr, end="", file=sys.stderr)
@@ -40,8 +41,8 @@ def run(suite: str) -> tuple[int, dict]:
 
 def report(deterministic: str, judge: str, suites: dict | None = None) -> None:
     """Persist the latest verdict AND append it to the run history."""
-    from datetime import datetime, timezone
     import json
+    from datetime import datetime
 
     from waku.config import load_settings
 
@@ -51,7 +52,7 @@ def report(deterministic: str, judge: str, suites: dict | None = None) -> None:
         "deterministic": deterministic,
         "judge": judge,
         "suites": suites or {},
-        "ran_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "ran_at": datetime.now(UTC).isoformat(timespec="seconds"),
     }
     (settings.home / "eval_report.json").write_text(json.dumps(record))
     with (settings.home / "eval_runs.jsonl").open("a") as f:
