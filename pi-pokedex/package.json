@@ -1,0 +1,15 @@
+{
+  "name": "pi-pokedex",
+  "version": "0.1.0",
+  "description": "A pi package that turns any coding agent into a Pokemon trainer: a Pokedex skill (PokeAPI, no key) + a type-matchup tool + a Team Rocket guard.",
+  "keywords": ["pi-package"],
+  "license": "MIT",
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "pi": {
+    "extensions": ["./extensions"],
+    "skills": ["./skills"]
+  }
+}

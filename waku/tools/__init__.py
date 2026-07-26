@@ -4,7 +4,6 @@ Apple ecosystem (WAKU_APPLE_TOOLS=1) and MCP servers (.waku/mcp.json)."""
 
 from __future__ import annotations
 
-import os
 import sqlite3
 
 from waku.config import Settings
@@ -32,7 +31,13 @@ def build_registry(conn: sqlite3.Connection, settings: Settings, memory=None) ->
     # Experimental tools — off by default; opt in with WAKU_EXPERIMENTAL=1.
     # delegate_task (sub-agents via pi) is live; terminal/browser/cron are
     # still skeletons that report "coming soon".
-    if getattr(settings, "experimental", False) or os.getenv("WAKU_EXPERIMENTAL", "") in ("1", "true", "yes"):
+    #
+    # Trust settings.experimental ALONE. load_settings() already defaults it from
+    # WAKU_EXPERIMENTAL, so re-checking the env here would let the global switch
+    # override an explicit False — and the arena passes experimental=False for
+    # every non-coding race. Once the dashboard could write WAKU_EXPERIMENTAL=1,
+    # that OR silently forced delegate_task into races that never asked for it.
+    if getattr(settings, "experimental", False):
         from waku.tools import experimental
 
         for t in experimental.make_tools(settings):

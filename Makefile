@@ -22,7 +22,10 @@ telegram:       ## phone → laptop (needs TELEGRAM_BOT_TOKEN in .env)
 brief:          ## morning briefing from calendar + mail + memory
 	$(PY) -m waku brief
 
-dashboard:      ## everything on one page — http://localhost:7777
+# The server holds dashboard.py in memory: static JS/CSS reload on refresh, but
+# Python routes do NOT. After pulling a change that touches dashboard.py (or any
+# imported module), stop this and re-run it, or the UI shows stale backend data.
+dashboard:      ## everything on one page — http://localhost:7777 (restart after a backend pull)
 	$(PY) -m waku.ops.dashboard
 
 trace:          ## deep trace waterfalls (Phoenix) at http://localhost:6006

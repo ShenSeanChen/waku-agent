@@ -61,7 +61,10 @@ mcp = [
 ]
 dev = [
     "pytest>=8.0",
-    "ruff>=0.6",
+    # Pinned EXACTLY: an unpinned linter means every ruff release can turn CI
+    # red with zero code changes (happened 2026-07-24 — 0.16.0 shipped new
+    # rules and 106 violations appeared overnight). Bump deliberately.
+    "ruff==0.16.0",
 ]
 
 [build-system]
@@ -73,3 +76,15 @@ packages = ["waku"]
 
 [tool.ruff]
 line-length = 100
+
+[tool.ruff.lint]
+# Rules waku IGNORES on purpose — each is a deliberate style choice, not an
+# oversight. If you're tempted to remove one, read the reason first:
+ignore = [
+    "BLE001",  # blind `except Exception` is the documented pattern: tools and
+               # observers surface errors as text instead of crashing the loop
+    "DTZ001", "DTZ005", "DTZ011",  # naive local datetimes are intentional —
+               # daily trace files and workspace folders are named in the
+               # user's local day, not UTC
+    "S110",    # try/except/pass around optional integrations (OTel, extras)
+]

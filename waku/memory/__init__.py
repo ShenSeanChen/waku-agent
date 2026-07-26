@@ -26,12 +26,16 @@ REPO_SKILLS = Path(__file__).resolve().parents[2] / "skills"
 
 
 class Memory:
-    def __init__(self, conn: sqlite3.Connection, settings: Settings, client: anthropic.Anthropic):
+    def __init__(self, conn: sqlite3.Connection, settings: Settings, client: anthropic.Anthropic,
+                 episode_store=None):
+        # episode_store: inject an already-built store (the dashboard caches ONE
+        # NotionEpisodeStore process-wide — its constructor hits the network,
+        # so building one per Memory would re-query Notion on every poll).
         self.conn = conn
         self.settings = settings
         self.client = client
         self.facts = self._make_fact_store(conn, settings)
-        self.episodes = self._make_episode_store(conn, settings)
+        self.episodes = episode_store if episode_store is not None else self._make_episode_store(conn, settings)
         self.skills = SkillLoader([REPO_SKILLS, settings.home / "skills"])
 
     @staticmethod
@@ -140,9 +144,9 @@ class Memory:
         lines = [
             "# Waku memory",
             "",
-            "_A human-readable mirror of what Waku remembers. The source of truth is "
+            ("_A human-readable mirror of what Waku remembers. The source of truth is "
             "`state.db` (the `facts` and `episodes` tables, keyword-searchable via FTS5); "
-            "this file is regenerated after every turn._",
+            "this file is regenerated after every turn._"),
             "",
             f"## Facts — semantic memory ({len(facts)})",
             "",

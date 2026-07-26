@@ -20,14 +20,38 @@ Two outputs from the same events:
 from __future__ import annotations
 
 import json
+from collections.abc import Iterator
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import UTC, datetime
+from pathlib import Path
 
 from waku.config import Settings
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="milliseconds")
+    return datetime.now(UTC).isoformat(timespec="milliseconds")
+
+
+class TraceEncodingError(UnicodeError):
+    """A legacy trace cannot be safely read or appended as UTF-8."""
+
+    def __init__(self, path: Path):
+        self.path = path
+        super().__init__(
+            f"Trace file is not valid UTF-8: {path}. It may have been written by an older "
+            "Waku version using the Windows system encoding. Move it out of the traces directory "
+            "and keep it as a backup, then restart Waku if it is today's trace. The file "
+            "was not modified."
+        )
+
+
+def iter_trace_lines(path: Path) -> Iterator[str]:
+    """Yield one UTF-8 trace line at a time with a useful legacy-file error."""
+    try:
+        with path.open("r", encoding="utf-8") as trace:
+            yield from trace
+    except UnicodeDecodeError as exc:
+        raise TraceEncodingError(path) from exc
 
 
 class Tracer:
@@ -39,6 +63,7 @@ class Tracer:
         self.path = settings.home / "traces" / f"{datetime.now().strftime('%Y-%m-%d')}.jsonl"
         self._otel_tracer = self._init_otel(settings)
         self._span_ctx = None
+        self._trace_encoding_checked = False
 
     def _init_otel(self, settings: Settings):
         if not settings.otel_endpoint:
@@ -63,8 +88,16 @@ class Tracer:
             return None
 
     def _write(self, record: dict) -> None:
+        # An older Windows release may have created this daily file in GBK.
+        # Refuse to make a mixed-encoding JSONL file: validate once, explain how
+        # to preserve the old file, and never guess or rewrite user data.
+        if not self._trace_encoding_checked:
+            if self.path.exists():
+                for _ in iter_trace_lines(self.path):
+                    pass
+            self._trace_encoding_checked = True
         record["ts"] = _now()
-        with self.path.open("a") as f:
+        with self.path.open("a", encoding="utf-8") as f:
             f.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
 
     def _record_usage(self, event: dict) -> None:
