@@ -28,7 +28,7 @@ def _raw_url(url: str) -> str:
 def install(url: str) -> None:
     raw = _raw_url(url)
     print(f"Fetching {raw}")
-    with urllib.request.urlopen(raw, timeout=15) as response:  # noqa: S310 — user-supplied by design
+    with urllib.request.urlopen(raw, timeout=15) as response:
         text = response.read().decode("utf-8", errors="replace")
 
     settings = load_settings()

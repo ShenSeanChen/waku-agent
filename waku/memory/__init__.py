@@ -144,9 +144,9 @@ class Memory:
         lines = [
             "# Waku memory",
             "",
-            "_A human-readable mirror of what Waku remembers. The source of truth is "
+            ("_A human-readable mirror of what Waku remembers. The source of truth is "
             "`state.db` (the `facts` and `episodes` tables, keyword-searchable via FTS5); "
-            "this file is regenerated after every turn._",
+            "this file is regenerated after every turn._"),
             "",
             f"## Facts — semantic memory ({len(facts)})",
             "",

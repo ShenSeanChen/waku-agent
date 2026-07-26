@@ -24,7 +24,7 @@ def test_autorun_runs_the_entry_and_captures_output(tmp_path, monkeypatch):
     monkeypatch.setenv("WAKU_WORKSPACE", str(tmp_path))
     folder = ws.new_run_folder("m", "print hello", now=datetime(2026, 7, 19, 1, 2, 3))
     (folder / "main.py").write_text("print('hello from the script')\n")
-    entry, code, out, secs = ws.autorun(folder)
+    entry, code, out, _secs = ws.autorun(folder)
     assert entry == "main.py" and code == 0
     assert "hello from the script" in out
     assert (folder / "run.log").exists()
@@ -35,7 +35,7 @@ def test_autorun_picks_main_over_a_helper(tmp_path, monkeypatch):
     folder = ws.new_run_folder("m", "t", now=datetime(2026, 7, 19, 1, 2, 4))
     (folder / "helper.py").write_text("X = 1\n")
     (folder / "main.py").write_text("print('main ran')\n")
-    entry, code, out, _ = ws.autorun(folder)
+    entry, _code, out, _ = ws.autorun(folder)
     assert entry == "main.py" and "main ran" in out
 
 

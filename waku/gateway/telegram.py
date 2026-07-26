@@ -111,7 +111,7 @@ def start_in_background() -> bool:
             loop.run_until_complete(app.start())
             loop.run_until_complete(app.updater.start_polling(error_callback=on_poll_error))
             loop.run_forever()
-        except Exception as exc:  # noqa: BLE001 — isolate the dashboard from bot errors
+        except Exception as exc:
             print(f"(telegram) background poller stopped: {exc}")
 
     threading.Thread(target=run, daemon=True, name="telegram-poll").start()

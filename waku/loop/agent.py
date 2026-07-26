@@ -17,8 +17,9 @@ End-loop guardrails (the orange box's exit conditions):
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Callable
+from typing import Any
 
 import anthropic
 
@@ -99,7 +100,7 @@ def run_loop(
         # ---- act: execute each requested tool; observe: feed results back
         tool_results = []
         for call in tool_uses:
-            output = tools.execute(call.name, call.input)
+            output = tools.execute(call.name, call.input, notify=notify)
             event = {"tool": call.name, "args": call.input, "output": output}
             result.tool_calls.append(event)
             notify("tool", event)
