@@ -31,12 +31,19 @@ for its own sake is not.
   *immediately before each run*. Permission never carries over from a previous run.
   The script backs up first, but restoring is a hassle — ask, wait for a clear yes,
   then run. It refuses to do anything without the `--yes` flag for this reason.
-- **Version control — commit AND push every milestone, same turn.** The moment a change
+- **Version control — commit AND ship every milestone, same turn.** The moment a change
   works (tests pass / verified live), commit it with a detailed message (subject = what,
-  body = WHY + what it survived) and `git push origin main` before moving on. Never end a
+  body = WHY + what it survived) and get it onto GitHub before moving on. Never end a
   turn or session with working changes left uncommitted — the repo must always be traceable
   from GitHub, and uncommitted work has been lost to branch switches before. Use the `/ship`
   skill. If several milestones land in one session, commit each as its own logical commit.
+- **`main` is protected — `git push origin main` is REJECTED, for everyone.** Since
+  2026-07-26 a commit only lands once `skills-and-evals` is green, and `enforce_admins`
+  is on, so the rule binds Sean and Claude identically. Ship via
+  `git checkout -b <topic>` → `gh pr create --fill` → `gh pr checks --watch` (~30s) →
+  `gh pr merge --squash --delete-branch`. `GH006: Protected branch update failed` is the
+  guard working; never route around it. Merging a COMMUNITY PR still needs Sean's
+  explicit per-PR yes (see `.claude/skills/review-pr/SKILL.md`).
 - **Gate before push**: `make gate` (deterministic must pass; judge runs with a key).
   When a live bug is found, fix it AND add a regression case to `evals/deterministic/`.
 - **No emojis** in any UI surface (dashboard, CLI output, README prose).
