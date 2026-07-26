@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from datetime import date, timedelta
 from pathlib import Path
 from typing import TextIO
 
@@ -23,7 +24,7 @@ def _short(value: object, limit: int = 100) -> str:
         text = value.replace("\n", " ")
     else:
         text = json.dumps(value, ensure_ascii=False, default=str, separators=(", ", ": "))
-    return text if len(text) <= limit else text[:limit - 1] + "…"
+    return text if len(text) <= limit else text[: limit - 1] + "…"
 
 
 def _event_summary(event: dict) -> str:
@@ -36,8 +37,10 @@ def _event_summary(event: dict) -> str:
         return f"turn end · {reply} · {event.get('iterations', 0)} iteration(s)"
     if kind == "llm":
         usage = event.get("usage", {})
-        return (f"llm · iteration {event.get('iteration', '?')} · "
-                f"{usage.get('in', 0)} in / {usage.get('out', 0)} out")
+        return (
+            f"llm · iteration {event.get('iteration', '?')} · "
+            f"{usage.get('in', 0)} in / {usage.get('out', 0)} out"
+        )
     if kind == "tool":
         return f"tool · {event.get('tool', '?')}({_short(event.get('args', {}))}) → {_short(event.get('output', ''))}"
     if kind == "gate":
@@ -97,6 +100,37 @@ def render_trace(path: Path, console: Console | None = None) -> int:
     return events
 
 
+def _render_trace_section(label: str, path: Path, console: Console) -> int:
+    console.print(f"\n[bold]=== {label} ===[/bold]")
+    return render_trace(path, console)
+
+
+def render_traces(paths: list[Path], console: Console | None = None) -> int:
+    console = console or Console()
+    events = 0
+    for path in paths:
+        events += _render_trace_section(path.stem, path, console)
+    return events
+
+
+def render_recent_days(
+    traces: Path,
+    days: int,
+    today: date | None = None,
+    console: Console | None = None,
+) -> int:
+    console = console or Console()
+    end = today or date.today()
+    events = 0
+    for offset in range(days - 1, -1, -1):
+        day = end - timedelta(days=offset)
+        label = day.isoformat()
+        path = traces / f"{label}.jsonl"
+        if path.exists():
+            events += _render_trace_section(label, path, console)
+    return events
+
+
 def latest_trace(traces: Path) -> Path | None:
     """Return the most recent daily trace without reading all of its contents."""
     if not traces.is_dir():
@@ -106,20 +140,37 @@ def latest_trace(traces: Path) -> Path | None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Render a Waku JSONL trace as a terminal timeline.")
-    parser.add_argument("trace", nargs="?", type=Path, help="trace JSONL file (defaults to latest)")
+    parser = argparse.ArgumentParser(
+        description="Render a Waku JSONL trace as a terminal timeline."
+    )
+    parser.add_argument(
+        "traces", nargs="*", type=Path, help="trace JSONL file(s) (defaults to latest)"
+    )
+    parser.add_argument("--days", type=int, metavar="N", help="render the last N daily traces")
     args = parser.parse_args()
+    console = Console()
 
-    if args.trace:
-        render_trace(args.trace)
+    if args.days is not None:
+        if args.days < 1:
+            parser.error("--days must be at least 1")
+        if args.traces:
+            parser.error("--days cannot be combined with trace paths")
+        render_recent_days(load_settings().home / "traces", args.days, console=console)
+        return
+
+    if args.traces:
+        if len(args.traces) == 1:
+            render_trace(args.traces[0], console)
+            return
+        render_traces(args.traces, console)
         return
 
     traces = load_settings().home / "traces"
     path = latest_trace(traces)
     if path is None:
-        Console().print(f"[dim]No traces found in {traces}.[/dim]")
+        console.print(f"[dim]No traces found in {traces}.[/dim]")
         return
-    render_trace(path)
+    render_trace(path, console)
 
 
 if __name__ == "__main__":

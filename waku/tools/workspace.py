@@ -70,7 +70,7 @@ def _pick_entry(files: list[Path]) -> Path | None:
     for pref in _ENTRY_PREFS:
         if pref in by_name:
             return by_name[pref]
-    with_main = [p for p in py if "__main__" in p.read_text(errors="ignore")]
+    with_main = [p for p in py if "__main__" in p.read_text(encoding="utf-8", errors="ignore")]
     if with_main:
         return with_main[0]
     return py[0] if len(py) == 1 else None
@@ -100,7 +100,7 @@ def autorun(folder: Path) -> tuple | None:
     except OSError as exc:
         result = (entry.name, -1, f"couldn't launch: {exc}", 0.0)
     (folder / "run.log").write_text(
-        f"$ python3 {result[0]}\nexit: {result[1]}\n\n{result[2]}\n")
+        f"$ python3 {result[0]}\nexit: {result[1]}\n\n{result[2]}\n", encoding="utf-8")
     return result
 
 
@@ -117,4 +117,4 @@ def write_manifest(folder: Path, provider: str, model: str, task: str,
         status = "still running (interactive?)" if code is None else f"exit {code}"
         lines += ["", f"## Auto-run: `python3 {entry}` — {status} in {secs}s", "",
                   "```", out[:2000], "```"]
-    (folder / "MANIFEST.md").write_text("\n".join(lines) + "\n")
+    (folder / "MANIFEST.md").write_text("\n".join(lines) + "\n", encoding="utf-8")

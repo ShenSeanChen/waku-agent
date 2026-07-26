@@ -37,7 +37,7 @@ class MCPBridge:
     def start(self) -> list[Tool]:
         """Connect every configured server and return their tools (as Tools)."""
         self._thread.start()
-        servers = json.loads(self.config_path.read_text()).get("servers", [])
+        servers = json.loads(self.config_path.read_text(encoding="utf-8")).get("servers", [])
         fut = asyncio.run_coroutine_threadsafe(self._connect_all(servers), self._loop)
         listed = fut.result(self.timeout * 2)  # {server: [tool metas]}
         tools: list[Tool] = []

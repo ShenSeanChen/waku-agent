@@ -42,7 +42,8 @@ def load_coding_cases() -> list[dict]:
     """Every coding case in file order; empty list if the file is missing."""
     if not _CODING.exists():
         return []
-    return [json.loads(line) for line in _CODING.read_text().splitlines() if line.strip()]
+    lines = _CODING.read_text(encoding="utf-8").splitlines()
+    return [json.loads(line) for line in lines if line.strip()]
 
 
 def pi_available() -> bool:
@@ -81,7 +82,7 @@ def run_coding_stream(provider: str, model: str, task: str, files: dict | None,
 
     workdir = Path(tempfile.mkdtemp(prefix=f"code-{provider}-"))
     for name, content in (files or {}).items():
-        (workdir / name).write_text(content)
+        (workdir / name).write_text(content, encoding="utf-8")
     on_line(f"$ pi --provider {pi_prov} --model {model} -p …")
 
     t0 = time.perf_counter()
@@ -149,7 +150,7 @@ def run_coding_case(provider: str, model: str, case: dict,
 
     workdir = Path(tempfile.mkdtemp(prefix=f"code-{provider}-"))
     for name, content in (case.get("files") or {}).items():
-        (workdir / name).write_text(content)
+        (workdir / name).write_text(content, encoding="utf-8")
 
     t0 = time.perf_counter()
     try:

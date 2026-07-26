@@ -73,7 +73,7 @@ def save_runs(home: Path, runs: list[dict]) -> None:
     which mutates an existing race's stored results in place."""
     path = _path(home)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("\n".join(json.dumps(r) for r in runs[-MAX_RUNS:]) + "\n")
+    path.write_text("\n".join(json.dumps(r) for r in runs[-MAX_RUNS:]) + "\n", encoding="utf-8")
 
 
 def clear(home: Path) -> None:
@@ -88,7 +88,7 @@ def load_runs(home: Path, limit: int | None = None) -> list[dict]:
     if not path.exists():
         return []
     runs = []
-    for line in path.read_text().splitlines():
+    for line in path.read_text(encoding="utf-8").splitlines():
         line = line.strip()
         if not line:
             continue

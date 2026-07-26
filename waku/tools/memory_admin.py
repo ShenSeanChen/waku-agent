@@ -88,7 +88,7 @@ def make_update_soul_tool(settings) -> Tool:
         if "## Learned rules" not in text:
             text = text.rstrip() + "\n\n## Learned rules\n"
         text = text.rstrip() + f"\n- {rule}\n"
-        path.write_text(text)
+        path.write_text(text, encoding="utf-8")
         return f"Noted, I'll remember to: {rule}"
 
     return Tool(

@@ -46,8 +46,8 @@ def load_soul(settings: Settings) -> str:
     changes who your Waku is — that's procedural memory at its simplest."""
     soul_path = settings.home / "SOUL.md"
     if not soul_path.exists():
-        soul_path.write_text(DEFAULT_SOUL)
-    return soul_path.read_text()
+        soul_path.write_text(DEFAULT_SOUL, encoding="utf-8")
+    return soul_path.read_text(encoding="utf-8")
 
 
 class Session:

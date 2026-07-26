@@ -95,4 +95,12 @@ ignore = [
                # daily trace files and workspace folders are named in the
                # user's local day, not UTC
     "S110",    # try/except/pass around optional integrations (OTel, extras)
+    # RUF100 flags a `# noqa` for a rule that is no longer enabled. Because the
+    # rules above are globally ignored, ANY `# noqa: BLE001` a contributor
+    # writes — the natural, correct-looking thing to write next to a broad
+    # `except Exception` — becomes a CI failure in a file they never touched.
+    # That footgun blocked two community PRs (#14, #26) on 2026-07-26. Turning
+    # RUF100 off costs us the ability to spot genuinely stale noqas; leaving it
+    # on costs contributors a red CI they can't explain. Contributors win.
+    "RUF100",
 ]

@@ -110,7 +110,7 @@ class Tracer:
         record = {"ts": _now(), "provider": self.settings.provider,
                   "model": self.settings.model or "", "kind": "loop",
                   "in": usage.get("in", 0), "out": usage.get("out", 0)}
-        with (self.settings.home / "usage.jsonl").open("a") as f:
+        with (self.settings.home / "usage.jsonl").open("a", encoding="utf-8") as f:
             f.write(json.dumps(record) + "\n")
 
     # ---- the Observer: called by the loop for every llm/tool/gate/... event

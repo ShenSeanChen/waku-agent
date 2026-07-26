@@ -54,8 +54,8 @@ def report(deterministic: str, judge: str, suites: dict | None = None) -> None:
         "suites": suites or {},
         "ran_at": datetime.now(UTC).isoformat(timespec="seconds"),
     }
-    (settings.home / "eval_report.json").write_text(json.dumps(record))
-    with (settings.home / "eval_runs.jsonl").open("a") as f:
+    (settings.home / "eval_report.json").write_text(json.dumps(record), encoding="utf-8")
+    with (settings.home / "eval_runs.jsonl").open("a", encoding="utf-8") as f:
         f.write(json.dumps(record) + "\n")
 
 

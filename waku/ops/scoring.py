@@ -25,7 +25,8 @@ def load_cases() -> list[dict]:
     """Every battery case in file order; empty list if the dataset is missing."""
     if not _DATASET.exists():
         return []
-    return [json.loads(line) for line in _DATASET.read_text().splitlines() if line.strip()]
+    lines = _DATASET.read_text(encoding="utf-8").splitlines()
+    return [json.loads(line) for line in lines if line.strip()]
 
 
 def check_case(case: dict, tool_calls: list[dict]) -> tuple[bool, str]:
