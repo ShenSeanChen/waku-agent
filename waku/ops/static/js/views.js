@@ -278,6 +278,21 @@ const VIEWS = {
       <div style="margin-top:12px"><button class="save" onclick="saveSettings()">Save &amp; switch</button>
         <span class="meta" id="set-msg" style="margin-left:10px"></span></div>
     </div>
+    <h2>Experimental tools</h2><div class="card">
+      <div class="meta" style="margin-bottom:8px">Off by default. Turns on <code>delegate_task</code>, which hands
+        a coding job to <b>pi</b> — a separate coding agent running locally, on this same model. The Arena's
+        <b>coding (pi)</b> checkbox switches this on per-race; this switches it on for the <b>chat</b>.</div>
+      <label class="fld">Sub-agent delegation
+        <select id="set-experimental" onfocus="markEditing()">
+          <option value="" ${!st.experimental?"selected":""}>off — the flagship tools only (default)</option>
+          <option value="1" ${st.experimental?"selected":""}>on — chat can delegate coding to pi</option>
+        </select></label>
+      ${st.pi_installed
+        ? `<div class="meta"><span class="srcpill" style="background:var(--good-soft);color:var(--good)">pi found</span> on this machine</div>`
+        : `<div class="meta"><span class="srcpill apple">pi not installed</span> — <code>npm install -g --ignore-scripts @earendil-works/pi-coding-agent</code></div>`}
+      <div style="margin-top:12px"><button class="save" onclick="saveSettings()">Save &amp; switch</button>
+        <span class="meta" style="margin-left:10px">rebuilds the agent in-process — no restart</span></div>
+    </div>
     <h2>Episodic memory</h2><div class="card">
       <div class="meta" style="margin-bottom:8px">Where dated episode summaries live. Default is the local
         <code>state.db</code> (zero setup). Pick <code>notion</code> to store them in a Notion database instead

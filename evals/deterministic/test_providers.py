@@ -153,3 +153,27 @@ def test_price_for_layers_model_over_provider():
     fable_in, fable_out = price_for("anthropic", "claude-fable-5")
     opus_in, opus_out = price_for("anthropic", "claude-opus-4-8")
     assert fable_in > opus_in and fable_out > opus_out   # fable is never cheaper
+
+
+def test_every_priced_model_has_a_knowledge_cutoff():
+    """Arena honesty: the Compare arena discloses each model's knowledge cutoff
+    so stale world knowledge isn't misread as low capability (gemini-3.1-pro
+    confidently denies 2026 models exist — its cutoff is 2025-01). Every model
+    in MODEL_PRICING must have a MODEL_CUTOFF entry. None is a valid value
+    (vendor hasn't published a cutoff; the UI shows a dash) — a MISSING key
+    means someone added a model without deciding, which is what this catches."""
+    import re
+
+    from waku.ops.dashboard import MODEL_CUTOFF, MODEL_PRICING, cutoff_for
+
+    missing = set(MODEL_PRICING) - set(MODEL_CUTOFF)
+    assert not missing, f"models priced but missing a MODEL_CUTOFF entry: {sorted(missing)}"
+
+    for model, cutoff in MODEL_CUTOFF.items():
+        if cutoff is not None:
+            assert re.fullmatch(r"20\d\d-(0[1-9]|1[0-2])", cutoff), \
+                f"{model}: cutoff {cutoff!r} is not YYYY-MM"
+
+    # The motivating case, plus the unknown-model path (no guessing).
+    assert cutoff_for("gemini-3.1-pro-preview") == "2025-01"
+    assert cutoff_for("some-future-model") is None

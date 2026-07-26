@@ -68,8 +68,8 @@ def _best_say_voice() -> str:
     robotic default — and auto-upgrades the moment you download a better voice in
     System Settings ▸ Accessibility ▸ Spoken Content ▸ System Voice."""
     try:
-        out = subprocess.run(["say", "-v", "?"], capture_output=True, text=True, timeout=5).stdout
-    except Exception:  # noqa: BLE001
+        out = subprocess.run(["say", "-v", "?"], capture_output=True, text=True, timeout=5, check=False).stdout
+    except Exception:
         return "Daniel"
     # each line: "Name (variant)      en_US    # sample" — split name from the locale column
     english = []
@@ -225,7 +225,7 @@ def wait_for_speech(stream, timeout: float) -> bool:
     return False
 
 
-def wake_loop(waku: Waku, mouth: "Mouth", wake_word: str) -> None:
+def wake_loop(waku: Waku, mouth: Mouth, wake_word: str) -> None:
     """Always-listening mode: scan the mic in ~2.5s windows with the tiny
     Whisper model until the wake word shows up, then hand off to the big one.
 

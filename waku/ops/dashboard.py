@@ -22,15 +22,17 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from waku.config import load_settings
 from waku.db import connect
-from waku.ops import compare_history, judge as judge_mod, scoring
+from waku.ops import compare_history, scoring
+from waku.ops import judge as judge_mod
 from waku.ops.tracing import TraceEncodingError, iter_trace_lines
 
 PORT = 7777
@@ -79,8 +81,8 @@ def _resume_or_new_session(conn) -> str:
     ).fetchone()
     if row and row["last_at"]:
         try:
-            last = datetime.strptime(row["last_at"], "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
-            if idle_min <= 0 or (datetime.now(timezone.utc) - last).total_seconds() <= idle_min * 60:
+            last = datetime.strptime(row["last_at"], "%Y-%m-%d %H:%M:%S").replace(tzinfo=UTC)
+            if idle_min <= 0 or (datetime.now(UTC) - last).total_seconds() <= idle_min * 60:
                 return row["session_id"]
         except ValueError:
             pass
@@ -118,10 +120,10 @@ def _maybe_rotate_session(agent) -> None:
     if not row or not row[0]:
         return
     try:  # sqlite datetime('now') is UTC "YYYY-MM-DD HH:MM:SS"
-        last = datetime.strptime(row[0], "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+        last = datetime.strptime(row[0], "%Y-%m-%d %H:%M:%S").replace(tzinfo=UTC)
     except ValueError:
         return
-    if (datetime.now(timezone.utc) - last).total_seconds() > idle_min * 60:
+    if (datetime.now(UTC) - last).total_seconds() > idle_min * 60:
         agent.session.start_new(datetime.now().strftime("dashboard-%Y%m%d-%H%M%S"))
 
 
@@ -133,10 +135,10 @@ def chat(message: str) -> dict:
     with _agent_lock:
         agent = _get_agent()
         _maybe_rotate_session(agent)
-        start = datetime.now(timezone.utc)
+        start = datetime.now(UTC)
         result = agent.respond(message, observer=lambda kind, ev: events.append({"kind": kind, **ev}),
                                source="dashboard")
-        latency_ms = int((datetime.now(timezone.utc) - start).total_seconds() * 1000)
+        latency_ms = int((datetime.now(UTC) - start).total_seconds() * 1000)
 
     gate = next((e for e in events if e["kind"] == "gate"), None)
     cons = next((e for e in events if e["kind"] == "consolidation"), None)
@@ -169,9 +171,9 @@ def chat_stream(message: str, emit) -> None:
     with _agent_lock:
         agent = _get_agent()
         _maybe_rotate_session(agent)
-        start = datetime.now(timezone.utc)
+        start = datetime.now(UTC)
         result = agent.respond(message, observer=observer, source="dashboard", stream=True)
-        latency_ms = int((datetime.now(timezone.utc) - start).total_seconds() * 1000)
+        latency_ms = int((datetime.now(UTC) - start).total_seconds() * 1000)
 
     gate = next((e for e in events if e["kind"] == "gate"), None)
     cons = next((e for e in events if e["kind"] == "consolidation"), None)
@@ -232,7 +234,8 @@ def _compare_one(message: str, spec: str) -> dict:
                 "gate": (gate or None), "iterations": result.iterations, "latency_ms": ms,
                 "tools": [{"tool": c["tool"]} for c in result.tool_calls],
                 "tokens_in": tin, "tokens_out": tout,
-                "cost_usd": round(tin / 1e6 * pin + tout / 1e6 * pout, 4)}
+                "cost_usd": round(tin / 1e6 * pin + tout / 1e6 * pout, 4),
+                "cutoff": cutoff_for(settings.model)}
     except (Exception, SystemExit) as exc:   # a broken contestant (incl. a missing
         # key, which get_client raises as SystemExit) fails alone, not the whole race
         return {"spec": spec, "provider": provider, "model": model, "error": str(exc)[:200]}
@@ -289,7 +292,8 @@ def compare_stream(message: str, specs: list, emit, judge: bool = False,
 
     def run(spec):
         provider, _, model = spec.partition(":")
-        send("start", {"spec": spec, "provider": provider, "model": model})
+        send("start", {"spec": spec, "provider": provider, "model": model,
+                       "cutoff": cutoff_for(model)})
         home = Path(tempfile.mkdtemp(prefix=f"compare-{provider}-"))
         gate: dict = {}
 
@@ -304,6 +308,14 @@ def compare_stream(message: str, specs: list, emit, judge: bool = False,
                 send("gate", {"spec": spec, "decision": ev.get("decision"), "reason": ev.get("reason")})
             elif kind == "tool":
                 send("tool", {"spec": spec, "tool": ev.get("tool")})
+            elif kind == "subagent":
+                # delegate_task relays pi's live event stream (see experimental.py)
+                # — forward it so the card can show the sub-agent working instead
+                # of a black box. Text deltas are trimmed; this is a peek, not a log.
+                out = {"spec": spec, **ev}
+                if out.get("type") == "text" and len(out.get("delta", "")) > 200:
+                    out["delta"] = out["delta"][:200]
+                send("subagent", out)
 
         try:
             # coding mode registers delegate_task (the pi sub-agent) so the loop
@@ -351,6 +363,7 @@ def compare_stream(message: str, specs: list, emit, judge: bool = False,
                             "iterations": result.iterations, "latency_ms": ms,
                             "tools": [{"tool": c["tool"]} for c in result.tool_calls],
                             "tokens_in": tin, "tokens_out": tout, "cost_usd": cost,
+                            "cutoff": cutoff_for(settings.model),
                             "completion": completion, "quality": None})
         except (Exception, SystemExit) as exc:
             # SystemExit (not an Exception subclass) is what get_client raises for
@@ -399,10 +412,13 @@ def compare_clear(payload: dict) -> dict:
 
 def _compare_history_response(runs: list[dict]) -> dict:
     """Reprice each stored result from its tokens with the CURRENT price table (so
-    a pricing fix corrects past races), aggregate, and tag each row with the rate.
-    The shared shape returned by /api/compare/history and the re-grade endpoint."""
+    a pricing fix corrects past races), aggregate, and tag each row with the rate
+    and knowledge cutoff (also from the current table, so a cutoff fix corrects
+    past races too). The shared shape returned by /api/compare/history and the
+    re-grade endpoint."""
     for run in runs:
         for r in run.get("results", []):
+            r["cutoff"] = cutoff_for(r.get("model", ""))
             if r.get("error"):
                 continue
             pin, pout = price_for(r.get("provider", ""), r.get("model", ""))
@@ -411,6 +427,7 @@ def _compare_history_response(runs: list[dict]) -> dict:
     agg = compare_history.aggregate(runs)
     for row in agg:
         row["rate_in"], row["rate_out"] = price_for(row["provider"], row["model"])
+        row["cutoff"] = cutoff_for(row["model"])
     return {"runs": runs[-20:][::-1], "aggregate": agg}
 
 
@@ -497,6 +514,42 @@ MODEL_PRICING = {
     "grok-4.5": (2.0, 6.0),
     "grok-4.3": (1.25, 2.5),
 }
+
+
+# Knowledge cutoff (YYYY-MM) per model — the arena discloses when each brain's
+# world knowledge ends, so stale knowledge isn't misread as low capability
+# (gemini-3.1-pro will confidently deny that 2026 models exist: its cutoff is
+# 2025-01, a year before them). Values are each vendor's published knowledge
+# cutoff (for Anthropic, the "reliable knowledge cutoff"; training data runs
+# later). None = the vendor hasn't published one. Fact-checked Jul 2026 against
+# vendor model cards/docs. Every MODEL_PRICING id must have an entry here —
+# enforced by evals/deterministic/test_providers.py.
+MODEL_CUTOFF = {
+    # Anthropic — support.claude.com "How up-to-date is Claude's training data?"
+    "claude-opus-4-8": "2026-01",
+    "claude-fable-5": "2026-01",
+    "claude-sonnet-5": "2026-01",
+    "claude-haiku-4-5-20251001": "2025-02",   # trained on data through 2025-07
+    # OpenAI — developers.openai.com model pages
+    "gpt-5.6-sol": "2026-02",
+    "gpt-5.3-chat-latest": "2025-08",
+    # Google Gemini — deepmind.google model cards / ai.google.dev
+    "gemini-3.1-pro-preview": "2025-01",
+    "gemini-3.5-flash": "2025-01",
+    # Moonshot Kimi — K3 reported "early 2026"; K2.7 cutoffs unpublished
+    "kimi-k3": "2026-01",
+    "kimi-k2.7-code-highspeed": None,
+    "kimi-k2.7": None,
+    # xAI Grok — docs.x.ai model list
+    "grok-4.5": "2026-02",
+    "grok-4.3": "2025-12",
+}
+
+
+def cutoff_for(model: str) -> str | None:
+    """Knowledge-cutoff date ('YYYY-MM') for a model id, or None when the
+    vendor hasn't published one (the UI shows a dash rather than a guess)."""
+    return MODEL_CUTOFF.get(model)
 
 
 def price_for(provider: str, model: str) -> tuple[float, float]:
@@ -696,8 +749,8 @@ def collect() -> dict:
     def pct(p: float) -> int:
         return latencies[min(len(latencies) - 1, int(len(latencies) * p))] if latencies else 0
 
-    from waku.memory.procedural.loader import SkillLoader
     from waku.memory import REPO_SKILLS
+    from waku.memory.procedural.loader import SkillLoader
 
     skills = [{"name": s.name, "description": s.description, "body": s.body,
                "path": str(s.path),
@@ -748,7 +801,7 @@ def collect() -> dict:
     }
 
     return {
-        "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "generated_at": datetime.now(UTC).isoformat(timespec="seconds"),
         "home": str(home.resolve()),
         "provider": settings.provider,
         "model": settings_info()["model"],
@@ -916,6 +969,14 @@ def tools_info() -> dict:
             from waku.tools import apple
 
             tools += apple.make_tools()
+        if settings.experimental:
+            # Mirror build_registry: without this the catalog LIES after you
+            # flip the experimental toggle — delegate_task is missing until the
+            # first chat turn builds the real agent, so it looks like the
+            # switch did nothing.
+            from waku.tools import experimental as experimental_tools
+
+            tools += experimental_tools.make_tools(settings)
     for t in tools:
         catalog.append({"name": t.name, "description": t.description,
                         "source": _tool_source(t.name, mcp["servers"])})
@@ -934,7 +995,7 @@ def run_query(payload: dict) -> dict:
     if not sql:
         return {"error": "Type a SELECT query."}
     low = sql.lower()
-    if not (low.startswith("select") or low.startswith("with")):
+    if not (low.startswith(("select", "with"))):
         return {"error": "Only SELECT (or WITH … SELECT) queries are allowed."}
     if ";" in sql:
         return {"error": "One statement at a time (no semicolons)."}
@@ -979,9 +1040,8 @@ def transcribe_audio(raw: bytes) -> dict:
             _whisper = WhisperModel(os.getenv("WAKU_WHISPER_MODEL", "base"), compute_type="int8")
     # the browser sends WAV (PCM) — Whisper/PyAV decode it reliably (WebM/Opus
     # from MediaRecorder often fails to decode).
-    tmp = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
-    tmp.write(raw)
-    tmp.close()
+    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+        tmp.write(raw)
     try:
         segments, _ = _whisper.transcribe(tmp.name)
         return {"text": " ".join(s.text for s in segments).strip()}
@@ -1374,6 +1434,11 @@ def settings_info() -> dict:
              "default_model": p.model, "default_small_model": p.small_model}
             for name, p in PROVIDERS.items()
         ],
+        # experimental tools (delegate_task -> pi). The ARENA can switch this on
+        # per-race, but the chat agent reads it from the environment — so without
+        # a toggle here, the sidebar chat could never delegate. See settings_save.
+        "experimental": s.experimental,
+        "pi_installed": bool(shutil.which("pi")),
         # optional web-search key (Tavily) — same BYOK treatment as provider keys
         "search_key_env": "TAVILY_API_KEY",
         "search_key_set": bool(os.getenv("TAVILY_API_KEY")),
@@ -1405,7 +1470,8 @@ def apply_settings(payload: dict) -> dict:
               "model": os.getenv("WAKU_MODEL", ""),
               "small_model": os.getenv("WAKU_SMALL_MODEL", "")}
     writable = ({"WAKU_PROVIDER", "WAKU_MODEL", "WAKU_SMALL_MODEL", "TAVILY_API_KEY",
-                 "WAKU_EPISODIC_STORE", "NOTION_TOKEN", "NOTION_EPISODES_DATABASE_ID"}
+                 "WAKU_EPISODIC_STORE", "WAKU_EXPERIMENTAL",
+                 "NOTION_TOKEN", "NOTION_EPISODES_DATABASE_ID"}
                 | {p.key_env for p in PROVIDERS.values()})
     env_path = find_dotenv(usecwd=True) or ".env"
 
@@ -1414,6 +1480,11 @@ def apply_settings(payload: dict) -> dict:
                "WAKU_SMALL_MODEL": payload.get("small_model", "") or ""}
     if episodic_store:
         updates["WAKU_EPISODIC_STORE"] = episodic_store
+    # NOT `if experimental:` — turning it OFF sends "", which is falsy. Absent
+    # (None) means "don't touch"; "" means "switch it off".
+    experimental = payload.get("experimental")
+    if experimental is not None:
+        updates["WAKU_EXPERIMENTAL"] = "1" if str(experimental).strip() else ""
     # Changing provider never carries a model across endpoints (live bug:
     # kimi->gemini kept gate model kimi-k3 and every turn 404'd on Gemini). But
     # if the user didn't newly type a model, use THIS provider's default (their
@@ -1501,7 +1572,7 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def do_GET(self):  # noqa: N802 — http.server API
+    def do_GET(self):
         if self.path == "/api/data":
             self._send(json.dumps(collect(), default=str).encode(), "application/json")
         elif self.path == "/api/compare/history":
@@ -1539,7 +1610,7 @@ class Handler(BaseHTTPRequestHandler):
                  ".html": "text/html; charset=utf-8"}.get(target.suffix, "application/octet-stream")
         self._send(target.read_bytes(), ctype, no_cache=True)
 
-    def do_POST(self):  # noqa: N802 — local write endpoints
+    def do_POST(self):
         length = int(self.headers.get("Content-Length", 0))
         # /api/voice takes a raw audio blob, not JSON — handle it first.
         if self.path == "/api/voice":
@@ -1631,7 +1702,7 @@ def main() -> None:
 
             if start_in_background():
                 print("Telegram gateway → listening in the background (phone messages land here too)")
-        except Exception as exc:  # noqa: BLE001 — never let a gateway block the dashboard
+        except Exception as exc:
             print(f"(telegram) not started: {exc}")
         print(f"Waku dashboard → http://localhost:{port}  (Ctrl-C to stop)")
         server.serve_forever()

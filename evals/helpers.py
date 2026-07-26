@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 from types import SimpleNamespace
 
+
 def _has_key() -> bool:
     """True when the ACTIVE provider (WAKU_PROVIDER) has its key set, so live
     evals run on whatever the user actually configured (anthropic, openrouter,

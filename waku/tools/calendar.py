@@ -100,7 +100,7 @@ end tell'''
     )
     try:
         result = subprocess.run(
-            ["osascript", "-e", script], capture_output=True, text=True, timeout=30
+            ["osascript", "-e", script], capture_output=True, text=True, timeout=30, check=False
         )
     except subprocess.TimeoutExpired:
         return (

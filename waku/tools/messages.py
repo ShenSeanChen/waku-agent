@@ -7,7 +7,7 @@ channel (email, Telegram, Slack) is a great community contribution.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from waku.tools.registry import Tool
@@ -15,7 +15,7 @@ from waku.tools.registry import Tool
 
 def make_tool(home: Path) -> Tool:
     def send_message(to: str, body: str) -> str:
-        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
+        stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S")
         safe_to = "".join(c if c.isalnum() else "-" for c in to)[:40]
         path = home / "outbox" / f"{stamp}-{safe_to}.txt"
         path.write_text(f"To: {to}\n\n{body}\n")
