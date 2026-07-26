@@ -50,7 +50,7 @@ class _FakeNotionClient:
         return {"results": list(self._pages), "has_more": False}
 
 
-from waku.memory.episodic.notion_store import (  # noqa: E402
+from waku.memory.episodic.notion_store import (
     NotionEpisodeStore,
     normalize_database_id,
 )
@@ -190,5 +190,5 @@ from waku.memory.episodic.notion_store import NotionEpisodeStore
 assert "notion_client" not in sys.modules
 print("ok")
 """
-    result = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
+    result = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=False)
     assert result.returncode == 0, result.stderr

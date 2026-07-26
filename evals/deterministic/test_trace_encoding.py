@@ -12,7 +12,6 @@ from waku.config import Settings
 from waku.ops.dashboard import collect, events_since
 from waku.ops.tracing import TraceEncodingError, Tracer
 
-
 MESSAGE = "处理中文日程 " + chr(0x1F680)
 
 
@@ -97,9 +96,9 @@ def test_tracer_refuses_to_append_to_legacy_non_utf8_trace(tmp_path):
     ).encode("gbk")
     trace.write_bytes(original)
 
-    with pytest.raises(TraceEncodingError, match="not valid UTF-8"):
-        with Tracer(settings).turn("next turn"):
-            pass
+    with pytest.raises(TraceEncodingError, match="not valid UTF-8"), \
+            Tracer(settings).turn("next turn"):
+        pass
 
     assert trace.read_bytes() == original
 

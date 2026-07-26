@@ -376,3 +376,25 @@
        border:1px solid var(--line2);border-radius:99px;padding:3px 12px}
   .cmp-sortbtn:hover{border-color:var(--accent);color:var(--accent)}
   .cmp-sortbtn.on{border-color:var(--accent);color:var(--accent);background:var(--accent-soft);font-weight:600}
+
+/* Sub-agent receipt (Arena cards): pi working inside a card. Live = small
+   terminal window; finished = one quiet row, expandable. */
+.subterm{ margin:6px 0; border:1px solid var(--line); border-radius:8px;
+  background:var(--bg); font-size:11.5px; overflow:hidden; }
+.subterm.live{ border-color:var(--accent); background:var(--accent-soft); }
+.subterm-h{ display:flex; align-items:center; gap:7px; padding:4px 8px;
+  color:var(--ink3); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+  cursor:default; list-style:none; }
+details.subterm > summary.subterm-h{ cursor:pointer; }
+details.subterm > summary.subterm-h::-webkit-details-marker{ display:none; }
+.subterm-t{ overflow:hidden; text-overflow:ellipsis; }
+.subterm pre{ margin:0; padding:5px 8px; border-top:1px solid var(--line);
+  font-size:11px; line-height:1.5; white-space:pre-wrap; word-break:break-word;
+  max-height:96px; overflow-y:auto; }
+
+/* Arena card diet: clamp long replies (fade + toggle), one-line model names. */
+.cmp-reply.clamped{ max-height:150px; overflow:hidden; position:relative; }
+.cmp-reply.clamped::after{ content:""; position:absolute; left:0; right:0; bottom:0;
+  height:44px; background:linear-gradient(transparent, var(--panel)); }
+.cmp-more{ font-size:11px; display:inline-block; margin-top:2px; }
+.cmp-h code{ white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:15ch; }

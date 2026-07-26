@@ -11,7 +11,6 @@ away. What persists lives in waku/memory. Working memory =
 
 from __future__ import annotations
 
-
 from waku.config import Settings
 
 DEFAULT_SOUL = """\
@@ -71,9 +70,9 @@ class Session:
                  f"\nRight now it is {now:%A, %Y-%m-%d %H:%M} ({now:%Z}, UTC{now:%z}).",
                  # the agent should know its own brain — "what model are you?"
                  # is the first question every curious user asks
-                 f"Your model: you are running on '{self.settings.model}' via the "
+                 (f"Your model: you are running on '{self.settings.model}' via the "
                  f"'{self.settings.provider}' provider, inside Waku, a local-first "
-                 f"open-source agent harness (github.com/ShenSeanChen/waku-agent)."]
+                 f"open-source agent harness (github.com/ShenSeanChen/waku-agent).")]
 
         if self.memory is not None:
             # Hero moment #1: a cheap judge decides IF we retrieve at all —

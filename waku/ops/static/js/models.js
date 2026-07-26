@@ -7,8 +7,8 @@
 // releases the edit lock — else the render guard keeps showing the OLD state
 // (live bug: "Current:" card stayed on kimi after switching) — clears the stale
 // catalog, and re-fetches. Returns the response so callers show their own status.
-async function applyModel({provider, model, small_model, episodic_store, keys = {}}){
-  const r = await postJSON("/api/settings", {provider, model, small_model, episodic_store, keys});
+async function applyModel({provider, model, small_model, episodic_store, experimental, keys = {}}){
+  const r = await postJSON("/api/settings", {provider, model, small_model, episodic_store, experimental, keys});
   if (!r.error){ editing = false; modelCatalog = null; await refresh(); }
   return r;
 }
@@ -17,10 +17,11 @@ async function saveSettings(){
   const model = document.getElementById("set-model").value.trim();
   const small_model = (document.getElementById("set-small-model")?.value || "").trim();
   const episodic_store = document.getElementById("set-episodic-store")?.value;
+  const experimental = document.getElementById("set-experimental")?.value;
   const keys = {};
   document.querySelectorAll("[data-key]").forEach(i => { if(i.value.trim()) keys[i.dataset.key] = i.value.trim(); });
   document.getElementById("set-msg").textContent = "switching…";
-  const r = await applyModel({provider, model, small_model, episodic_store, keys});
+  const r = await applyModel({provider, model, small_model, episodic_store, experimental, keys});
   document.getElementById("set-msg").textContent = r.error ? ("Error: "+r.error) : "Switched to "+r.provider+" — live now.";
 }
 function markEditing(){ editing = true; }

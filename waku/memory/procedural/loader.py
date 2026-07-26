@@ -31,10 +31,10 @@ def _parse_text(text: str, path: Path) -> Skill | None:
     if not match:
         return None
     front, body = match.groups()
-    fields = dict(
-        (k.strip(), v.strip().strip("'\""))
+    fields = {
+        k.strip(): v.strip().strip("'\"")
         for k, _, v in (line.partition(":") for line in front.splitlines() if ":" in line)
-    )
+    }
     if "name" not in fields or "description" not in fields:
         return None
     return Skill(fields["name"], fields["description"], body.strip(), path)

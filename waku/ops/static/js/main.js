@@ -4,6 +4,7 @@
 
 let activeView = null, activeSub = null;
 const TITLES = {chat:"Chat & watch", ops:"LLM Ops",
+                compare:"Arena — race models through the real loop",
                 database:"Database — everything Waku stores (state.db)"};
 function render(){
   if (!D) return;
