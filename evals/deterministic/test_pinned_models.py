@@ -20,7 +20,7 @@ from waku.ops import settings_api as d
 
 PROVIDER_KEYS = ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "DEEPSEEK_API_KEY",
                  "MINIMAX_API_KEY", "MOONSHOT_API_KEY", "ZHIPU_API_KEY", "OPENROUTER_API_KEY",
-                 "XAI_API_KEY")
+                 "XAI_API_KEY", "OPENCODE_ZEN_API_KEY", "OPENCODE_GO_API_KEY")
 
 
 @pytest.fixture
@@ -33,6 +33,10 @@ def home(tmp_path, monkeypatch):
     (tmp_path / ".env").write_text("")
     for var in PROVIDER_KEYS:
         monkeypatch.delenv(var, raising=False)
+    # apply_settings bypasses monkeypatch and writes directly to os.environ,
+    # so WAKU_PROVIDER must also be tracked to prevent leaking into later
+    # tests (test_tool_trigger would inherit a stale provider and crash).
+    monkeypatch.delenv("WAKU_PROVIDER", raising=False)
     return tmp_path
 
 
@@ -157,7 +161,8 @@ def test_known_catalog_providers_can_list(home):
     they intentionally show their curated defaults until we wire+verify one."""
     from waku.loop.models import PROVIDERS
 
-    CAN_LIST = {"anthropic", "openai", "openrouter", "gemini", "deepseek", "kimi", "xai"}
+    CAN_LIST = {"anthropic", "openai", "openrouter", "gemini", "deepseek", "kimi", "xai",
+                "opencode_zen", "opencode_go"}
     for name in CAN_LIST:
         prov = PROVIDERS[name]
         can_list = bool(prov.catalog_url) or (prov.kind == "openai" and bool(prov.base_url))

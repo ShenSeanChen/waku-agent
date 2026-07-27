@@ -107,10 +107,13 @@ def list_models(provider: str | None = None) -> dict:
         return {**out, "listed": False,
                 "models": _known_default_ids(prov, out, name == s.provider), "error": msg}
     # send both auth styles — Bearer for OpenAI-compatible catalogs, x-api-key +
-    # version for Anthropic's; each server reads the header it knows
+    # version for Anthropic's; each server reads the header it knows.
+    # Set a browser-like User-Agent: some OpenAI-compatible proxies (e.g.
+    # opencode.ai) block Python-urllib/3.x with a 403 / error code 1010.
     req = urllib.request.Request(url, headers={
         "Authorization": f"Bearer {key}",
         "x-api-key": key, "anthropic-version": "2023-06-01",
+        "User-Agent": "Mozilla/5.0 (compatible; Waku)",
     })
     try:
         with urllib.request.urlopen(req, timeout=10) as resp:

@@ -95,6 +95,17 @@ PROVIDERS: dict[str, Provider] = {
     "xai":       Provider("openai", "XAI_API_KEY", "https://api.x.ai/v1",
                           "grok-4", "grok-4-fast",
                           catalog_url="https://api.x.ai/v1/models"),
+    # OpenCode — OpenAI-compatible platform. Two endpoints: "zen" and "go"
+    # share the same platform key. zen offers free models (default:
+    # deepseek-v4-flash-free); go uses the standard deepseek-v4-flash.
+    # The live catalog (GET /models) lists whatever the endpoint serves,
+    # and the picker is the authoritative menu.
+    "opencode_zen": Provider("openai", "OPENCODE_ZEN_API_KEY",
+                               "https://opencode.ai/zen/v1",
+                               "deepseek-v4-flash-free", "deepseek-v4-flash-free"),
+    "opencode_go":  Provider("openai", "OPENCODE_GO_API_KEY",
+                               "https://opencode.ai/zen/go/v1",
+                               "deepseek-v4-flash", "deepseek-v4-flash"),
 }
 
 

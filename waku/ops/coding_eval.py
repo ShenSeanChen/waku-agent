@@ -35,6 +35,7 @@ PI_PROVIDER = {
     "anthropic": "anthropic", "openai": "openai", "gemini": "google",
     "kimi": "moonshotai", "xai": "xai", "glm": "zai",
     "deepseek": "deepseek", "minimax": "minimax", "openrouter": "openrouter",
+    "opencode_zen": "opencode_zen", "opencode_go": "opencode_go",
 }
 
 
