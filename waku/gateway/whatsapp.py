@@ -19,27 +19,33 @@ Setup (10-20 minutes, free tier available but painful):
        and generate a permanent token with whatsapp_business_messaging permission
      - Temporary tokens expire after 24 hours — set up a permanent one early
 
-  4. Set up webhook verification (WHATSAPP_VERIFY_TOKEN):
+  4. Get your App Secret (WHATSAPP_APP_SECRET):
+     - Go to your app → Settings → Basic → App Secret
+     - This is used to verify that incoming webhooks are actually from Meta
+     - Without this, anyone who finds your webhook URL can forge requests
+
+  5. Set up webhook verification (WHATSAPP_VERIFY_TOKEN):
      - Pick any random string, e.g. "my-waku-verify-token-123"
      - You'll enter this in Meta's webhook config later
 
-  5. Expose your local server publicly:
+  6. Expose your local server publicly:
      - Install ngrok: https://ngrok.com (free tier gives you a URL)
      - Run: ngrok http 5000
      - Copy the https://xxxx.ngrok.io URL
 
-  6. Configure the webhook in Meta's dashboard:
+  7. Configure the webhook in Meta's dashboard:
      - Go to your app → WhatsApp → Configuration → Webhook
      - Callback URL: https://xxxx.ngrok.io/webhook
-     - Verify token: the string you chose in step 4
+     - Verify token: the string you chose in step 5
      - Subscribe to "messages" field
 
-  7. Set env vars in .env:
+  8. Set env vars in .env:
      WHATSAPP_TOKEN=your_access_token
      WHATSAPP_PHONE_NUMBER_ID=your_phone_number_id
+     WHATSAPP_APP_SECRET=your_app_secret
      WHATSAPP_VERIFY_TOKEN=your_random_verify_string
 
-  8. Run: make whatsapp
+  9. Run: make whatsapp
 
   Common gotchas and pain points (Meta's setup is a rite of passage):
 
@@ -59,7 +65,7 @@ Setup (10-20 minutes, free tier available but painful):
     get a new URL and must reconfigure the webhook in Meta's dashboard.
     Ngrok paid plans give you a stable subdomain.
 
-  - METa'S DASHBOARD IS A MAZE. Settings live acrossdevelopers.facebook.com,
+  - META'S DASHBOARD IS A MAZE. Settings live across developers.facebook.com,
     business.facebook.com, and the WhatsApp Manager at business.whatsapp.com.
     Bookmark all three.
 
@@ -85,9 +91,13 @@ Setup (10-20 minutes, free tier available but painful):
 
 from __future__ import annotations
 
+import hashlib
+import hmac
+import json
 import os
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import parse_qs, urlparse
 
 from waku.app import Waku
 from waku.gateway.cli import _observer  # mirror gate/tool activity on the laptop terminal
@@ -109,7 +119,13 @@ def _send_message(token: str, phone_number_id: str, to: str, text: str) -> bool:
         return False
 
 
-def _build_handler(token: str, phone_number_id: str, verify_token: str, allowed: str):
+def _build_handler(
+    token: str,
+    phone_number_id: str,
+    verify_token: str,
+    app_secret: str,
+    allowed: str,
+):
     """Build the HTTP request handler with captured config. Shared by the
     standalone gateway and the background server the dashboard starts."""
 
@@ -124,8 +140,6 @@ def _build_handler(token: str, phone_number_id: str, verify_token: str, allowed:
 
         # ── GET /webhook — Meta's one-time verification challenge ──────
         def do_GET(self) -> None:
-            from urllib.parse import urlparse, parse_qs
-
             parsed = urlparse(self.path)
             if parsed.path != "/webhook":
                 self._set_json(404)
@@ -148,8 +162,6 @@ def _build_handler(token: str, phone_number_id: str, verify_token: str, allowed:
 
         # ── POST /webhook — incoming messages from WhatsApp ────────────
         def do_POST(self) -> None:
-            from urllib.parse import urlparse
-
             parsed = urlparse(self.path)
             if parsed.path != "/webhook":
                 self._set_json(404)
@@ -159,9 +171,19 @@ def _build_handler(token: str, phone_number_id: str, verify_token: str, allowed:
             content_length = int(self.headers.get("Content-Length", 0))
             body = self.rfile.read(content_length)
 
-            try:
-                import json
+            # Verify Meta's X-Hub-Signature-256 — without this, anyone who
+            # finds the webhook URL can forge payloads and drive the agent.
+            sig = self.headers.get("X-Hub-Signature-256", "")
+            expected = "sha256=" + hmac.new(
+                app_secret.encode(), body, hashlib.sha256
+            ).hexdigest()
+            if not hmac.compare_digest(sig, expected):
+                print("(whatsapp) rejected: bad signature")
+                self._set_json(403)
+                self.wfile.write(b"{}")
+                return
 
+            try:
                 data = json.loads(body)
             except Exception:
                 self._set_json(400)
@@ -193,7 +215,9 @@ def _build_handler(token: str, phone_number_id: str, verify_token: str, allowed:
                         )
                         print(f"waku › {result.reply}")
 
-                        _send_message(token, phone_number_id, sender, result.reply or "(no reply)")
+                        _send_message(
+                            token, phone_number_id, sender, result.reply or "(no reply)"
+                        )
 
     return Handler
 
@@ -210,6 +234,7 @@ def main() -> None:
     token = settings.whatsapp_token
     phone_number_id = settings.whatsapp_phone_number_id
     verify_token = os.getenv("WHATSAPP_VERIFY_TOKEN", "")
+    app_secret = os.getenv("WHATSAPP_APP_SECRET", "")
     allowed = os.getenv("WHATSAPP_ALLOWED_PHONE", "")
 
     if not token:
@@ -225,8 +250,14 @@ def main() -> None:
         raise SystemExit(
             "Set WHATSAPP_VERIFY_TOKEN in .env (any random string you'll enter in Meta's dashboard)."
         )
+    if not app_secret:
+        raise SystemExit(
+            "Set WHATSAPP_APP_SECRET in .env (from your app's Settings → Basic → App Secret). "
+            "This is required to verify webhook signatures — without it, anyone who finds "
+            "your webhook URL can forge requests and drive the agent."
+        )
 
-    handler = _build_handler(token, phone_number_id, verify_token, allowed)
+    handler = _build_handler(token, phone_number_id, verify_token, app_secret, allowed)
     server = ThreadingHTTPServer(("0.0.0.0", 5000), handler)
     print("WhatsApp gateway → listening on http://0.0.0.0:5000")
     print("  Webhook URL: http://<your-public-url>/webhook")
@@ -249,8 +280,9 @@ def start_in_background() -> bool:
     token = settings.whatsapp_token
     phone_number_id = settings.whatsapp_phone_number_id
     verify_token = os.getenv("WHATSAPP_VERIFY_TOKEN", "")
+    app_secret = os.getenv("WHATSAPP_APP_SECRET", "")
 
-    if not token or not phone_number_id or not verify_token:
+    if not token or not phone_number_id or not verify_token or not app_secret:
         return False
     try:
         import httpx  # noqa: F401
@@ -263,7 +295,9 @@ def start_in_background() -> bool:
 
     def run() -> None:
         try:
-            handler = _build_handler(token, phone_number_id, verify_token, allowed)
+            handler = _build_handler(
+                token, phone_number_id, verify_token, app_secret, allowed
+            )
             server = ThreadingHTTPServer(("0.0.0.0", 5000), handler)
             server.serve_forever()
         except Exception as exc:  # noqa: BLE001 — isolate the dashboard from gateway errors
