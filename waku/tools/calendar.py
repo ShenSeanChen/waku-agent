@@ -153,6 +153,7 @@ def sync_to_google_calendar(
     attendees: str = "",
     notes: str = "",
     calendar_id: str = "primary",
+    home: Path | None = None,
 ) -> str:
     """Create one Google Calendar event without changing the local-first contract."""
     try:
@@ -168,7 +169,58 @@ def sync_to_google_calendar(
         )
 
     try:
-        credentials, _ = google.auth.default(scopes=[GOOGLE_CALENDAR_SCOPE])
+        credentials = None
+        if home is not None:
+            try:
+                from google.auth.transport.requests import Request
+                from google.oauth2.credentials import Credentials
+                from google_auth_oauthlib.flow import InstalledAppFlow
+            except ImportError:
+                return (
+                    "Google Calendar sync FAILED (support is not installed; "
+                    "install with pip install -e '.[gcal]') — the event is still in the "
+                    "local calendar."
+                )
+
+            token_path = home / "token.json"
+            creds_path = home / "credentials.json"
+
+            if token_path.exists():
+                try:
+                    credentials = Credentials.from_authorized_user_file(
+                        str(token_path), scopes=[GOOGLE_CALENDAR_SCOPE]
+                    )
+                except Exception:
+                    credentials = None
+
+            if credentials and credentials.expired and credentials.refresh_token:
+                try:
+                    credentials.refresh(Request())
+                    token_path.parent.mkdir(parents=True, exist_ok=True)
+                    token_path.write_text(credentials.to_json(), encoding="utf-8")
+                except Exception:
+                    credentials = None
+
+            if not credentials or not credentials.valid:
+                if not creds_path.exists():
+                    root_creds = Path("credentials.json")
+                    if root_creds.exists():
+                        creds_path = root_creds
+                    else:
+                        return (
+                            "Google Calendar sync FAILED (credentials.json not found in "
+                            f"{home / 'credentials.json'}; download OAuth 2.0 Client ID "
+                            "credentials from Google Cloud Console) — the event is still in the local calendar."
+                        )
+                flow = InstalledAppFlow.from_client_secrets_file(
+                    str(creds_path), scopes=[GOOGLE_CALENDAR_SCOPE]
+                )
+                credentials = flow.run_local_server(port=0)
+                token_path.parent.mkdir(parents=True, exist_ok=True)
+                token_path.write_text(credentials.to_json(), encoding="utf-8")
+        else:
+            credentials, _ = google.auth.default(scopes=[GOOGLE_CALENDAR_SCOPE])
+
         bounded_http = httplib2.Http(timeout=GOOGLE_CALENDAR_TIMEOUT)
         authorized_http = google_auth_httplib2.AuthorizedHttp(
             credentials, http=bounded_http
@@ -253,6 +305,7 @@ def make_tool(
                 attendees,
                 notes,
                 calendar_id=google_calendar_id,
+                home=home,
             )
         if not apple_calendar and not google_calendar:
             where += (
