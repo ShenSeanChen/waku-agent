@@ -127,10 +127,20 @@ def _build_handler(
     allowed: str,
 ):
     """Build the HTTP request handler with captured config. Shared by the
-    standalone gateway and the background server the dashboard starts."""
+    standalone gateway and the background server the dashboard starts.
 
-    waku = Waku()
-    waku.session.session_id = "whatsapp"  # its own conversation thread in the inbox
+    ThreadingHTTPServer dispatches requests on worker threads, so we pass
+    ``check_same_thread=False`` and use a lock to serialise turns through
+    the same Waku instance."""
+
+    from waku.config import load_settings
+    from waku.db import connect
+
+    s = load_settings()
+    s.ensure_home()
+    waku = Waku(settings=s, conn=connect(s.home, check_same_thread=False))
+    waku.session.session_id = "whatsapp"
+    waku_lock = threading.Lock()
 
     class Handler(BaseHTTPRequestHandler):
         def _set_json(self, code: int) -> None:
@@ -210,9 +220,10 @@ def _build_handler(
                             continue
 
                         print(f"you › [{sender}] {text}")
-                        result = waku.respond(
-                            text, observer=_observer, source="whatsapp"
-                        )
+                        with waku_lock:
+                            result = waku.respond(
+                                text, observer=_observer, source="whatsapp"
+                            )
                         print(f"waku › {result.reply}")
 
                         _send_message(
