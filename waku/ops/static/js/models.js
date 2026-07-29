@@ -13,16 +13,10 @@ async function applyModel({provider, model, small_model, episodic_store, experim
   return r;
 }
 async function saveSettings(){
-  const provider = document.getElementById("set-provider").value;
-  const model = document.getElementById("set-model").value.trim();
-  const small_model = (document.getElementById("set-small-model")?.value || "").trim();
-  const episodic_store = document.getElementById("set-episodic-store")?.value;
   const experimental = document.getElementById("set-experimental")?.value;
-  const keys = {};
-  document.querySelectorAll("[data-key]").forEach(i => { if(i.value.trim()) keys[i.dataset.key] = i.value.trim(); });
   document.getElementById("set-msg").textContent = "switching…";
-  const r = await applyModel({provider, model, small_model, episodic_store, experimental, keys});
-  document.getElementById("set-msg").textContent = r.error ? ("Error: "+r.error) : "Switched to "+r.provider+" — live now.";
+  const r = await postJSON("/api/settings", {experimental});
+  document.getElementById("set-msg").textContent = r.error ? ("Error: "+r.error) : "Saved.";
 }
 function markEditing(){ editing = true; }
 
@@ -232,4 +226,3 @@ async function pinModel(provider, model, action){
   const r = await postJSON("/api/pin", {provider, model, action});
   if (!r.error){ editing = false; await refresh(); }
 }
-

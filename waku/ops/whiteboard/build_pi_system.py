@@ -29,7 +29,8 @@ def _add(e, x):
 
 def build():
     e = []
-    a = lambda x: _add(e, x)
+    def a(x):
+        _add(e, x)
 
     # ---- title -------------------------------------------------------------
     a(S.text(60, 44, "pi — one small loop, made strong", size=S.FS_TITLE))

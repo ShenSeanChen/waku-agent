@@ -25,12 +25,14 @@ import os
 import shutil
 import threading
 import time
+from dataclasses import asdict
 from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from waku.config import load_settings
 from waku.db import connect
+from waku.integrations import apply_integration, apply_provider, list_integrations, test_integration
 from waku.ops import browser_agent, compare_history
 from waku.ops.arena import (
     compare_clear,
@@ -134,6 +136,14 @@ _notion_store = None                       # built once (its constructor calls N
 _notion_episodes: tuple[float, list] | None = None   # (fetched_at, items)
 
 
+def invalidate_notion_cache() -> None:
+    """Forget cached Notion clients/results after connection settings change."""
+    global _notion_store, _notion_episodes
+    with _notion_lock:
+        _notion_store = None
+        _notion_episodes = None
+
+
 def _get_notion_store():
     """The ONE NotionEpisodeStore for the whole dashboard process. Its
     constructor round-trips to Notion (data-source resolution), so it's built
@@ -149,6 +159,7 @@ def _get_notion_store():
 def collect() -> dict:
     """Everything the page shows, in one JSON blob."""
     settings = load_settings()
+    info = settings_info()
     settings.ensure_home()
     home = settings.home
     conn = connect(home)
@@ -307,7 +318,7 @@ def collect() -> dict:
         "generated_at": datetime.now(UTC).isoformat(timespec="seconds"),
         "home": str(home.resolve()),
         "provider": settings.provider,
-        "model": settings_info()["model"],
+        "model": info["model"],
         "stats": {
             "turns": len(turns),
             "tool_calls": sum(len(t["tools"]) for t in turns),
@@ -346,7 +357,8 @@ def collect() -> dict:
         "eval_report": eval_report,
         "eval_history": eval_history,
         "db": db_info,
-        "settings": settings_info(),
+        "settings": info,
+        "connections": [asdict(view) for view in list_integrations()],
         "tools": tools_info(),
         "usage": usage_summary(home),
     }
@@ -836,6 +848,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         routes = {"/api/chat": None, "/api/memory": memory_action, "/api/settings": apply_settings,
                   "/api/query": run_query, "/api/session": session_action, "/api/pin": pin_action,
+                  "/api/connections": None, "/api/connections/test": None, "/api/connections/provider": None,
                   "/api/compare/clear": compare_clear,
                   "/api/compare/regrade": compare_regrade, "/api/compare/delete_run": compare_delete_run}
         if self.path not in routes:
@@ -847,6 +860,16 @@ class Handler(BaseHTTPRequestHandler):
             if self.path == "/api/chat":
                 message = (payload.get("message") or "").strip()
                 out = chat(message) if message else {"error": "empty message"}
+            elif self.path == "/api/connections":
+                result = apply_integration(payload.get("key", ""), payload.get("values") or {},
+                                           tuple(payload.get("clear") or ()), force=bool(payload.get("force")))
+                if result.ok and payload.get("key") == "notion":
+                    invalidate_notion_cache()
+                out = asdict(result)
+            elif self.path == "/api/connections/test":
+                out = asdict(test_integration(payload.get("key", "")))
+            elif self.path == "/api/connections/provider":
+                out = asdict(apply_provider(**payload))
             else:
                 out = routes[self.path](payload)
         except Exception as exc:  # surface, don't 500 — the browser shows it
@@ -867,24 +890,26 @@ def main() -> None:
         except OSError:
             print(f"port {port} busy, trying {port + 1}…")
             continue
-        # One command, many gateways: if a Telegram token is set, run the bot
-        # too (background thread) so you don't need a separate `waku telegram`.
-        try:
-            from waku.gateway.telegram import start_in_background
+        # One owner for gateway lifecycle: configuration saves can now stop and
+        # restart a bot in-process instead of requiring a dashboard restart.
+        from waku.gateway.discord import start_in_background as start_discord
+        from waku.gateway.supervisor import GatewaySupervisor
+        from waku.gateway.telegram import start_in_background as start_telegram
+        from waku.integrations import INTEGRATIONS, register_gateway_reloader, register_gateway_status_provider
 
-            if start_in_background():
-                print("Telegram gateway → listening in the background (phone messages land here too)")
-        except Exception as exc:
-            print(f"(telegram) not started: {exc}")
-        try:
-            from waku.gateway.discord import start_in_background as start_discord
-
-            if start_discord():
-                print("Discord gateway → listening in the background (server messages land here too)")
-        except Exception as exc:  # noqa: BLE001 — never let a gateway block the dashboard
-            print(f"(discord) not started: {exc}")
+        gateway_items = [item for item in INTEGRATIONS if item.reload.value == "gateway"]
+        supervisor = GatewaySupervisor(
+            {"telegram": start_telegram, "discord": start_discord},
+            {item.key: tuple(field.name for field in item.env) for item in gateway_items},
+        )
+        register_gateway_status_provider(supervisor.status)
+        register_gateway_reloader(supervisor.reconcile)
+        supervisor.reconcile()
         print(f"Waku dashboard → http://localhost:{port}  (Ctrl-C to stop)")
-        server.serve_forever()
+        try:
+            server.serve_forever()
+        finally:
+            supervisor.shutdown()
         return
     raise SystemExit(f"no free port in {base}–{base + 9}")
 

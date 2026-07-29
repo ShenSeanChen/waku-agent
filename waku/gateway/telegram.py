@@ -18,6 +18,10 @@ no server. This is why hobbyist assistants pick Telegram over WhatsApp
 from __future__ import annotations
 
 import os
+import asyncio
+import threading
+
+from waku.integrations import IntegrationState, IntegrationStatus
 
 from waku.app import Waku
 from waku.gateway.cli import _observer  # mirror gate/tool activity on the laptop terminal
@@ -84,7 +88,31 @@ def main() -> None:
     app.run_polling()
 
 
-def start_in_background() -> bool:
+class TelegramHandle:
+    def __init__(self, loop, app, thread, conflict) -> None:
+        self.loop, self.app, self.thread, self._conflict = loop, app, thread, conflict
+
+    def stop(self) -> None:
+        async def shutdown():
+            if self.app.updater.running:
+                await self.app.updater.stop()
+            if self.app.running:
+                await self.app.stop()
+            await self.app.shutdown()
+        if self.thread.is_alive() and self.loop.is_running():
+            asyncio.run_coroutine_threadsafe(shutdown(), self.loop).result(timeout=10)
+            self.loop.call_soon_threadsafe(self.loop.stop)
+            self.thread.join(timeout=10)
+
+    def status(self) -> IntegrationStatus:
+        if self._conflict["conflict"]:
+            return IntegrationStatus(IntegrationState.ERROR, "another instance is polling this token")
+        if not self.thread.is_alive():
+            return IntegrationStatus(IntegrationState.ERROR, "gateway stopped unexpectedly")
+        return IntegrationStatus(IntegrationState.CONNECTED)
+
+
+def start_in_background() -> TelegramHandle | None:
     """Start the Telegram poller on a daemon thread — so `waku dashboard` runs
     the browser cockpit AND Telegram from one command. Returns True if started,
     False (quietly) if there's no token or the extra isn't installed. Never
@@ -93,16 +121,13 @@ def start_in_background() -> bool:
 
     token = load_settings().telegram_token
     if not token:
-        return False
+        return None
     try:
         import telegram  # noqa: F401
     except ImportError:
         print("(telegram) TELEGRAM_BOT_TOKEN is set but the extra isn't installed — "
               "pip install 'waku-agent[telegram]'")
-        return False
-
-    import asyncio
-    import threading
+        return None
 
     print("(telegram) starting:")
     print(posture())
@@ -122,6 +147,9 @@ def start_in_background() -> bool:
             print("(telegram) another instance is already running this bot — the dashboard's "
                   "Telegram stays idle. Stop the other `waku telegram` and restart to use it here.")
 
+    loop = asyncio.new_event_loop()
+    app = _build_app(token)
+
     def run() -> None:
         # keep PTB's own error logging out of the dashboard terminal; we report
         # the one error that matters (Conflict) cleanly via on_poll_error.
@@ -129,10 +157,8 @@ def start_in_background() -> bool:
         logging.getLogger("httpx").setLevel(logging.WARNING)
         # its own event loop on this thread; start_polling is non-blocking, then
         # run_forever keeps it alive until the process (a daemon thread) exits.
-        loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         try:
-            app = _build_app(token)
             loop.run_until_complete(app.initialize())
             loop.run_until_complete(app.start())
             loop.run_until_complete(app.updater.start_polling(error_callback=on_poll_error))
@@ -140,8 +166,9 @@ def start_in_background() -> bool:
         except Exception as exc:
             print(f"(telegram) background poller stopped: {exc}")
 
-    threading.Thread(target=run, daemon=True, name="telegram-poll").start()
-    return True
+    thread = threading.Thread(target=run, daemon=True, name="telegram-poll")
+    thread.start()
+    return TelegramHandle(loop, app, thread, warned)
 
 
 if __name__ == "__main__":

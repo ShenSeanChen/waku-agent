@@ -200,7 +200,78 @@ function toolsMCP(t){
   return h;
 }
 
+function connectionField(key, field){
+  const id = `connection-${key}-${field.name}`;
+  const label = `${esc(field.label)}${field.required?" *":""}`;
+  if (field.kind === "bool") return `<label class="fld"><span>${label}</span><input id="${id}" data-field="${esc(field.name)}" type="checkbox" ${field.value?"checked":""}></label>`;
+  if (field.kind === "choice") return `<label class="fld"><span>${label}</span><select id="${id}" data-field="${esc(field.name)}">${field.options.map(o=>`<option value="${esc(o)}" ${o===field.value?"selected":""}>${esc(o)}</option>`).join("")}</select></label>`;
+  return `<label class="fld"><span>${label}${field.secret?(field.configured?` <span class="meta">set ····${esc(field.last4)}</span>`:" "):""}</span><input id="${id}" data-field="${esc(field.name)}" type="${field.secret?"password":"text"}" value="${field.secret?"":esc(field.value)}" placeholder="${field.secret?(field.configured?"blank keeps existing":"not configured"):""}>${field.secret?` <label class="meta"><input type="checkbox" data-clear="${esc(field.name)}"> clear</label>`:""}</label>`;
+}
+async function saveConnection(key, force){
+  const card = document.querySelector(`[data-connection="${key}"]`), values = {}, clear = [];
+  card.querySelectorAll("[data-field]").forEach(el => values[el.dataset.field] = el.type === "checkbox" ? (el.checked ? "1" : "") : el.value);
+  card.querySelectorAll("[data-clear]").forEach(el => { if (el.checked) clear.push(el.dataset.clear); });
+  const r = await postJSON("/api/connections", {key, values, clear, force:!!force});
+  const msg = document.getElementById(`connection-msg-${key}`);
+  if (!r.ok && r.can_force) msg.innerHTML = `${esc(r.error)} <button onclick="saveConnection('${esc(key)}',true)">Save anyway</button>`;
+  else { msg.textContent = r.ok ? "saved" : (r.error||"failed"); if(r.ok) refresh(); }
+}
+async function testConnection(key){
+  const r = await postJSON("/api/connections/test", {key});
+  const msg = document.getElementById(`connection-msg-${key}`); msg.textContent = r.status ? (r.status.message||r.status.state) : (r.error||"failed"); refresh();
+}
+async function saveProvider(provider){
+  const info = (D.connections || []).find(x => x.key === provider);
+  const field = info && info.fields[0] && document.getElementById(`connection-${provider}-${info.fields[0].name}`);
+  const payload = {provider};
+  if (field && field.value) payload.key = field.value;
+  // Models are global fields for the *current* provider. Switching cards must
+  // omit them so apply_provider selects the new provider's own default.
+  if (provider === stProvider()) {
+    const model = document.getElementById("connection-model"), small = document.getElementById("connection-small-model"), base = document.getElementById("connection-base-url"), custom = document.getElementById("connection-custom-key");
+    if (model) payload.model = model.value;
+    if (small) payload.small_model = small.value;
+    if (base) payload.base_url = base.value;
+    if (custom && custom.value) payload.custom_key = custom.value;
+    if (document.getElementById("connection-clear-custom-key")?.checked) payload.custom_key = "";
+  }
+  const r = await postJSON("/api/connections/provider", payload);
+  if (!r.ok) alert(r.error || "Provider update failed"); else refresh();
+}
+function stProvider(){ return (D.settings || {}).provider || "anthropic"; }
+
 const VIEWS = {
+  connections(d){
+    const items = d.connections || [];
+    let group = "", h = "";
+    const st = d.settings || {};
+    h += `<div class="card"><b>Current provider:</b> ${esc(st.provider||"")} · <code>${esc(st.model||"")}</code>
+      <label class="fld">Main model <input id="connection-model" list="model-list" value="${esc(st.model||"")}"></label>
+      <label class="fld">Small model <input id="connection-small-model" list="model-list" value="${esc(st.small_model||"")}"></label>
+      <label class="fld">Custom endpoint <input id="connection-base-url" value="${esc(st.base_url||"")}"></label>
+      <label class="fld">Custom API key <input type="password" id="connection-custom-key" placeholder="blank keeps existing"> <label class="meta"><input type="checkbox" id="connection-clear-custom-key"> clear</label></label>
+      <button class="save" onclick="saveProvider(stProvider())">Save provider settings</button>
+      <datalist id="model-list"></datalist><div class="meta" id="model-list-msg"></div></div>
+      <h2 id="catalog-h">Model catalog</h2><div class="card" id="catalog"></div>${(setTimeout(loadModelList,0),"")}`;
+    h += yourModelsCard(st);
+    for (const item of items){
+      if (item.group !== group){ group = item.group; h += `<h2>${esc(group)}</h2>`; }
+      const status = item.status || {};
+      const fields = item.fields.map(f => connectionField(item.key, f)).join("");
+      const providerControls = item.group === "AI Providers" ? `<button class="save" onclick="saveProvider('${esc(item.key)}')">${d.settings&&d.settings.provider===item.key?"Save current provider":"Switch to this provider"}</button>` : "";
+      h += `<div class="card connection-card" data-connection="${esc(item.key)}"><div class="u"><b>${esc(item.name)}</b>
+        <span class="srcpill">${esc((status.state||"").replaceAll("_"," "))}</span></div>
+        <div class="meta">${esc(item.what)}</div>${status.message?`<div class="meta">${esc(status.message)}</div>`:""}
+        ${status.checked_at?`<div class="meta">checked ${esc(status.checked_at)}</div>`:""}
+        ${item.install_command?`<div class="meta"><code>${esc(item.install_command)}</code></div>`:""}
+        ${item.setup_url?`<div class="meta"><a href="${esc(item.setup_url)}" target="_blank">Setup</a></div>`:""}
+        <div class="connection-fields">${fields}</div>
+        ${item.group === "AI Providers" ? providerControls : `<button class="save" onclick="saveConnection('${esc(item.key)}')">Save</button>
+        <button onclick="testConnection('${esc(item.key)}')">Test connection</button><span class="meta" id="connection-msg-${esc(item.key)}"></span>`}
+      </div>`;
+    }
+    return h || `<div class="card empty">No integrations registered.</div>`;
+  },
   // Gateway: ONE unified conversation across every channel (dashboard, telegram,
   // voice, cli) — the same loop + memory answer all of them. Each message is
   // tagged with where it came in, Hermes-style. You type in the dock on the right.
@@ -257,6 +328,15 @@ const VIEWS = {
   },
   settings(d){
     const st = d.settings || {providers:[]};
+    return `<h2>Experimental tools</h2><div class="card">
+      <div class="meta" style="margin-bottom:8px">Opt in to local coding delegation for chat.</div>
+      <label class="fld">Sub-agent delegation<select id="set-experimental" onfocus="markEditing()">
+        <option value="" ${!st.experimental?"selected":""}>off</option>
+        <option value="1" ${st.experimental?"selected":""}>on</option>
+      </select></label>
+      <button class="save" onclick="saveSettings()">Save</button><span class="meta" id="set-msg"></span></div>`;
+    /* Legacy Settings markup below is intentionally unreachable while retained
+       temporarily as a reference for the catalog widgets now in Connections. */
     let h = `<div class="card">Current: <b>${esc(st.provider)}</b> · loop brain <code>${esc(st.model)}</code> · gate &amp; summarizer <code>${esc(st.small_model)}</code><div class="meta" style="margin:4px 0 0">two jobs, two brains: the loop brain answers you; the small gate model decides memory retrieval and distills chats</div></div>`;
     h += yourModelsCard(st);
     h += `<h2>Provider &amp; keys (BYOK)</h2><div class="card">

@@ -26,7 +26,8 @@ def _add(e, x):
 
 def act1():
     e = []
-    a = lambda x: _add(e, x)
+    def a(x):
+        _add(e, x)
 
     a(S.text(60, 40, "From Bag-of-Words to Kimi K3", size=S.FS_TITLE))
     a(S.underline(64, 120, 900, color=S.PAL["orange"][1]))
@@ -87,7 +88,8 @@ def act1():
 
 def act2(standalone=True):
     e = []
-    a = lambda x: _add(e, x)
+    def a(x):
+        _add(e, x)
 
     a(S.text(60, 40, "Testing the Hero -- live, on Waku", size=S.FS_TITLE))
     a(S.underline(64, 120, 760, color=S.PAL["orange"][1]))

@@ -43,10 +43,13 @@ from __future__ import annotations
 
 import os
 import time
+import asyncio
+import threading
 from pathlib import Path
 
 from waku.app import Waku
 from waku.gateway.cli import _observer
+from waku.integrations import IntegrationState, IntegrationStatus
 
 
 def _ids(env: str) -> set[str]:
@@ -200,31 +203,56 @@ def main() -> None:
     client.run(token)
 
 
-def start_in_background() -> bool:
+class DiscordHandle:
+    def __init__(self, client, thread, started) -> None:
+        self.client, self.thread, self.started = client, thread, started
+
+    def stop(self) -> None:
+        self.started.wait(timeout=5)
+        loop = getattr(self.client, "loop", None)
+        if loop and loop.is_running():
+            asyncio.run_coroutine_threadsafe(self.client.close(), loop).result(timeout=10)
+        self.thread.join(timeout=10)
+
+    def status(self) -> IntegrationStatus:
+        if not self.thread.is_alive() or self.client.is_closed():
+            return IntegrationStatus(IntegrationState.ERROR, "gateway stopped unexpectedly")
+        if self.client.is_ready():
+            return IntegrationStatus(IntegrationState.CONNECTED)
+        return IntegrationStatus(IntegrationState.INSTALLED_BUT_UNCONFIGURED, "starting")
+
+
+def start_in_background() -> DiscordHandle | None:
     """Start Discord on a daemon thread, returning False when it is not configured."""
     token = os.getenv("DISCORD_BOT_TOKEN", "")
     if not token:
-        return False
+        return None
     try:
         import discord  # noqa: F401
     except ImportError:
         print("(discord) DISCORD_BOT_TOKEN is set but the extra isn't installed — "
               "pip install 'waku-agent[discord]'")
-        return False
-
-    import threading
+        return None
 
     print("(discord) starting:")
     print(describe_posture())
 
+    client = _build_client()
+    started = threading.Event()
+
+    @client.event
+    async def on_ready():
+        started.set()
+
     def run() -> None:
         try:
-            _build_client().run(token)
+            client.run(token)
         except Exception as exc:  # noqa: BLE001 — isolate the dashboard from bot errors
             print(f"(discord) background client stopped: {exc}")
 
-    threading.Thread(target=run, daemon=True, name="discord-client").start()
-    return True
+    thread = threading.Thread(target=run, daemon=True, name="discord-client")
+    thread.start()
+    return DiscordHandle(client, thread, started)
 
 
 if __name__ == "__main__":

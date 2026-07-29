@@ -12,6 +12,7 @@ these tests drive the same helpers the dashboard's /api/pin route calls."""
 from __future__ import annotations
 
 import json
+import os
 
 import pytest
 
@@ -79,17 +80,23 @@ def test_unpin_removes_and_promotes_next_default(home):
 
 
 def test_switching_provider_adopts_its_pinned_default(home, monkeypatch):
-    """apply_settings on a provider change uses that provider's pinned default,
+    """apply_provider on a provider change uses that provider's pinned default,
     never carrying the previous provider's model across endpoints (the live
     kimi->gemini 404)."""
     monkeypatch.setenv("GEMINI_API_KEY", "g")
     monkeypatch.setenv("MOONSHOT_API_KEY", "k")
     (home / "models.json").write_text(json.dumps({"pinned": ["kimi:kimi-k3"]}))
-    # start on gemini with a gemini model, then switch to kimi without naming one
-    d.apply_settings({"provider": "gemini", "model": "gemini-3.5-flash", "keys": {}})
-    info = d.apply_settings({"provider": "kimi", "keys": {}})
-    assert info["provider"] == "kimi"
-    assert info["model"] == "kimi-k3"          # adopted the pinned default, not gemini's model
+    from waku import integrations
+    from waku.ops import browser_agent
+
+    monkeypatch.setattr(browser_agent, "rebuild", lambda: None)
+    monkeypatch.setattr(browser_agent, "current", lambda: type("A", (), {"tracer": type("T", (), {"event": lambda *args: None})()})())
+    monkeypatch.setenv("WAKU_PROVIDER", "gemini")
+    monkeypatch.setenv("WAKU_MODEL", "gemini-3.5-flash")
+    result = integrations.apply_provider("kimi")
+    assert result.ok
+    assert os.getenv("WAKU_PROVIDER") == "kimi"
+    assert os.getenv("WAKU_MODEL") == "kimi-k3"  # not gemini's model
 
 
 def test_pinned_are_grouped_by_provider_for_display(home):
