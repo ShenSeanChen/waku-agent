@@ -92,6 +92,13 @@ class Settings:
     experimental: bool = field(
         default_factory=lambda: os.getenv("WAKU_EXPERIMENTAL", "") in ("1", "true", "yes")
     )
+    # Route every message through the triage graph workflow first (a small model
+    # classifies it; trivial messages get a fast small-model reply, real tasks
+    # run the normal loop as a graph node). Any failure anywhere fails open to
+    # the plain loop, so this can never make Waku worse — only faster/cheaper.
+    graph_workflows: bool = field(
+        default_factory=lambda: os.getenv("WAKU_GRAPH_WORKFLOWS", "") in ("1", "true", "yes")
+    )
 
     # --- Optional gateway
     telegram_token: str = field(default_factory=lambda: os.getenv("TELEGRAM_BOT_TOKEN", ""))

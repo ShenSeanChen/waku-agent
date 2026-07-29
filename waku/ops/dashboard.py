@@ -80,7 +80,7 @@ def chat_stream(message: str, emit) -> None:
     events: list[dict] = []
 
     def observer(kind, ev):
-        if kind in ("gate", "consolidation"):
+        if kind in ("gate", "consolidation", "route", "triage"):
             events.append({"kind": kind, **ev})
         emit(kind, ev)
 
@@ -93,16 +93,23 @@ def chat_stream(message: str, emit) -> None:
 
     gate = next((e for e in events if e["kind"] == "gate"), None)
     cons = next((e for e in events if e["kind"] == "consolidation"), None)
+    route = next((e for e in events if e["kind"] == "route"), None)
+    triage = next((e for e in events if e["kind"] == "triage"), None)
+    quick = bool(route) and route.get("target") == "quick_reply"
     emit("done", {
         "reply": result.reply,
         "gate": {"decision": gate["decision"], "reason": gate.get("reason")} if gate else None,
+        "graph": ({"workflow": route.get("workflow", "triage"),
+                   "route": "quick" if quick else "full",
+                   "reason": (triage or {}).get("reason", "")} if route else None),
         "tools": [{"tool": c["tool"], "args": c["args"], "output": c["output"],
                    "status": _tool_status(c["output"]),
                    "summary": (c["output"] or "").split(". ")[0][:120]} for c in result.tool_calls],
         "consolidation": {"new_facts": cons["new_facts"]} if cons else None,
         "iterations": result.iterations,
         "latency_ms": latency_ms,
-        "model": agent.settings.model,   # which brain answered — shown per card
+        # which brain answered — shown per card; a quick graph turn was the small model
+        "model": agent.settings.small_model if quick else agent.settings.model,
     })
 
 
