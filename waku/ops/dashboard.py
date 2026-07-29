@@ -217,6 +217,12 @@ def collect() -> dict:
         elif current is not None:
             if kind == "gate":
                 current["gate"] = ev
+            elif kind == "route":
+                current["graph"] = {"workflow": ev.get("workflow"),
+                                    "route": "quick" if ev.get("target") == "quick_reply" else "full",
+                                    "reason": (current.get("graph") or {}).get("reason", "")}
+            elif kind == "triage":
+                current.setdefault("graph", {})["reason"] = ev.get("reason", "")
             elif kind == "llm":
                 current["llm_calls"].append(ev)
             elif kind == "tool":
@@ -310,6 +316,11 @@ def collect() -> dict:
     # pay for an agent nobody has chatted with yet.
     live = browser_agent.current()
 
+    # --- graph workflows: topology straight from the engine (never hand-drawn,
+    # so the picture can't drift) + quick/full split from the trace events
+    from waku.graph.workflows.triage import triage_topology
+    graph_routes = [e.get("target") for e in events if e.get("type") == "route"]
+
     return {
         "generated_at": datetime.now(UTC).isoformat(timespec="seconds"),
         "home": str(home.resolve()),
@@ -352,6 +363,12 @@ def collect() -> dict:
         "skills": skills,
         "eval_report": eval_report,
         "eval_history": eval_history,
+        "graph": {
+            "enabled": settings.graph_workflows,
+            "workflows": [triage_topology()],
+            "stats": {"quick": sum(1 for t in graph_routes if t == "quick_reply"),
+                      "full": sum(1 for t in graph_routes if t == "full_agent")},
+        },
         "db": db_info,
         "settings": settings_info(),
         "tools": tools_info(),

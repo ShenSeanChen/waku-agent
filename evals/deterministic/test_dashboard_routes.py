@@ -90,7 +90,7 @@ def test_collect_returns_the_keys_the_page_reads():
     frontend indexes into; dropping one blanks a tab with no error."""
     expected = {
         "settings", "tools", "facts", "episodes", "soul", "chat_log", "sessions",
-        "turns", "stats", "db", "skills", "trace_file", "chat_pending",
+        "turns", "stats", "db", "skills", "trace_file", "chat_pending", "graph",
     }
     src = inspect.getsource(dashboard.collect)
     for key in expected:

@@ -3,6 +3,7 @@
 Four pillars, one module each:
   harness  → waku/runtime + waku/gateway  (scaffolding around the raw LLM)
   loop     → waku/loop                      (observe → reason → act → repeat)
+             waku/graph                     (opt-in structure around the loop — extends this pillar)
   memory   → waku/memory                    (procedural / semantic / episodic)
   ops      → waku/ops + evals/              (trace → eval → gate → release)
 """

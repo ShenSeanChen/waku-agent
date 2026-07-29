@@ -63,6 +63,11 @@ when the rung above genuinely can't do it:
    `waku.respond()`, out again. No memory, no tools, no loop logic.
 6. **A new core tool — last resort.** It has to earn its place in every prompt.
 
+One thing the ladder deliberately has no rung for: **a new top-level package**
+(like `waku/graph/`). That's not a contribution size, it's an architecture
+decision — it needs a written design doc and a maintainer yes before any code
+(see `docs/agent-graphs-design.md` for the precedent and the bar it had to clear).
+
 If you're unsure which rung you're on, open an issue and ask before writing
 code. That conversation is cheaper than a rejected PR.
 

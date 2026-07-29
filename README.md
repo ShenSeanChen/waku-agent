@@ -87,6 +87,7 @@ Each tab is one pillar, linked to the real files:
 | **Overview** | cost, latency, the gate skip/retrieve split, the clickable architecture map |
 | **Gateway** | one conversation across every channel, each message tagged by source (dashboard / telegram / voice / cli) |
 | **Loop** | every turn with its gate decision, tool calls, tokens, and cost |
+| **Graph** | graph workflows: the live triage topology (drawn from the engine itself) + which door each turn took |
 | **Memory** | sub-tabs per pillar — semantic facts, episodes, editable skills + SOUL, consolidation |
 | **Tools** | the agent's available tools (grouped by origin), its results, and MCP connectors |
 | **Data** | a live SQLite browser: per-table tabs, schema, and a read-only SQL console over `state.db` |
@@ -173,6 +174,7 @@ Every box is one module (full version with every file path: [docs/architecture.m
 | Gateway Interface (CLI / voice / Telegram / web) | [`waku/gateway/`](waku/gateway) |
 | Ephemeral Agent Run → Working Memory | [`waku/runtime/session.py`](waku/runtime/session.py) |
 | The Loop (LLM ↔ tools, end-loop guardrails) | [`waku/loop/agent.py`](waku/loop/agent.py) |
+| Graph workflows (structure around the loop) | [`waku/graph/`](waku/graph) |
 | Agentic Tools (schedule / note / message) | [`waku/tools/`](waku/tools) |
 | Procedural Memory (SKILL.md, "how to act") | [`waku/memory/procedural/`](waku/memory/procedural) + [`skills/`](skills) |
 | Semantic Memory (durable facts, profile) | [`waku/memory/semantic/`](waku/memory/semantic) |
@@ -193,7 +195,9 @@ raw `state.db` tables.
 ## The Loop — reason → act → repeat
 
 Yes, there's a real agent loop, and it's [~95 lines of plain Python](waku/loop/agent.py) —
-no LangGraph, no hidden control flow:
+no LangGraph, no hidden control flow (and when a task needs structure *around* the loop,
+that structure is another ~200 readable lines — see
+[Graph workflows](#graph-workflows--when-a-turn-needs-shape) below):
 
 ```
 while not done:
@@ -228,6 +232,53 @@ reasons over the results, then calls [`create_event`](waku/tools/calendar.py) on
 several iterations in a single turn. You'll see `iter 4`, `iter 5`… on the Loop tab and the
 LOOP box pulse for each cycle. `search_web` works keyless via DuckDuckGo but that endpoint
 rate-limits bots, so for a clean take set a free `TAVILY_API_KEY` (see [`.env.example`](.env.example)).
+
+## Graph workflows — when a turn needs shape
+
+The loop is one agent turn: the model picks tools until it stops, and that covers chat.
+But some work has **shape** — steps that could run *at the same time*, and explicit
+"if this, go here" routing. A **graph workflow** makes that shape first-class: nodes
+(each does one job — a function, one LLM call, or a whole loop turn) connected by edges
+(what happens next). It's an extension of the Loop pillar, not a replacement:
+[`loop/agent.py`](waku/loop/agent.py) did not change one line — a graph *arranges calls
+around it, and to it*. And it's still no-framework: the entire engine is
+[one readable file](waku/graph/engine.py), same trick as the loop.
+
+```mermaid
+flowchart LR
+  subgraph L["The loop — one path, step after step"]
+    T["think"] --> A["act"] --> O["observe"] --> T
+  end
+  subgraph G["A graph workflow — a map of steps"]
+    S(["START"]) --> C["classify<br/>small model"]
+    S --> K["check calendar<br/>local read"]
+    C --> R{"route"}
+    K --> R
+    R -. quick .-> Q["quick reply<br/>small model"] --> E(["END"])
+    R -. full .-> F["full agent<br/>THE loop, as a node"] --> E
+  end
+```
+
+**The shipped example: triage.** Flip `WAKU_GRAPH_WORKFLOWS=1` (in `.env`, or the
+dashboard's Settings) and *every* message enters the triage graph first — you never
+choose a mode, the harness decides. A small model classifies the message **while**
+today's calendar loads in parallel; *"thanks!"* gets a fast small-model reply and never
+wakes the big model; *"schedule a swim Saturday"* routes into the exact same loop as
+before, running as one node. Any failure anywhere — classifier, engine, anything —
+**fails open** to the plain loop, so the flag can only ever save time and tokens. This
+is the retrieval-gate idea generalized from one gate to a structure. (A graph is *not*
+a swarm of chatting agents: the edges decide everything, deterministically — which is
+why it can be traced and eval'd like everything else here.)
+
+**How to show it on camera:**
+1. Switch the flag on, then send *"thanks!"* — on **Overview**, the graph panel lights
+   the quick path while the LOOP boxes stay dark: proof the big model never woke.
+2. Send *"schedule a swim Saturday 9am"* — watch `route → full_agent` light up, then the
+   familiar loop animation take over. Same loop, one graph node.
+3. Open the **Graph** tab: the live topology there is drawn from the engine's own
+   `describe()` — the picture *cannot* drift from the code. The trace
+   (`.waku/traces/<today>.jsonl`) shows the run on tape:
+   `graph_start → node_start … route → graph_end`.
 
 ## The two hero moments
 
@@ -474,6 +525,7 @@ something, but nothing is over-promised (they report "coming soon", and the dash
 | Whiteboard box | Tool | Status |
 |---|---|---|
 | Sub-Agents | `delegate_task` | **live** — delegates coding tasks to pi |
+| Graph workflows | [`waku/graph/`](waku/graph) | **live** behind `WAKU_GRAPH_WORKFLOWS=1` — [triage-first turns](#graph-workflows--when-a-turn-needs-shape) |
 | Terminal tool | `run_command` | skeleton — needs a real sandbox + safety surface first |
 | Browser tool | `browse_web` | skeleton — `search_web` already covers read-only lookups |
 | Cron Job | `schedule_task` | skeleton — `make brief` + a system cron line covers it today |

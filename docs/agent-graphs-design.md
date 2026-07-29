@@ -1,6 +1,11 @@
 # Agent Graphs — system design
 
-Status: DESIGN, not built. Nothing in this doc exists in code yet.
+Status: phases 1–3 SHIPPED (engine + triage graph workflow behind
+`WAKU_GRAPH_WORKFLOWS` + dashboard Graph tab). The content workflow (§4.2) and the
+AutoManus port (§5) remain future work. Two shipped deviations from this doc:
+triage has no `search_memory` fan-out node (the full path's retrieval gate already
+covers it — a parallel prefetch would double-retrieve), and a `gather` fan-in node
+sits before the router so it waits on both parallel branches.
 Scope: a fifth pillar candidate — **Graph** — sitting beside Harness, Loop, Memory, Eval.
 
 ## 1. What we're adding and why
