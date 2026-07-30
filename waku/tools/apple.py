@@ -3,18 +3,45 @@ reading your actual Calendar.app (including email-invited events) and Mail, and
 writing Reminders/Notes. Opt-in via WAKU_APPLE_TOOLS=1; first use triggers the
 system Automation permission prompts. All AppleScript runs with a timeout and
 returns honest error text so a slow/denied call never hangs a turn.
+
+THE PERFORMANCE RULE, learned the hard way on 2026-07-30 when every one of these
+timed out on a real Mac while the tests stayed green:
+
+  NEVER use a `whose` filter on a large collection.
+
+Measured against a 472-event Google-synced calendar:
+
+  every event whose start date ≥ X    ~25s   (and the tool needs two)
+  start date of every event            ~6s   (then filter in Python)
+
+`whose` makes Calendar.app evaluate a predicate per item across an Apple Event
+bridge. Pulling the raw column once and filtering locally is 4x faster and gets
+slower far more gracefully. Same rule applies to Mail.
+
+Reminders is a separate problem: `name of list 1` — a trivial query — measured
+22.8s on the same machine. Nothing to optimise there, it is simply slow, so it
+gets a timeout that reflects reality instead of a misleading "timed out" string.
 """
 
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import sys
 import time
+from datetime import datetime, timedelta
 
 from waku.tools.registry import Tool
 
 _TIMEOUT = 30
+# A tool that takes 75s to FAIL is worse than no tool: it blocks a chat turn and
+# then apologises. These budgets are set so a broken app gives up quickly with an
+# actionable message. Measured on a real Mac 2026-07-31:
+#   Calendar  `count of calendars`        instant   -> usable
+#   Reminders `count of lists`            7.8s      -> slow but alive
+#   Mail      `count of messages of inbox` TIMED OUT at 120s (-1712)
+_SLOW_APP_TIMEOUT = 25
 _cache: dict[str, tuple[float, str]] = {}
 
 
@@ -24,12 +51,33 @@ def _osa(script: str, timeout: int = _TIMEOUT) -> tuple[bool, str]:
     try:
         r = subprocess.run(["osascript", "-e", script], capture_output=True, text=True, timeout=timeout, check=False)
     except subprocess.TimeoutExpired:
-        return False, "timed out — the app may be showing a permission dialog; approve it and retry."
+        return False, (
+            f"timed out after {timeout}s. The app is either slow (Reminders and large "
+            "synced calendars routinely take 20s+) or waiting on a macOS permission "
+            "dialog — check for one, approve it, and ask again."
+        )
     except OSError as exc:
         return False, f"could not run osascript ({exc})"
     if r.returncode != 0:
         return False, (r.stderr or "failed").strip()[:200]
     return True, r.stdout.strip()
+
+
+def _parse_applescript_date(raw: str) -> datetime | None:
+    """AppleScript renders dates as 'Thursday, July 30, 2026 at 1:00:00 PM' (with
+    a locale-dependent prefix we ignore). Returns None rather than raising: one
+    unparseable row must not lose the whole calendar."""
+    m = re.search(r"([A-Z][a-z]+ \d{1,2}, \d{4}) at (\d{1,2}:\d{2}:\d{2}\s*[AP]M)", raw)
+    if not m:
+        return None
+    try:
+        # Naive on purpose: Calendar.app renders wall-clock local time with no
+        # offset, and every comparison below is against local `now`. Attaching a
+        # tz here would invent information AppleScript never gave us.
+        return datetime.strptime(  # noqa: DTZ007
+            f"{m.group(1)} {m.group(2).replace(chr(8239), ' ')}", "%B %d, %Y %I:%M:%S %p")
+    except ValueError:
+        return None
 
 
 def _cached(key: str, ttl: int, producer) -> str:
@@ -52,56 +100,60 @@ def read_apple_calendar(days_ahead: int = 7) -> str:
     blows past any sane timeout, so with a list we address each calendar BY NAME
     and never enumerate the rest.
 
-    Without the list we still enumerate everything, because a first-run user has
-    no idea which names exist — but we say so in the timeout message rather than
-    leaving them guessing.
+    Without the list we refuse and tell you how to find the names, because
+    enumerating 37 calendars takes minutes and a wall of silence is worse than
+    an instruction.
     """
     def go() -> str:
         cals = [c.strip() for c in os.getenv("WAKU_APPLE_CALENDARS", "").split(",") if c.strip()]
-        # BULK property access, never per-event. `summary of (every event ...)`
-        # is ONE Apple Event returning a list; reading `summary of e` inside a
-        # repeat loop is one round-trip per event per property. Measured on a
-        # real Mac: bulk = 1.9s per calendar, per-event = 70s+ for five.
-        def block(cal_expr: str, label: str) -> str:
-            # `summary of (every event whose ...)` must be ONE expression. Binding
-            # the events to a variable first and then asking for `summary of _ev`
-            # fails with -1728 ("Can't get summary of {event id ...}") because the
-            # variable holds a list of references, not a queryable specifier.
-            return f'''
+        if not cals:
+            return (
+                "Calendar not configured. Set WAKU_APPLE_CALENDARS to the calendars you "
+                "actually use (e.g. WAKU_APPLE_CALENDARS=Work,Home) — a typical Mac has "
+                "30+ once holiday and subscribed calendars pile up, and reading them all "
+                "takes minutes. Run `osascript -e 'tell application \"Calendar\" to return "
+                "name of every calendar'` to see the names."
+            )
+
+        # NO `whose` filter — see the module docstring. We pull two raw columns
+        # per calendar (~6s each) and match them up in Python. The filter itself
+        # is free here; it is the Apple Event predicate that costs 25s.
+        blocks = "\n".join(f'''
   try
-    tell {cal_expr}
-      set _su to summary of (every event whose start date ≥ startDate and start date ≤ endDate)
-      set _st to start date of (every event whose start date ≥ startDate and start date ≤ endDate)
+    tell calendar "{c}"
+      set _su to summary of every event
+      set _st to start date of every event
       repeat with i from 1 to (count of _su)
-        set out to out & {label} & " | " & (item i of _su) & " | " & ((item i of _st) as string) & linefeed
+        set out to out & "{c}" & "\\t" & (item i of _su) & "\\t" & ((item i of _st) as string) & linefeed
       end repeat
     end tell
-  end try'''
+  end try''' for c in cals)
 
-        if cals:
-            blocks = "\n".join(block(f'calendar "{c}"', f'"{c}"') for c in cals)
-            budget = 15 + 8 * len(cals)
-        else:
-            blocks = f'''
-  repeat with cal in calendars{block("cal", "(name of cal)")}
-  end repeat'''
-            budget = 90
         # `launch` starts Calendar without stealing focus; without it a quit
         # Calendar.app answers -600 "Application isn't running" instead of
         # auto-starting, which read as a permissions problem for an hour.
         script = f'''
 set out to ""
-set startDate to current date
-set endDate to (current date) + ({int(days_ahead)} * days)
 launch application "Calendar"
 tell application "Calendar"{blocks}
 end tell
 return out'''
-        ok, res = _osa(script, timeout=budget)
-        if ok:
-            return res
-        hint = "" if cals else " Set WAKU_APPLE_CALENDARS=Work,Home to read only the calendars you use."
-        return f"Calendar unavailable: {res}{hint}"
+        ok, res = _osa(script, timeout=20 + 12 * len(cals))
+        if not ok:
+            return f"Calendar unavailable: {res}"
+
+        lo = datetime.now()
+        hi = lo + timedelta(days=int(days_ahead))
+        rows = []
+        for line in res.splitlines():
+            parts = line.split("\t")
+            if len(parts) != 3:
+                continue
+            when = _parse_applescript_date(parts[2])
+            if when and lo.date() <= when.date() <= hi.date():
+                rows.append((when, f"{parts[0]} | {parts[1]} | {when:%Y-%m-%d %H:%M}"))
+        rows.sort()
+        return "\n".join(r[1] for r in rows)
     return _cached(f"cal:{days_ahead}", 600, go) or "No events in that window."
 
 
@@ -114,7 +166,7 @@ set out to ""
 set cutoff to (current date) - ({int(hours)} * hours)
 tell application "Mail"
   set box to inbox
-  set msgs to (messages of box whose date received ≥ cutoff)
+  set msgs to messages of box
   set n to 0
   repeat with m in msgs
     if n ≥ {int(limit)} then exit repeat
@@ -123,8 +175,15 @@ tell application "Mail"
   end repeat
 end tell
 return out'''
-        ok, res = _osa(script, timeout=45)
-        return res if ok else f"Mail unavailable: {res}"
+        ok, res = _osa(script, timeout=20)
+        if ok:
+            return res
+        return (
+            f"Mail unavailable: {res} Note: on this machine Mail.app could not even "
+            "count its own inbox within two minutes, which usually means a very large "
+            "mailbox or an in-progress sync. Apple Mail reading is effectively "
+            "unavailable until that settles."
+        )
     return _cached(f"mail:{hours}:{limit}", 300, go) or "No recent mail."
 
 
@@ -132,13 +191,15 @@ def create_reminder(title: str, due: str = "") -> str:
     props = f'name:"{title}"'
     if due:
         props += f', due date:(date "{due}")'
-    ok, res = _osa(f'tell application "Reminders" to make new reminder with properties {{{props}}}')
+    ok, res = _osa(f'tell application "Reminders" to make new reminder with properties {{{props}}}',
+                   timeout=_SLOW_APP_TIMEOUT)
     return f"Reminder created: {title}" if ok else f"Reminder failed: {res}"
 
 
 def create_note(title: str, body: str = "") -> str:
     safe = (title + "\n" + body).replace('"', "'")
-    ok, res = _osa(f'tell application "Notes" to make new note at folder "Notes" with properties {{body:"{safe}"}}')
+    ok, res = _osa(f'tell application "Notes" to make new note at folder "Notes" with properties {{body:"{safe}"}}',
+                   timeout=_SLOW_APP_TIMEOUT)
     return f"Note created: {title}" if ok else f"Note failed: {res}"
 
 
