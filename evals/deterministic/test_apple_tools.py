@@ -26,8 +26,18 @@ a Mail.app that could not `count of messages of inbox` inside two minutes.
 from __future__ import annotations
 
 import inspect
+import sys
+
+import pytest
 
 from waku.tools import apple
+
+# _osa short-circuits with "Apple tools are macOS-only" before it ever spawns
+# osascript, so the timeout and refusal cases can only be observed on a Mac.
+# CI runs Linux; those two cases skip there. Everything else — the `whose` rule,
+# the budgets, the date parsing — is pure source/string logic and runs anywhere,
+# which is the point: the rule that broke these tools IS checkable in CI.
+macos_only = pytest.mark.skipif(sys.platform != "darwin", reason="needs macOS osascript")
 
 
 def _code_lines(module) -> list[str]:
@@ -78,6 +88,7 @@ def test_failures_are_fast_enough_to_be_useful():
     assert apple._TIMEOUT <= 45
 
 
+@macos_only
 def test_a_timeout_explains_itself():
     """The old message blamed a permission dialog for what was actually slowness,
     which sent a real debugging session down the wrong path for an hour."""
@@ -87,6 +98,7 @@ def test_a_timeout_explains_itself():
     assert "permission" in msg and "slow" in msg, "must name BOTH likely causes"
 
 
+@macos_only
 def test_calendar_refuses_rather_than_enumerating_everything(monkeypatch):
     """A typical Mac has 30+ calendars once holidays and subscriptions pile up;
     reading them all takes minutes. Refusing with instructions beats a two-minute
