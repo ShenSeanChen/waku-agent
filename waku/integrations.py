@@ -12,11 +12,11 @@ import json
 import os
 import sys
 import urllib.request
+from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
-from typing import Callable, Mapping
 
 from waku.loop.models import PROVIDERS, Provider
 from waku.memory.episodic.notion_store import normalize_database_id

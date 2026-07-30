@@ -910,7 +910,11 @@ def main() -> None:
         from waku.gateway.discord import start_in_background as start_discord
         from waku.gateway.supervisor import GatewaySupervisor
         from waku.gateway.telegram import start_in_background as start_telegram
-        from waku.integrations import INTEGRATIONS, register_gateway_reloader, register_gateway_status_provider
+        from waku.integrations import (
+            INTEGRATIONS,
+            register_gateway_reloader,
+            register_gateway_status_provider,
+        )
 
         gateway_items = [item for item in INTEGRATIONS if item.reload.value == "gateway"]
         supervisor = GatewaySupervisor(

@@ -17,14 +17,13 @@ no server. This is why hobbyist assistants pick Telegram over WhatsApp
 
 from __future__ import annotations
 
-import os
 import asyncio
+import os
 import threading
-
-from waku.integrations import IntegrationState, IntegrationStatus
 
 from waku.app import Waku
 from waku.gateway.cli import _observer  # mirror gate/tool activity on the laptop terminal
+from waku.integrations import IntegrationState, IntegrationStatus
 
 
 def _allowed_ids() -> set[str]:

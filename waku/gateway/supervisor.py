@@ -9,7 +9,8 @@ from __future__ import annotations
 
 import hashlib
 import os
-from typing import Callable, Protocol
+from collections.abc import Callable
+from typing import Protocol
 
 from waku.integrations import IntegrationState, IntegrationStatus, record_health
 

@@ -41,10 +41,10 @@ Setup:
 
 from __future__ import annotations
 
-import os
-import time
 import asyncio
+import os
 import threading
+import time
 from pathlib import Path
 
 from waku.app import Waku
