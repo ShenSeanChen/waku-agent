@@ -398,3 +398,21 @@ details.subterm > summary.subterm-h::-webkit-details-marker{ display:none; }
   height:44px; background:linear-gradient(transparent, var(--panel)); }
 .cmp-more{ font-size:11px; display:inline-block; margin-top:2px; }
 .cmp-h code{ white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:15ch; }
+
+
+/* Models page: provider card grid + edit modal. */
+.provgrid{ display:grid; grid-template-columns:repeat(auto-fill, minmax(230px, 1fr)); gap:12px; }
+.provcard{ background:var(--panel); border:1px solid var(--line); border-radius:10px;
+  padding:16px 14px 12px; display:flex; flex-direction:column; align-items:flex-start;
+  gap:6px; position:relative; }
+.provcard .prov-current{ position:absolute; top:10px; right:10px; }
+.provlogo{ width:44px; height:44px; border-radius:10px; }
+.provname{ font-weight:700; font-size:14px; }
+.provstatus{ display:flex; align-items:center; gap:6px; font-size:11.5px; color:var(--ink2); }
+.provdot{ width:9px; height:9px; border-radius:99px; flex-shrink:0; }
+.provactions{ display:flex; gap:8px; margin-top:4px; }
+.provactions .save{ padding:5px 12px; font-size:12px; }
+.provmodal-back{ position:fixed; inset:0; background:rgba(0,0,0,.45); z-index:60;
+  display:flex; align-items:center; justify-content:center; }
+.provmodal{ background:var(--panel); border:1px solid var(--line); border-radius:12px;
+  padding:18px; width:min(420px, 92vw); max-height:86vh; overflow-y:auto; }

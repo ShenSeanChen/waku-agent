@@ -1,17 +1,8 @@
-// waku dashboard — settings write (applyModel), model picker/catalog/pins.
+// waku dashboard — model picker/catalog/pins, and the remaining Settings toggle.
 // Split out of app.js: classic <script>, shared global scope (no build
 // step, no modules). Load order + rules: static/README.md.
 
-// The ONE writer to /api/settings (settings form, catalog "use", chat pill all
-// funnel through here) so the after-switch reset can't drift. On success it
-// releases the edit lock — else the render guard keeps showing the OLD state
-// (live bug: "Current:" card stayed on kimi after switching) — clears the stale
-// catalog, and re-fetches. Returns the response so callers show their own status.
-async function applyModel({provider, model, small_model, episodic_store, experimental, keys = {}}){
-  const r = await postJSON("/api/settings", {provider, model, small_model, episodic_store, experimental, keys});
-  if (!r.error){ editing = false; modelCatalog = null; await refresh(); }
-  return r;
-}
+
 async function saveSettings(){
   const experimental = document.getElementById("set-experimental")?.value;
   document.getElementById("set-msg").textContent = "switching…";
@@ -147,14 +138,17 @@ function renderCatalogList(){
   list.innerHTML = h;
 }
 
-// One-click model switch: same /api/settings path as the Save button, keeping
-// the other slot (main vs gate) as-is. Live for the next turn.
+// One-click model switch: posts to /api/providers so the provider/model pair
+// is validated and applied by the integrations layer. Keeps the other slot
+// (main vs gate) as-is. Live for the next turn.
 async function switchModel(id, asGate){
   const st = (D && D.settings) || {};
   const msg = document.getElementById("free-switch-msg");
   if (msg) msg.textContent = "switching…";
-  const r = await applyModel({provider: st.provider,
-    model: asGate ? st.model : id, small_model: asGate ? id : st.small_model});
+  const payload = {provider: st.provider,
+    model: asGate ? st.model : id, small_model: asGate ? id : st.small_model};
+  const r = await postJSON("/api/providers", payload);
+  if (!r.error){ editing = false; modelCatalog = null; await refresh(); }
   if (msg) msg.textContent = r.error ? ("Error: " + r.error)
                                      : (asGate ? "Gate model is now " : "Model is now ") + id + ". Applies from your next message.";
 }
@@ -225,4 +219,130 @@ async function addPinnedModel(){
 async function pinModel(provider, model, action){
   const r = await postJSON("/api/pin", {provider, model, action});
   if (!r.error){ editing = false; await refresh(); }
+}
+
+// --- Models page: a grid of provider cards (logo, name, status dot, actions)
+// plus an edit modal. Status is derived, never stored: unconfigured = no key,
+// configured = key set but disabled, enabled = key set and available. The
+// ACTIVE provider (settings.provider) can't be disabled (server guards too).
+function providerCardStatus(p, st){
+  const keySet = !!(p.fields && p.fields[0] && p.fields[0].configured);
+  if (!keySet) return "unconfigured";
+  return (st.disabled_providers || []).includes(p.key) ? "configured" : "enabled";
+}
+
+function modelsGrid(d){
+  const st = d.settings || {};
+  const rank = p => p.key === st.provider ? 0
+    : providerCardStatus(p, st) === "enabled" ? 1
+    : providerCardStatus(p, st) === "configured" ? 2 : 3;
+  const providers = (d.providers || []).slice()
+    .sort((a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name));
+  return `<div class="provgrid">` + providers.map(p => providerCard(p, st)).join("") +
+    `</div><div id="prov-modal-root"></div>`;
+}
+
+function providerCard(p, st){
+  const status = providerCardStatus(p, st);
+  const current = p.key === st.provider;
+  const dot = status === "enabled" ? "var(--good)" : status === "configured" ? "#4c9aff" : "var(--bad)";
+  return `<div class="provcard" data-provider="${esc(p.key)}">
+    ${current ? `<span class="srcpill prov-current" style="background:var(--good-soft);color:var(--good)">current</span>` : ""}
+    <img class="provlogo" src="/static/logos/${esc(p.key)}.svg" alt="" onerror="this.style.display='none'">
+    <div class="provname">${esc(p.name)}</div>
+    <div class="provstatus"><span class="provdot" style="background:${dot}"></span>${status}</div>
+    <div class="provactions">
+      <button class="save ghost" onclick="openProviderModal('${esc(p.key)}')">edit</button>
+      ${status === "configured" ? `<button class="save ghost" onclick="toggleProvider('${esc(p.key)}',false)">enable</button>` : ""}
+      ${status === "enabled" && !current ? `<button class="save ghost" onclick="toggleProvider('${esc(p.key)}',true)">disable</button>` : ""}
+    </div></div>`;
+}
+
+// enable/disable a provider (the grid button). Server keeps the key; the
+// provider just leaves/enters the available list.
+async function toggleProvider(provider, disabled){
+  const r = await postJSON("/api/providers", {provider, disabled});
+  if (!r.ok) alert(r.error || "update failed");
+  else { editing = false; await refresh(); }
+}
+
+// --- edit modal: API key (+ main/small model when this provider is current,
+// with the live catalog as a datalist) and a "set as current" action.
+function openProviderModal(provider){
+  const st = (D && D.settings) || {};
+  const p = (D.providers || []).find(x => x.key === provider);
+  if (!p) return;
+  const current = provider === st.provider;
+  const f = (p.fields || [])[0] || {};
+  const root = document.getElementById("prov-modal-root");
+  root.innerHTML = `<div class="provmodal-back" onclick="closeProviderModal()">
+    <div class="provmodal" onclick="event.stopPropagation()">
+      <div class="u" style="display:flex;justify-content:space-between;align-items:center">
+        <b>${esc(p.name)}</b><a class="reveal" onclick="closeProviderModal()">✕</a></div>
+      <label class="fld"><span>API key <span class="meta">(${esc(f.name || "")})</span>
+        ${f.configured ? `<span class="srcpill" style="background:var(--good-soft);color:var(--good)">set ····${esc(f.last4 || "")}</span>`
+                       : `<span class="srcpill apple">not set</span>`}</span>
+        <input type="password" id="pm-key" placeholder="${f.configured ? "key on file — blank keeps it" : "paste key"}"></label>
+      ${current ? `
+      <label class="fld">Main model (runs the loop; needs tool calling) <input id="pm-model" list="model-list" value="${esc(st.model || "")}"></label>
+      <label class="fld">Gate / summary model <input id="pm-small-model" list="model-list" value="${esc(st.small_model || "")}"></label>
+      <datalist id="model-list"></datalist>` : ""}
+      <div style="display:flex;gap:8px;margin-top:10px">
+        <button class="save" onclick="saveProviderModal('${esc(provider)}')">Save</button>
+        ${!current ? `<button class="save ghost" onclick="makeCurrentProvider('${esc(provider)}')">Set as current provider</button>` : ""}
+      </div>
+      <span class="meta" id="pm-msg"></span>
+    </div></div>`;
+  if (current) loadModalModels(provider);
+}
+
+function closeProviderModal(){
+  const root = document.getElementById("prov-modal-root");
+  if (root) root.innerHTML = "";
+}
+
+// Datalist suggestions for the modal's model fields: this provider's live
+// catalog (or its defaults when there's no catalog). Manual typing still works.
+async function loadModalModels(provider){
+  const dl = document.getElementById("model-list");
+  if (!dl) return;
+  let data;
+  try { data = await (await fetch("/api/models?provider=" + encodeURIComponent(provider))).json(); }
+  catch(e){ return; }
+  dl.innerHTML = (data.models || []).map(m => `<option value="${esc(m.id)}"></option>`).join("");
+}
+
+function modalKeyPayload(provider){
+  const key = document.getElementById("pm-key")?.value;
+  const payload = {provider};
+  if (key) payload.key = key;
+  return payload;
+}
+
+async function saveProviderModal(provider){
+  const st = (D && D.settings) || {};
+  const payload = modalKeyPayload(provider);
+  if (provider === st.provider){
+    payload.model = document.getElementById("pm-model")?.value ?? "";
+    payload.small_model = document.getElementById("pm-small-model")?.value ?? "";
+  }
+  const r = await postJSON("/api/providers", payload);
+  if (!r.ok){
+    const msg = document.getElementById("pm-msg");
+    if (msg) msg.textContent = r.error || "update failed";
+    return;
+  }
+  editing = false; closeProviderModal(); await refresh();
+}
+
+// "Set as current": apply_provider switches provider and picks its default
+// models when none are passed (keeps the key field if one was just typed).
+async function makeCurrentProvider(provider){
+  const r = await postJSON("/api/providers", modalKeyPayload(provider));
+  if (!r.ok){
+    const msg = document.getElementById("pm-msg");
+    if (msg) msg.textContent = r.error || "update failed";
+    return;
+  }
+  editing = false; closeProviderModal(); await refresh();
 }

@@ -10,6 +10,7 @@ from __future__ import annotations
 import shutil
 
 from waku.config import load_settings
+from waku.loop.models import PROVIDERS
 from waku.ops import catalog
 
 
@@ -59,7 +60,14 @@ def settings_info() -> dict:
         "provider": s.provider,
         "model": s.model,
         "small_model": s.small_model,
+        "base_url": s.base_url or "",
+        "custom_key_set": bool(s.api_key),
+        # Ids of providers the user disabled in the Models grid; the frontend
+        # derives each card's status (unconfigured / configured / enabled) and
+        # hides disabled providers from the chat switcher.
+        "disabled_providers": sorted(s.disabled_providers),
         "pinned": pinned,
+        "providers": [{"name": name} for name in PROVIDERS],
         # experimental tools (delegate_task -> pi). The ARENA can switch this on
         # per-race, but the chat agent reads it from the environment — so without
         # a toggle here, the sidebar chat could never delegate. See settings_save.

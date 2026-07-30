@@ -32,7 +32,14 @@ from pathlib import Path
 
 from waku.config import load_settings
 from waku.db import connect
-from waku.integrations import apply_integration, apply_provider, list_integrations, test_integration
+from waku.integrations import (
+    apply_integration,
+    apply_provider,
+    apply_provider_disabled,
+    list_connections,
+    list_providers,
+    test_integration,
+)
 from waku.ops import browser_agent, compare_history
 from waku.ops.arena import (
     compare_clear,
@@ -358,7 +365,8 @@ def collect() -> dict:
         "eval_history": eval_history,
         "db": db_info,
         "settings": info,
-        "connections": [asdict(view) for view in list_integrations()],
+        "providers": [asdict(view) for view in list_providers()],
+        "connections": [asdict(view) for view in list_connections()],
         "tools": tools_info(),
         "usage": usage_summary(home),
     }
@@ -790,7 +798,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_response(404)
             self.end_headers()
             return
-        ctype = {".css": "text/css", ".js": "text/javascript",
+        ctype = {".css": "text/css", ".js": "text/javascript", ".svg": "image/svg+xml",
                  ".html": "text/html; charset=utf-8"}.get(target.suffix, "application/octet-stream")
         self._send(target.read_bytes(), ctype, no_cache=True)
 
@@ -848,7 +856,8 @@ class Handler(BaseHTTPRequestHandler):
             return
         routes = {"/api/chat": None, "/api/memory": memory_action, "/api/settings": apply_settings,
                   "/api/query": run_query, "/api/session": session_action, "/api/pin": pin_action,
-                  "/api/connections": None, "/api/connections/test": None, "/api/connections/provider": None,
+                  "/api/connections": None, "/api/connections/test": None,
+                  "/api/providers": None,
                   "/api/compare/clear": compare_clear,
                   "/api/compare/regrade": compare_regrade, "/api/compare/delete_run": compare_delete_run}
         if self.path not in routes:
@@ -868,8 +877,14 @@ class Handler(BaseHTTPRequestHandler):
                 out = asdict(result)
             elif self.path == "/api/connections/test":
                 out = asdict(test_integration(payload.get("key", "")))
-            elif self.path == "/api/connections/provider":
-                out = asdict(apply_provider(**payload))
+            elif self.path == "/api/providers":
+                # A payload that only toggles availability goes to the enable/
+                # disable path; everything else is the existing provider apply.
+                if "disabled" in payload and set(payload) <= {"provider", "disabled"}:
+                    out = asdict(apply_provider_disabled(payload.get("provider", ""),
+                                                         disabled=bool(payload["disabled"])))
+                else:
+                    out = asdict(apply_provider(**payload))
             else:
                 out = routes[self.path](payload)
         except Exception as exc:  # surface, don't 500 — the browser shows it

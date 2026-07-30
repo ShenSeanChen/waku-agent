@@ -326,6 +326,16 @@ def list_integrations() -> tuple[IntegrationView, ...]:
     return tuple(views)
 
 
+def list_providers() -> tuple[IntegrationView, ...]:
+    """AI Provider integrations only."""
+    return tuple(view for view in list_integrations() if view.group == "AI Providers")
+
+
+def list_connections() -> tuple[IntegrationView, ...]:
+    """Non-provider integrations: channels, memory, search, observability, productivity."""
+    return tuple(view for view in list_integrations() if view.group != "AI Providers")
+
+
 def render_env_example_block() -> str:
     """Render the deterministic Connections section of ``.env.example``."""
     lines = [
@@ -617,4 +627,20 @@ def apply_provider(provider: str, *, key: str | None = None, model: str | None =
         _restore(path, contents, before)
         result = _safe_error(exc, updates, _find_integration(provider) or provider_integrations()[0])
         return ApplyResult(False, error=result, can_force=bool(key))
+    return ApplyResult(True, _current_view(provider))
+
+
+def apply_provider_disabled(provider: str, *, disabled: bool) -> ApplyResult:
+    """Toggle a provider's availability (the Models grid's enable/disable).
+
+    Disabled providers are hidden from pickers/switchers but keep their key.
+    The ACTIVE provider can't be disabled — switch to another provider first.
+    """
+    if provider not in PROVIDERS:
+        return ApplyResult(False, error="unknown provider")
+    if disabled and os.environ.get("WAKU_PROVIDER", "") == provider:
+        return ApplyResult(False, error="cannot disable the current provider — switch to another provider first")
+    current = {p.strip() for p in os.environ.get("WAKU_DISABLED_PROVIDERS", "").split(",") if p.strip()}
+    updated = (current | {provider}) if disabled else (current - {provider})
+    _write_updates({"WAKU_DISABLED_PROVIDERS": ",".join(sorted(updated))}, ())
     return ApplyResult(True, _current_view(provider))

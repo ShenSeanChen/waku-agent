@@ -89,7 +89,7 @@ document.addEventListener("click", e => {
 
 // --- mini model switcher in the chat dock: a pill showing the current brain,
 // clicking it drops the live catalog to swap without leaving the conversation.
-// Reuses switchModel() (the same /api/settings path the Settings page uses).
+// Posts to /api/providers (the same endpoint the Models page uses).
 function syncModelChip(){
   const el = document.getElementById("modelchip");
   if (!el || !D || !D.settings) return;
@@ -116,7 +116,10 @@ function toggleModelMenu(ev){
   ev.stopPropagation();
   if (document.getElementById("modelmenu")){ closeModelMenu(); return; }
   const st = (D && D.settings) || {};
-  const pinned = st.pinned || [];
+  // Disabled providers leave the switcher (the Models grid's disable button);
+  // their pins stay on file and reappear when re-enabled.
+  const disabled = st.disabled_providers || [];
+  const pinned = (st.pinned || []).filter(p => !disabled.includes(p.provider));
   const items = pinned.length ? pinned.map(p =>
     `<div class="sessitem ${(p.provider===st.provider && p.model===st.model)?"on":""}"
           onclick="switchTo('${esc(p.provider)}','${esc(p.model)}')">
@@ -126,7 +129,7 @@ function toggleModelMenu(ev){
   const menu = document.createElement("div");
   menu.className = "sessmenu modelmenu"; menu.id = "modelmenu";
   menu.innerHTML = `<div class="mm-h">Your models</div>${items}`
-    + `<div class="mm-f"><a href="#settings" onclick="closeModelMenu()">+ add models in Settings &rsaquo;</a></div>`;
+    + `<div class="mm-f"><a href="#models" onclick="closeModelMenu()">+ add models in Models &rsaquo;</a></div>`;
   const r = ev.currentTarget.getBoundingClientRect();
   menu.style.top = (r.bottom + 6) + "px";
   menu.style.left = Math.max(8, r.right - 250) + "px";
@@ -141,6 +144,7 @@ async function switchTo(provider, model){
   const name = chip && chip.querySelector(".mc-name");
   closeModelMenu();
   if (name) name.textContent = "switching…";
-  await applyModel({provider, model,
+  await postJSON("/api/providers", {provider, model,
     small_model: provider === st.provider ? st.small_model : ""});
+  await refresh();
 }
