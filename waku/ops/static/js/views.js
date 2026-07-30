@@ -203,22 +203,59 @@ function toolsMCP(t){
 function connectionField(key, field, prefix="connection"){
   const id = `${prefix}-${key}-${field.name}`;
   const label = `${esc(field.label)}${field.required?" *":""}`;
-  if (field.kind === "bool") return `<label class="fld"><span>${label}</span><input id="${id}" data-field="${esc(field.name)}" type="checkbox" ${field.value?"checked":""}></label>`;
-  if (field.kind === "choice") return `<label class="fld"><span>${label}</span><select id="${id}" data-field="${esc(field.name)}">${field.options.map(o=>`<option value="${esc(o)}" ${o===field.value?"selected":""}>${esc(o)}</option>`).join("")}</select></label>`;
-  return `<label class="fld"><span>${label}${field.secret?(field.configured?` <span class="meta">set ····${esc(field.last4)}</span>`:" "):""}</span><input id="${id}" data-field="${esc(field.name)}" type="${field.secret?"password":"text"}" value="${field.secret?"":esc(field.value)}" placeholder="${field.secret?(field.configured?"blank keeps existing":"not configured"):""}>${field.secret?` <label class="meta"><input type="checkbox" data-clear="${esc(field.name)}"> clear</label>`:""}</label>`;
+  const help = field.help ? `<div class="conn-field-help">${esc(field.help)}</div>` : "";
+  if (field.kind === "bool") return `<div class="conn-field">
+    <label class="conn-check" for="${id}"><input id="${id}" data-field="${esc(field.name)}" type="checkbox" ${field.value?"checked":""}>
+      <span>${label}</span></label>${help}</div>`;
+  if (field.kind === "choice") return `<div class="conn-field"><label class="fld" for="${id}"><span>${label}</span>
+    <select id="${id}" data-field="${esc(field.name)}">${field.options.map(o=>`<option value="${esc(o)}" ${o===field.value?"selected":""}>${esc(o)}</option>`).join("")}</select>
+    </label>${help}</div>`;
+  const configured = field.secret && field.configured
+    ? ` <span class="conn-secret-state">set ····${esc(field.last4)}</span>` : "";
+  const clear = field.secret && field.configured
+    ? `<label class="conn-clear"><input type="checkbox" data-clear="${esc(field.name)}"> Clear saved value</label>` : "";
+  return `<div class="conn-field"><label class="fld" for="${id}"><span>${label}${configured}</span>
+    <input id="${id}" data-field="${esc(field.name)}" type="${field.secret?"password":"text"}"
+      value="${field.secret?"":esc(field.value)}" placeholder="${field.secret?(field.configured?"Blank keeps the saved value":"Not configured"):""}">
+    </label>${clear}${help}</div>`;
 }
 async function saveConnection(key, force){
-  const card = document.querySelector(`[data-connection="${key}"]`), values = {}, clear = [];
-  card.querySelectorAll("[data-field]").forEach(el => values[el.dataset.field] = el.type === "checkbox" ? (el.checked ? "1" : "") : el.value);
-  card.querySelectorAll("[data-clear]").forEach(el => { if (el.checked) clear.push(el.dataset.clear); });
-  const r = await postJSON("/api/connections", {key, values, clear, force:!!force});
+  const modal = document.querySelector(`.connmodal[data-connection="${key}"]`), values = {}, clear = [];
+  if (!modal) return;
+  modal.querySelectorAll("[data-field]").forEach(el => values[el.dataset.field] = el.type === "checkbox" ? (el.checked ? "1" : "") : el.value);
+  modal.querySelectorAll("[data-clear]").forEach(el => { if (el.checked) clear.push(el.dataset.clear); });
   const msg = document.getElementById(`connection-msg-${key}`);
-  if (!r.ok && r.can_force) msg.innerHTML = `${esc(r.error)} <button onclick="saveConnection('${esc(key)}',true)">Save anyway</button>`;
-  else { msg.textContent = r.ok ? "saved" : (r.error||"failed"); if(r.ok) refresh(); }
+  msg.textContent = force ? "saving without a successful test…" : "saving…";
+  const r = await postJSON("/api/connections", {key, values, clear, force:!!force});
+  if (!r.ok && r.can_force) {
+    msg.innerHTML = `${esc(r.error)} <button class="save ghost conn-force" onclick="saveConnection('${esc(key)}',true)">Save anyway</button>`;
+  } else if (!r.ok) {
+    msg.textContent = r.error || "failed";
+  } else {
+    closeConnectionModal();
+    await refresh();
+  }
 }
 async function testConnection(key){
+  const msg = document.getElementById(`connection-msg-${key}`);
+  if (msg) msg.textContent = "testing…";
   const r = await postJSON("/api/connections/test", {key});
-  const msg = document.getElementById(`connection-msg-${key}`); msg.textContent = r.status ? (r.status.message||r.status.state) : (r.error||"failed"); refresh();
+  if (!r.status) {
+    if (msg) msg.textContent = r.error || "failed";
+    return;
+  }
+  const display = connectionStatusDisplay(r.status);
+  const status = document.getElementById("connection-modal-status");
+  if (status) {
+    status.className = `connstatus ${display.className}`;
+    status.innerHTML = `<span class="conndot"></span>${esc(display.label)}`;
+  }
+  const detail = document.getElementById("connection-modal-status-detail");
+  if (detail) detail.textContent = r.status.message || "";
+  const checked = document.getElementById("connection-modal-checked");
+  if (checked) checked.textContent = r.status.checked_at ? `Last checked ${r.status.checked_at}` : "";
+  if (msg) msg.textContent = r.status.message || display.label;
+  await refresh();
 }
 async function saveProvider(provider){
   const info = (D.providers || []).find(x => x.key === provider);
@@ -240,6 +277,103 @@ async function saveProvider(provider){
 }
 function stProvider(){ return (D.settings || {}).provider || "anthropic"; }
 
+const CONNECTION_GROUPS = ["Channels", "Productivity", "Storage", "Tools"];
+const CONNECTION_GROUP_MAP = {
+  "Channels": "Channels",
+  "Calendar & Productivity": "Productivity",
+  "Memory & Storage": "Storage",
+  "Search & Observability": "Tools",
+};
+
+function connectionDisplayGroup(item){
+  if (item.key === "apple_tools") return "Tools";
+  return CONNECTION_GROUP_MAP[item.group] || "Tools";
+}
+
+function connectionStatusDisplay(status){
+  const state = (status && status.state) || "not_configured";
+  if (state === "connected") return {label:"connected", className:"connected"};
+  if (state === "error") return {label:"error", className:"error"};
+  if (state === "installed_but_unconfigured") return {label:"needs setup", className:"needs-setup"};
+  return {label:"not configured", className:"not-configured"};
+}
+
+function connectionCard(item){
+  const display = connectionStatusDisplay(item.status);
+  const action = item.status && item.status.state !== "not_configured" ? "Edit" : "Configure";
+  return `<article class="provcard conncard" data-connection-card="${esc(item.key)}">
+    <img class="provlogo connlogo" src="/static/logos/connections/${esc(item.key)}.svg" alt="">
+    <div class="provname">${esc(item.name)}</div>
+    <div class="connstatus ${display.className}"><span class="conndot"></span>${esc(display.label)}</div>
+    <div class="conndesc">${esc(item.what)}</div>
+    <div class="provactions connactions">
+      <button class="save ghost" onclick="openConnectionModal('${esc(item.key)}')">${action}</button>
+    </div>
+  </article>`;
+}
+
+function connectionsGrid(items){
+  const grouped = Object.fromEntries(CONNECTION_GROUPS.map(group => [group, []]));
+  items.forEach(item => grouped[connectionDisplayGroup(item)].push(item));
+  return CONNECTION_GROUPS.map(group => `<section class="connsection">
+    <h2>${group}</h2>
+    <div class="provgrid conngrid">${grouped[group].map(connectionCard).join("")}</div>
+  </section>`).join("") + `<div id="connection-modal-root"></div>`;
+}
+
+function openConnectionModal(key){
+  const item = ((D && D.connections) || []).find(connection => connection.key === key);
+  const root = document.getElementById("connection-modal-root");
+  if (!item || !root) return;
+  markEditing();
+  const display = connectionStatusDisplay(item.status);
+  const status = item.status || {};
+  const fields = item.fields.map(field => connectionField(item.key, field)).join("");
+  root.innerHTML = `<div class="connmodal-back" onclick="closeConnectionModal()" onkeydown="connectionModalKeydown(event)">
+    <section class="connmodal" data-connection="${esc(item.key)}" role="dialog" aria-modal="true" aria-labelledby="connection-modal-title" onclick="event.stopPropagation()">
+      <header class="connmodal-head">
+        <img class="provlogo connlogo" src="/static/logos/connections/${esc(item.key)}.svg" alt="">
+        <div class="connmodal-title">
+          <h3 id="connection-modal-title">${esc(item.name)}</h3>
+          <div class="connstatus ${display.className}" id="connection-modal-status"><span class="conndot"></span>${esc(display.label)}</div>
+        </div>
+        <button class="connmodal-close" type="button" onclick="closeConnectionModal()" aria-label="Close">Close</button>
+      </header>
+      <p class="conndesc connmodal-desc">${esc(item.what)}</p>
+      <div class="connmodal-meta">
+        <span id="connection-modal-status-detail">${esc(status.message || "")}</span>
+        <span id="connection-modal-checked">${status.checked_at?`Last checked ${esc(status.checked_at)}`:""}</span>
+      </div>
+      ${(item.install_command || item.setup_url) ? `<div class="connsetup">
+        ${item.install_command?`<code>${esc(item.install_command)}</code>`:""}
+        ${item.setup_url?`<a href="${esc(item.setup_url)}" target="_blank" rel="noopener noreferrer">Setup guide ↗</a>`:""}
+      </div>` : ""}
+      <div class="connection-fields">${fields}</div>
+      <footer class="connmodal-actions">
+        <button class="save" onclick="saveConnection('${esc(item.key)}')">Save</button>
+        <button class="save ghost" onclick="testConnection('${esc(item.key)}')">Test connection</button>
+        <span class="connmodal-message" id="connection-msg-${esc(item.key)}" aria-live="polite"></span>
+      </footer>
+    </section>
+  </div>`;
+  setTimeout(() => {
+    const target = root.querySelector(".connection-fields input, .connection-fields select")
+      || root.querySelector(".connmodal-close");
+    target?.focus();
+  }, 0);
+}
+
+function closeConnectionModal(){
+  editing = false;
+  const root = document.getElementById("connection-modal-root");
+  if (root) root.innerHTML = "";
+  if (activeView === "connections") render();
+}
+
+function connectionModalKeydown(event){
+  if (event.key === "Escape") closeConnectionModal();
+}
+
 const VIEWS = {
   models(d){
     // Provider card grid (logo / status dot / edit / enable-disable). Editing
@@ -248,23 +382,7 @@ const VIEWS = {
   },
   connections(d){
     const items = d.connections || [];
-    let group = "", h = "";
-    for (const item of items){
-      if (item.group !== group){ group = item.group; h += `<h2>${esc(group)}</h2>`; }
-      const status = item.status || {};
-      const fields = item.fields.map(f => connectionField(item.key, f)).join("");
-      h += `<div class="card connection-card" data-connection="${esc(item.key)}"><div class="u"><b>${esc(item.name)}</b>
-        <span class="srcpill">${esc((status.state||"").replaceAll("_"," "))}</span></div>
-        <div class="meta">${esc(item.what)}</div>${status.message?`<div class="meta">${esc(status.message)}</div>`:""}
-        ${status.checked_at?`<div class="meta">checked ${esc(status.checked_at)}</div>`:""}
-        ${item.install_command?`<div class="meta"><code>${esc(item.install_command)}</code></div>`:""}
-        ${item.setup_url?`<div class="meta"><a href="${esc(item.setup_url)}" target="_blank">Setup</a></div>`:""}
-        <div class="connection-fields">${fields}</div>
-        <button class="save" onclick="saveConnection('${esc(item.key)}')">Save</button>
-        <button onclick="testConnection('${esc(item.key)}')">Test connection</button><span class="meta" id="connection-msg-${esc(item.key)}"></span>
-      </div>`;
-    }
-    return h || `<div class="card empty">No integrations registered.</div>`;
+    return items.length ? connectionsGrid(items) : `<div class="card empty">No integrations registered.</div>`;
   },
   // Gateway: ONE unified conversation across every channel (dashboard, telegram,
   // voice, cli) — the same loop + memory answer all of them. Each message is
