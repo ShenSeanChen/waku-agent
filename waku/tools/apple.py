@@ -43,32 +43,65 @@ def _cached(key: str, ttl: int, producer) -> str:
 
 
 def read_apple_calendar(days_ahead: int = 7) -> str:
-    """Events from Calendar.app between now and days_ahead. Limit which calendars
-    with WAKU_APPLE_CALENDARS=Work,Home (enumeration is slow on many calendars)."""
+    """Events from Calendar.app between now and days_ahead.
+
+    Set WAKU_APPLE_CALENDARS=Work,Home to name the calendars you actually care
+    about. That is not just a filter, it is the difference between working and
+    timing out: querying one calendar costs ~4 seconds, and a real Mac easily
+    has 30+ once holiday and subscribed calendars pile up. Walking all of them
+    blows past any sane timeout, so with a list we address each calendar BY NAME
+    and never enumerate the rest.
+
+    Without the list we still enumerate everything, because a first-run user has
+    no idea which names exist — but we say so in the timeout message rather than
+    leaving them guessing.
+    """
     def go() -> str:
-        cals = os.getenv("WAKU_APPLE_CALENDARS", "").strip()
-        cal_clause = ""
+        cals = [c.strip() for c in os.getenv("WAKU_APPLE_CALENDARS", "").split(",") if c.strip()]
+        # BULK property access, never per-event. `summary of (every event ...)`
+        # is ONE Apple Event returning a list; reading `summary of e` inside a
+        # repeat loop is one round-trip per event per property. Measured on a
+        # real Mac: bulk = 1.9s per calendar, per-event = 70s+ for five.
+        def block(cal_expr: str, label: str) -> str:
+            # `summary of (every event whose ...)` must be ONE expression. Binding
+            # the events to a variable first and then asking for `summary of _ev`
+            # fails with -1728 ("Can't get summary of {event id ...}") because the
+            # variable holds a list of references, not a queryable specifier.
+            return f'''
+  try
+    tell {cal_expr}
+      set _su to summary of (every event whose start date ≥ startDate and start date ≤ endDate)
+      set _st to start date of (every event whose start date ≥ startDate and start date ≤ endDate)
+      repeat with i from 1 to (count of _su)
+        set out to out & {label} & " | " & (item i of _su) & " | " & ((item i of _st) as string) & linefeed
+      end repeat
+    end tell
+  end try'''
+
         if cals:
-            names = " or ".join(f'name of cal is "{c.strip()}"' for c in cals.split(","))
-            cal_clause = f"if not ({names}) then error number -128"
+            blocks = "\n".join(block(f'calendar "{c}"', f'"{c}"') for c in cals)
+            budget = 15 + 8 * len(cals)
+        else:
+            blocks = f'''
+  repeat with cal in calendars{block("cal", "(name of cal)")}
+  end repeat'''
+            budget = 90
+        # `launch` starts Calendar without stealing focus; without it a quit
+        # Calendar.app answers -600 "Application isn't running" instead of
+        # auto-starting, which read as a permissions problem for an hour.
         script = f'''
 set out to ""
 set startDate to current date
 set endDate to (current date) + ({int(days_ahead)} * days)
-tell application "Calendar"
-  repeat with cal in calendars
-    try
-      {cal_clause}
-      set evs to (every event of cal whose start date ≥ startDate and start date ≤ endDate)
-      repeat with e in evs
-        set out to out & (name of cal) & " | " & (summary of e) & " | " & ((start date of e) as string) & linefeed
-      end repeat
-    end try
-  end repeat
+launch application "Calendar"
+tell application "Calendar"{blocks}
 end tell
 return out'''
-        ok, res = _osa(script, timeout=45)
-        return res if ok else f"Calendar unavailable: {res}"
+        ok, res = _osa(script, timeout=budget)
+        if ok:
+            return res
+        hint = "" if cals else " Set WAKU_APPLE_CALENDARS=Work,Home to read only the calendars you use."
+        return f"Calendar unavailable: {res}{hint}"
     return _cached(f"cal:{days_ahead}", 600, go) or "No events in that window."
 
 
