@@ -883,6 +883,8 @@ def main() -> None:
                 print("Discord gateway → listening in the background (server messages land here too)")
         except Exception as exc:  # noqa: BLE001 — never let a gateway block the dashboard
             print(f"(discord) not started: {exc}")
+        # Each gateway gets its OWN try: a Discord failure must not skip WhatsApp.
+        try:
             from waku.gateway.whatsapp import start_in_background as wa_background
 
             if wa_background():

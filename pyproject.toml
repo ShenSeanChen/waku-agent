@@ -47,6 +47,7 @@ gcal = [
 # Optional gateway: message Waku from Discord
 discord = [
     "discord.py>=2.4",
+]
 # Optional gateway: WhatsApp via Meta Cloud API (needs a public URL — see docstring)
 whatsapp = [
     "httpx>=0.25",
