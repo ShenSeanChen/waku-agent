@@ -317,8 +317,10 @@ async function loadModalModels(provider){
   }
   setupModelPickers(data.models || [], provider);
   if (!data.listed){
-    setModelPickerMeta(data.error
-      ? "Could not load catalog — showing defaults only."
+    setModelPickerMeta(data.error && !(data.models || []).length
+      ? "Could not load catalog — you can still type any model id."
+      : data.error
+        ? "Could not load catalog — showing defaults only."
       : "Live catalog unavailable — showing defaults.");
   }
 }
@@ -337,36 +339,48 @@ function renderModelPicker(id, label, value){
     <div class="model-picker" id="${escAttr(id)}-picker">
       <div class="model-picker-input">
         <input type="text" id="${escAttr(id)}" value="${escAttr(value || "")}" autocomplete="off" onfocus="markEditing()" onclick="event.stopPropagation()">
-        <button type="button" class="model-picker-toggle" onclick="toggleModelPicker('${escAttr(id)}'); event.stopPropagation();" aria-label="toggle models">▾</button>
+        <button type="button" class="model-picker-toggle" onclick="toggleModelPicker('${escAttr(id)}'); event.stopPropagation();" aria-label="toggle models" aria-controls="${escAttr(id)}-list" aria-expanded="false">▾</button>
       </div>
-      <div class="model-picker-list" id="${escAttr(id)}-list">
-        <input type="text" class="model-picker-search" id="${escAttr(id)}-search" placeholder="filter models..." autocomplete="off" oninput="filterModelPicker('${escAttr(id)}')" onfocus="markEditing()" onclick="event.stopPropagation()">
+      <div class="model-picker-list" id="${escAttr(id)}-list" role="listbox">
+        <input type="text" class="model-picker-search" id="${escAttr(id)}-search" placeholder="filter models..." autocomplete="off" aria-label="filter models" oninput="filterModelPicker('${escAttr(id)}')" onfocus="markEditing()" onclick="event.stopPropagation()">
         <div class="model-picker-items" id="${escAttr(id)}-items"></div>
-        <div class="model-picker-meta" id="${escAttr(id)}-meta"></div>
+        <div class="model-picker-meta" id="${escAttr(id)}-meta" aria-live="polite"></div>
       </div>
     </div>
   </label>`;
 }
 
 function setupModelPickers(models, provider){
-  _modalModels = models || [];
+  _modalModels = Array.isArray(models) ? models : [];
   ["pm-model", "pm-small-model"].forEach(id => {
     const input = document.getElementById(id);
     if (!input) return;
     const itemsBox = document.getElementById(id + "-items");
-    if (itemsBox){
+    const search = document.getElementById(id + "-search");
+    if (itemsBox && !itemsBox.dataset.modelPickerBound){
+      itemsBox.dataset.modelPickerBound = "true";
       itemsBox.addEventListener("click", e => {
         const item = e.target.closest(".model-picker-item");
         if (!item) return;
         e.stopPropagation();
         selectModelPicker(id, item.dataset.model || "");
       });
+      search?.addEventListener("keydown", e => {
+        if (e.key !== "Enter") return;
+        const query = search.value.toLowerCase();
+        const first = _modalModels.find(m => (m.id || "").toLowerCase().includes(query));
+        if (!first) return;
+        e.preventDefault();
+        selectModelPicker(id, first.id || "");
+      });
     }
-    renderModelPickerItems(id, "");
+    renderModelPickerItems(id, (search?.value || "").toLowerCase());
   });
   if (!_outsidePickerListener){
     _outsidePickerListener = true;
-    document.addEventListener("click", () => closeAllModelPickers());
+    document.addEventListener("click", e => {
+      if (!e.target.closest?.(".model-picker")) closeAllModelPickers();
+    }, true);
     document.addEventListener("keydown", e => { if (e.key === "Escape") closeAllModelPickers(); });
   }
 }
@@ -385,6 +399,7 @@ function toggleModelPicker(id){
   closeAllModelPickers();
   if (!isOpen){
     list.classList.add("open");
+    list.parentElement.querySelector(".model-picker-toggle")?.setAttribute("aria-expanded", "true");
     _activeModelPicker = id;
     const search = document.getElementById(id + "-search");
     if (search) search.focus();
@@ -392,13 +407,19 @@ function toggleModelPicker(id){
 }
 
 function closeAllModelPickers(){
-  document.querySelectorAll(".model-picker-list.open").forEach(el => el.classList.remove("open"));
+  document.querySelectorAll(".model-picker-list.open").forEach(el => {
+    el.classList.remove("open");
+    el.parentElement.querySelector(".model-picker-toggle")?.setAttribute("aria-expanded", "false");
+  });
   _activeModelPicker = null;
 }
 
 function closeModelPicker(id){
   const list = document.getElementById(id + "-list");
-  if (list) list.classList.remove("open");
+  if (list){
+    list.classList.remove("open");
+    list.parentElement.querySelector(".model-picker-toggle")?.setAttribute("aria-expanded", "false");
+  }
   if (_activeModelPicker === id) _activeModelPicker = null;
 }
 
@@ -412,17 +433,20 @@ function renderModelPickerItems(id, query){
   const metaBox = document.getElementById(id + "-meta");
   if (!itemsBox) return;
   const filtered = _modalModels.filter(m => (m.id || "").toLowerCase().includes(query));
-  itemsBox.innerHTML = filtered.map(m => `<div class="model-picker-item" data-model="${escAttr(m.id)}">${esc(m.id)}</div>`).join("");
+  itemsBox.innerHTML = filtered.map((m, index) => `<div class="model-picker-item${index === 0 ? " active" : ""}" role="option" data-model="${escAttr(m.id)}">${esc(m.id)}</div>`).join("");
   if (metaBox){
     if (_modalModels.length === 0) metaBox.textContent = "No models loaded — you can still type any model id.";
-    else if (filtered.length === 0) metaBox.textContent = `No models match "${esc(query)}".`;
+    else if (filtered.length === 0) metaBox.textContent = `No models match "${query}".`;
     else metaBox.textContent = "";
   }
 }
 
 function selectModelPicker(id, value){
   const input = document.getElementById(id);
-  if (input) input.value = value;
+  if (input){
+    input.value = value;
+    input.focus();
+  }
   closeModelPicker(id);
 }
 
