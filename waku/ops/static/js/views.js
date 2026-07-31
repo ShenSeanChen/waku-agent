@@ -250,7 +250,6 @@ const VIEWS = {
   // the harness routes every message itself; this tab just tells the story.
   graph(d){
     const g = d.graph || {enabled:false, workflows:[], stats:{quick:0, full:0}};
-    const wf = g.workflows[0];
     let h = `<div class="meta" style="margin-bottom:14px">The loop is one agent turn: the model picks tools until
       it stops. Some work has <b>shape</b> — steps that can run at the same time, and explicit "if this, go
       there" routing. A <b>graph workflow</b> makes that shape first-class: nodes (each does one job) connected
@@ -263,14 +262,23 @@ const VIEWS = {
         <a class="reveal" onclick="location.hash='settings'">Settings</a>, or set
         <code>WAKU_GRAPH_WORKFLOWS=1</code> in <code>.env</code>. Any failure anywhere fails open to the
         plain loop — this can never lose a reply, only save time and tokens.</div></div>`;
-    if (wf){
-      h += `<h2>${esc(wf.name)} — live topology <span class="arch-status"></span></h2>`;
+    const NOTE = {
+      triage: `solid arrows = always · dashed = the router's choice · every message comes through
+        this door, and <code>full_agent</code> is the ordinary loop running as one node`,
+      gather: `the four scans have no dependencies on each other, so the engine runs them in ONE WAVE —
+        together, not in turn. Run it with <code>make gather</code>. It proposes and never acts:
+        the digest lands in the outbox for you to read`,
+    };
+    (g.workflows || []).forEach(w => {
+      if (!w) return;
+      h += `<h2>${esc(w.name)} — live topology <span class="arch-status"></span></h2>`;
       const tot = g.stats.quick + g.stats.full;
-      h += `<div class="card">${graphSVG(wf)}
-        <div class="meta" style="margin-top:8px">solid arrows = always · dashed = the router's choice ·
-        ${tot ? `${g.stats.quick} quick / ${g.stats.full} full so far` : "no graph turns on tape yet"} ·
+      const extra = w.name === "triage" && tot
+        ? ` · ${g.stats.quick} quick / ${g.stats.full} full so far` : "";
+      h += `<div class="card">${graphSVG(w)}
+        <div class="meta" style="margin-top:8px">${NOTE[w.name] || ""}${extra} ·
         drawn from the engine's own <code>describe()</code>, so this picture cannot drift from the code</div></div>`;
-    }
+    });
     const gturns = (d.turns||[]).filter(t => t.graph && t.graph.route);
     h += `<h2>Graph turns</h2>`;
     h += gturns.length

@@ -36,7 +36,15 @@ function graphSVG(wf, opts = {}){
     const colH = col.length * (H + GY) - GY;
     pos[n] = {x: PAD + ci * (W + GX), y: PAD + (height - PAD * 2 - colH) / 2 + ri * (H + GY)};
   }));
-  const SUB = {llm: "small model", agent: "THE loop, as a node", tool: "local read", fn: ""};
+  // "code, no model" not "local read": a tool node is anything deterministic —
+  // triage's calendar peek is a local file, but gather's scan_github shells out
+  // to gh and scan_web hits the network. What they share is that no model runs.
+  // Both labels used to overclaim. "local read" was true for triage's calendar
+  // peek and false for gather's scan_github (a subprocess) and scan_web (the
+  // network) — what tool nodes share is that NO MODEL RUNS. And "small model"
+  // was true of triage's classify and false of gather's synthesize, which uses
+  // the main one; the kind alone does not know which, so do not claim.
+  const SUB = {llm: "one model call", agent: "THE loop, as a node", tool: "code, no model", fn: ""};
   const nodeBox = n => {
     const p = pos[n];
     if (n === "START" || n === "END")

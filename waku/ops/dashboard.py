@@ -318,6 +318,7 @@ def collect() -> dict:
 
     # --- graph workflows: topology straight from the engine (never hand-drawn,
     # so the picture can't drift) + quick/full split from the trace events
+    from waku.graph.workflows.gather import gather_topology
     from waku.graph.workflows.triage import triage_topology
     graph_routes = [e.get("target") for e in events if e.get("type") == "route"]
 
@@ -365,7 +366,8 @@ def collect() -> dict:
         "eval_history": eval_history,
         "graph": {
             "enabled": settings.graph_workflows,
-            "workflows": [triage_topology()],
+            # triage stays index 0 — the Overview panel renders workflows[0].
+            "workflows": [triage_topology(), gather_topology()],
             "stats": {"quick": sum(1 for t in graph_routes if t == "quick_reply"),
                       "full": sum(1 for t in graph_routes if t == "full_agent")},
         },
