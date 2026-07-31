@@ -344,10 +344,15 @@ function setupModelPickers(models, provider){
   ["pm-model", "pm-small-model"].forEach(id => {
     const input = document.getElementById(id);
     if (!input) return;
-    input.addEventListener("input", () => {
-      const items = document.getElementById(id + "-items");
-      if (items) items.querySelectorAll(".model-picker-item").forEach(el => el.classList.remove("active"));
-    });
+    const itemsBox = document.getElementById(id + "-items");
+    if (itemsBox){
+      itemsBox.addEventListener("click", e => {
+        const item = e.target.closest(".model-picker-item");
+        if (!item) return;
+        e.stopPropagation();
+        selectModelPicker(id, item.dataset.model || "");
+      });
+    }
     renderModelPickerItems(id, "");
   });
   if (!_outsidePickerListener){
@@ -391,7 +396,7 @@ function renderModelPickerItems(id, query){
   const metaBox = document.getElementById(id + "-meta");
   if (!itemsBox) return;
   const filtered = _modalModels.filter(m => (m.id || "").toLowerCase().includes(query));
-  itemsBox.innerHTML = filtered.map(m => `<div class="model-picker-item" onclick="selectModelPicker('${escAttr(id)}', '${escAttr(m.id)}'); event.stopPropagation();">${esc(m.id)}</div>`).join("");
+  itemsBox.innerHTML = filtered.map(m => `<div class="model-picker-item" data-model="${escAttr(m.id)}">${esc(m.id)}</div>`).join("");
   if (metaBox){
     if (_modalModels.length === 0) metaBox.textContent = "No models loaded — you can still type any model id.";
     else if (filtered.length === 0) metaBox.textContent = `No models match "${esc(query)}".`;
