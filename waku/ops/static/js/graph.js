@@ -36,9 +36,10 @@ function graphSVG(wf, opts = {}){
     const colH = col.length * (H + GY) - GY;
     pos[n] = {x: PAD + ci * (W + GX), y: PAD + (height - PAD * 2 - colH) / 2 + ri * (H + GY)};
   }));
-  // "code, no model" not "local read": a tool node is anything deterministic —
-  // triage's calendar peek is a local file, but gather's scan_github shells out
-  // to gh and scan_web hits the network. What they share is that no model runs.
+  // Ids carry the workflow name. START and END exist in EVERY workflow, so on a
+  // page showing two charts an un-namespaced `g-START` lit both of them at once
+  // — and hot() deliberately hits every match, so the bug looked like a feature.
+  const nid = n => `g-${wf.name}-${n}`;
   // Both labels used to overclaim. "local read" was true for triage's calendar
   // peek and false for gather's scan_github (a subprocess) and scan_web (the
   // network) — what tool nodes share is that NO MODEL RUNS. And "small model"
@@ -48,11 +49,11 @@ function graphSVG(wf, opts = {}){
   const nodeBox = n => {
     const p = pos[n];
     if (n === "START" || n === "END")
-      return `<g class="node" data-node="g-${n}">
+      return `<g class="node" data-node="${nid(n)}">
         <rect class="bx" x="${p.x + W/2 - 34}" y="${p.y + H/2 - 15}" width="68" height="30" rx="15"/>
         <text class="nt" x="${p.x + W/2}" y="${p.y + H/2 + 5}" text-anchor="middle" style="font-size:12px">${n}</text></g>`;
     const sub = SUB[kinds[n]] || "";
-    return `<g class="node" data-node="g-${n}">
+    return `<g class="node" data-node="${nid(n)}">
       <rect class="bx" x="${p.x}" y="${p.y}" width="${W}" height="${H}" rx="9"/>
       <text class="nt" x="${p.x + 12}" y="${p.y + 22}">${esc(n)}</text>
       ${sub ? `<text class="ns" x="${p.x + 12}" y="${p.y + 39}">${sub}</text>` : ""}</g>`;
@@ -62,7 +63,7 @@ function graphSVG(wf, opts = {}){
     const x1 = a.x + (e.src === "START" ? W/2 + 34 : W), y1 = a.y + H/2;
     const x2 = b.x + (e.dst === "END" ? W/2 - 34 : 0), y2 = b.y + H/2;
     const mx = (x1 + x2) / 2;
-    return `<path class="flow${e.conditional ? " dash" : ""}" data-edge="g-${e.src}-${e.dst}"
+    return `<path class="flow${e.conditional ? " dash" : ""}" data-edge="g-${wf.name}-${e.src}-${e.dst}"
       d="M${x1} ${y1} C${mx} ${y1} ${mx} ${y2} ${x2} ${y2}" marker-end="url(#garr)"/>`;
   };
   return `<div style="overflow-x:auto"><svg viewBox="0 0 ${width} ${height}" class="arch graphchart"
@@ -76,8 +77,15 @@ function graphSVG(wf, opts = {}){
 
 // --- the compact Overview panel: the harness auto-decides, this reflects it.
 function graphPanel(d){
-  const g = d.graph || {enabled: false, workflows: [], stats: {quick: 0, full: 0}};
-  const wf = g.workflows[0];
+  const g = d.graph || {enabled: false, workflows: [], runs: [], stats: {quick: 0, full: 0}};
+  // Overview is a STATUS surface — "what just happened" — while the Graph tab
+  // is a reference one: "what shapes exist". So this shows the workflow that
+  // most recently RAN, from the trace. Pinning it to workflows[0] meant Overview
+  // showed triage forever, seconds after a gather, which is why the panel read
+  // as leftovers rather than as news.
+  const last = (g.runs || [])[0];
+  const wf = (g.workflows || []).find(w => w && w.name === (last || {}).workflow)
+             || (g.workflows || [])[0];
   const tot = g.stats.quick + g.stats.full;
   const seg = (cls, n, label, pct) =>
     `<div class="${cls}" style="width:${pct}%">${pct >= 14 ? `${n} ${label}` : ""}</div>`;
@@ -87,14 +95,23 @@ function graphPanel(d){
         ${seg("seg-skip", g.stats.quick, "quick", Math.round(g.stats.quick / tot * 100))}
         ${seg("seg-ret", g.stats.full, "full", 100 - Math.round(g.stats.quick / tot * 100))}
       </div><div class="meta" style="margin:6px 0 10px">${g.stats.quick} answered by the small model alone — the loop never woke</div>`;
-  if (!g.enabled)
-    return `<div class="card"><div class="meta">Off — every turn runs the classic loop above. Switch on
-      <b>graph workflows</b> in <a class="reveal" onclick="location.hash='settings'">Settings</a> and every message
-      is triaged first: trivial ones get a fast small-model reply, real tasks run the same loop as a graph node.
-      You never pick a mode — the harness decides, this chart just shows which door each turn took.</div></div>`;
+  // The flag gates TRIAGE — the per-message door — and nothing else. `waku
+  // gather` is a routine you start yourself and runs regardless, so the old
+  // copy ("off = every turn runs the classic loop") was quietly false the
+  // moment a second workflow existed.
+  if (!g.enabled && !last)
+    return `<div class="card"><div class="meta">The per-message graph door is <b>off</b> — every chat turn
+      runs the classic loop above. Switch on <b>graph workflows</b> in
+      <a class="reveal" onclick="location.hash='settings'">Settings</a> to triage each message first.
+      Workflows you run yourself, like <code>make gather</code>, do not need the flag —
+      <a class="reveal" onclick="location.hash='graph'">see them here</a>.</div></div>`;
+  const when = last
+    ? `last run: <b>${esc(last.workflow || "")}</b>${last.ms ? ` · ${(last.ms/1000).toFixed(1)}s` : ""}${
+        last.steps ? ` · ${last.steps} nodes` : ""}`
+    : "live — nodes light up as a turn flows through";
   return `<div class="card" style="cursor:pointer" onclick="location.hash='graph'">
-    ${split}${wf ? graphSVG(wf) : ""}
-    <div class="meta" style="margin-top:8px">live — nodes light up as a turn flows through · click for the full story</div></div>`;
+    ${g.enabled ? split : ""}${wf ? graphSVG(wf) : ""}
+    <div class="meta" style="margin-top:8px">${when} · click for the full story</div></div>`;
 }
 
 // --- live animation: same machinery as the loop's STAGE map. hot() lights
@@ -104,13 +121,160 @@ function animateGraphStage(ev){
   if (!document.querySelector(".graphchart")) return;
   const status = t => document.querySelectorAll(".arch-status").forEach(
     st => st.innerHTML = `<span class="live-dot"></span>${t}`);
-  if (ev.type === "graph_start"){ status("graph workflow starts"); hot(`[data-node="g-START"]`, "hot", 1000); }
-  else if (ev.type === "node_start") status(`graph · ${ev.node}`);
-  else if (ev.type === "node_end") hot(`[data-node="g-${ev.node}"]`, "hot", 1000);
+  // Every graph event carries `workflow`, so the ids can be scoped to the chart
+  // that is actually running instead of lighting every chart on the page.
+  const w = ev.workflow || "";
+  if (ev.type === "graph_start"){ status(`${w} starts`); hot(`[data-node="g-${w}-START"]`, "hot", 1000); }
+  else if (ev.type === "node_start") status(`${w} · ${ev.node}`);
+  else if (ev.type === "node_end") hot(`[data-node="g-${w}-${ev.node}"]`, "hot", 1000);
   else if (ev.type === "route"){
     status(`route → ${ev.target}`);
-    hot(`[data-edge="g-${ev.router}-${ev.target}"]`, "live", 1400);
-    hot(`[data-node="g-${ev.target}"]`, "hot", 1400);
+    hot(`[data-edge="g-${w}-${ev.router}-${ev.target}"]`, "live", 1400);
+    hot(`[data-node="g-${w}-${ev.target}"]`, "hot", 1400);
   }
-  else if (ev.type === "graph_end") hot(`[data-node="g-END"]`, "hot", 1000);
+  else if (ev.type === "graph_end") hot(`[data-node="g-${w}-END"]`, "hot", 1000);
+}
+
+// ---------------------------------------------------------------------------
+// THE RUNNER — N nodes as a row of live cards.
+//
+// The topology chart above shows the SHAPE: "these four are independent". It
+// cannot show that they actually ran together, because a picture has no time
+// axis and a viewer cannot tell four boxes lit at once from four lit very fast
+// in sequence. So the cards carry the time: they start together, tick while
+// running, and finish out of order. Watching three settle while one spins is
+// the proof the chart can only promise.
+//
+// Same shape as the Arena, deliberately — arena.py tags every event with `spec`
+// and routes it to a card; the graph engine already tags every event with
+// `node`. Swap the key, reuse .cmp-grid/.cmp-col, and it reads as a sibling
+// because it is one.
+let graphRun = {running: false, workflow: "", nodes: {}, order: [], waves: [],
+                digest: "", draft: "", error: "", ticker: null};
+
+function graphResetRun(workflow){
+  graphRun = {running: true, workflow, nodes: {}, order: [], waves: [],
+              digest: "", draft: "", error: "", ticker: graphRun.ticker};
+}
+
+function graphApplyEvent(ev){
+  const R = graphRun;
+  const k = ev.kind;
+  if (k === "graph_start"){
+    R.order = ev.nodes || [];
+    R.order.forEach(n => R.nodes[n] = {status: "waiting"});
+  } else if (k === "node_start"){
+    // A wave is "the nodes that started before any of them finished". That is
+    // exactly what the engine means by a wave, and it is what the row groups by.
+    const open = R.waves[R.waves.length - 1];
+    if (open && !open.closed) open.nodes.push(ev.node);
+    else R.waves.push({nodes: [ev.node], closed: false});
+    R.nodes[ev.node] = {status: "running", startedAt: performance.now()};
+  } else if (k === "node_end"){
+    const w = R.waves[R.waves.length - 1];
+    if (w) w.closed = true;   // first finish closes the wave for new members
+    R.nodes[ev.node] = {status: ev.error ? "error" : "done", ms: ev.ms,
+                        keys: ev.keys || [], error: ev.error || ""};
+  } else if (k === "route"){
+    R.route = {target: ev.target, reason: ev.reason};
+  } else if (k === "graph_end"){
+    R.running = false; R.totalMs = ev.ms;
+  } else if (k === "done"){
+    R.running = false;
+    R.digest = ev.digest || ""; R.draft = ev.draft_path || ""; R.error = ev.error || "";
+  }
+}
+
+async function runGraph(workflow){
+  if (graphRun.running) return;
+  graphResetRun(workflow);
+  // Without a ticker the elapsed numbers freeze and the cards look identical to
+  // a sequential run — the one thing this view exists to disprove.
+  clearInterval(graphRun.ticker);
+  graphRun.ticker = setInterval(() => { if (graphRun.running) render(); }, 100);
+  render();
+  try {
+    const res = await fetch("/api/graph/stream", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({workflow}),
+    });
+    const reader = res.body.getReader();
+    const dec = new TextDecoder();
+    let buf = "";
+    for (;;){
+      const {value, done} = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, {stream: true});
+      const parts = buf.split("\n\n");
+      buf = parts.pop();
+      for (const p of parts){
+        const line = p.trim();
+        if (!line.startsWith("data:")) continue;
+        try { graphApplyEvent(JSON.parse(line.slice(5))); } catch (e) { /* partial frame */ }
+        render();
+      }
+    }
+  } catch (e){
+    graphRun.error = String(e);
+  } finally {
+    graphRun.running = false;
+    clearInterval(graphRun.ticker);
+    render();
+  }
+}
+
+function graphCol(name){
+  const n = graphRun.nodes[name] || {status: "waiting"};
+  if (n.status === "waiting")
+    return `<div class="cmp-col" style="opacity:.5"><div class="cmp-h"><b>${esc(name)}</b></div>
+      <div class="meta">queued</div></div>`;
+  if (n.status === "running"){
+    const el = ((performance.now() - n.startedAt) / 1000).toFixed(1);
+    return `<div class="cmp-col"><div class="cmp-h"><b>${esc(name)}</b></div>
+      <div class="meta"><span class="live-dot"></span>${el}s</div></div>`;
+  }
+  if (n.status === "error")
+    return `<div class="cmp-col err"><div class="cmp-h"><b>${esc(name)}</b></div>
+      <div class="meta" style="color:var(--bad)">${esc(n.error)}</div></div>`;
+  // The bar is scaled to the SLOWEST node in this node's wave, and every faster
+  // node prints what it spent waiting at the barrier. That number is the honest
+  // cost of wave execution — printing it teaches more than hiding it would.
+  const wave = graphRun.waves.find(w => w.nodes.includes(name));
+  const peers = (wave ? wave.nodes : [name]).map(x => (graphRun.nodes[x] || {}).ms || 0);
+  const slowest = Math.max(...peers, 1);
+  const pct = Math.round((n.ms || 0) / slowest * 100);
+  const waited = slowest - (n.ms || 0);
+  return `<div class="cmp-col"><div class="cmp-h"><b>${esc(name)}</b>
+      <span class="chip">${n.ms}ms</span></div>
+    <div class="wavebar"><i style="width:${pct}%"></i></div>
+    <div class="meta">${waited > 20 && peers.length > 1
+      ? `waited ${(waited/1000).toFixed(1)}s at the barrier`
+      : (peers.length > 1 ? "set the pace for this wave" : "")}</div>
+    <div class="meta">${(n.keys || []).map(k => `<span class="chip">${esc(k)}</span>`).join(" ")}</div>
+  </div>`;
+}
+
+function graphRunPanel(){
+  const R = graphRun;
+  const btn = `<button class="btn" onclick="runGraph('gather')" ${R.running ? "disabled" : ""}>
+    ${R.running ? "running…" : "Run gather"}</button>`;
+  let h = `<h2>Run it — watch the wave <span class="meta" style="font-weight:400">
+    the chart shows the shape; these cards show it happening</span></h2>
+    <div class="card">${btn}
+    <span class="meta" style="margin-left:10px">fetches GitHub, the web, your calendar and your
+    memory — together. Proposes only: the digest lands in the outbox.</span>`;
+  if (R.error) h += `<div class="meta" style="color:var(--bad);margin-top:10px">${esc(R.error)}</div>`;
+  R.waves.forEach((w, i) => {
+    const done = w.nodes.filter(n => (R.nodes[n] || {}).ms != null);
+    const slowest = done.length ? Math.max(...done.map(n => R.nodes[n].ms)) : 0;
+    const sum = done.reduce((a, n) => a + R.nodes[n].ms, 0);
+    h += `<div class="meta" style="margin:14px 0 6px">wave ${i + 1} · ${w.nodes.length}
+      node${w.nodes.length > 1 ? "s" : ""}${slowest ? ` · ${(slowest/1000).toFixed(1)}s`
+      + (w.nodes.length > 1 ? ` (in sequence it would be ${(sum/1000).toFixed(1)}s)` : "") : ""}</div>
+      <div class="cmp-grid">${w.nodes.map(graphCol).join("")}</div>`;
+  });
+  if (R.totalMs) h += `<div class="meta" style="margin-top:12px">finished in
+    ${(R.totalMs/1000).toFixed(1)}s${R.draft ? ` · saved to <code>${esc(R.draft)}</code>` : ""}</div>`;
+  if (R.digest) h += `<div class="card" style="margin-top:10px">${renderMarkdown(R.digest)}</div>`;
+  return h + `</div>`;
 }

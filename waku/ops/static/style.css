@@ -324,6 +324,11 @@
   .cmp-col{background:var(--panel);border:1px solid var(--line);border-radius:12px;
        padding:12px 14px;display:flex;flex-direction:column;gap:8px}
   .cmp-col.err{border-color:var(--bad)}
+  /* One wave's nodes all start together, so every bar shares a left edge and
+     ends where that node finished. Four bars of different lengths from the same
+     origin IS the wave — the topology chart above can only promise it. */
+  .wavebar{height:6px;background:var(--line);border-radius:3px;overflow:hidden}
+  .wavebar i{display:block;height:100%;background:var(--accent);border-radius:3px}
   .cmp-h{display:flex;align-items:center;gap:6px;font-size:13px}
   .cmp-stats{display:flex;flex-wrap:wrap;gap:5px;align-items:center}
   .chip{font-size:11px;color:var(--ink2);border:1px solid var(--line2);border-radius:99px;padding:1px 8px}

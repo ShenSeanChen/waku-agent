@@ -113,6 +113,44 @@ def chat_stream(message: str, emit) -> None:
     })
 
 
+# A NAME -> runner table, never a dynamic import of whatever the browser sent.
+# "run the workflow the client named" is one careless refactor away from "import
+# and call whatever string arrives", so the indirection is a dict on purpose.
+WORKFLOW_RUNNERS = {"gather": "waku.ops.gather:run_gather"}
+
+
+def graph_stream(payload: dict, emit) -> None:
+    """Run a graph workflow, streaming its node events as SSE.
+
+    Only the engine's own events go out — graph_start / node_start / node_end /
+    route / graph_end. They already carry `workflow` and `node`, which is all a
+    card needs, and they carry no node OUTPUT, so a digest can never leak into
+    a frame. Unlike the Arena this needs no lock of its own: run_graph already
+    serialises notify() behind one (engine.py), so events arrive whole.
+    """
+    name = (payload.get("workflow") or "").strip()
+    target = WORKFLOW_RUNNERS.get(name)
+    if target is None:
+        emit("done", {"error": f"unknown workflow '{name}'"})
+        return
+    module_name, _, fn_name = target.partition(":")
+    try:
+        import importlib
+
+        run = getattr(importlib.import_module(module_name), fn_name)
+        state = run(observer=lambda kind, ev: emit(kind, ev))
+        emit("done", {
+            "workflow": name,
+            "digest": (state.get("digest") or "")[:4000],
+            "draft_path": state.get("draft_path", ""),
+            "errors": state.get("errors") or {},
+        })
+    except Exception as exc:
+        # Includes GraphStateCollision, which run_graph raises OUT (unlike node
+        # errors) — better shown in the card than dropped on the floor.
+        emit("done", {"error": f"{type(exc).__name__}: {exc}"})
+
+
 def _parse_ts(ts: str):
     try:
         return datetime.fromisoformat(ts)
@@ -321,6 +359,15 @@ def collect() -> dict:
     from waku.graph.workflows.gather import gather_topology
     from waku.graph.workflows.triage import triage_topology
     graph_routes = [e.get("target") for e in events if e.get("type") == "route"]
+    # The last few completed runs, newest first. Overview needs this because the
+    # two workflows are two different JOBS with different triggers — triage runs
+    # itself on every message, gather runs when you ask — so "which chart is
+    # relevant right now" is a question only the trace can answer. Rendering a
+    # fixed workflow there showed triage forever, seconds after a gather ran.
+    graph_runs = [{"workflow": e.get("workflow"), "ms": e.get("ms"),
+                   "at": e.get("ts"), "steps": e.get("steps"),
+                   "path": e.get("path") or [], "error": e.get("error")}
+                  for e in events if e.get("type") == "graph_end"][-8:][::-1]
 
     return {
         "generated_at": datetime.now(UTC).isoformat(timespec="seconds"),
@@ -365,9 +412,12 @@ def collect() -> dict:
         "eval_report": eval_report,
         "eval_history": eval_history,
         "graph": {
+            # NOTE: `enabled` gates TRIAGE ONLY — the per-message front door.
+            # `waku gather` is a routine you run yourself and ignores this flag
+            # entirely, so the UI must not say "off = no graphs run".
             "enabled": settings.graph_workflows,
-            # triage stays index 0 — the Overview panel renders workflows[0].
             "workflows": [triage_topology(), gather_topology()],
+            "runs": graph_runs,
             "stats": {"quick": sum(1 for t in graph_routes if t == "quick_reply"),
                       "full": sum(1 for t in graph_routes if t == "full_agent")},
         },
@@ -859,6 +909,21 @@ class Handler(BaseHTTPRequestHandler):
                                judge_spec=(payload.get("judge_model") or ""), apple=bool(payload.get("apple")))
             except Exception as exc:
                 emit("done", {"error": f"{type(exc).__name__}: {exc}"})
+            return
+        if self.path == "/api/graph/stream":
+            payload = json.loads(self.rfile.read(length) or "{}")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-cache")
+            self.end_headers()
+
+            def emit(kind, ev):
+                try:
+                    self.wfile.write(f"data: {json.dumps({'kind': kind, **ev}, default=str)}\n\n".encode())
+                    self.wfile.flush()
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
+            graph_stream(payload, emit)
             return
         routes = {"/api/chat": None, "/api/memory": memory_action, "/api/settings": apply_settings,
                   "/api/query": run_query, "/api/session": session_action, "/api/pin": pin_action,

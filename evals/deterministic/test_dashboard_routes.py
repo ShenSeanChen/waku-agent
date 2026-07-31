@@ -49,7 +49,8 @@ GET_PATHS = {
 
 # Streaming endpoints. These are what the dashboard actually uses for chat and
 # racing; the browser reads them as SSE, so they are handled before the router.
-STREAM_ROUTES = {"/api/chat/stream", "/api/compare/stream", "/api/voice"}
+STREAM_ROUTES = {"/api/chat/stream", "/api/compare/stream", "/api/voice",
+                 "/api/graph/stream"}
 
 
 def _source() -> str:
@@ -77,7 +78,7 @@ def test_streaming_routes_survive():
 
 
 def test_the_handlers_behind_the_routes_exist_and_are_callable():
-    for name in ("collect", "chat", "chat_stream", "compare_stream", "memory_action",
+    for name in ("collect", "chat", "chat_stream", "compare_stream", "graph_stream", "memory_action",
                  "apply_settings", "run_query", "session_action", "pin_action",
                  "list_models", "events_since", "reveal_path", "settings_info",
                  "tools_info", "compare_clear", "compare_regrade", "compare_delete_run"):

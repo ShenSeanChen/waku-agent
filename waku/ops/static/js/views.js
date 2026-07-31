@@ -262,12 +262,17 @@ const VIEWS = {
         <a class="reveal" onclick="location.hash='settings'">Settings</a>, or set
         <code>WAKU_GRAPH_WORKFLOWS=1</code> in <code>.env</code>. Any failure anywhere fails open to the
         plain loop — this can never lose a reply, only save time and tokens.</div></div>`;
+    // The two workflows are two different JOBS with different triggers, which is
+    // the thing the page has to make obvious — otherwise two stacked charts read
+    // like two options you pick between.
     const NOTE = {
-      triage: `solid arrows = always · dashed = the router's choice · every message comes through
-        this door, and <code>full_agent</code> is the ordinary loop running as one node`,
-      gather: `the four scans have no dependencies on each other, so the engine runs them in ONE WAVE —
-        together, not in turn. Run it with <code>make gather</code>. It proposes and never acts:
-        the digest lands in the outbox for you to read`,
+      triage: `<b>Runs itself, on every message.</b> Gated by the graph-workflows flag.
+        Solid arrows = always, dashed = the router's choice. <code>full_agent</code> is the
+        ordinary loop running as one node — a graph does not replace the loop, it arranges calls to it.`,
+      gather: `<b>Runs when you start it</b> — <code>make gather</code> or the button below — and
+        ignores the flag entirely. The four scans have no dependencies on each other, so the engine
+        runs them in ONE WAVE: together, not in turn. It proposes and never acts; the digest lands
+        in the outbox for you to read.`,
     };
     (g.workflows || []).forEach(w => {
       if (!w) return;
@@ -278,6 +283,7 @@ const VIEWS = {
       h += `<div class="card">${graphSVG(w)}
         <div class="meta" style="margin-top:8px">${NOTE[w.name] || ""}${extra} ·
         drawn from the engine's own <code>describe()</code>, so this picture cannot drift from the code</div></div>`;
+      if (w.name === "gather") h += graphRunPanel();
     });
     const gturns = (d.turns||[]).filter(t => t.graph && t.graph.route);
     h += `<h2>Graph turns</h2>`;
