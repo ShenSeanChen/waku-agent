@@ -269,6 +269,7 @@ async function toggleProvider(provider, disabled){
 // --- edit modal: API key (+ main/small model when this provider is current,
 // with the live catalog as a datalist) and a "set as current" action.
 function openProviderModal(provider){
+  markEditing();   // keep the 5s refresh loop from wiping this modal
   const st = (D && D.settings) || {};
   const p = (D.providers || []).find(x => x.key === provider);
   if (!p) return;
@@ -297,6 +298,7 @@ function openProviderModal(provider){
 }
 
 function closeProviderModal(){
+  editing = false;
   const root = document.getElementById("prov-modal-root");
   if (root) root.innerHTML = "";
 }
