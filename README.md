@@ -4,7 +4,7 @@
 
 Meet **Waku** — a local-first personal assistant that shows the four pillars behind every
 serious agent: **Harness · Loop · Memory · Eval/LLM-Ops**. No frameworks hiding the good parts.
-Built for [Sean's AI Stories](https://www.youtube.com/@SeanAIStories).
+Built by [seanchen.io](https://seanchen.io).
 
 - **Local-first.** Your memory is one SQLite file. Open it. Read it. It's yours.
 - **Memory is the hero.** Semantic + episodic + procedural — with a gate that decides *whether*
