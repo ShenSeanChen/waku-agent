@@ -316,6 +316,7 @@ async function loadModalModels(provider){
 
 // Shared model list for the currently open modal.
 let _modalModels = [];
+let _activeModelPicker = null;
 let _outsidePickerListener = false;
 
 function escAttr(s){
@@ -326,7 +327,7 @@ function renderModelPicker(id, label, value){
   return `<label class="fld">${esc(label)}
     <div class="model-picker" id="${escAttr(id)}-picker">
       <div class="model-picker-input">
-        <input type="text" id="${escAttr(id)}" value="${escAttr(value || "")}" autocomplete="off" onfocus="markEditing()">
+        <input type="text" id="${escAttr(id)}" value="${escAttr(value || "")}" autocomplete="off" onfocus="markEditing()" onclick="event.stopPropagation()">
         <button type="button" class="model-picker-toggle" onclick="toggleModelPicker('${escAttr(id)}'); event.stopPropagation();" aria-label="toggle models">▾</button>
       </div>
       <div class="model-picker-list" id="${escAttr(id)}-list">
@@ -338,11 +339,15 @@ function renderModelPicker(id, label, value){
   </label>`;
 }
 
-function setupModelPickers(models, ids){
+function setupModelPickers(models, provider){
   _modalModels = models || [];
-  (ids || []).forEach(id => {
+  ["pm-model", "pm-small-model"].forEach(id => {
     const input = document.getElementById(id);
     if (!input) return;
+    input.addEventListener("input", () => {
+      const items = document.getElementById(id + "-items");
+      if (items) items.querySelectorAll(".model-picker-item").forEach(el => el.classList.remove("active"));
+    });
     renderModelPickerItems(id, "");
   });
   if (!_outsidePickerListener){
@@ -359,6 +364,7 @@ function toggleModelPicker(id){
   closeAllModelPickers();
   if (!isOpen){
     list.classList.add("open");
+    _activeModelPicker = id;
     const search = document.getElementById(id + "-search");
     if (search) search.focus();
   }
@@ -366,11 +372,13 @@ function toggleModelPicker(id){
 
 function closeAllModelPickers(){
   document.querySelectorAll(".model-picker-list.open").forEach(el => el.classList.remove("open"));
+  _activeModelPicker = null;
 }
 
 function closeModelPicker(id){
   const list = document.getElementById(id + "-list");
   if (list) list.classList.remove("open");
+  if (_activeModelPicker === id) _activeModelPicker = null;
 }
 
 function filterModelPicker(id){
