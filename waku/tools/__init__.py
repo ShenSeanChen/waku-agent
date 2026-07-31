@@ -61,6 +61,12 @@ def build_registry(conn: sqlite3.Connection, settings: Settings, memory=None) ->
         for t in apple.make_tools():
             registry.register(t)
 
+    # Read-only GitHub via the gh CLI (opt-in; uses gh's own auth, no token here).
+    if getattr(settings, "gh_tool", False):
+        from waku.tools import github
+
+        registry.register(github.make_tool(default_repo=getattr(settings, "gh_repo", "")))
+
     # MCP servers (opt-in via .waku/mcp.json).
     mcp_config = settings.home / "mcp.json"
     if mcp_config.exists():

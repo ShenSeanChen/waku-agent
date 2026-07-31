@@ -75,6 +75,17 @@ class Settings:
     apple_tools: bool = field(
         default_factory=lambda: os.getenv("WAKU_APPLE_TOOLS", "") in ("1", "true", "yes")
     )
+    # Read-only GitHub access through the `gh` CLI's own auth (no token here).
+    # Off by default and deliberately so: every registered tool ships in every
+    # prompt, and reading PRs is maintainer capability, not assistant capability.
+    # The gather workflow calls waku/tools/github.py as a library and does NOT
+    # need this on — the switch only decides whether the MODEL can reach it.
+    gh_tool: bool = field(
+        default_factory=lambda: os.getenv("WAKU_GH_TOOL", "") in ("1", "true", "yes")
+    )
+    # owner/name to assume when a call omits it — for when Waku runs outside a
+    # checkout, where `gh` has no remote to infer from.
+    gh_repo: str = field(default_factory=lambda: os.getenv("WAKU_GH_REPO", ""))
     # Register the experimental tools (delegate_task -> pi sub-agent, ...). Env is
     # the global switch; the arena sets this per-race so a coding race can hand
     # work to pi WITHOUT flipping it on for the whole process.
