@@ -5,7 +5,7 @@ from __future__ import annotations
 import sys
 from types import ModuleType
 
-from waku.tools import calendar
+from waku.tools import calendar, google_calendar
 
 
 def _install_fake_oauth_modules(monkeypatch, *, execute_error: Exception | None = None):
@@ -62,6 +62,12 @@ def _install_fake_oauth_modules(monkeypatch, *, execute_error: Exception | None 
         @classmethod
         def from_client_secrets_file(cls, path, scopes=None):
             captured["client_secrets_path"] = path
+            captured["flow_scopes"] = scopes
+            return FakeInstalledAppFlow()
+
+        @classmethod
+        def from_client_config(cls, config, scopes=None):
+            captured["client_config"] = config
             captured["flow_scopes"] = scopes
             return FakeInstalledAppFlow()
 
@@ -205,3 +211,78 @@ def test_expired_token_is_refreshed(tmp_path, monkeypatch):
     assert captured.get("refreshed") is True
     assert "client_secrets_path" not in captured
     assert "Also added to Google Calendar" in result
+
+
+def test_google_calendar_uses_bundled_client_and_readonly_scope_by_default(
+    tmp_path, monkeypatch
+):
+    captured = _install_fake_oauth_modules(monkeypatch)
+    bundled_config = {
+        "installed": {
+            "client_id": "fake-client-id",
+            "client_secret": "fake-client-secret",
+        }
+    }
+    monkeypatch.setattr(
+        google_calendar, "BUNDLED_CLIENT_CONFIG", bundled_config
+    )
+
+    result = google_calendar.connect(tmp_path)
+
+    assert captured["client_config"] == bundled_config
+    assert captured["flow_scopes"] == google_calendar.DEFAULT_SCOPES
+    assert captured["flow_scopes"] == [google_calendar.READONLY_SCOPE]
+    assert "client_secrets_path" not in captured
+    assert captured["ran_local_server_port"] == 0
+    token_file = tmp_path / "google-token.json"
+    assert token_file.exists()
+    assert "fake-oauth-token" in token_file.read_text(encoding="utf-8")
+    assert "read-only via bundled OAuth client" in result
+
+
+def test_google_calendar_reports_when_bundled_client_is_not_configured(
+    tmp_path, monkeypatch
+):
+    captured = _install_fake_oauth_modules(monkeypatch)
+
+    result = google_calendar.connect(tmp_path)
+
+    assert "bundled OAuth client is not configured" in result
+    assert ".waku/credentials.json" in result
+    assert "client_config" not in captured
+    assert "ran_local_server_port" not in captured
+    assert not (tmp_path / "google-token.json").exists()
+
+
+def test_google_calendar_credentials_json_overrides_client_not_scope(
+    tmp_path, monkeypatch
+):
+    captured = _install_fake_oauth_modules(monkeypatch)
+    creds_file = tmp_path / "credentials.json"
+    creds_file.write_text('{"installed": {}}', encoding="utf-8")
+
+    result = google_calendar.connect(tmp_path)
+
+    assert captured["client_secrets_path"] == str(creds_file)
+    assert captured["flow_scopes"] == google_calendar.DEFAULT_SCOPES
+    assert captured["flow_scopes"] == [google_calendar.READONLY_SCOPE]
+    assert "client_config" not in captured
+    assert (tmp_path / "google-token.json").exists()
+    assert "read-only via credentials.json override" in result
+
+
+def test_google_calendar_token_loading_uses_default_readonly_scopes(
+    tmp_path, monkeypatch
+):
+    captured = _install_fake_oauth_modules(monkeypatch)
+    token_file = tmp_path / "google-token.json"
+    token_file.write_text('{"token": "existing"}', encoding="utf-8")
+
+    creds = google_calendar._load_credentials(
+        tmp_path, google_calendar.DEFAULT_SCOPES
+    )
+
+    assert creds is not None
+    assert captured["loaded_token_path"] == str(token_file)
+    assert captured["loaded_scopes"] == google_calendar.DEFAULT_SCOPES
+    assert captured["loaded_scopes"] == [google_calendar.READONLY_SCOPE]
