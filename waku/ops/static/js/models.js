@@ -267,7 +267,7 @@ async function toggleProvider(provider, disabled){
 }
 
 // --- edit modal: API key (+ main/small model when this provider is current,
-// with the live catalog as a datalist) and a "set as current" action.
+// with a searchable live catalog) and a "set as current" action.
 function openProviderModal(provider){
   markEditing();   // keep the 5s refresh loop from wiping this modal
   const st = (D && D.settings) || {};
@@ -285,9 +285,8 @@ function openProviderModal(provider){
                        : `<span class="srcpill apple">not set</span>`}</span>
         <input type="password" id="pm-key" placeholder="${f.configured ? "key on file — blank keeps it" : "paste key"}"></label>
       ${current ? `
-      <label class="fld">Main model (runs the loop; needs tool calling) <input id="pm-model" list="model-list" value="${esc(st.model || "")}"></label>
-      <label class="fld">Gate / summary model <input id="pm-small-model" list="model-list" value="${esc(st.small_model || "")}"></label>
-      <datalist id="model-list"></datalist>` : ""}
+      ${renderModelPicker("pm-model", "Main model (runs the loop; needs tool calling)", st.model || "")}
+      ${renderModelPicker("pm-small-model", "Gate / summary model", st.small_model || "")}` : ""}
       <div style="display:flex;gap:8px;margin-top:10px">
         <button class="save" onclick="saveProviderModal('${esc(provider)}')">Save</button>
         ${!current ? `<button class="save ghost" onclick="makeCurrentProvider('${esc(provider)}')">Set as current provider</button>` : ""}
@@ -303,15 +302,25 @@ function closeProviderModal(){
   if (root) root.innerHTML = "";
 }
 
-// Datalist suggestions for the modal's model fields: this provider's live
-// catalog (or its defaults when there's no catalog). Manual typing still works.
+// Populate both modal pickers from one request: this provider's live catalog,
+// or its defaults when there is no catalog. Manual typing always still works.
 async function loadModalModels(provider){
-  const dl = document.getElementById("model-list");
-  if (!dl) return;
+  setupModelPickers([], provider);
+  setModelPickerMeta("Loading models…");
   let data;
-  try { data = await (await fetch("/api/models?provider=" + encodeURIComponent(provider))).json(); }
-  catch(e){ return; }
-  dl.innerHTML = (data.models || []).map(m => `<option value="${esc(m.id)}"></option>`).join("");
+  try {
+    const response = await fetch("/api/models?provider=" + encodeURIComponent(provider));
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    data = await response.json();
+  } catch(e){
+    data = {models: [], listed: false, error: e.message || String(e)};
+  }
+  setupModelPickers(data.models || [], provider);
+  if (!data.listed){
+    setModelPickerMeta(data.error
+      ? "Could not load catalog — showing defaults only."
+      : "Live catalog unavailable — showing defaults.");
+  }
 }
 
 // Shared model list for the currently open modal.
@@ -360,6 +369,13 @@ function setupModelPickers(models, provider){
     document.addEventListener("click", () => closeAllModelPickers());
     document.addEventListener("keydown", e => { if (e.key === "Escape") closeAllModelPickers(); });
   }
+}
+
+function setModelPickerMeta(message){
+  ["pm-model", "pm-small-model"].forEach(id => {
+    const meta = document.getElementById(id + "-meta");
+    if (meta) meta.textContent = message;
+  });
 }
 
 function toggleModelPicker(id){
