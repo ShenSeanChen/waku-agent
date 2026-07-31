@@ -320,7 +320,7 @@ let _activeModelPicker = null;
 let _outsidePickerListener = false;
 
 function escAttr(s){
-  return String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+  return esc(s).replace(/"/g, "&quot;").replace(/'/g, "&#39;");
 }
 
 function renderModelPicker(id, label, value){
