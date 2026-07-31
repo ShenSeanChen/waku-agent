@@ -109,6 +109,17 @@ dev = [
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
+# An sdist should be what you need to BUILD and TEST waku — source, bundled
+# skills, schema, evals. Left alone it was 2.6 MB, and 2.5 MB of that was a
+# whiteboard PNG and the .excalidraw sources, plus the agent tooling (.claude,
+# .agents, .pi) that only matters inside this repo. All of it stays on GitHub,
+# where people actually read it; none of it belongs in a package download.
+[tool.hatch.build.targets.sdist]
+exclude = [
+    "docs", "examples", "pi-pokedex",
+    ".claude", ".agents", ".pi", ".deepeval", ".github",
+]
+
 [tool.hatch.build.targets.wheel]
 packages = ["waku"]
 

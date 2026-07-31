@@ -27,6 +27,17 @@ Built for [Sean's AI Stories](https://www.youtube.com/@SeanAIStories).
 
 ## Quickstart
 
+Just want to run it:
+
+```bash
+pip install waku-agent
+waku                                    # talk to your Waku in the terminal
+waku dashboard                          # …or the browser cockpit → localhost:7777
+```
+
+It will tell you which key to set the first time. Want to **read the code** (the
+point of this repo) or contribute — clone it instead:
+
 ```bash
 git clone https://github.com/ShenSeanChen/waku-agent && cd waku-agent
 uv venv && uv pip install -e .          # create the env + install the `waku` command
