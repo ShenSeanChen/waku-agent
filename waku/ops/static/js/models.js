@@ -314,6 +314,93 @@ async function loadModalModels(provider){
   dl.innerHTML = (data.models || []).map(m => `<option value="${esc(m.id)}"></option>`).join("");
 }
 
+// Shared model list for the currently open modal.
+let _modalModels = [];
+let _activeModelPicker = null;
+let _outsidePickerListener = false;
+
+function renderModelPicker(id, label, value){
+  return `<label class="fld">${esc(label)}
+    <div class="model-picker" id="${esc(id)}-picker">
+      <div class="model-picker-input">
+        <input type="text" id="${esc(id)}" value="${esc(value || "")}" autocomplete="off" onfocus="markEditing()">
+        <button type="button" class="model-picker-toggle" onclick="toggleModelPicker('${esc(id)}'); event.stopPropagation();" aria-label="toggle models">▾</button>
+      </div>
+      <div class="model-picker-list" id="${esc(id)}-list">
+        <input type="text" class="model-picker-search" id="${esc(id)}-search" placeholder="filter models..." autocomplete="off" oninput="filterModelPicker('${esc(id)}')" onfocus="markEditing()" onclick="event.stopPropagation()">
+        <div class="model-picker-items" id="${esc(id)}-items"></div>
+        <div class="model-picker-meta" id="${esc(id)}-meta"></div>
+      </div>
+    </div>
+  </label>`;
+}
+
+function setupModelPickers(models, provider){
+  _modalModels = models || [];
+  ["pm-model", "pm-small-model"].forEach(id => {
+    const input = document.getElementById(id);
+    if (!input) return;
+    input.addEventListener("input", () => {
+      const items = document.getElementById(id + "-items");
+      if (items) items.querySelectorAll(".model-picker-item").forEach(el => el.classList.remove("active"));
+    });
+    renderModelPickerItems(id, "");
+  });
+  if (!_outsidePickerListener){
+    _outsidePickerListener = true;
+    document.addEventListener("click", () => closeAllModelPickers());
+    document.addEventListener("keydown", e => { if (e.key === "Escape") closeAllModelPickers(); });
+  }
+}
+
+function toggleModelPicker(id){
+  const list = document.getElementById(id + "-list");
+  if (!list) return;
+  const isOpen = list.classList.contains("open");
+  closeAllModelPickers();
+  if (!isOpen){
+    list.classList.add("open");
+    _activeModelPicker = id;
+    const search = document.getElementById(id + "-search");
+    if (search) search.focus();
+  }
+}
+
+function closeAllModelPickers(){
+  document.querySelectorAll(".model-picker-list.open").forEach(el => el.classList.remove("open"));
+  _activeModelPicker = null;
+}
+
+function closeModelPicker(id){
+  const list = document.getElementById(id + "-list");
+  if (list) list.classList.remove("open");
+  if (_activeModelPicker === id) _activeModelPicker = null;
+}
+
+function filterModelPicker(id){
+  const query = (document.getElementById(id + "-search")?.value || "").toLowerCase();
+  renderModelPickerItems(id, query);
+}
+
+function renderModelPickerItems(id, query){
+  const itemsBox = document.getElementById(id + "-items");
+  const metaBox = document.getElementById(id + "-meta");
+  if (!itemsBox) return;
+  const filtered = _modalModels.filter(m => (m.id || "").toLowerCase().includes(query));
+  itemsBox.innerHTML = filtered.map(m => `<div class="model-picker-item" onclick="selectModelPicker('${esc(id)}', '${esc(m.id)}'); event.stopPropagation();">${esc(m.id)}</div>`).join("");
+  if (metaBox){
+    if (_modalModels.length === 0) metaBox.textContent = "No models loaded — you can still type any model id.";
+    else if (filtered.length === 0) metaBox.textContent = `No models match "${esc(query)}".`;
+    else metaBox.textContent = "";
+  }
+}
+
+function selectModelPicker(id, value){
+  const input = document.getElementById(id);
+  if (input) input.value = value;
+  closeModelPicker(id);
+}
+
 function modalKeyPayload(provider){
   const key = document.getElementById("pm-key")?.value;
   const payload = {provider};
