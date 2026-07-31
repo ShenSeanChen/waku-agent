@@ -25,8 +25,11 @@ discord:        ## Discord → laptop (needs DISCORD_BOT_TOKEN in .env)
 whatsapp:       ## WhatsApp → laptop (needs WHATSAPP_TOKEN in .env, public URL)
 	$(PY) -m waku whatsapp
 
-brief:          ## morning briefing from calendar + mail + memory
+brief:          ## morning briefing from calendar + mail + memory (as a LOOP)
 	$(PY) -m waku brief
+
+gather:         ## same job as a GRAPH: 4 sources in parallel, then one digest
+	$(PY) -m waku gather
 
 # The server holds dashboard.py in memory: static JS/CSS reload on refresh, but
 # Python routes do NOT. After pulling a change that touches dashboard.py (or any

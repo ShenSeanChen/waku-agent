@@ -6,7 +6,9 @@
   waku telegram              phone → laptop (needs TELEGRAM_BOT_TOKEN)
   waku discord               Discord → laptop (needs DISCORD_BOT_TOKEN)
   waku whatsapp              WhatsApp → laptop (needs WHATSAPP_TOKEN, public URL)
-  waku brief                 morning briefing (calendar + mail + memory)
+  waku brief                 morning briefing (calendar + mail + memory) — as a LOOP
+  waku gather                same job as a GRAPH: github, web, calendar and
+                             memory fetched together, then one digest
   waku skill install <url>   install a community skill
 """
 
@@ -45,6 +47,10 @@ def main() -> None:
         from waku.ops.brief import main as brief_main
 
         brief_main()
+    elif args[0] == "gather":
+        from waku.ops.gather import main as gather_main
+
+        gather_main()
     elif args[0] == "skill" and len(args) >= 3 and args[1] == "install":
         from waku.memory.procedural.installer import install
 
