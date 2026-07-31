@@ -277,7 +277,7 @@ function openProviderModal(provider){
   const f = (p.fields || [])[0] || {};
   const root = document.getElementById("prov-modal-root");
   root.innerHTML = `<div class="provmodal-back" onclick="closeProviderModal()">
-    <div class="provmodal" onclick="event.stopPropagation()">
+    <div class="provmodal${current ? " provmodal-models" : ""}" onclick="event.stopPropagation()">
       <div class="u" style="display:flex;justify-content:space-between;align-items:center">
         <b>${esc(p.name)}</b><a class="reveal" onclick="closeProviderModal()">✕</a></div>
       <label class="fld"><span>API key <span class="meta">(${esc(f.name || "")})</span>
