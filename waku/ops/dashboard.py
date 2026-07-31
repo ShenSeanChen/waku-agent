@@ -248,7 +248,7 @@ def collect() -> dict:
     def pct(p: float) -> int:
         return latencies[min(len(latencies) - 1, int(len(latencies) * p))] if latencies else 0
 
-    from waku.memory import REPO_SKILLS
+    from waku.memory import bundled_skill_dirs
     from waku.memory.procedural.loader import SkillLoader
 
     skills = [{"name": s.name, "description": s.description, "body": s.body,
@@ -256,7 +256,7 @@ def collect() -> dict:
                # relative path (for reveal) + whether it lives in the editable home dir
                "rel": _rel_to_home(s.path, home),
                "editable": str((home / "skills").resolve()) in str(s.path.resolve())}
-              for s in SkillLoader([REPO_SKILLS, home / "skills"]).skills]
+              for s in SkillLoader([*bundled_skill_dirs(), home / "skills"]).skills]
 
     eval_report = None
     report_path = home / "eval_report.json"
@@ -669,12 +669,12 @@ def memory_action(payload: dict) -> dict:
         # skills folders; validates the frontmatter before writing.
         from pathlib import Path
 
-        from waku.memory import REPO_SKILLS
+        from waku.memory import bundled_skill_dirs
         from waku.memory.procedural.loader import _parse_text
 
         text = (payload.get("content") or "").strip()
         dest = Path(payload.get("path") or "").resolve()
-        allowed = [REPO_SKILLS.resolve(), (settings.home / "skills").resolve()]
+        allowed = [d.resolve() for d in bundled_skill_dirs()] + [(settings.home / "skills").resolve()]
         if dest.name != "SKILL.md" or not any(a in dest.parents for a in allowed):
             return {"error": "can only edit SKILL.md files inside the skills folders"}
         if _parse_text(text, dest) is None:

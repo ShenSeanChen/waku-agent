@@ -6,12 +6,27 @@ readme = "README.md"
 license = { text = "MIT" }
 authors = [{ name = "Sean Chen (ShenSeanChen)" }]
 requires-python = ">=3.11"
+keywords = ["ai-agent", "llm", "agent-framework", "local-first", "llmops", "memory", "eval"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
 dependencies = [
     "anthropic>=0.40",   # anthropic wire format: Anthropic, Kimi, GLM, MiniMax
     "openai>=1.50",      # openai wire format: OpenAI, Gemini, DeepSeek (and embeddings)
     "python-dotenv>=1.0",
     "rich>=13.0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/ShenSeanChen/waku-agent"
+Repository = "https://github.com/ShenSeanChen/waku-agent"
+Issues = "https://github.com/ShenSeanChen/waku-agent/issues"
+Changelog = "https://github.com/ShenSeanChen/waku-agent/releases"
 
 [project.scripts]
 # Branded CLI: `waku dashboard`, `waku voice`, `waku` to chat, etc.
@@ -96,6 +111,17 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["waku"]
+
+# The bundled skills live at the repo root because that is where contributors
+# add them (CONTRIBUTING.md, CI's validate-skills job, `skills/community/`).
+# But `packages = ["waku"]` ships only the package, so before 2026-07-31 a
+# `pip install waku-agent` arrived with ZERO skills — procedural memory, one of
+# the four pillars, silently absent while the dashboard shipped fine (it lives
+# under waku/ops/static). Copying them in at build time keeps one contributor-
+# facing location and still ships them; waku.memory.bundled_skill_dirs() looks
+# in both places and explains why.
+[tool.hatch.build.targets.wheel.force-include]
+"skills" = "waku/skills"
 
 [tool.ruff]
 line-length = 100
