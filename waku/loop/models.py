@@ -79,7 +79,8 @@ PROVIDERS: dict[str, Provider] = {
     "deepseek":  Provider("openai", "DEEPSEEK_API_KEY", "https://api.deepseek.com",
                           "deepseek-v4-pro", "deepseek-v4-pro"),
     "minimax":   Provider("anthropic", "MINIMAX_API_KEY", "https://api.minimaxi.com/anthropic",
-                          "MiniMax-M3", "MiniMax-M2"),
+                          "MiniMax-M3", "MiniMax-M2",
+                          catalog_url="https://api.minimaxi.com/anthropic/v1/models"),
     # K3 is the flagship default; the gate/summarizer stays on cheap K2.6
     # (the live catalog has no plain "kimi-k2.7" — only -code variants; we
     # checked). Override with WAKU_SMALL_MODEL=kimi-k3 if your key is K3-only.

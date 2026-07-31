@@ -164,12 +164,12 @@ def test_known_catalog_providers_can_list(home):
     openai has no base_url by default, so it MUST set catalog_url — without it
     the picker fell back to just its 2 hardcoded defaults.
 
-    minimax/glm are anthropic-wire with no verified public /models endpoint, so
-    they intentionally show their curated defaults until we wire+verify one."""
+    glm is anthropic-wire with no verified public /models endpoint, so it
+    intentionally shows its curated defaults until we wire and verify one."""
     from waku.loop.models import PROVIDERS
 
-    CAN_LIST = {"anthropic", "openai", "openrouter", "gemini", "deepseek", "kimi", "xai",
-                "opencode_zen", "opencode_go"}
+    CAN_LIST = {"anthropic", "openai", "openrouter", "gemini", "deepseek", "minimax",
+                "kimi", "xai", "opencode_zen", "opencode_go"}
     for name in CAN_LIST:
         prov = PROVIDERS[name]
         can_list = bool(prov.catalog_url) or (prov.kind == "openai" and bool(prov.base_url))
