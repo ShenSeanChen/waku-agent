@@ -417,6 +417,20 @@ details.subterm > summary.subterm-h::-webkit-details-marker{ display:none; }
 .provmodal{ background:var(--panel); border:1px solid var(--line); border-radius:12px;
   padding:18px; width:min(420px, 92vw); max-height:86vh; overflow-y:auto; }
 
+.model-picker{ position:relative; }
+.model-picker-input{ display:flex; align-items:stretch; }
+.model-picker-input input{ flex:1; border-radius:8px 0 0 8px; border-right:none; }
+.model-picker-toggle{ width:34px; border:1px solid var(--line2); border-radius:0 8px 8px 0; background:var(--bg); color:var(--ink2); cursor:pointer; }
+.model-picker-toggle:hover{ background:var(--panel); color:var(--ink); }
+.model-picker-list{ display:none; position:absolute; top:100%; left:0; right:0; margin-top:4px; background:var(--panel); border:1px solid var(--line2); border-radius:8px; box-shadow:0 6px 20px rgba(0,0,0,.15); z-index:10; max-height:240px; overflow:auto; }
+.model-picker-list.open{ display:block; }
+.model-picker-search{ position:sticky; top:0; padding:8px 10px; border:none; border-bottom:1px solid var(--line2); background:var(--panel); width:100%; outline:none; }
+.model-picker-search:focus{ border-bottom-color:var(--accent); }
+.model-picker-items{ padding:4px 0; }
+.model-picker-item{ padding:7px 12px; cursor:pointer; font-size:12.5px; }
+.model-picker-item:hover,.model-picker-item.active{ background:var(--accent-soft); color:var(--accent); }
+.model-picker-meta{ padding:6px 12px; font-size:11px; color:var(--ink3); border-top:1px solid var(--line2); }
+
 /* Connections page: the same compact card language as Models, with config
    details moved into a focused modal instead of stretching every card. */
 .connsection:first-child h2{margin-top:0}
