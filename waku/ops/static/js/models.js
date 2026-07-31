@@ -316,34 +316,33 @@ async function loadModalModels(provider){
 
 // Shared model list for the currently open modal.
 let _modalModels = [];
-let _activeModelPicker = null;
 let _outsidePickerListener = false;
+
+function escAttr(s){
+  return String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+}
 
 function renderModelPicker(id, label, value){
   return `<label class="fld">${esc(label)}
-    <div class="model-picker" id="${esc(id)}-picker">
+    <div class="model-picker" id="${escAttr(id)}-picker">
       <div class="model-picker-input">
-        <input type="text" id="${esc(id)}" value="${esc(value || "")}" autocomplete="off" onfocus="markEditing()">
-        <button type="button" class="model-picker-toggle" onclick="toggleModelPicker('${esc(id)}'); event.stopPropagation();" aria-label="toggle models">▾</button>
+        <input type="text" id="${escAttr(id)}" value="${escAttr(value || "")}" autocomplete="off" onfocus="markEditing()">
+        <button type="button" class="model-picker-toggle" onclick="toggleModelPicker('${escAttr(id)}'); event.stopPropagation();" aria-label="toggle models">▾</button>
       </div>
-      <div class="model-picker-list" id="${esc(id)}-list">
-        <input type="text" class="model-picker-search" id="${esc(id)}-search" placeholder="filter models..." autocomplete="off" oninput="filterModelPicker('${esc(id)}')" onfocus="markEditing()" onclick="event.stopPropagation()">
-        <div class="model-picker-items" id="${esc(id)}-items"></div>
-        <div class="model-picker-meta" id="${esc(id)}-meta"></div>
+      <div class="model-picker-list" id="${escAttr(id)}-list">
+        <input type="text" class="model-picker-search" id="${escAttr(id)}-search" placeholder="filter models..." autocomplete="off" oninput="filterModelPicker('${escAttr(id)}')" onfocus="markEditing()" onclick="event.stopPropagation()">
+        <div class="model-picker-items" id="${escAttr(id)}-items"></div>
+        <div class="model-picker-meta" id="${escAttr(id)}-meta"></div>
       </div>
     </div>
   </label>`;
 }
 
-function setupModelPickers(models, provider){
+function setupModelPickers(models, ids){
   _modalModels = models || [];
-  ["pm-model", "pm-small-model"].forEach(id => {
+  (ids || []).forEach(id => {
     const input = document.getElementById(id);
     if (!input) return;
-    input.addEventListener("input", () => {
-      const items = document.getElementById(id + "-items");
-      if (items) items.querySelectorAll(".model-picker-item").forEach(el => el.classList.remove("active"));
-    });
     renderModelPickerItems(id, "");
   });
   if (!_outsidePickerListener){
@@ -360,7 +359,6 @@ function toggleModelPicker(id){
   closeAllModelPickers();
   if (!isOpen){
     list.classList.add("open");
-    _activeModelPicker = id;
     const search = document.getElementById(id + "-search");
     if (search) search.focus();
   }
@@ -368,13 +366,11 @@ function toggleModelPicker(id){
 
 function closeAllModelPickers(){
   document.querySelectorAll(".model-picker-list.open").forEach(el => el.classList.remove("open"));
-  _activeModelPicker = null;
 }
 
 function closeModelPicker(id){
   const list = document.getElementById(id + "-list");
   if (list) list.classList.remove("open");
-  if (_activeModelPicker === id) _activeModelPicker = null;
 }
 
 function filterModelPicker(id){
@@ -387,7 +383,7 @@ function renderModelPickerItems(id, query){
   const metaBox = document.getElementById(id + "-meta");
   if (!itemsBox) return;
   const filtered = _modalModels.filter(m => (m.id || "").toLowerCase().includes(query));
-  itemsBox.innerHTML = filtered.map(m => `<div class="model-picker-item" onclick="selectModelPicker('${esc(id)}', '${esc(m.id)}'); event.stopPropagation();">${esc(m.id)}</div>`).join("");
+  itemsBox.innerHTML = filtered.map(m => `<div class="model-picker-item" onclick="selectModelPicker('${escAttr(id)}', '${escAttr(m.id)}'); event.stopPropagation();">${esc(m.id)}</div>`).join("");
   if (metaBox){
     if (_modalModels.length === 0) metaBox.textContent = "No models loaded — you can still type any model id.";
     else if (filtered.length === 0) metaBox.textContent = `No models match "${esc(query)}".`;

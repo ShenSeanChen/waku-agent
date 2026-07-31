@@ -428,7 +428,7 @@ details.subterm > summary.subterm-h::-webkit-details-marker{ display:none; }
 .model-picker-search:focus{ border-bottom-color:var(--accent); }
 .model-picker-items{ padding:4px 0; }
 .model-picker-item{ padding:7px 12px; cursor:pointer; font-size:12.5px; }
-.model-picker-item:hover,.model-picker-item.active{ background:var(--accent-soft); color:var(--accent); }
+.model-picker-item:hover{ background:var(--accent-soft); color:var(--accent); }
 .model-picker-meta{ padding:6px 12px; font-size:11px; color:var(--ink3); border-top:1px solid var(--line2); }
 
 /* Connections page: the same compact card language as Models, with config
