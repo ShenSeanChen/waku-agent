@@ -1,6 +1,6 @@
-# waku-agent — working conventions
+# milli-agent — working conventions
 
-**Waku** — a local-first personal assistant demonstrating the four pillars behind every
+**Milli** — a local-first personal assistant demonstrating the four pillars behind every
 serious agent: Harness, Loop, Memory, and Eval/LLM-Ops. It began as a teaching repo you
 could read in an afternoon, and it's now growing toward a full open-source assistant (the
 next Hermes / OpenClaw). The bar for every change: **clear, honest code a newcomer can
@@ -10,26 +10,26 @@ for its own sake is not.
 
 ## Architecture map (file ↔ diagram box)
 
-- `waku/gateway/` — cli, voice (wake word), telegram. Gateways only move text.
-- `waku/runtime/session.py` — working memory assembly (SOUL.md + memory + history)
-- `waku/loop/agent.py` — THE loop; `loop/models.py` — pluggable providers, 2 wire formats
-- `waku/graph/` — engine + node factories + `workflows/` (triage) — opt-in structure
+- `milli/gateway/` — cli, voice (wake word), telegram. Gateways only move text.
+- `milli/runtime/session.py` — working memory assembly (SOUL.md + memory + history)
+- `milli/loop/agent.py` — THE loop; `loop/models.py` — pluggable providers, 2 wire formats
+- `milli/graph/` — engine + node factories + `workflows/` (triage) — opt-in structure
   AROUND the loop (the loop never changes; a graph node can BE a loop turn); every
   failure fails open to the plain loop
-- `waku/tools/` — create_event / save_note / send_message (flagship task only)
-- `waku/memory/` — semantic (FTS5) / episodic / procedural (SKILL.md) +
+- `milli/tools/` — create_event / save_note / send_message (flagship task only)
+- `milli/memory/` — semantic (FTS5) / episodic / procedural (SKILL.md) +
   `retrieval_gate.py` (hero 1) + `consolidation.py` (every N exchanges)
-- `waku/ops/` — tracing (JSONL + OTel), dashboard (localhost:7777), release_gate,
+- `milli/ops/` — tracing (JSONL + OTel), dashboard (localhost:7777), release_gate,
   `compare_history.py` (the Compare arena's own JSONL scoreboard — never state.db)
 - `evals/deterministic/` (0/1, pytest) vs `evals/judge/` (DeepEval, scored) — never mix
-- Runtime state lives in `.waku/` (state.db, calendar.ics, outbox/, traces/) — gitignored
+- Runtime state lives in `.milli/` (state.db, calendar.ics, outbox/, traces/) — gitignored
 
 ## Rules
 
 - **Be concise.** Sean wants short replies: lead with the answer, cut preamble and
   recap. A few lines beats a wall of text. Expand only when he asks for detail.
 - **Never wipe runtime data without asking first, every time.** `scripts/demo_seed.py`
-  and anything else that clears `.waku` (memory, calendar, chat log, traces, or the
+  and anything else that clears `.milli` (memory, calendar, chat log, traces, or the
   `usage.jsonl` spend ledger) must be proposed and explicitly approved by the user
   *immediately before each run*. Permission never carries over from a previous run.
   The script backs up first, but restoring is a hassle — ask, wait for a clear yes,

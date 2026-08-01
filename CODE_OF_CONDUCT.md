@@ -4,7 +4,7 @@
 
 Be decent. Assume the other person is trying to help. Critique code, not people.
 
-waku is a teaching repo — a lot of the people opening their first-ever pull
+milli is a teaching repo — a lot of the people opening their first-ever pull
 request will do it here. That's the point, and it sets the bar for how we
 answer them.
 

@@ -11,7 +11,7 @@ description: Commit and push the current work properly — lint, run the release
    fix the cause (or, if a finding is a genuine behavior change, update the
    eval WITH the user's agreement) — never push a red gate.
 3. Review `git status` and `git diff` — confirm nothing unintended is staged
-   (especially nothing from `.waku/` or `.env`).
+   (especially nothing from `.milli/` or `.env`).
 4. Commit with a detailed message:
    - Subject: imperative, specific ("Fix triple-booking from first live test"),
      never generic ("update code", "fixes").

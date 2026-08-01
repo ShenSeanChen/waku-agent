@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import inspect
 
-from waku.ops import dashboard
+from milli.ops import dashboard
 
 # Every path the POST router accepts. `/api/compare` (non-streaming) was removed
 # on 2026-07-26: nothing called it, and its implementation had drifted behind the

@@ -1,7 +1,7 @@
 """LLM-AS-JUDGE EVAL — "was the response good?" This is NOT a unit test.
 
 A judge model scores qualities no assertion can check: helpfulness, whether
-Waku actually used what it remembered, tone. Scores are 0–1 percentages
+Milli actually used what it remembered, tone. Scores are 0–1 percentages
 with a threshold, not 0/1 truths — never confuse the two (that confusion is
 exactly what the deterministic suite next door exists to prevent).
 
@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import pytest
 
-from evals.helpers import HAS_KEY, make_waku
+from evals.helpers import HAS_KEY, make_milli
 
 pytestmark = pytest.mark.skipif(not HAS_KEY, reason="LLM-as-judge needs the active provider's API key")
 
@@ -57,7 +57,7 @@ def test_scheduling_reply_is_helpful(tmp_path, geval_metrics):
     from deepeval.test_case import LLMTestCase
 
     helpful, _ = geval_metrics
-    app = make_waku(tmp_path / "home")
+    app = make_milli(tmp_path / "home")
     user_message = "Schedule a coffee with Alex next Tuesday at 9am"
     result = app.respond(user_message)
 
@@ -69,7 +69,7 @@ def test_reply_uses_remembered_preference(tmp_path, geval_metrics):
     from deepeval.test_case import LLMTestCase
 
     _, uses_memory = geval_metrics
-    app = make_waku(tmp_path / "home")
+    app = make_milli(tmp_path / "home")
     app.memory.facts.add("alex", "Alex prefers morning meetings")
     user_message = "Book a catch-up with Alex on Friday"
     result = app.respond(user_message)

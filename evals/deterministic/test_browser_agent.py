@@ -1,12 +1,12 @@
 """DETERMINISTIC EVAL — the browser gateway's shared agent survives a swap.
 
 The dashboard is the one gateway that is both multi-threaded and long-lived, so
-it keeps a single Waku behind `waku.ops.browser_agent`. Two callers mutate it:
+it keeps a single Milli behind `milli.ops.browser_agent`. Two callers mutate it:
 dashboard.py builds it on the first chat, settings_api rebuilds it when you
 change provider or model. This pins the part that is easy to get wrong.
 
 The bug this was written for: changing ANY setting rebuilt the agent, and a
-fresh Waku starts on the eternal 'default' session. So one visit to the Settings
+fresh Milli starts on the eternal 'default' session. So one visit to the Settings
 tab silently moved you into a different conversation — your chat was still in
 the database, just no longer the thread the dock was showing. It looked like
 data loss and was reported as one.
@@ -16,15 +16,15 @@ from __future__ import annotations
 
 import pytest
 
-from waku.ops import browser_agent
+from milli.ops import browser_agent
 
 
 @pytest.fixture
 def isolated(tmp_path, monkeypatch):
     """A throwaway home + a clean module global, so these tests never see (or
     leave behind) the real dashboard's agent."""
-    monkeypatch.setenv("WAKU_HOME", str(tmp_path))
-    monkeypatch.setenv("WAKU_PROVIDER", "anthropic")
+    monkeypatch.setenv("MILLI_HOME", str(tmp_path))
+    monkeypatch.setenv("MILLI_PROVIDER", "anthropic")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "fake-key-for-tests")
     monkeypatch.setattr(browser_agent, "_agent", None)
     monkeypatch.setattr(browser_agent, "_dashboard_session", None)
@@ -63,7 +63,7 @@ def test_a_failed_rebuild_keeps_the_working_agent(isolated, monkeypatch):
     def explode(*a, **k):
         raise SystemExit("no API key found")     # what get_client actually raises
 
-    monkeypatch.setattr("waku.app.Waku", explode)
+    monkeypatch.setattr("milli.app.Milli", explode)
 
     error = browser_agent.rebuild()
     assert error and "no API key" in error

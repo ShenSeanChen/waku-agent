@@ -6,7 +6,7 @@ from datetime import date
 
 from rich.console import Console
 
-from waku.ops.show_trace import render_recent_days, render_trace
+from milli.ops.show_trace import render_recent_days, render_trace
 
 
 def test_trace_renders_an_indented_timeline(tmp_path):

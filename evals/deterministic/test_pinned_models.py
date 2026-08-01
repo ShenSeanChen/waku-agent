@@ -6,7 +6,7 @@ default (adopted when you switch to it). Live goal Sean asked for: "a default
 model for each api key, the user can choose more models, and the chat switcher
 shows the models already selected in settings."
 
-The shortlist lives in .waku/models.json as {"pinned": ["provider:model", ...]};
+The shortlist lives in .milli/models.json as {"pinned": ["provider:model", ...]};
 these tests drive the same helpers the dashboard's /api/pin route calls."""
 
 from __future__ import annotations
@@ -15,8 +15,8 @@ import json
 
 import pytest
 
-from waku.ops import catalog
-from waku.ops import settings_api as d
+from milli.ops import catalog
+from milli.ops import settings_api as d
 
 PROVIDER_KEYS = ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "DEEPSEEK_API_KEY",
                  "MINIMAX_API_KEY", "MOONSHOT_API_KEY", "ZHIPU_API_KEY", "OPENROUTER_API_KEY",
@@ -28,15 +28,15 @@ def home(tmp_path, monkeypatch):
     """Point every load_settings() at a throwaway home, run from there so
     apply_settings's find_dotenv writes to a throwaway .env, and clear all
     provider keys so the default shortlist is empty unless a test sets one."""
-    monkeypatch.setenv("WAKU_HOME", str(tmp_path))
+    monkeypatch.setenv("MILLI_HOME", str(tmp_path))
     monkeypatch.chdir(tmp_path)
     (tmp_path / ".env").write_text("")
     for var in PROVIDER_KEYS:
         monkeypatch.delenv(var, raising=False)
     # apply_settings bypasses monkeypatch and writes directly to os.environ,
-    # so WAKU_PROVIDER must also be tracked to prevent leaking into later
+    # so MILLI_PROVIDER must also be tracked to prevent leaking into later
     # tests (test_tool_trigger would inherit a stale provider and crash).
-    monkeypatch.delenv("WAKU_PROVIDER", raising=False)
+    monkeypatch.delenv("MILLI_PROVIDER", raising=False)
     return tmp_path
 
 
@@ -116,7 +116,7 @@ def test_no_pins_is_empty_not_error(home):
 
 def test_default_pair_is_flagship_then_fast(home):
     """Each provider ships a flagship + fast default pair for the switcher."""
-    from waku.loop.models import PROVIDERS
+    from milli.loop.models import PROVIDERS
 
     assert PROVIDERS["anthropic"].default_pair() == ["claude-opus-4-8", "claude-sonnet-5"]
     assert PROVIDERS["gemini"].default_pair() == ["gemini-3.1-pro-preview", "gemini-3.5-flash"]
@@ -159,7 +159,7 @@ def test_known_catalog_providers_can_list(home):
 
     minimax/glm are anthropic-wire with no verified public /models endpoint, so
     they intentionally show their curated defaults until we wire+verify one."""
-    from waku.loop.models import PROVIDERS
+    from milli.loop.models import PROVIDERS
 
     CAN_LIST = {"anthropic", "openai", "openrouter", "gemini", "deepseek", "kimi", "xai",
                 "opencode_zen", "opencode_go"}
@@ -174,7 +174,7 @@ def test_list_models_honors_provider_override(home, monkeypatch):
     THAT provider's catalog, not the active one. Cache-seeded to avoid network."""
     import time
 
-    from waku.loop.models import PROVIDERS
+    from milli.loop.models import PROVIDERS
 
     url = PROVIDERS["kimi"].catalog_url
     # cache tuple is (ts, models, error) — None error means a real listing

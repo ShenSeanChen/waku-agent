@@ -31,4 +31,4 @@ below was installed together in one venv (Python 3.13, uv) and smoke-tested end-
 Explored in depth: it is a LangGraph `StateGraph` fork of `open_deep_research` — supervisor
 fan-out, research-specific state and prompts, hard LangChain coupling. The *pattern* worth
 keeping (tools-by-name dict, parallel dispatch with `asyncio.gather`, safe-execute wrapper)
-is reimplemented here in plain Python in `waku/loop/agent.py`.
+is reimplemented here in plain Python in `milli/loop/agent.py`.

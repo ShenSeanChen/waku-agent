@@ -8,7 +8,7 @@ proves, where to look, and whether it's been dry-run verified. Keep this updated
 - [x] Provider = `anthropic` (best streaming; Gemini breaks multi-turn tool use) — Settings
 - [x] Free `TAVILY_API_KEY` pasted on the Settings page (for the World Cup beat)
 - [x] Clean curated state — `python scripts/demo_seed.py --yes` (clears Loop/Tools traces + Ops eval history; keeps `usage.jsonl` spend unless you add `--reset-spend`). Refuses without `--yes` — it's destructive.
-- [x] `waku dashboard` running on your own machine (also starts Telegram if a token is set) → `localhost:7777` in a real browser
+- [x] `milli dashboard` running on your own machine (also starts Telegram if a token is set) → `localhost:7777` in a real browser
 
 ## The beats
 
@@ -23,7 +23,7 @@ proves, where to look, and whether it's been dry-run verified. Keep this updated
 | 7 | **Multi-tool loop (money shot)** | *"Search the World Cup games still left and add each to my calendar"* | Loop tab `iter 8`: `search_web` × N → `create_event` × N | [x] |
 | 8 | Consolidation (Memory) | keep chatting past N exchanges | Memory ▸ Consolidation; a new episode + distilled facts | [x] |
 | 9 | Telegram gateway | message the bot from your phone | Gateway tab shows it tagged `telegram` | [x] |
-| 10 | **Voice** | `waku voice` — hands-free, say "waku waku, …" (or click the dock mic) | WAV → local Whisper; landed in a distinct `voice` conversation | [x] |
+| 10 | **Voice** | `milli voice` — hands-free, say "milli, …" (or click the dock mic) | WAV → local Whisper; landed in a distinct `voice` conversation | [x] |
 | 11 | Eval / LLM-Ops (hero 2) | `make gate` in a terminal | prints `GATE OPEN`; Ops ▸ Eval history gains a row | [x] |
 | 12 | Spend ledger | (just look) | Ops: all-time cost/tokens, per-day — survives resets | [x] |
 | 13 | **Database tab** | click each table tab; run a query in the **SQL console** | per-table schema (indigo headers) + rows; `SELECT` returns live data (and persists) | [x] |
@@ -45,6 +45,6 @@ permanent spend ledger + `MEMORY.md`, source-tagged Gateway, coming-soon skeleto
 ## Reset between takes
 
 `python scripts/demo_seed.py --yes` — clears the memory/calendar **and** the Loop/Tools traces + Ops eval
-history for a clean take, and backs up the whole `.waku` first. The `usage.jsonl` spend ledger is
+history for a clean take, and backs up the whole `.milli` first. The `usage.jsonl` spend ledger is
 **kept** (it's a permanent record) unless you pass `--reset-spend`. It never deletes the db file, so a
-running `waku dashboard`/`waku telegram` keeps working. Nothing else clears your data.
+running `milli dashboard`/`milli telegram` keeps working. Nothing else clears your data.

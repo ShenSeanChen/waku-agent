@@ -2,7 +2,7 @@
 
 The live bug this pins: the Arena passed `experimental=coding` explicitly, so a
 coding race could always delegate to pi — but the sidebar chat built its agent
-from `load_settings()`, which reads WAKU_EXPERIMENTAL from the environment.
+from `load_settings()`, which reads MILLI_EXPERIMENTAL from the environment.
 `make dashboard` never sets it, so the chat could NEVER delegate and told the
 user so. The dashboard now exposes the flag and lets settings_save write it.
 """
@@ -11,17 +11,17 @@ from __future__ import annotations
 
 import os
 
-from waku.config import Settings, load_settings
-from waku.tools import build_registry
+from milli.config import Settings, load_settings
+from milli.tools import build_registry
 
 
 def test_settings_exposes_the_flag_so_the_ui_can_render_a_toggle(monkeypatch):
-    from waku.ops import settings_api
+    from milli.ops import settings_api
 
-    monkeypatch.delenv("WAKU_EXPERIMENTAL", raising=False)
+    monkeypatch.delenv("MILLI_EXPERIMENTAL", raising=False)
     assert settings_api.settings_info()["experimental"] is False
 
-    monkeypatch.setenv("WAKU_EXPERIMENTAL", "1")
+    monkeypatch.setenv("MILLI_EXPERIMENTAL", "1")
     info = settings_api.settings_info()
     assert info["experimental"] is True
     # the UI needs to say "pi not installed" honestly rather than fail later
@@ -47,16 +47,16 @@ def test_turning_it_off_is_not_swallowed(monkeypatch):
 
 def test_an_explicit_setting_beats_the_global_env_switch(tmp_path, monkeypatch):
     """The arena passes experimental per race. If build_registry ALSO consulted
-    WAKU_EXPERIMENTAL, then switching chat delegation on (which writes that var)
+    MILLI_EXPERIMENTAL, then switching chat delegation on (which writes that var)
     would silently force delegate_task into every non-coding race too. The
     explicit Settings value must win — this is the isolation guarantee."""
-    monkeypatch.setenv("WAKU_EXPERIMENTAL", "1")      # global switch ON
+    monkeypatch.setenv("MILLI_EXPERIMENTAL", "1")      # global switch ON
     off = Settings(home=tmp_path / "off", experimental=False)
     on = Settings(home=tmp_path / "on", experimental=True)
     off.ensure_home()
     on.ensure_home()
 
-    from waku.db import connect
+    from milli.db import connect
 
     conn = connect(off.home)
     assert "delegate_task" not in build_registry(conn, off, None)._tools
@@ -65,9 +65,9 @@ def test_an_explicit_setting_beats_the_global_env_switch(tmp_path, monkeypatch):
 
 
 def test_env_var_is_what_load_settings_reads(monkeypatch):
-    """Why the chat was broken: nothing sets WAKU_EXPERIMENTAL for the server."""
-    monkeypatch.delenv("WAKU_EXPERIMENTAL", raising=False)
+    """Why the chat was broken: nothing sets MILLI_EXPERIMENTAL for the server."""
+    monkeypatch.delenv("MILLI_EXPERIMENTAL", raising=False)
     assert load_settings().experimental is False
-    monkeypatch.setenv("WAKU_EXPERIMENTAL", "1")
+    monkeypatch.setenv("MILLI_EXPERIMENTAL", "1")
     assert load_settings().experimental is True
-    assert os.getenv("WAKU_EXPERIMENTAL") == "1"
+    assert os.getenv("MILLI_EXPERIMENTAL") == "1"

@@ -1,7 +1,7 @@
 [project]
-name = "waku-agent"
+name = "milli-agent"
 version = "0.1.1"
-description = "A minimal, transparent, local-first Waku: harness + loop + memory + eval, in code you can read in an afternoon."
+description = "A minimal, transparent, local-first Milli: harness + loop + memory + eval, in code you can read in an afternoon."
 readme = "README.md"
 license = { text = "MIT" }
 authors = [{ name = "Sean Chen (ShenSeanChen)" }]
@@ -29,8 +29,8 @@ Issues = "https://github.com/ShenSeanChen/waku-agent/issues"
 Changelog = "https://github.com/ShenSeanChen/waku-agent/releases"
 
 [project.scripts]
-# Branded CLI: `waku dashboard`, `waku voice`, `waku` to chat, etc.
-waku = "waku.__main__:main"
+# Branded CLI: `milli dashboard`, `milli voice`, `milli` to chat, etc.
+milli = "milli.__main__:main"
 
 [project.optional-dependencies]
 # Eval pillar: LLM-as-judge (deterministic evals need only pytest)
@@ -59,7 +59,7 @@ gcal = [
     # application-default login`, which is a developer ritual, not a sign-in.
     "google-auth-oauthlib>=1.0",
 ]
-# Optional gateway: message Waku from Discord
+# Optional gateway: message Milli from Discord
 discord = [
     "discord.py>=2.4",
 ]
@@ -79,7 +79,7 @@ voice = [
 ]
 # The beautiful neural voice (Kokoro-82M, Apache-2.0): British butler, fully
 # local/offline. Heavier — pulls torch (~2GB). `uv pip install '.[voice-neural]'`
-# and Waku auto-detects it; no env var needed.
+# and Milli auto-detects it; no env var needed.
 voice-neural = [
     "kokoro>=0.9",
     "soundfile>=0.12",
@@ -93,7 +93,7 @@ supabase = [
 notion = [
     "notion-client>=2.5",
 ]
-# Optional: connect MCP servers (.waku/mcp.json)
+# Optional: connect MCP servers (.milli/mcp.json)
 mcp = [
     "mcp>=1.0",
 ]
@@ -109,7 +109,7 @@ dev = [
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
-# An sdist should be what you need to BUILD and TEST waku — source, bundled
+# An sdist should be what you need to BUILD and TEST milli — source, bundled
 # skills, schema, evals. Left alone it was 2.6 MB, and 2.5 MB of that was a
 # whiteboard PNG and the .excalidraw sources, plus the agent tooling (.claude,
 # .agents, .pi) that only matters inside this repo. All of it stays on GitHub,
@@ -121,24 +121,24 @@ exclude = [
 ]
 
 [tool.hatch.build.targets.wheel]
-packages = ["waku"]
+packages = ["milli"]
 
 # The bundled skills live at the repo root because that is where contributors
 # add them (CONTRIBUTING.md, CI's validate-skills job, `skills/community/`).
-# But `packages = ["waku"]` ships only the package, so before 2026-07-31 a
-# `pip install waku-agent` arrived with ZERO skills — procedural memory, one of
+# But `packages = ["milli"]` ships only the package, so before 2026-07-31 a
+# `pip install milli-agent` arrived with ZERO skills — procedural memory, one of
 # the four pillars, silently absent while the dashboard shipped fine (it lives
-# under waku/ops/static). Copying them in at build time keeps one contributor-
-# facing location and still ships them; waku.memory.bundled_skill_dirs() looks
+# under milli/ops/static). Copying them in at build time keeps one contributor-
+# facing location and still ships them; milli.memory.bundled_skill_dirs() looks
 # in both places and explains why.
 [tool.hatch.build.targets.wheel.force-include]
-"skills" = "waku/skills"
+"skills" = "milli/skills"
 
 [tool.ruff]
 line-length = 100
 
 [tool.ruff.lint]
-# Rules waku IGNORES on purpose — each is a deliberate style choice, not an
+# Rules milli IGNORES on purpose — each is a deliberate style choice, not an
 # oversight. If you're tempted to remove one, read the reason first:
 ignore = [
     "BLE001",  # blind `except Exception` is the documented pattern: tools and

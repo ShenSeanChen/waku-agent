@@ -12,7 +12,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO))
 
-from waku.memory.procedural.loader import _parse  # noqa: E402
+from milli.memory.procedural.loader import _parse  # noqa: E402
 
 MAX_BODY_LINES = 80
 

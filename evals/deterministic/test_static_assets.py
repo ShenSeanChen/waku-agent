@@ -13,7 +13,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-STATIC = Path(__file__).resolve().parents[2] / "waku" / "ops" / "static"
+STATIC = Path(__file__).resolve().parents[2] / "milli" / "ops" / "static"
 INDEX = (STATIC / "index.html").read_text()
 JS_FILES = sorted((STATIC / "js").glob("*.js"))
 JS_SRC = "\n".join(f.read_text() for f in JS_FILES)

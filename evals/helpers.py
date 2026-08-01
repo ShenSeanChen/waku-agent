@@ -1,5 +1,5 @@
 """Shared eval plumbing: a scripted fake LLM client for offline tests, and a
-real-Waku factory for live ones."""
+real-Milli factory for live ones."""
 
 from __future__ import annotations
 
@@ -10,11 +10,11 @@ from types import SimpleNamespace
 
 
 def _has_key() -> bool:
-    """True when the ACTIVE provider (WAKU_PROVIDER) has its key set, so live
+    """True when the ACTIVE provider (MILLI_PROVIDER) has its key set, so live
     evals run on whatever the user actually configured (anthropic, openrouter,
     gemini, ...), not only on ANTHROPIC_API_KEY."""
-    from waku.config import load_settings
-    from waku.loop.models import PROVIDERS
+    from milli.config import load_settings
+    from milli.loop.models import PROVIDERS
 
     settings = load_settings()
     provider = PROVIDERS.get(settings.provider)
@@ -51,12 +51,12 @@ class ScriptedClient:
         return self._script.pop(0)
 
 
-def make_waku(home: Path, client=None, **settings_overrides):
-    """Build a Waku with an isolated home dir; optionally swap in a fake client."""
-    from waku.app import Waku
-    from waku.config import Settings
+def make_milli(home: Path, client=None, **settings_overrides):
+    """Build a Milli with an isolated home dir; optionally swap in a fake client."""
+    from milli.app import Milli
+    from milli.config import Settings
 
-    # A test must describe its own world. `waku/config.py` calls load_dotenv()
+    # A test must describe its own world. `milli/config.py` calls load_dotenv()
     # at import, so every Settings() default is quietly seeded from whatever is
     # in the maintainer's .env — and a test that reads the developer's machine
     # is not deterministic. Each entry below is a switch that changes what a
@@ -65,7 +65,7 @@ def make_waku(home: Path, client=None, **settings_overrides):
     #   apple_tools            register four more tools and shell out to macOS
     #   graph_workflows        route every message through the triage graph,
     #                          which spends one extra model call — on 2026-07-31
-    #                          a stale WAKU_GRAPH_WORKFLOWS=1 ate a scripted
+    #                          a stale MILLI_GRAPH_WORKFLOWS=1 ate a scripted
     #                          response and failed 8 tests that pass in CI
     # NOT pinned here: `experimental`. test_delegate.py drives it with
     # monkeypatch.setenv to prove the env var really gates registration, and a
@@ -84,4 +84,4 @@ def make_waku(home: Path, client=None, **settings_overrides):
     settings = Settings(home=home, **settings_overrides)
     if client is not None and not settings.api_key:
         settings.api_key = "offline"  # never read the real key for scripted runs
-    return Waku(settings=settings, client=client)
+    return Milli(settings=settings, client=client)

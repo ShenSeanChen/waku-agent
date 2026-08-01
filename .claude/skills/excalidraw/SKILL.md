@@ -25,7 +25,7 @@ style engine, which locks the values that a from-scratch board always gets wrong
 ## How to build one
 
 ```python
-from waku.ops.whiteboard import style as S
+from milli.ops.whiteboard import style as S
 
 e = []
 e.append(S.text(60, 40, "Title", size=S.FS_TITLE))
@@ -45,7 +45,7 @@ doc = S.document(e)                 # wraps with appState + white bg
 ```
 
 Write `json.dumps(doc, indent=2)` to `docs/whiteboards/<name>.excalidraw`.
-See `waku/ops/whiteboard/build_k3_tutorial.py` for a full two-board example.
+See `milli/ops/whiteboard/build_k3_tutorial.py` for a full two-board example.
 
 ## Palette (name → fill/stroke), meaning follows Sean's color system
 

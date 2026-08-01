@@ -1,7 +1,7 @@
 ---
 name: review-pr
 description: >
-  Review an incoming community PR for waku-agent and present it Sean's way —
+  Review an incoming community PR for milli-agent and present it Sean's way —
   bilingual (English + 中文), three fixed sections: what they did & why it
   matters, verdict (merge / change / close), and how to see it visually. Use
   whenever Sean asks to look at, test, triage, or decide on a pull request.
@@ -9,7 +9,7 @@ description: >
 
 # Reviewing a PR, Sean's way
 
-Sean maintains waku-agent solo while a community sends PRs against the
+Sean maintains milli-agent solo while a community sends PRs against the
 `good first issue` list. He needs to decide fast, without reading diffs, and he
 reads/repeats these decisions in both English and Chinese (for the channel).
 
@@ -38,19 +38,19 @@ Post review comments and change requests freely. Merging is his call.
    from the main working tree and a branch switch swaps code under a live demo):
    ```bash
    git fetch -q origin pull/<N>/head:pr-<N>
-   git worktree add -q ~/Developer/waku-prs/pr<N> pr-<N>
-   ln -sfn <repo>/.waku ~/Developer/waku-prs/pr<N>/.waku   # real runtime data
-   ln -sfn <repo>/.env  ~/Developer/waku-prs/pr<N>/.env    # real keys
+   git worktree add -q ~/Developer/milli-prs/pr<N> pr-<N>
+   ln -sfn <repo>/.milli ~/Developer/milli-prs/pr<N>/.milli   # real runtime data
+   ln -sfn <repo>/.env  ~/Developer/milli-prs/pr<N>/.env    # real keys
    ```
    Run its tests AND actually run the feature. **Tear the worktree down the same
    turn the PR is decided** — see the `pr-worktree` skill, which covers the
    `set_key`-replaces-your-symlinked-`.env` trap that once left a full copy of
-   every API key in `~/Developer/waku-prs/pr18/`.
+   every API key in `~/Developer/milli-prs/pr18/`.
 5. **Test it, don't just read it.** PR #14 looked correct in review and crashed on
    every message (`asyncio.to_thread` moved `respond()` off the thread that owns
    the SQLite connection). Reviewing from the diff would have merged it.
 2. **Run it against real data**, not just the PR's own fixtures — that's how the
-   PR #13 bug surfaced (hardcoded `~/.waku/traces`; the real home is `.waku`
+   PR #13 bug surfaced (hardcoded `~/.milli/traces`; the real home is `.milli`
    relative to cwd via `load_settings()`).
 3. **Check it against the repo's rules** (CLAUDE.md): stdlib + anthropic/openai
    only — new deps must sit behind an optional extra; tests land in
@@ -80,7 +80,7 @@ EN: Merge as-is / Merge with a change / Ask for a rebase / Close (with a reason
 ### 3. How to see it yourself / 你怎么亲眼看到
 EN: Copy-paste commands. CLI PRs run from the worktree; dashboard PRs run on a
     second port so 7777 is untouched:
-    `WAKU_DASHBOARD_PORT=7778 .venv/bin/python -m waku.ops.dashboard`
+    `MILLI_DASHBOARD_PORT=7778 .venv/bin/python -m milli.ops.dashboard`
     Say what to look for — the specific visual difference.
 中文：可直接复制的命令 + 该看哪里、看什么变化。
 ```

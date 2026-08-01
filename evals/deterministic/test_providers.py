@@ -12,8 +12,8 @@ from __future__ import annotations
 import anthropic
 import pytest
 
-from waku.config import Settings
-from waku.loop.models import PROVIDERS, OpenAICompatClient, get_client
+from milli.config import Settings
+from milli.loop.models import PROVIDERS, OpenAICompatClient, get_client
 
 
 @pytest.fixture(autouse=True)
@@ -21,8 +21,8 @@ def fake_keys(monkeypatch):
     for provider in PROVIDERS.values():
         monkeypatch.setenv(provider.key_env, "fake-key-for-tests")
     # a stray custom-endpoint override must not leak into these checks
-    monkeypatch.delenv("WAKU_API_KEY", raising=False)
-    monkeypatch.delenv("WAKU_BASE_URL", raising=False)
+    monkeypatch.delenv("MILLI_API_KEY", raising=False)
+    monkeypatch.delenv("MILLI_BASE_URL", raising=False)
 
 
 @pytest.mark.parametrize("name", list(PROVIDERS))
@@ -54,7 +54,7 @@ def test_unknown_provider_names_the_choices():
 
 @pytest.mark.parametrize("name", list(PROVIDERS))
 def test_dashboard_pricing_covers_every_provider(name):
-    from waku.ops.pricing import PRICING
+    from milli.ops.pricing import PRICING
 
     assert name in PRICING
 
@@ -65,11 +65,11 @@ def test_dashboard_pricing_covers_every_provider(name):
 def test_model_listing_falls_back_without_a_catalog(name, monkeypatch):
     """Providers with no listable catalog still give the picker their defaults
     (and never make a network call to get them)."""
-    from waku.ops import catalog
+    from milli.ops import catalog
 
-    monkeypatch.setenv("WAKU_PROVIDER", name)
-    monkeypatch.delenv("WAKU_MODEL", raising=False)
-    monkeypatch.delenv("WAKU_SMALL_MODEL", raising=False)
+    monkeypatch.setenv("MILLI_PROVIDER", name)
+    monkeypatch.delenv("MILLI_MODEL", raising=False)
+    monkeypatch.delenv("MILLI_SMALL_MODEL", raising=False)
     result = catalog.list_models()
     assert result["listed"] is False
     ids = [m["id"] for m in result["models"]]
@@ -85,11 +85,11 @@ def test_bad_key_gives_a_fixable_error_not_a_codec_crash(monkeypatch):
     fixable message AND still offer the flagship so opus-4.8/fable-5 aren't lost.
     (Regression: a cloned repo whose ANTHROPIC_API_KEY had a '→' dropped the
     picker to two defaults with a 'latin-1 codec' error.)"""
-    from waku.ops import catalog
+    from milli.ops import catalog
 
-    monkeypatch.setenv("WAKU_PROVIDER", "anthropic")
+    monkeypatch.setenv("MILLI_PROVIDER", "anthropic")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-" + "x" * 100 + "→bad")
-    monkeypatch.delenv("WAKU_MODEL", raising=False)
+    monkeypatch.delenv("MILLI_MODEL", raising=False)
     catalog._models_cache.clear()
     result = catalog.list_models("anthropic")
     assert result["listed"] is False
@@ -105,7 +105,7 @@ def test_catalog_url_is_used_with_both_auth_styles(monkeypatch):
     import json
     import urllib.request
 
-    from waku.ops import catalog
+    from milli.ops import catalog
 
     captured = {}
 
@@ -119,9 +119,9 @@ def test_catalog_url_is_used_with_both_auth_styles(monkeypatch):
         body.__exit__ = lambda *a: None
         return body
 
-    monkeypatch.setenv("WAKU_PROVIDER", "kimi")
+    monkeypatch.setenv("MILLI_PROVIDER", "kimi")
     monkeypatch.setenv("MOONSHOT_API_KEY", "fake-key-for-tests")
-    monkeypatch.delenv("WAKU_MODEL", raising=False)
+    monkeypatch.delenv("MILLI_MODEL", raising=False)
     monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
     catalog._models_cache.clear()
 
@@ -138,7 +138,7 @@ def test_price_for_layers_model_over_provider():
     """Receipts correctness: a kimi-k3 run must be priced at K3's $3/$15, not
     the kimi provider's K2.7 rate — and unknown models still fall back to the
     provider estimate. (Live-catalog and :free paths are covered above.)"""
-    from waku.ops.pricing import MODEL_PRICING, PRICING, price_for
+    from milli.ops.pricing import MODEL_PRICING, PRICING, price_for
 
     assert price_for("kimi", "kimi-k3") == MODEL_PRICING["kimi-k3"] == (3.0, 15.0)
     assert price_for("kimi", "kimi-k2.7") == (0.95, 4.0)
@@ -164,7 +164,7 @@ def test_every_priced_model_has_a_knowledge_cutoff():
     means someone added a model without deciding, which is what this catches."""
     import re
 
-    from waku.ops.pricing import MODEL_CUTOFF, MODEL_PRICING, cutoff_for
+    from milli.ops.pricing import MODEL_CUTOFF, MODEL_PRICING, cutoff_for
 
     missing = set(MODEL_PRICING) - set(MODEL_CUTOFF)
     assert not missing, f"models priced but missing a MODEL_CUTOFF entry: {sorted(missing)}"

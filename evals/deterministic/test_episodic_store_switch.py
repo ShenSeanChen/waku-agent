@@ -8,9 +8,9 @@ from typing import ClassVar
 
 import pytest
 
-from waku.config import Settings
-from waku.memory import Memory
-from waku.memory.episodic.store import SqliteEpisodeStore
+from milli.config import Settings
+from milli.memory import Memory
+from milli.memory.episodic.store import SqliteEpisodeStore
 
 
 class _FakeNotionClient:
@@ -75,7 +75,7 @@ def fake_notion(monkeypatch):
     monkeypatch.setenv("NOTION_TOKEN", "test-token")
     monkeypatch.setenv("NOTION_EPISODES_DATABASE_ID", "test-db-id")
     # the dashboard caches the store + result module-wide — reset between tests
-    from waku.ops import dashboard
+    from milli.ops import dashboard
 
     monkeypatch.setattr(dashboard, "_notion_store", None)
     monkeypatch.setattr(dashboard, "_notion_episodes", None)
@@ -83,25 +83,25 @@ def fake_notion(monkeypatch):
 
 
 def test_settings_defaults_to_sqlite(monkeypatch):
-    monkeypatch.delenv("WAKU_EPISODIC_STORE", raising=False)
+    monkeypatch.delenv("MILLI_EPISODIC_STORE", raising=False)
     assert Settings().episodic_store == "sqlite"
 
 
 def test_settings_reads_episodic_store_env(monkeypatch):
-    monkeypatch.setenv("WAKU_EPISODIC_STORE", "notion")
+    monkeypatch.setenv("MILLI_EPISODIC_STORE", "notion")
     assert Settings().episodic_store == "notion"
 
 
 def test_factory_returns_sqlite_store_by_default(monkeypatch):
-    monkeypatch.delenv("WAKU_EPISODIC_STORE", raising=False)
+    monkeypatch.delenv("MILLI_EPISODIC_STORE", raising=False)
     store = Memory._make_episode_store(conn=None, settings=Settings())
     assert isinstance(store, SqliteEpisodeStore)
 
 
 def test_factory_returns_notion_store_when_configured(monkeypatch, fake_notion):
-    monkeypatch.setenv("WAKU_EPISODIC_STORE", "notion")
+    monkeypatch.setenv("MILLI_EPISODIC_STORE", "notion")
     store = Memory._make_episode_store(conn=None, settings=Settings())
-    from waku.memory.episodic.notion_store import NotionEpisodeStore
+    from milli.memory.episodic.notion_store import NotionEpisodeStore
 
     assert isinstance(store, NotionEpisodeStore)
 
@@ -109,7 +109,7 @@ def test_factory_returns_notion_store_when_configured(monkeypatch, fake_notion):
 def test_apply_settings_rejects_unknown_episodic_store(monkeypatch, tmp_path):
     # chdir so a regression of the guard can't write into the real project .env
     monkeypatch.chdir(tmp_path)
-    from waku.ops.settings_api import apply_settings
+    from milli.ops.settings_api import apply_settings
 
     result = apply_settings({"provider": "anthropic", "episodic_store": "bogus"})
     assert "error" in result
@@ -117,22 +117,22 @@ def test_apply_settings_rejects_unknown_episodic_store(monkeypatch, tmp_path):
 
 
 def _isolated_home(monkeypatch, tmp_path):
-    """Point collect()/memory_action() at a throwaway WAKU_HOME with no network
+    """Point collect()/memory_action() at a throwaway MILLI_HOME with no network
     warm-up (provider anthropic, no base_url)."""
-    monkeypatch.setenv("WAKU_HOME", str(tmp_path))
-    monkeypatch.setenv("WAKU_PROVIDER", "anthropic")
-    monkeypatch.delenv("WAKU_BASE_URL", raising=False)
+    monkeypatch.setenv("MILLI_HOME", str(tmp_path))
+    monkeypatch.setenv("MILLI_PROVIDER", "anthropic")
+    monkeypatch.delenv("MILLI_BASE_URL", raising=False)
 
 
 def test_collect_reads_episodes_from_notion_when_active(monkeypatch, fake_notion, tmp_path):
     _isolated_home(monkeypatch, tmp_path)
-    monkeypatch.setenv("WAKU_EPISODIC_STORE", "notion")
+    monkeypatch.setenv("MILLI_EPISODIC_STORE", "notion")
 
-    from waku.memory.episodic.notion_store import NotionEpisodeStore
+    from milli.memory.episodic.notion_store import NotionEpisodeStore
 
     NotionEpisodeStore().add("episode from notion", "2026-07-18")
 
-    from waku.ops.dashboard import collect
+    from milli.ops.dashboard import collect
 
     data = collect()
     assert data["episodes_source"] == "notion"
@@ -142,9 +142,9 @@ def test_collect_reads_episodes_from_notion_when_active(monkeypatch, fake_notion
 
 def test_collect_episodes_default_to_sqlite(monkeypatch, tmp_path):
     _isolated_home(monkeypatch, tmp_path)
-    monkeypatch.delenv("WAKU_EPISODIC_STORE", raising=False)
+    monkeypatch.delenv("MILLI_EPISODIC_STORE", raising=False)
 
-    from waku.ops.dashboard import collect
+    from milli.ops.dashboard import collect
 
     data = collect()
     assert data["episodes_source"] == "sqlite"
@@ -154,14 +154,14 @@ def test_collect_episodes_default_to_sqlite(monkeypatch, tmp_path):
 
 def test_memory_action_delete_episode_routes_to_notion(monkeypatch, fake_notion, tmp_path):
     _isolated_home(monkeypatch, tmp_path)
-    monkeypatch.setenv("WAKU_EPISODIC_STORE", "notion")
+    monkeypatch.setenv("MILLI_EPISODIC_STORE", "notion")
 
-    from waku.memory.episodic.notion_store import NotionEpisodeStore
+    from milli.memory.episodic.notion_store import NotionEpisodeStore
 
     NotionEpisodeStore().add("to delete", "2026-07-18")
     page_id = _FakeNotionClient._pages[0]["id"]
 
-    from waku.ops.dashboard import memory_action
+    from milli.ops.dashboard import memory_action
 
     assert memory_action({"action": "delete_episode", "id": page_id}) == {"ok": True}
     assert _FakeNotionClient._pages[0]["archived"] is True
@@ -169,10 +169,10 @@ def test_memory_action_delete_episode_routes_to_notion(monkeypatch, fake_notion,
 
 def test_collect_episodes_notion_outage_degrades_gracefully(monkeypatch, fake_notion, tmp_path):
     _isolated_home(monkeypatch, tmp_path)
-    monkeypatch.setenv("WAKU_EPISODIC_STORE", "notion")
+    monkeypatch.setenv("MILLI_EPISODIC_STORE", "notion")
     monkeypatch.delenv("NOTION_TOKEN", raising=False)  # constructor raises ValueError
 
-    from waku.ops.dashboard import collect
+    from milli.ops.dashboard import collect
 
     data = collect()
     assert data["episodes"] == []
@@ -182,8 +182,8 @@ def test_collect_episodes_notion_outage_degrades_gracefully(monkeypatch, fake_no
 
 
 def test_manage_memory_delete_episode_accepts_notion_string_id(fake_notion):
-    from waku.memory.episodic.notion_store import NotionEpisodeStore
-    from waku.tools.memory_admin import make_manage_memory_tool
+    from milli.memory.episodic.notion_store import NotionEpisodeStore
+    from milli.tools.memory_admin import make_manage_memory_tool
 
     store = NotionEpisodeStore()
     store.add("via tool", "2026-07-18")
@@ -196,9 +196,9 @@ def test_manage_memory_delete_episode_accepts_notion_string_id(fake_notion):
 
 
 def test_manage_memory_delete_episode_sqlite_accepts_string_id(tmp_path):
-    from waku.db import connect
-    from waku.memory.episodic.store import SqliteEpisodeStore
-    from waku.tools.memory_admin import make_manage_memory_tool
+    from milli.db import connect
+    from milli.memory.episodic.store import SqliteEpisodeStore
+    from milli.tools.memory_admin import make_manage_memory_tool
 
     conn = connect(tmp_path)
     store = SqliteEpisodeStore(conn)
@@ -215,13 +215,13 @@ def test_collect_builds_notion_client_once_across_refreshes(monkeypatch, fake_no
     ONE Notion client and serve the cached result within the TTL — not rebuild
     the client and re-query Notion on every poll."""
     _isolated_home(monkeypatch, tmp_path)
-    monkeypatch.setenv("WAKU_EPISODIC_STORE", "notion")
+    monkeypatch.setenv("MILLI_EPISODIC_STORE", "notion")
 
-    from waku.memory.episodic.notion_store import NotionEpisodeStore
+    from milli.memory.episodic.notion_store import NotionEpisodeStore
 
     NotionEpisodeStore().add("episode from notion", "2026-07-18")
 
-    from waku.ops import dashboard
+    from milli.ops import dashboard
 
     fake_notion._init_count = 0   # ignore the setup construction above
     fake_notion._query_count = 0
@@ -236,13 +236,13 @@ def test_collect_builds_notion_client_once_across_refreshes(monkeypatch, fake_no
 
 def test_collect_refetches_after_ttl_but_reuses_client(monkeypatch, fake_notion, tmp_path):
     _isolated_home(monkeypatch, tmp_path)
-    monkeypatch.setenv("WAKU_EPISODIC_STORE", "notion")
+    monkeypatch.setenv("MILLI_EPISODIC_STORE", "notion")
 
-    from waku.memory.episodic.notion_store import NotionEpisodeStore
+    from milli.memory.episodic.notion_store import NotionEpisodeStore
 
     NotionEpisodeStore().add("ep", "2026-07-18")
 
-    from waku.ops import dashboard
+    from milli.ops import dashboard
 
     monkeypatch.setattr(dashboard, "_NOTION_EPISODES_TTL", 0)   # every poll is stale
     fake_notion._init_count = 0
@@ -259,13 +259,13 @@ def test_collect_serves_stale_episodes_during_notion_outage(monkeypatch, fake_no
     """House rule: a Notion outage must degrade gracefully — and with a cache
     on hand the tab keeps its last good data instead of going blank."""
     _isolated_home(monkeypatch, tmp_path)
-    monkeypatch.setenv("WAKU_EPISODIC_STORE", "notion")
+    monkeypatch.setenv("MILLI_EPISODIC_STORE", "notion")
 
-    from waku.memory.episodic.notion_store import NotionEpisodeStore
+    from milli.memory.episodic.notion_store import NotionEpisodeStore
 
     NotionEpisodeStore().add("cached episode", "2026-07-18")
 
-    from waku.ops import dashboard
+    from milli.ops import dashboard
 
     assert dashboard.collect()["episodes_error"] == ""
 
@@ -280,15 +280,15 @@ def test_collect_serves_stale_episodes_during_notion_outage(monkeypatch, fake_no
 
 def test_delete_episode_busts_the_episodes_cache(monkeypatch, fake_notion, tmp_path):
     _isolated_home(monkeypatch, tmp_path)
-    monkeypatch.setenv("WAKU_EPISODIC_STORE", "notion")
+    monkeypatch.setenv("MILLI_EPISODIC_STORE", "notion")
 
-    from waku.memory.episodic.notion_store import NotionEpisodeStore
+    from milli.memory.episodic.notion_store import NotionEpisodeStore
 
     store = NotionEpisodeStore()
     store.add("first", "2026-07-18")
     store.add("second", "2026-07-19")
 
-    from waku.ops import dashboard
+    from milli.ops import dashboard
 
     assert len(dashboard.collect()["episodes"]) == 2   # populates the cache
 

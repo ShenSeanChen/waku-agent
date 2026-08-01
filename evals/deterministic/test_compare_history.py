@@ -7,7 +7,7 @@ contract: append + trim, isolation of the reply cap, and the aggregate math."""
 
 from __future__ import annotations
 
-from waku.ops import compare_history as ch
+from milli.ops import compare_history as ch
 
 
 def _result(spec, model, latency, tin, tout, cost, error=None):

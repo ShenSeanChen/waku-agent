@@ -1,10 +1,10 @@
-"""Reset .waku to a clean, curated state for a demo / recording.
+"""Reset .milli to a clean, curated state for a demo / recording.
 
     python scripts/demo_seed.py                 # clean slate, KEEPS the spend ledger
     python scripts/demo_seed.py --reset-spend   # also wipe usage.jsonl (money/tokens)
 
 What it does (your old state is backed up first, never just deleted):
-  1. moves the current .waku aside to .waku.bak-<timestamp>
+  1. moves the current .milli aside to .milli.bak-<timestamp>
   2. creates a fresh state.db + calendar.ics
   3. seeds a small, clean memory (a few facts + one episode) and ONE calendar
      event — Sergey's standing Saturday 5 PM swim
@@ -24,11 +24,11 @@ import argparse
 import shutil
 from datetime import datetime
 
-from waku.config import load_settings
-from waku.db import connect
-from waku.memory.episodic.store import SqliteEpisodeStore
-from waku.memory.semantic.store import SqliteFactStore
-from waku.tools.calendar import make_tool
+from milli.config import load_settings
+from milli.db import connect
+from milli.memory.episodic.store import SqliteEpisodeStore
+from milli.memory.semantic.store import SqliteFactStore
+from milli.tools.calendar import make_tool
 
 # Curated seed — clean, no duplicates. Edit these to taste before recording.
 FACTS = [
@@ -89,7 +89,7 @@ def main(reset_spend: bool = False) -> None:
     print(create_event(**EVENT))
 
     # regenerate the human-readable MEMORY.md mirror for the fresh state
-    from waku.memory import Memory
+    from milli.memory import Memory
 
     Memory(conn, settings, None).export_markdown()
 
@@ -100,13 +100,13 @@ def main(reset_spend: bool = False) -> None:
         print("  CLEARED: usage.jsonl (money/token spend) — you approved this.")
     else:
         print("  KEPT: SOUL.md and usage.jsonl (your real spend — pass --reset-spend to wipe).")
-    print("  Run `waku dashboard` and start filming.")
+    print("  Run `milli dashboard` and start filming.")
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Reset .waku to a clean demo state.")
+    parser = argparse.ArgumentParser(description="Reset .milli to a clean demo state.")
     parser.add_argument("--yes", "-y", action="store_true",
-                        help="required confirmation: yes, wipe .waku (it is backed up first)")
+                        help="required confirmation: yes, wipe .milli (it is backed up first)")
     parser.add_argument("--reset-spend", action="store_true",
                         help="also wipe usage.jsonl (the money/token spend ledger)")
     args = parser.parse_args()
@@ -114,7 +114,7 @@ if __name__ == "__main__":
         # Safety gate: this destroys live memory/calendar/traces. Refuse unless the
         # human explicitly confirms with --yes. See CLAUDE.md ("Never wipe runtime
         # data without asking first"). It backs up, but restoring is a hassle.
-        print("REFUSING to run: demo_seed clears .waku (memory, calendar, chat, traces"
+        print("REFUSING to run: demo_seed clears .milli (memory, calendar, chat, traces"
               + (", AND spend" if args.reset_spend else "") + ").")
         print("This is destructive. If you truly mean it, re-run with --yes:")
         print("    python scripts/demo_seed.py --yes"

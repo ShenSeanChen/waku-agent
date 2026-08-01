@@ -25,8 +25,8 @@ import time
 
 import pytest
 
-from waku.graph import END, run_graph
-from waku.graph.workflows.gather import (
+from milli.graph import END, run_graph
+from milli.graph.workflows.gather import (
     SCAN_KEYS,
     build_gather_graph,
     gather_topology,
@@ -197,8 +197,8 @@ def test_the_workflow_cannot_act():
     parameter — a model handed no tool schemas cannot call a tool, which is a
     guarantee about capability rather than about instructions.
     """
-    from waku.graph.workflows import gather as workflow
-    from waku.ops import gather as binder
+    from milli.graph.workflows import gather as workflow
+    from milli.ops import gather as binder
 
     for module in (workflow, binder):
         code = _code_lines(module)

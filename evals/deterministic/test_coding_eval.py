@@ -1,4 +1,4 @@
-"""DETERMINISTIC EVAL — the cross-model coding runner (waku.ops.coding_eval).
+"""DETERMINISTIC EVAL — the cross-model coding runner (milli.ops.coding_eval).
 
 We can't call a real model in a hermetic test, so we stub pi with /bin/true (a
 no-op that exits 0) and let the seeded files + the real `verify` command decide
@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import shutil
 
-from waku.ops import coding_eval as ce
+from milli.ops import coding_eval as ce
 
 _TRUE = shutil.which("true") or "/usr/bin/true"   # a real no-op binary, exits 0
 

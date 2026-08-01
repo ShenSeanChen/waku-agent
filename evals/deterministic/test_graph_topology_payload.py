@@ -8,7 +8,7 @@ dashboard serves IS the graph app.py actually runs.
 
 from __future__ import annotations
 
-from waku.graph.workflows.triage import build_triage_graph, triage_topology
+from milli.graph.workflows.triage import build_triage_graph, triage_topology
 
 
 def real_graph():

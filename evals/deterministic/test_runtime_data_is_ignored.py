@@ -1,17 +1,17 @@
 """DETERMINISTIC EVAL — runtime data and secrets never become commits.
 
-waku runs on people's own machines with their own keys, and it writes a lot of
+milli runs on people's own machines with their own keys, and it writes a lot of
 personal state: facts about the user, their calendar, a spend ledger, message
 outboxes, traces of every turn. None of it belongs in git. This pins the
 .gitignore rules that keep it out, because that file is edited by hand and a
 missing line is invisible until the day it isn't.
 
-The gap this was written for (2026-07-26): .gitignore listed `.waku/` by exact
+The gap this was written for (2026-07-26): .gitignore listed `.milli/` by exact
 name. When the Discord bot was given its OWN memory via DISCORD_HOME — the fix
 for a bot answering strangers out of the maintainer's personal store — that
-second home was called `.waku-discord/`, matched nothing, and its SOUL.md,
+second home was called `.milli-discord/`, matched nothing, and its SOUL.md,
 usage.jsonl and outbox/ were tracked. A privacy fix had quietly created a
-different privacy hole. `.waku-*/` closes it for any alternate home.
+different privacy hole. `.milli-*/` closes it for any alternate home.
 
 These call `git check-ignore`, so they test what git ACTUALLY does with the
 committed .gitignore — not what a regex here thinks it should do.
@@ -35,12 +35,12 @@ def ignored(rel: str) -> bool:
 
 
 # Every runtime artifact a home can hold, for the DEFAULT home and for an
-# alternate one (DISCORD_HOME, or any WAKU_HOME a user points elsewhere).
+# alternate one (DISCORD_HOME, or any MILLI_HOME a user points elsewhere).
 ARTIFACTS = ["state.db", "SOUL.md", "usage.jsonl", "calendar.ics",
              "traces/2026-07-26.jsonl", "outbox/msg-1.txt"]
 
 
-@pytest.mark.parametrize("home", [".waku", ".waku-discord", ".waku-demo"])
+@pytest.mark.parametrize("home", [".milli", ".milli-discord", ".milli-demo"])
 @pytest.mark.parametrize("artifact", ARTIFACTS)
 def test_no_agent_home_leaks_its_runtime_data(home, artifact):
     """A second agent home is a normal thing to have — one per gateway, one for
@@ -78,7 +78,7 @@ def test_nothing_from_a_runtime_home_is_currently_tracked():
     ).stdout.splitlines()
     leaked = [f for f in tracked
               if f not in allowed
-              and (f.startswith((".waku", ".env"))
+              and (f.startswith((".milli", ".env"))
                    or f.endswith(("credentials.json", "token.json")))]
     assert leaked == [], f"private files are in the index: {leaked}"
 
@@ -91,6 +91,6 @@ def test_the_env_template_carries_no_real_values():
     filled = [ln for ln in lines
               if "=" in ln and not ln.lstrip().startswith("#")
               and ln.split("=", 1)[1].strip().strip("\"'")]
-    # WAKU_PROVIDER is a non-secret default and is meant to have a value.
-    unexpected = [ln for ln in filled if not ln.startswith("WAKU_PROVIDER=")]
+    # MILLI_PROVIDER is a non-secret default and is meant to have a value.
+    unexpected = [ln for ln in filled if not ln.startswith("MILLI_PROVIDER=")]
     assert unexpected == [], f"values committed in .env.example: {unexpected}"

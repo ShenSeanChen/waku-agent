@@ -7,7 +7,7 @@ fixed window; older turns live in state.db + consolidation, not the prompt."""
 
 from __future__ import annotations
 
-from evals.helpers import ScriptedClient, make_waku, response, text_block
+from evals.helpers import ScriptedClient, make_milli, response, text_block
 
 
 def _gate_skip():
@@ -15,7 +15,7 @@ def _gate_skip():
 
 
 def test_prompt_history_is_windowed(tmp_path, monkeypatch):
-    monkeypatch.setenv("WAKU_HISTORY_TURNS", "3")   # keep only last 3 turns
+    monkeypatch.setenv("MILLI_HISTORY_TURNS", "3")   # keep only last 3 turns
     sent = []
 
     class Recorder(ScriptedClient):
@@ -29,7 +29,7 @@ def test_prompt_history_is_windowed(tmp_path, monkeypatch):
     script = []
     for _ in range(5):
         script += [_gate_skip(), response([text_block("ok")])]
-    app = make_waku(tmp_path / "home", client=Recorder(script))
+    app = make_milli(tmp_path / "home", client=Recorder(script))
     for i in range(5):
         app.respond(f"message number {i}")
 
@@ -43,6 +43,6 @@ def test_prompt_history_is_windowed(tmp_path, monkeypatch):
 
 
 def test_default_window_is_generous_but_finite(tmp_path, monkeypatch):
-    monkeypatch.delenv("WAKU_HISTORY_TURNS", raising=False)
-    app = make_waku(tmp_path / "home", client=ScriptedClient([]))
+    monkeypatch.delenv("MILLI_HISTORY_TURNS", raising=False)
+    app = make_milli(tmp_path / "home", client=ScriptedClient([]))
     assert app.settings.history_turns == 12

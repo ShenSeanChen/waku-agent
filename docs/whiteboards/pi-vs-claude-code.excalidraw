@@ -1,7 +1,7 @@
 {
   "type": "excalidraw",
   "version": 2,
-  "source": "waku/ops/whiteboard",
+  "source": "milli/ops/whiteboard",
   "elements": [
     {
       "id": "txt-0001",
@@ -660,13 +660,13 @@
       "updated": 1,
       "link": null,
       "locked": false,
-      "text": "SUB-AGENTS:  refused \u2014 spawn pi yourself: tmux,\nor waku's delegate_task (that's us)",
+      "text": "SUB-AGENTS:  refused \u2014 spawn pi yourself: tmux,\nor milli's delegate_task (that's us)",
       "fontSize": 16,
       "fontFamily": 5,
       "textAlign": "center",
       "verticalAlign": "middle",
       "containerId": "rec-0018",
-      "originalText": "SUB-AGENTS:  refused \u2014 spawn pi yourself: tmux,\nor waku's delegate_task (that's us)",
+      "originalText": "SUB-AGENTS:  refused \u2014 spawn pi yourself: tmux,\nor milli's delegate_task (that's us)",
       "lineHeight": 1.25
     },
     {
@@ -1419,13 +1419,13 @@
       "updated": 1,
       "link": null,
       "locked": false,
-      "text": "waku uses BOTH: Claude Code writes waku's code - pi is waku's delegate_task sub-agent,\non whatever model the loop is running. pi refused to build sub-agents \u2014 which is exactly what makes it embeddable as one.",
+      "text": "milli uses BOTH: Claude Code writes milli's code - pi is milli's delegate_task sub-agent,\non whatever model the loop is running. pi refused to build sub-agents \u2014 which is exactly what makes it embeddable as one.",
       "fontSize": 16,
       "fontFamily": 5,
       "textAlign": "center",
       "verticalAlign": "middle",
       "containerId": "rec-0040",
-      "originalText": "waku uses BOTH: Claude Code writes waku's code - pi is waku's delegate_task sub-agent,\non whatever model the loop is running. pi refused to build sub-agents \u2014 which is exactly what makes it embeddable as one.",
+      "originalText": "milli uses BOTH: Claude Code writes milli's code - pi is milli's delegate_task sub-agent,\non whatever model the loop is running. pi refused to build sub-agents \u2014 which is exactly what makes it embeddable as one.",
       "lineHeight": 1.25
     },
     {

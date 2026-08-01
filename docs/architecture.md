@@ -6,7 +6,7 @@ now with a file path on every box.
 
 ```mermaid
 flowchart TB
-    subgraph GW["Gateway Interface — waku/gateway/"]
+    subgraph GW["Gateway Interface — milli/gateway/"]
         CLI["cli.py (default)"]
         TG["telegram.py (optional)"]
     end
@@ -25,7 +25,7 @@ flowchart TB
     GW --> WM
     LLM -->|reply| GW
 
-    subgraph MEM["Memory — waku/memory/"]
+    subgraph MEM["Memory — milli/memory/"]
         GATE{{"retrieval_gate.py<br/>'does this turn need memory?'"}}
         PROC["procedural/ — SKILL.md<br/>how to act"]
         SEM["semantic/ — facts (FTS5,<br/>or Supabase pgvector)"]
@@ -42,7 +42,7 @@ flowchart TB
     CONS -->|one episode| EPI
     SEM & EPI --- DB
 
-    subgraph OPS["LLM Ops — waku/ops/ + evals/"]
+    subgraph OPS["LLM Ops — milli/ops/ + evals/"]
         TRACE["tracing.py — 1 trace/run<br/>JSONL always · OTel → Phoenix/Langfuse"]
         DET["evals/deterministic — 0/1<br/>'did the right tool fire?'"]
         JUDGE["evals/judge — scored %<br/>'was the reply good?'"]
@@ -67,7 +67,7 @@ flowchart TB
   mock calendar → Google Calendar, JSONL → Phoenix/Langfuse. The default is always
   zero-signup.
 - **Graphs wrap the loop, never replace it.** When a turn needs shape (parallel
-  steps, explicit routing), an opt-in graph workflow (`waku/graph/`) arranges nodes
+  steps, explicit routing), an opt-in graph workflow (`milli/graph/`) arranges nodes
   around the untouched loop — the `full_agent` node IS `run_loop`. Routers are plain
   code reading state a model wrote; every failure fails open to the plain loop; the
   dashboard renders the topology from the engine's own `describe()` so the picture

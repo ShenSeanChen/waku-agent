@@ -10,12 +10,12 @@ labels: bug
 a command you ran, a file you opened.
 
 **Your setup**
-- waku version / commit:
+- milli version / commit:
 - Python version (`python -V`):
 - OS:
 - Provider and model (e.g. `anthropic` / `claude-opus-4-8`):
 
-**Trace or output** — `python -m waku.ops.show_trace` renders the last run as a
+**Trace or output** — `python -m milli.ops.show_trace` renders the last run as a
 timeline; that's usually the fastest thing to paste. Please redact API keys.
 
 **Anything you already ruled out?**

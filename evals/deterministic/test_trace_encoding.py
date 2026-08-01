@@ -8,9 +8,9 @@ from pathlib import Path
 
 import pytest
 
-from waku.config import Settings
-from waku.ops.dashboard import collect, events_since
-from waku.ops.tracing import TraceEncodingError, Tracer
+from milli.config import Settings
+from milli.ops.dashboard import collect, events_since
+from milli.ops.tracing import TraceEncodingError, Tracer
 
 MESSAGE = "处理中文日程 " + chr(0x1F680)
 
@@ -49,7 +49,7 @@ def test_dashboard_reads_utf8_without_platform_default(tmp_path, monkeypatch):
         json.dumps({"type": "turn_start", "user_message": MESSAGE}, ensure_ascii=False) + "\n",
         encoding="utf-8",
     )
-    monkeypatch.setenv("WAKU_HOME", str(home))
+    monkeypatch.setenv("MILLI_HOME", str(home))
     original_open = Path.open
 
     def reject_implicit_jsonl(path, mode="r", *args, encoding=None, **kwargs):
@@ -73,7 +73,7 @@ def test_dashboard_reports_legacy_non_utf8_trace_without_modifying_it(tmp_path, 
         json.dumps({"type": "turn_start", "user_message": "中文"}, ensure_ascii=False) + "\n"
     ).encode("gbk")
     trace.write_bytes(original)
-    monkeypatch.setenv("WAKU_HOME", str(home))
+    monkeypatch.setenv("MILLI_HOME", str(home))
 
     data = collect()
     live = events_since(0)
@@ -105,7 +105,7 @@ def test_tracer_refuses_to_append_to_legacy_non_utf8_trace(tmp_path):
 
 def test_dashboard_ops_view_surfaces_trace_encoding_errors():
     views = (
-        Path(__file__).resolve().parents[2] / "waku" / "ops" / "static" / "js" / "views.js"
+        Path(__file__).resolve().parents[2] / "milli" / "ops" / "static" / "js" / "views.js"
     ).read_text(encoding="utf-8")
 
     assert "trace_errors" in views

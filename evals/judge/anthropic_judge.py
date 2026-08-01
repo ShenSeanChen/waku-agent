@@ -1,5 +1,5 @@
 """A DeepEval judge model backed by the same Anthropic-compatible endpoint
-Waku itself uses — no separate OpenAI key needed for judging.
+Milli itself uses — no separate OpenAI key needed for judging.
 
 DeepEval calls generate() with an optional pydantic schema when it wants
 structured verdicts; we ask the model for JSON and validate it back.
@@ -11,8 +11,8 @@ import json
 
 from deepeval.models import DeepEvalBaseLLM
 
-from waku.config import load_settings
-from waku.loop.models import get_client
+from milli.config import load_settings
+from milli.loop.models import get_client
 
 
 class AnthropicJudge(DeepEvalBaseLLM):

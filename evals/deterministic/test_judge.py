@@ -1,4 +1,4 @@
-"""DETERMINISTIC EVAL — the K3-as-referee quality judge (waku.ops.judge).
+"""DETERMINISTIC EVAL — the K3-as-referee quality judge (milli.ops.judge).
 
 We can't call a real model hermetically, so we stub the client with a canned
 JSON reply and pin the parse/clamp behavior + graceful failure. The point: a
@@ -6,7 +6,7 @@ judge hiccup must degrade to None (no score), never crash a race."""
 
 from __future__ import annotations
 
-from waku.ops import judge as J
+from milli.ops import judge as J
 
 
 class _Block:

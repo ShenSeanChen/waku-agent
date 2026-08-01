@@ -21,7 +21,7 @@ without a Discord connection. Every case below is a door that must stay shut.
 
 from __future__ import annotations
 
-from waku.gateway.discord import TurnBudget, _ids, _strip_mention, should_answer
+from milli.gateway.discord import TurnBudget, _ids, _strip_mention, should_answer
 
 ME = "111"
 STRANGER = "999"

@@ -11,8 +11,8 @@ from __future__ import annotations
 
 import json
 
-from evals.helpers import ScriptedClient, make_waku, response, text_block, tool_block
-from waku.graph.workflows.triage import classify_message, todays_events
+from evals.helpers import ScriptedClient, make_milli, response, text_block, tool_block
+from milli.graph.workflows.triage import classify_message, todays_events
 
 
 def last_meta(app) -> dict:
@@ -61,7 +61,7 @@ def test_todays_events_reads_the_ics(tmp_path):
 
 def test_flag_off_is_byte_for_byte_the_old_world(tmp_path):
     gate = response([text_block('{"retrieve": false, "query": "", "reason": "test"}')])
-    app = make_waku(tmp_path / "home",
+    app = make_milli(tmp_path / "home",
                     client=ScriptedClient([gate, response([text_block("Hi!")])]),
                     graph_workflows=False)
     events = []
@@ -77,7 +77,7 @@ def test_quick_turn_answers_on_the_small_model_and_skips_the_gate(tmp_path):
         response([text_block('{"route": "quick", "reason": "just thanks"}')]),  # triage
         response([text_block("You're welcome!")]),                              # quick reply
     ]
-    app = make_waku(tmp_path / "home", client=ScriptedClient(script),
+    app = make_milli(tmp_path / "home", client=ScriptedClient(script),
                     graph_workflows=True, small_model="small-model")
     events: list[tuple[str, dict]] = []
     result = app.respond("thanks!", observer=lambda k, ev: events.append((k, ev)))
@@ -103,7 +103,7 @@ def test_full_turn_runs_the_real_loop_with_both_funnel_stages(tmp_path):
                                               "end": "2026-08-01 10:00"})], "tool_use"),
         response([text_block("Booked!")]),
     ]
-    app = make_waku(tmp_path / "home", client=ScriptedClient(script),
+    app = make_milli(tmp_path / "home", client=ScriptedClient(script),
                     graph_workflows=True)
     events: list[str] = []
     result = app.respond("swim saturday 9am", observer=lambda k, ev: events.append(k))
@@ -124,14 +124,14 @@ def test_broken_classifier_fails_open_to_the_full_loop(tmp_path):
         response([text_block('{"retrieve": false, "query": "", "reason": "n"}')]),   # gate
         response([text_block("Still here.")]),                                        # loop
     ]
-    app = make_waku(tmp_path / "home", client=ScriptedClient(script),
+    app = make_milli(tmp_path / "home", client=ScriptedClient(script),
                     graph_workflows=True)
     assert app.respond("hello?").reply == "Still here."
 
 
 def test_broken_graph_engine_fails_open_to_the_plain_loop(tmp_path, monkeypatch):
     """Layer two: even if graph construction itself explodes, respond() answers."""
-    from waku.graph.workflows import triage
+    from milli.graph.workflows import triage
 
     def explode(**kwargs):
         raise RuntimeError("graph machinery on fire")
@@ -140,7 +140,7 @@ def test_broken_graph_engine_fails_open_to_the_plain_loop(tmp_path, monkeypatch)
         response([text_block('{"retrieve": false, "query": "", "reason": "n"}')]),   # gate
         response([text_block("Saved by the loop.")]),
     ]
-    app = make_waku(tmp_path / "home", client=ScriptedClient(script),
+    app = make_milli(tmp_path / "home", client=ScriptedClient(script),
                     graph_workflows=True)
     events: list[str] = []
     result = app.respond("hello", observer=lambda k, ev: events.append(k))

@@ -18,8 +18,8 @@ import json
 
 import pytest
 
-from waku.graph import END, START, Graph, Node
-from waku.ops import dashboard
+from milli.graph import END, START, Graph, Node
+from milli.ops import dashboard
 
 
 def _emitter():
@@ -32,7 +32,7 @@ def test_an_unknown_workflow_is_refused_without_importing_anything():
     client named' is one careless refactor from 'import whatever string
     arrives', so the refusal is pinned."""
     out, emit = _emitter()
-    for name in ("", "nope", "waku.ops.gather", "os:system", "../../etc/passwd"):
+    for name in ("", "nope", "milli.ops.gather", "os:system", "../../etc/passwd"):
         out.clear()
         dashboard.graph_stream({"workflow": name}, emit)
         assert len(out) == 1 and out[0][0] == "done"
@@ -42,10 +42,10 @@ def test_an_unknown_workflow_is_refused_without_importing_anything():
 def test_the_runner_table_maps_names_to_known_targets():
     """Discovered rather than hand-listed since slash commands shipped — a
     hardcoded table beside a command list is two registries of one fact."""
-    assert dashboard.WORKFLOW_RUNNERS()["gather"] == "waku.ops.gather:run_gather"
+    assert dashboard.WORKFLOW_RUNNERS()["gather"] == "milli.ops.gather:run_gather"
     for target in dashboard.WORKFLOW_RUNNERS().values():
         module, _, fn = target.partition(":")
-        assert module.startswith("waku.") and fn
+        assert module.startswith("milli.") and fn
 
 
 @pytest.fixture
@@ -61,11 +61,11 @@ def scripted(monkeypatch):
             g.add_edge(START, n)
             g.add_edge(n, "c")
         g.add_edge("c", END)
-        from waku.graph import run_graph
+        from milli.graph import run_graph
 
         return run_graph(g, {}, observer=observer)
 
-    import waku.ops.gather as gather_mod
+    import milli.ops.gather as gather_mod
 
     monkeypatch.setattr(gather_mod, "run_gather", fake_run)
     return fake_run
@@ -126,11 +126,11 @@ def test_a_raising_node_still_finishes_the_stream(monkeypatch):
         g.add_node(Node("a", boom, kind="tool"))
         g.add_edge(START, "a")
         g.add_edge("a", END)
-        from waku.graph import run_graph
+        from milli.graph import run_graph
 
         return run_graph(g, {}, observer=observer)
 
-    import waku.ops.gather as gather_mod
+    import milli.ops.gather as gather_mod
 
     monkeypatch.setattr(gather_mod, "run_gather", fake_run)
     out = _run(None)
@@ -144,7 +144,7 @@ def test_a_runner_that_explodes_reports_instead_of_500ing(monkeypatch):
     def boom(**kw):
         raise RuntimeError("collision")
 
-    import waku.ops.gather as gather_mod
+    import milli.ops.gather as gather_mod
 
     monkeypatch.setattr(gather_mod, "run_gather", boom)
     out = _run(None)

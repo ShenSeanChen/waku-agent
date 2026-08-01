@@ -12,8 +12,8 @@ import time
 
 import pytest
 
-from waku.graph import END, START, Graph, GraphStateCollision, Node, run_graph
-from waku.graph.nodes import key_router
+from milli.graph import END, START, Graph, GraphStateCollision, Node, run_graph
+from milli.graph.nodes import key_router
 
 
 def collect_events():

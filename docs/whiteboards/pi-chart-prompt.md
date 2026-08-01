@@ -36,7 +36,7 @@ TOP SPINE, left to right, four stages joined by labelled arrows:
   1. FACES (blue) — "one brain, four costumes"
        pi              -> TUI, interactive
        pi -p "task"    -> answers once, exits (how scripts embed it)
-       pi --mode json  -> event stream on stdout   <- mark: waku enters here
+       pi --mode json  -> event stream on stdout   <- mark: milli enters here
        pi --mode rpc   -> long-lived pipe
      note: all four consume the SAME event stream; the loop never knows who
      is watching.
@@ -95,10 +95,10 @@ FOOTER 1 (red) — refused, on purpose:
   another harness) · plan mode + todos -> PLAN.md, TODO.md · permissions ->
   run it in a container.
 
-FOOTER 2 (blue) — waku x pi, the collab thesis:
-  waku loop -> delegate_task -> subprocess -> pi -p --mode json
-  pi's events -> waku's arena card (a live mini-terminal)
-  pi's tokens -> waku's usage ledger (coding runs aren't free)
+FOOTER 2 (blue) — milli x pi, the collab thesis:
+  milli loop -> delegate_task -> subprocess -> pi -p --mode json
+  pi's events -> milli's arena card (a live mini-terminal)
+  pi's tokens -> milli's usage ledger (coding runs aren't free)
   "memory and evals belong to the ORCHESTRATOR; tools belong to the SPECIALIST."
 
 FACTS THAT MUST STAY EXACT

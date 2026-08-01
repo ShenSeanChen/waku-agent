@@ -45,7 +45,7 @@ package 全世界。作用域就是这一课。
 |---|---|
 | `pi` | **TUI** — interactive app in your terminal |
 | `pi -p "task"` | **CLI** — answers once, exits. How scripts embed it |
-| `pi --mode json` | **event stream** on stdout, one JSON per line ← *waku plugs in here* |
+| `pi --mode json` | **event stream** on stdout, one JSON per line ← *milli plugs in here* |
 | `pi --mode rpc` | long-lived pipe for other programs |
 
 All four consume the **same event stream** — the loop never knows who's watching.
@@ -55,8 +55,8 @@ All four consume the **same event stream** — the loop never knows who's watchi
 
 Two-command demo you can run on camera:
 ```bash
-claude -p "Reply with exactly: waku waku"   # answers, dies
-claude    "Reply with exactly: waku waku"   # banner, state, waits for you
+claude -p "Reply with exactly: milli"   # answers, dies
+claude    "Reply with exactly: milli"   # banner, state, waits for you
 ```
 
 ### CONTEXT — the whole state
@@ -193,7 +193,7 @@ An npm or git bundle of skills + extensions + prompts + themes, declared under a
 | Refused | Use instead |
 |---|---|
 | MCP | any CLI + its README |
-| sub-agents | spawn more pi's (tmux — or waku's `delegate_task`) |
+| sub-agents | spawn more pi's (tmux — or milli's `delegate_task`) |
 | plan mode / todos | `PLAN.md`, `TODO.md` — files you can open |
 | permissions | run it in a container |
 | **memory · evals** | **the orchestrator's job** — pi's "memory" is just the raw session |
@@ -203,15 +203,15 @@ An npm or git bundle of skills + extensions + prompts + themes, declared under a
 
 ---
 
-## 4 · waku × pi — the collab thesis
+## 4 · milli × pi — the collab thesis
 
 ```
-waku loop → delegate_task → subprocess → pi -p --mode json
+milli loop → delegate_task → subprocess → pi -p --mode json
      pi's events → the arena card (live mini-terminal)
-     pi's tokens → waku's usage ledger (coding runs aren't free)
+     pi's tokens → milli's usage ledger (coding runs aren't free)
 ```
 
-Wiring: [`waku/tools/experimental.py`](../waku/tools/experimental.py) — every
+Wiring: [`milli/tools/experimental.py`](../milli/tools/experimental.py) — every
 delegated pi run inherits this repo's own extensions and skills:
 
 ```python
@@ -238,7 +238,7 @@ The four ways to add power, as a rookie→Champion arc. PokeAPI is public (no ke
 
 **Pre-flight, off camera:**
 ```bash
-cd ~/Developer/waku-agent
+cd ~/Developer/milli-agent
 git stash                       # clean repo — see the first gotcha
 set -a; source .env; set +a
 ```
@@ -249,7 +249,7 @@ set -a; source .env; set +a
 | 1 | Prof. Oak's Pokedex | **SKILL** | `.agents/skills/pokedex/` |
 | 2 | Moves + gym rules | **EXTENSION** | `.pi/extensions/pokemon-battle.ts` |
 | 3 | Earning the Badge | **PACKAGE** | `pi-pokedex/` |
-| 4 | The League | **waku × pi** | `delegate_task` |
+| 4 | The League | **milli × pi** | `delegate_task` |
 
 ### Stage 0 — bash is already a tool
 ```bash
@@ -275,10 +275,10 @@ pi -e .pi/extensions/pokemon-battle.ts --provider anthropic --model claude-haiku
    -a --no-session -p "Call type_matchup with attacker=fire, then say what fire beats."
 #  → Fire is super-effective against grass, ice, bug, and steel.
 
-# 2b — guard a verb (throwaway dir with a dummy .waku)
-pi -e .pi/extensions/pokemon-battle.ts … -p "Run: rm -rf .waku"
-#  → "…blocked by a safety guard. The .waku directory is protected…"
-#  → .waku SURVIVED. The refusal came back as a tool result and the model
+# 2b — guard a verb (throwaway dir with a dummy .milli)
+pi -e .pi/extensions/pokemon-battle.ts … -p "Run: rm -rf .milli"
+#  → "…blocked by a safety guard. The .milli directory is protected…"
+#  → .milli SURVIVED. The refusal came back as a tool result and the model
 #    adapted — offered to back up / narrow the path — instead of crashing.
 ```
 **That is the `allowed?` diamond, live.**
@@ -297,10 +297,10 @@ Skill + extension **compose**. The collision is itself the lesson: skills warn a
 keep the first; extension tools **hard-error** — two copies of a verb is ambiguous,
 so pi refuses rather than guess.
 
-### Stage 4 — waku × pi
+### Stage 4 — milli × pi
 ```bash
-WAKU_EXPERIMENTAL=1 make run        # + make dashboard (:7777)
-# ask waku: "delegate to pi: what beats Charizard? use the pokedex + type_matchup"
+MILLI_EXPERIMENTAL=1 make run        # + make dashboard (:7777)
+# ask milli: "delegate to pi: what beats Charizard? use the pokedex + type_matchup"
 ```
 Watch the arena card stream the sub-agent's tools live.
 
@@ -312,7 +312,7 @@ Watch the arena card stream the sub-agent's tools live.
 
 - **pi runs the model raw, and it can wander.** On one run, haiku ignored "what
   does fire beat?" and ran `git add` instead, reporting "Staged, ready to commit."
-  Why: pi loads `AGENTS.md`/`CLAUDE.md` from the repo, and waku's says *"commit
+  Why: pi loads `AGENTS.md`/`CLAUDE.md` from the repo, and milli's says *"commit
   every milestone."* Seeing a dirty repo, the model followed the ambient rule over
   the trivial prompt. 3 of 4 runs were correct. **Clean repo + explicit prompt.**
 - **The knowledge-cutoff moment.** A Gemini session read `gpt-5.6` in pi's *own

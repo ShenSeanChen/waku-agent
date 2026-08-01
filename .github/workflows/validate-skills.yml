@@ -16,7 +16,7 @@ jobs:
       - name: Install
         run: pip install -e '.[dev]'
       - name: Lint (ruff)
-        run: python -m ruff check waku evals scripts
+        run: python -m ruff check milli evals scripts
       - name: Validate skills (community PRs land here)
         run: python scripts/validate_skills.py
       - name: Deterministic evals (offline tier — no API key in CI)

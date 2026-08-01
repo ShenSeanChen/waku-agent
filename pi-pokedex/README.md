@@ -10,7 +10,7 @@ What's inside:
   public PokeAPI (no key). Loaded on demand; costs ~0 tokens until you ask.
 - **extension `pokemon-battle`** — registers a deterministic `type_matchup` tool,
   and installs a "Team Rocket" guard that blocks bash commands from wiping runtime
-  data (`.waku`, `rm -rf /`).
+  data (`.milli`, `rm -rf /`).
 
 ## Install
 

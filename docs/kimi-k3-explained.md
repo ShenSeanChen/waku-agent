@@ -204,7 +204,7 @@ FP4 (low-precision numbers → 4x smaller). Each attacks one part of the wall.
 The 6.3x / 25% / 2.5x figures are **vendor claims** from Moonshot's own blog; open
 weights don't drop until Jul 27, 2026, so nobody has independently verified them.
 Opus and Fable internals are undisclosed, so the "vs" is one-directional — you can only
-draw K3. That gap is exactly why the plan is to test it live in Waku (same agent, same
+draw K3. That gap is exactly why the plan is to test it live in Milli (same agent, same
 tasks, measured on pass rate, dollars, and latency) rather than trust the slide.
 
 *Sources: Moonshot / MarkTechPost, Jul 16 2026; Simon Willison, Jul 16 2026.*

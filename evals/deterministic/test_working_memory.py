@@ -9,8 +9,8 @@ from __future__ import annotations
 
 import re
 
-from waku.config import load_settings
-from waku.runtime.session import Session
+from milli.config import load_settings
+from milli.runtime.session import Session
 
 
 def test_system_prompt_includes_current_time():

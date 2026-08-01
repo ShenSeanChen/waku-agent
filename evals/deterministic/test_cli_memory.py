@@ -2,15 +2,15 @@
 
 from __future__ import annotations
 
-from waku.db import connect
-from waku.gateway.cli import _memory_snapshot
+from milli.db import connect
+from milli.gateway.cli import _memory_snapshot
 
 
 def test_memory_snapshot_reads_seeded_home(tmp_path):
     conn = connect(tmp_path)
     conn.execute(
         "INSERT INTO facts (subject, content, source) VALUES (?, ?, ?)",
-        ("project", "Waku stays local-first", "user"),
+        ("project", "Milli stays local-first", "user"),
     )
     conn.execute(
         "INSERT INTO facts (subject, content, source) VALUES (?, ?, ?)",
@@ -37,7 +37,7 @@ def test_memory_snapshot_reads_seeded_home(tmp_path):
 
     assert "Semantic facts (2)" in snapshot
     assert "[alex] Alex prefers morning meetings" in snapshot
-    assert "[project] Waku stays local-first" in snapshot
+    assert "[project] Milli stays local-first" in snapshot
     assert "Recent episodes (2)" in snapshot
     assert "2026-07-17 - Reviewed the launch checklist" in snapshot
     assert "2026-07-16 - Planned the launch" in snapshot

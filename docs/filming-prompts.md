@@ -78,7 +78,7 @@ arena" note in [benchmarks.md §3.B](benchmarks.md) for what's built vs. not.
 
 ---
 
-# The pi × waku video — shooting rundown
+# The pi × milli video — shooting rundown
 
 Segment order per Sean's retention call: **philosophy first, machine second,
 stakes last** — primitives are sprinkled as 15-second footnotes, never a cold
@@ -100,7 +100,7 @@ wc -l ~/Developer/pi/packages/agent/src/agent-loop.ts        # → exactly 792
 ```
 
 ```
-pi --mode json -p --no-session -nt "Reply with exactly: waku waku"
+pi --mode json -p --no-session -nt "Reply with exactly: milli"
 ```
 > the naked event stream — point at usage+cost riding on every line.
 
@@ -117,19 +117,19 @@ Session tree: open any `~/.pi/agent/sessions/**/*.jsonl` and show
 Board 2. The two-command demo, live:
 
 ```
-claude -p "Reply with exactly: waku waku"     # CLI: answers and dies
-claude "Reply with exactly: waku waku"        # TUI: banner, state, waits
+claude -p "Reply with exactly: milli"     # CLI: answers and dies
+claude "Reply with exactly: milli"        # TUI: banner, state, waits
 ```
 
 Then the naked-model story: the real Gemini session that read gpt-5.6 in pi's
 own docs and decided it was "a simulated timeline." Punchline: *"Claude Code
-carries the model; pi shows you the model. That's why waku's arena delegates
+carries the model; pi shows you the model. That's why milli's arena delegates
 coding to pi."*
 
-## Segment D — waku hires pi (the demo)
+## Segment D — milli hires pi (the demo)
 
 ```
-WAKU_EXPERIMENTAL=1 make run
+MILLI_EXPERIMENTAL=1 make run
 ```
 ```
 help me build a 贪吃蛇 game and run it when you finish
@@ -139,7 +139,7 @@ help me build a 贪吃蛇 game and run it when you finish
 > pi on its own brain; sub-agent events stream into the card and pi's tokens
 > hit the card's cost (the "no more free coding runs" line).
 
-Receipts: `python -m waku.ops.show_trace` for the delegation in the trace.
+Receipts: `python -m milli.ops.show_trace` for the delegation in the trace.
 
 ## Dry-run checklist (run all of it the day before)
 

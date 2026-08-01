@@ -24,10 +24,10 @@ from types import SimpleNamespace
 import pytest
 
 from evals.helpers import ScriptedClient, response, text_block
-from waku.db import connect
-from waku.memory.consolidation import SUMMARIZER_PROMPT, consolidate_if_due
-from waku.memory.episodic.store import SqliteEpisodeStore
-from waku.memory.semantic.store import SqliteFactStore
+from milli.db import connect
+from milli.memory.consolidation import SUMMARIZER_PROMPT, consolidate_if_due
+from milli.memory.episodic.store import SqliteEpisodeStore
+from milli.memory.semantic.store import SqliteFactStore
 
 DISTILLED = json.dumps({
     "facts": [{"subject": "Alex", "content": "Alex prefers morning meetings."},

@@ -2,9 +2,9 @@
   "version": "0.0.1",
   "configurations": [
     {
-      "name": "waku-dashboard",
+      "name": "milli-dashboard",
       "runtimeExecutable": ".venv/bin/python",
-      "runtimeArgs": ["-m", "waku.ops.dashboard"],
+      "runtimeArgs": ["-m", "milli.ops.dashboard"],
       "port": 7777,
       "autoPort": false
     },

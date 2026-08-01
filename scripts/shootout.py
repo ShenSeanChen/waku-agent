@@ -4,14 +4,14 @@
     make shootout RUNS="kimi:kimi-k3 anthropic:claude-opus-4-8"
 
 For each provider:model pair this runs every case in evals/dataset.jsonl through
-a REAL Waku (fresh isolated home per run, your keys from .env) and scores it the
+a REAL Milli (fresh isolated home per run, your keys from .env) and scores it the
 same deterministic way the live eval tier does: did the right tool fire, with
 the right arguments — 0 or 1, no judge involved. Alongside correctness it
 collects what benchmarks usually hide: tokens, estimated dollars (per-model
 pricing, same table the dashboard uses), latency, and loop iterations.
 
 Output: a markdown table on stdout plus a timestamped .md + .json report in
-.waku/shootout/ — publish it, and anyone can re-run it with their own keys.
+.milli/shootout/ — publish it, and anyone can re-run it with their own keys.
 That's the point: don't trust the table, reproduce it.
 
 Honesty notes baked in: cost is an ESTIMATE from tokens x list price (cache
@@ -33,9 +33,9 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO))
 
-from waku.config import Settings, load_settings  # noqa: E402  (loads .env keys)
-from waku.ops.pricing import price_for  # noqa: E402
-from waku.ops.scoring import check_case, load_cases  # noqa: E402  (the ONE scorer)
+from milli.config import Settings, load_settings  # noqa: E402  (loads .env keys)
+from milli.ops.pricing import price_for  # noqa: E402
+from milli.ops.scoring import check_case, load_cases  # noqa: E402  (the ONE scorer)
 
 DATASET = load_cases()
 
@@ -60,7 +60,7 @@ def run_one(provider: str, model: str, cases: list[dict], trials: int = 1) -> di
     fail the next (we watched kimi-k3 do exactly that). One trial is a coin
     flip; N trials per case turns the table into a pass RATE. Each trial gets
     a fresh home so no memory leaks between attempts."""
-    from waku.app import Waku
+    from milli.app import Milli
 
     rows, t_run, resolved_model = [], time.perf_counter(), model
     for case in cases:
@@ -69,7 +69,7 @@ def run_one(provider: str, model: str, cases: list[dict], trials: int = 1) -> di
             home = Path(tempfile.mkdtemp(prefix=f"shootout-{provider}-"))
             settings = Settings(provider=provider, model=model, small_model="",
                                 home=home, apple_calendar=False)
-            app = Waku(settings=settings)
+            app = Milli(settings=settings)
             resolved_model = settings.model   # get_client filled the default
             if "setup_fact" in case:
                 app.memory.facts.add(case["setup_fact"]["subject"], case["setup_fact"]["content"])
@@ -127,7 +127,7 @@ def markdown(results: list[dict]) -> str:
 def coding_shootout(runs: list[str], cases: list[dict], trials: int) -> str:
     """Cross-model CODING round: pi runs each contestant's model on each coding
     task, scored by the task's `verify` command (tests pass = 1). Prints a table."""
-    from waku.ops.coding_eval import run_coding_case
+    from milli.ops.coding_eval import run_coding_case
 
     lines = ["| brain | pass rate | avg latency | detail |", "|---|---|---|---|"]
     for spec in runs:
@@ -162,7 +162,7 @@ def main() -> None:
     args = parser.parse_args()
 
     if args.coding:
-        from waku.ops.coding_eval import load_coding_cases, pi_available
+        from milli.ops.coding_eval import load_coding_cases, pi_available
         if not pi_available():
             raise SystemExit("pi isn't installed — the coding battery needs it. "
                              "Install: npm install -g --ignore-scripts @earendil-works/pi-coding-agent")

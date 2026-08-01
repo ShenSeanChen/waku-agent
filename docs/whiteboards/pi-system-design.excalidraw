@@ -1,7 +1,7 @@
 {
   "type": "excalidraw",
   "version": 2,
-  "source": "waku/ops/whiteboard",
+  "source": "milli/ops/whiteboard",
   "elements": [
     {
       "id": "txt-0001",
@@ -496,13 +496,13 @@
       "updated": 1,
       "link": null,
       "locked": false,
-      "text": "\u2191 waku plugs in here",
+      "text": "\u2191 milli plugs in here",
       "fontSize": 16,
       "fontFamily": 5,
       "textAlign": "left",
       "verticalAlign": "top",
       "containerId": null,
-      "originalText": "\u2191 waku plugs in here",
+      "originalText": "\u2191 milli plugs in here",
       "lineHeight": 1.25
     },
     {
@@ -2847,13 +2847,13 @@
       "updated": 1,
       "link": null,
       "locked": false,
-      "text": "waku \u00d7 pi",
+      "text": "milli \u00d7 pi",
       "fontSize": 20,
       "fontFamily": 5,
       "textAlign": "left",
       "verticalAlign": "top",
       "containerId": null,
-      "originalText": "waku \u00d7 pi",
+      "originalText": "milli \u00d7 pi",
       "lineHeight": 1.25
     },
     {
@@ -2882,13 +2882,13 @@
       "updated": 1,
       "link": null,
       "locked": false,
-      "text": "waku \u2192 delegate_task \u2192 pi -p --mode json\nevents \u2192 arena card\ntokens \u2192 usage ledger",
+      "text": "milli \u2192 delegate_task \u2192 pi -p --mode json\nevents \u2192 arena card\ntokens \u2192 usage ledger",
       "fontSize": 16,
       "fontFamily": 5,
       "textAlign": "left",
       "verticalAlign": "top",
       "containerId": null,
-      "originalText": "waku \u2192 delegate_task \u2192 pi -p --mode json\nevents \u2192 arena card\ntokens \u2192 usage ledger",
+      "originalText": "milli \u2192 delegate_task \u2192 pi -p --mode json\nevents \u2192 arena card\ntokens \u2192 usage ledger",
       "lineHeight": 1.25
     },
     {

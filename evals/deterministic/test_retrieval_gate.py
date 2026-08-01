@@ -22,7 +22,7 @@ from types import SimpleNamespace
 import pytest
 
 from evals.helpers import ScriptedClient, response, text_block
-from waku.memory.retrieval_gate import GATE_PROMPT, should_retrieve
+from milli.memory.retrieval_gate import GATE_PROMPT, should_retrieve
 
 
 def gate(reply_text: str):

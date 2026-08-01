@@ -5,7 +5,7 @@ from __future__ import annotations
 import sys
 from types import ModuleType
 
-from waku.tools import calendar
+from milli.tools import calendar
 
 
 def _install_fake_oauth_modules(monkeypatch, *, execute_error: Exception | None = None):

@@ -523,13 +523,13 @@
    "updated": 1752700000000,
    "link": null,
    "locked": false,
-   "text": "same events \u2192 any frontend\n(this is how Waku plugs in: -p)",
+   "text": "same events \u2192 any frontend\n(this is how Milli plugs in: -p)",
    "fontSize": 13,
    "fontFamily": 1,
    "textAlign": "left",
    "verticalAlign": "top",
    "containerId": null,
-   "originalText": "same events \u2192 any frontend\n(this is how Waku plugs in: -p)",
+   "originalText": "same events \u2192 any frontend\n(this is how Milli plugs in: -p)",
    "lineHeight": 1.25,
    "baseline": 13
   },
@@ -1756,7 +1756,7 @@
    "baseline": 14
   },
   {
-   "id": "a-gap-waku1",
+   "id": "a-gap-milli1",
    "type": "arrow",
    "x": 1575,
    "y": 500,
@@ -1800,7 +1800,7 @@
    "endArrowhead": "arrow"
   },
   {
-   "id": "a-gap-waku2",
+   "id": "a-gap-milli2",
    "type": "arrow",
    "x": 1575,
    "y": 545,
@@ -1844,7 +1844,7 @@
    "endArrowhead": "arrow"
   },
   {
-   "id": "op-waku",
+   "id": "op-milli",
    "type": "text",
    "x": 1655,
    "y": 495,
@@ -1869,13 +1869,13 @@
    "updated": 1752700000000,
    "link": null,
    "locked": false,
-   "text": "\u2192 Waku's\n   pillars",
+   "text": "\u2192 Milli's\n   pillars",
    "fontSize": 15,
    "fontFamily": 1,
    "textAlign": "left",
    "verticalAlign": "top",
    "containerId": null,
-   "originalText": "\u2192 Waku's\n   pillars",
+   "originalText": "\u2192 Milli's\n   pillars",
    "lineHeight": 1.25,
    "baseline": 15
   },
@@ -1905,13 +1905,13 @@
    "updated": 1752700000000,
    "link": null,
    "locked": false,
-   "text": "the collab thesis:\nmemory + evals belong to\nthe ORCHESTRATOR (Waku).\ntools belong to the\nSPECIALIST (pi).\n\nso Waku hires pi:\ndelegate_task \u2192 pi -p",
+   "text": "the collab thesis:\nmemory + evals belong to\nthe ORCHESTRATOR (Milli).\ntools belong to the\nSPECIALIST (pi).\n\nso Milli hires pi:\ndelegate_task \u2192 pi -p",
    "fontSize": 15,
    "fontFamily": 1,
    "textAlign": "left",
    "verticalAlign": "top",
    "containerId": null,
-   "originalText": "the collab thesis:\nmemory + evals belong to\nthe ORCHESTRATOR (Waku).\ntools belong to the\nSPECIALIST (pi).\n\nso Waku hires pi:\ndelegate_task \u2192 pi -p",
+   "originalText": "the collab thesis:\nmemory + evals belong to\nthe ORCHESTRATOR (Milli).\ntools belong to the\nSPECIALIST (pi).\n\nso Milli hires pi:\ndelegate_task \u2192 pi -p",
    "lineHeight": 1.25,
    "baseline": 15
   }

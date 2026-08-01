@@ -12,15 +12,15 @@ from types import SimpleNamespace
 
 import pytest
 
-from evals.helpers import ScriptedClient, make_waku, response, text_block, tool_block
-from waku.config import Settings
-from waku.tools import experimental
+from evals.helpers import ScriptedClient, make_milli, response, text_block, tool_block
+from milli.config import Settings
+from milli.tools import experimental
 
 
 @pytest.fixture(autouse=True)
 def _tmp_workspace(tmp_path, monkeypatch):
-    """Never let a delegate test write into the repo's ./waku_workspace."""
-    monkeypatch.setenv("WAKU_WORKSPACE", str(tmp_path / "ws"))
+    """Never let a delegate test write into the repo's ./milli_workspace."""
+    monkeypatch.setenv("MILLI_WORKSPACE", str(tmp_path / "ws"))
 
 
 @pytest.fixture(autouse=True)
@@ -44,8 +44,8 @@ def test_delegate_task_invokes_pi_print_mode(tmp_path, monkeypatch):
     lands in the dated workspace with a MANIFEST + pi transcript, and pi's answer
     comes back in the tool result."""
     record = {}
-    monkeypatch.setenv("WAKU_EXPERIMENTAL", "1")
-    monkeypatch.setenv("WAKU_WORKSPACE", str(tmp_path / "ws"))   # keep it out of the repo
+    monkeypatch.setenv("MILLI_EXPERIMENTAL", "1")
+    monkeypatch.setenv("MILLI_WORKSPACE", str(tmp_path / "ws"))   # keep it out of the repo
     monkeypatch.setattr(experimental.shutil, "which", lambda _: "/fake/bin/pi")
     monkeypatch.setattr(experimental.subprocess, "run", fake_run(record))
 
@@ -54,7 +54,7 @@ def test_delegate_task_invokes_pi_print_mode(tmp_path, monkeypatch):
         response([tool_block("delegate_task", {"task": "create hello.py"})], "tool_use"),
         response([text_block("pi handled it.")]),
     ]
-    app = make_waku(tmp_path / "home", client=ScriptedClient(script))
+    app = make_milli(tmp_path / "home", client=ScriptedClient(script))
     result = app.respond("have pi create hello.py")
 
     assert [c["tool"] for c in result.tool_calls] == ["delegate_task"]
@@ -103,7 +103,7 @@ def test_delegate_timeout_is_honest(tmp_path, monkeypatch):
     monkeypatch.setattr(experimental.subprocess, "run", run)
     tool = experimental.make_delegate_tool(Settings(home=tmp_path))
     out = tool.fn(task="huge refactor", timeout_seconds=7)
-    assert "7s" in out and "WAKU_DELEGATE_TIMEOUT" in out
+    assert "7s" in out and "MILLI_DELEGATE_TIMEOUT" in out
 
 
 def test_delegate_rejects_missing_cwd_and_empty_task(tmp_path, monkeypatch):
@@ -199,16 +199,16 @@ def test_delegate_kills_a_silent_pi_at_the_deadline(tmp_path, monkeypatch):
 
     tool = experimental.make_delegate_tool(Settings(home=tmp_path / "home"))
     out = tool.fn(task="anything", timeout_seconds=2)
-    assert "2s" in out and "WAKU_DELEGATE_TIMEOUT" in out
+    assert "2s" in out and "MILLI_DELEGATE_TIMEOUT" in out
 
 
 def test_experimental_flag_gates_registration(tmp_path, monkeypatch):
     """The demo depends on this: flag off → no delegate_task; flag on → present."""
-    monkeypatch.delenv("WAKU_EXPERIMENTAL", raising=False)
-    app_off = make_waku(tmp_path / "off", client=ScriptedClient([]))
+    monkeypatch.delenv("MILLI_EXPERIMENTAL", raising=False)
+    app_off = make_milli(tmp_path / "off", client=ScriptedClient([]))
     assert "delegate_task" not in app_off.tools._tools
 
-    monkeypatch.setenv("WAKU_EXPERIMENTAL", "1")
-    app_on = make_waku(tmp_path / "on", client=ScriptedClient([]))
+    monkeypatch.setenv("MILLI_EXPERIMENTAL", "1")
+    app_on = make_milli(tmp_path / "on", client=ScriptedClient([]))
     assert "delegate_task" in app_on.tools._tools
     assert "run_command" in app_on.tools._tools   # skeletons still registered

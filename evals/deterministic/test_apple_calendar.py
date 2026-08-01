@@ -1,7 +1,7 @@
 """Apple Calendar AppleScript generation is pure string logic — evaluable
 offline without ever touching the real Calendar app."""
 
-from waku.tools.calendar import _applescript_date, sync_to_apple_calendar
+from milli.tools.calendar import _applescript_date, sync_to_apple_calendar
 
 
 def test_date_sets_day_first_to_avoid_overflow():
@@ -29,7 +29,7 @@ def test_create_event_handles_empty_call_gracefully():
     # TypeError. The tool must return a helpful message instead of crashing.
     import sqlite3
 
-    from waku.tools.calendar import make_tool
+    from milli.tools.calendar import make_tool
 
     conn = sqlite3.connect(":memory:")
     conn.executescript(

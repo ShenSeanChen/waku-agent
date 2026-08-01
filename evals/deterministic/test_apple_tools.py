@@ -8,7 +8,7 @@ and one of its cases did nothing at all on macOS —
     # on macOS we can't run osascript in CI, but the escaping is in the string
     # build; covered by the pure date test above + manual verification
 
-"manual verification on the dev machine" is not a test. So waku advertised four
+"manual verification on the dev machine" is not a test. So milli advertised four
 Apple tools, and three of them did not work.
 
 CI has no Calendar.app, so we still cannot assert "reading really works". What we
@@ -30,7 +30,7 @@ import sys
 
 import pytest
 
-from waku.tools import apple
+from milli.tools import apple
 
 # _osa short-circuits with "Apple tools are macOS-only" before it ever spawns
 # osascript, so the timeout and refusal cases can only be observed on a Mac.
@@ -103,10 +103,10 @@ def test_calendar_refuses_rather_than_enumerating_everything(monkeypatch):
     """A typical Mac has 30+ calendars once holidays and subscriptions pile up;
     reading them all takes minutes. Refusing with instructions beats a two-minute
     silence followed by a timeout."""
-    monkeypatch.setenv("WAKU_APPLE_CALENDARS", "")
+    monkeypatch.setenv("MILLI_APPLE_CALENDARS", "")
     apple._cache.clear()
     out = apple.read_apple_calendar(1)
-    assert "WAKU_APPLE_CALENDARS" in out
+    assert "MILLI_APPLE_CALENDARS" in out
     assert "name of every calendar" in out, "must tell the user how to find the names"
 
 

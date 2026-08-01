@@ -1,7 +1,7 @@
 # Agent Graphs — system design
 
 Status: phases 1–3 SHIPPED (engine + triage graph workflow behind
-`WAKU_GRAPH_WORKFLOWS` + dashboard Graph tab). The content workflow (§4.2) and the
+`MILLI_GRAPH_WORKFLOWS` + dashboard Graph tab). The content workflow (§4.2) and the
 AutoManus port (§5) remain future work. Two shipped deviations from this doc:
 triage has no `search_memory` fan-out node (the full path's retrieval gate already
 covers it — a parallel prefetch would double-retrieve), and a `gather` fan-in node
@@ -10,7 +10,7 @@ Scope: a fifth pillar candidate — **Graph** — sitting beside Harness, Loop, 
 
 ## 1. What we're adding and why
 
-`waku/loop/agent.py` is one agent turn: a while-loop where the model picks tools until
+`milli/loop/agent.py` is one agent turn: a while-loop where the model picks tools until
 it stops. That covers every conversational task. What it cannot express:
 
 - **Parallel work** — three research calls that could run at once run one after another.
@@ -31,7 +31,7 @@ eval it, and explain it on a whiteboard.
 
 ## 2. Decision: no LangGraph
 
-Build a small engine in-repo. Reasons, in Waku terms:
+Build a small engine in-repo. Reasons, in Milli terms:
 
 1. **No new dependencies** rule — core stays stdlib + anthropic/openai.
 2. The teaching bar: "each pillar legible on its own." A ~200-line engine you can read
@@ -43,10 +43,10 @@ Build a small engine in-repo. Reasons, in Waku terms:
 Revisit only if graphs become the center of gravity (checkpointing/resume across
 processes, distributed nodes). Not now.
 
-## 3. The engine — `waku/graph/`
+## 3. The engine — `milli/graph/`
 
 ```
-waku/graph/
+milli/graph/
   engine.py       # Graph, Node, run_graph — the whole mechanism, one file
   nodes.py        # node factories: llm_node, tool_node, agent_node, router helpers
   workflows/      # one file per real workflow (triage.py, content.py, ...)
@@ -128,7 +128,7 @@ the dashboard gets a graph timeline view later without touching the engine.
 
 Gate rule unchanged: `make gate` before any push; live bug → fix + regression case.
 
-## 4. Workflows in Waku (use cases 2 & 3)
+## 4. Workflows in Milli (use cases 2 & 3)
 
 ### 4.1 `workflows/triage.py` — inbound message triage (phase 2)
 

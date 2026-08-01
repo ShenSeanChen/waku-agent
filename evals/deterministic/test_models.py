@@ -1,7 +1,7 @@
 from types import SimpleNamespace
 
-from waku.config import Settings
-from waku.loop import models
+from milli.config import Settings
+from milli.loop import models
 
 
 def test_xai_grok_provider_uses_expected_key_endpoint_and_models(monkeypatch, tmp_path):
@@ -28,7 +28,7 @@ def test_openai_default_is_tool_capable(tmp_path):
     """Regression: bare 'gpt-5.6' isn't callable, and the gpt-5.6 REASONING
     variants (luna/sol/terra) can't use function tools on /v1/chat/completions
     (they 400). The default must be a NON-reasoning, tool-capable chat model."""
-    from waku.loop.models import PROVIDERS
+    from milli.loop.models import PROVIDERS
     assert PROVIDERS["openai"].model == "gpt-5.3-chat-latest"
     assert PROVIDERS["openai"].default_pair() == ["gpt-5.3-chat-latest", "gpt-4.1-mini"]
 
@@ -38,7 +38,7 @@ def test_gemini_thought_signature_round_trips():
     REQUIRE it echoed back next turn, or the follow-up 400s. The OpenAI-compat
     adapter must capture it on parse (_create) and put it back on serialize
     (_to_openai). Verified end-to-end without a network call."""
-    from waku.loop.models import OpenAICompatClient
+    from milli.loop.models import OpenAICompatClient
 
     client = OpenAICompatClient.__new__(OpenAICompatClient)   # skip __init__ (no network)
     sig = {"google": {"thought_signature": "ABC123"}}

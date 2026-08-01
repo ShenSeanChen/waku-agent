@@ -9,8 +9,8 @@ from __future__ import annotations
 
 import json
 
-from evals.helpers import ScriptedClient, make_waku
-from waku.ops.dashboard import _thread_history, session_action
+from evals.helpers import ScriptedClient, make_milli
+from milli.ops.dashboard import _thread_history, session_action
 
 
 def _seed(app, session_id, user, assistant):
@@ -23,8 +23,8 @@ def _seed(app, session_id, user, assistant):
 
 
 def test_all_history_returns_every_thread(tmp_path, monkeypatch):
-    monkeypatch.setenv("WAKU_HOME", str(tmp_path / "home"))
-    app = make_waku(tmp_path / "home", client=ScriptedClient([]))
+    monkeypatch.setenv("MILLI_HOME", str(tmp_path / "home"))
+    app = make_milli(tmp_path / "home", client=ScriptedClient([]))
     _seed(app, "dashboard-a", "hi from A", "reply A")
     _seed(app, "dashboard-b", "hi from B", "reply B")
 
@@ -35,8 +35,8 @@ def test_all_history_returns_every_thread(tmp_path, monkeypatch):
 
 
 def test_single_thread_history_is_scoped(tmp_path, monkeypatch):
-    monkeypatch.setenv("WAKU_HOME", str(tmp_path / "home"))
-    app = make_waku(tmp_path / "home", client=ScriptedClient([]))
+    monkeypatch.setenv("MILLI_HOME", str(tmp_path / "home"))
+    app = make_milli(tmp_path / "home", client=ScriptedClient([]))
     _seed(app, "dashboard-a", "hi from A", "reply A")
     _seed(app, "dashboard-b", "hi from B", "reply B")
 
@@ -48,8 +48,8 @@ def test_thread_history_includes_meta(tmp_path, monkeypatch):
     """Regression: switching threads showed only text because that path dropped
     meta. Both the switch and history paths now go through _thread_history, which
     must carry the per-turn meta (gate/stats/tools/model) so cards render full."""
-    monkeypatch.setenv("WAKU_HOME", str(tmp_path / "home"))
-    app = make_waku(tmp_path / "home", client=ScriptedClient([]))
+    monkeypatch.setenv("MILLI_HOME", str(tmp_path / "home"))
+    app = make_milli(tmp_path / "home", client=ScriptedClient([]))
     meta = {"gate": {"decision": "skip"}, "iterations": 1, "latency_ms": 2400,
             "tools": [], "model": "gemini-3.5-flash"}
     app.conn.execute("INSERT INTO chat_log (role, content, session_id, source) VALUES ('user','hi','t','dashboard')")
