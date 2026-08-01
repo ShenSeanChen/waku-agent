@@ -75,6 +75,13 @@ function graphSVG(wf, opts = {}){
   </svg></div>`;
 }
 
+// Which workflow is running RIGHT NOW, set by graph_start and cleared by
+// graph_end. The Overview panel used to read the last COMPLETED run, so during
+// a gather it still showed triage — and since animateGraphStage only lights a
+// chart that is on screen, nothing lit up either. One wrong chart caused both
+// bugs: you saw the old shape, and you saw it stay dark.
+let GRAPH_LIVE = null;
+
 // --- the compact Overview panel: the harness auto-decides, this reflects it.
 function graphPanel(d){
   const g = d.graph || {enabled: false, workflows: [], runs: [], stats: {quick: 0, full: 0}};
@@ -83,8 +90,11 @@ function graphPanel(d){
   // most recently RAN, from the trace. Pinning it to workflows[0] meant Overview
   // showed triage forever, seconds after a gather, which is why the panel read
   // as leftovers rather than as news.
+  // A run in flight wins over the last finished one — during a gather you want
+  // to watch the gather, not read about the triage that came before it.
+  const showing = GRAPH_LIVE || ((g.runs || [])[0] || {}).workflow;
   const last = (g.runs || [])[0];
-  const wf = (g.workflows || []).find(w => w && w.name === (last || {}).workflow)
+  const wf = (g.workflows || []).find(w => w && w.name === showing)
              || (g.workflows || [])[0];
   const tot = g.stats.quick + g.stats.full;
   const seg = (cls, n, label, pct) =>
@@ -105,7 +115,9 @@ function graphPanel(d){
       <a class="reveal" onclick="location.hash='settings'">Settings</a> to triage each message first.
       Workflows you run yourself, like <code>make gather</code>, do not need the flag —
       <a class="reveal" onclick="location.hash='graph'">see them here</a>.</div></div>`;
-  const when = last
+  const when = GRAPH_LIVE
+    ? `<span class="live-dot"></span><b>${esc(GRAPH_LIVE)}</b> running now`
+    : last
     ? `last run: <b>${esc(last.workflow || "")}</b>${last.ms ? ` · ${(last.ms/1000).toFixed(1)}s` : ""}${
         last.steps ? ` · ${last.steps} nodes` : ""}`
     : "live — nodes light up as a turn flows through";
@@ -124,15 +136,44 @@ function animateGraphStage(ev){
   // Every graph event carries `workflow`, so the ids can be scoped to the chart
   // that is actually running instead of lighting every chart on the page.
   const w = ev.workflow || "";
-  if (ev.type === "graph_start"){ status(`${w} starts`); hot(`[data-node="g-${w}-START"]`, "hot", 1000); }
-  else if (ev.type === "node_start") status(`${w} · ${ev.node}`);
-  else if (ev.type === "node_end") hot(`[data-node="g-${w}-${ev.node}"]`, "hot", 1000);
+  if (ev.type === "graph_start"){
+    // Swap the Overview chart to this workflow before anything runs, so the
+    // nodes about to light up are the ones on screen.
+    graphLive(w);
+    status(`${w} starts`);
+    hot(`[data-node="g-${w}-START"]`, "hot", 1000);
+  }
+  else if (ev.type === "node_start"){
+    status(`${w} · ${ev.node}`);
+    // Held, not pulsed: a node is lit for as long as it is WORKING. Pulsing on
+    // node_end only ever showed you what had already finished, which is the
+    // opposite of watching it happen — and with four nodes in one wave it is
+    // the difference between seeing a fan-out and seeing four blinks.
+    document.querySelectorAll(`[data-node="g-${w}-${ev.node}"]`)
+      .forEach(el => el.classList.add("hot"));
+  }
+  else if (ev.type === "node_end"){
+    document.querySelectorAll(`[data-node="g-${w}-${ev.node}"]`)
+      .forEach(el => el.classList.remove("hot"));
+    hot(`[data-node="g-${w}-${ev.node}"]`, "done", 900);
+  }
   else if (ev.type === "route"){
     status(`route → ${ev.target}`);
     hot(`[data-edge="g-${w}-${ev.router}-${ev.target}"]`, "live", 1400);
     hot(`[data-node="g-${w}-${ev.target}"]`, "hot", 1400);
   }
-  else if (ev.type === "graph_end") hot(`[data-node="g-${w}-END"]`, "hot", 1000);
+  else if (ev.type === "graph_end"){
+    hot(`[data-node="g-${w}-END"]`, "hot", 1000);
+    graphLive(null);
+  }
+}
+
+// Setting the live workflow re-renders, so the panel swaps the moment a run
+// starts rather than at the next poll.
+function graphLive(name){
+  if (GRAPH_LIVE === name) return;
+  GRAPH_LIVE = name;
+  if (typeof render === "function") render();
 }
 
 // ---------------------------------------------------------------------------

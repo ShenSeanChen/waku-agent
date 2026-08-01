@@ -114,7 +114,13 @@ def run(name: str, emit, arg: str = "") -> dict | None:
     fn = getattr(importlib.import_module(module_name), fn_name)
     if "message" in inspect.signature(fn).parameters:
         return fn(observer=emit, message=arg)
-    return fn(observer=emit)
+    state = fn(observer=emit)
+    if arg and isinstance(state, dict):
+        # Silently swallowing input is worse than not accepting it: `/gather
+        # what's up with the repo` looked like it had been understood, and the
+        # digest that came back was the same one it always produces.
+        state["ignored_argument"] = arg
+    return state
 
 
 def unknown_reply(name: str) -> str:

@@ -187,6 +187,10 @@ def _run_command(command: tuple[str, str], emit) -> None:
                       "iterations": 0, "latency_ms": 0, "gate": None})
         return
     reply = state.get("digest") or "(the workflow produced no text)"
+    if state.get("ignored_argument"):
+        reply = (f"*`/{name}` takes no input, so \u201c{state['ignored_argument']}\u201d "
+                 f"was not used — a fixed shape always fetches the same sources. "
+                 f"Ask a normal question to use the loop instead.*\n\n") + reply
     if state.get("draft_path"):
         reply += f"\n\n*saved to `{state['draft_path']}`*"
     for node, err in (state.get("errors") or {}).items():

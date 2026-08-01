@@ -131,6 +131,12 @@ function syncChatLogs(){
 
 // One streamed harness event updates the live card in place.
 function applyStreamEvent(pending, ev){
+  // Graph events arrive here too when a workflow is called from the chat box.
+  // The trace poller animates the chart either way, but it runs every 450ms
+  // and stages play on a 620ms stagger — going straight to graphLive() means
+  // the Overview panel swaps to the running workflow the moment you hit send.
+  if (ev.kind === "graph_start" && typeof graphLive === "function") graphLive(ev.workflow);
+  else if (ev.kind === "graph_end" && typeof graphLive === "function") graphLive(null);
   if (ev.kind === "gate") pending.gate = {decision: ev.decision, reason: ev.reason};
   else if (ev.kind === "route")
     pending.graph = {route: ev.target === "quick_reply" ? "quick" : "full",

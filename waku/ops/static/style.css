@@ -144,6 +144,10 @@
      drop-shadow(var()) is unreliable on SVG, so we light the fill instead. */
   .arch .bx{transition:stroke .15s ease, fill .15s ease, stroke-width .15s ease}
   .arch .node.hot .bx{stroke:var(--accent) !important;stroke-width:2.6;fill:var(--accent-soft) !important}
+  /* A node holds .hot for as long as it is WORKING, then flashes .done. Held
+     rather than pulsed because four nodes in one wave lit together is the
+     thing worth seeing, and a pulse on completion shows the opposite. */
+  .arch .node.done .bx{stroke:var(--good) !important;stroke-width:2.2;fill:var(--good-soft) !important}
   .arch .gate{transition:stroke .15s ease, stroke-width .15s ease}
   .arch .gate.hot{stroke:var(--accent) !important;stroke-width:4}
   .arch .flow.live{stroke:var(--accent) !important;stroke-width:2.6;opacity:1;stroke-dasharray:6 5;
