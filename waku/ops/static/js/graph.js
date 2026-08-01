@@ -81,6 +81,13 @@ function graphSVG(wf, opts = {}){
 // chart that is on screen, nothing lit up either. One wrong chart caused both
 // bugs: you saw the old shape, and you saw it stay dark.
 let GRAPH_LIVE = null;
+// The workflow to keep showing once a run ENDS. Without it the panel fell back
+// to d.graph.runs[0] the instant graph_end fired — and that payload is only
+// refreshed by the /api/data poll, so for one beat it still named the PREVIOUS
+// run. Observed as: swap to gather, flick back to triage, then back to gather
+// when the poll caught up. Remembering locally means the panel never shows a
+// workflow older than the one it just watched.
+let GRAPH_SHOWN = null;
 
 // --- the compact Overview panel: the harness auto-decides, this reflects it.
 function graphPanel(d){
@@ -92,7 +99,7 @@ function graphPanel(d){
   // as leftovers rather than as news.
   // A run in flight wins over the last finished one — during a gather you want
   // to watch the gather, not read about the triage that came before it.
-  const showing = GRAPH_LIVE || ((g.runs || [])[0] || {}).workflow;
+  const showing = GRAPH_LIVE || GRAPH_SHOWN || ((g.runs || [])[0] || {}).workflow;
   const last = (g.runs || [])[0];
   const wf = (g.workflows || []).find(w => w && w.name === showing)
              || (g.workflows || [])[0];
@@ -172,6 +179,7 @@ function animateGraphStage(ev){
 // starts rather than at the next poll.
 function graphLive(name){
   if (GRAPH_LIVE === name) return;
+  if (name) GRAPH_SHOWN = name;   // sticky: outlives the run, so no flick-back
   GRAPH_LIVE = name;
   if (typeof render === "function") render();
 }

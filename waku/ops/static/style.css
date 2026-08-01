@@ -337,6 +337,11 @@
   .cmp-stats{display:flex;flex-wrap:wrap;gap:5px;align-items:center}
   .chip{font-size:11px;color:var(--ink2);border:1px solid var(--line2);border-radius:99px;padding:1px 8px}
   .chip.money{color:var(--good);border-color:var(--good)}
+  /* A graph node's chip while it WORKS, and after. Several .live at once is
+     the fan-out made visible in the chat card — the pending state used to say
+     only "thinking…" for the whole thirteen seconds of a gather. */
+  .chip.live{color:var(--accent);border-color:var(--accent);background:var(--accent-soft)}
+  .chip.err{color:var(--bad);border-color:var(--bad)}
   .chip.sorted{color:var(--accent);border-color:var(--accent);background:var(--accent-soft);font-weight:600}
   .cmp-reply{margin-top:2px;font-size:13px;max-height:340px;overflow-y:auto}
   .cmp-race{padding:5px 14px;font-size:12.5px}
