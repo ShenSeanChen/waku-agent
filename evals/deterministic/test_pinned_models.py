@@ -183,6 +183,8 @@ def test_list_models_honors_provider_override(home, monkeypatch):
 
     from waku.loop.models import PROVIDERS
 
+    monkeypatch.delenv("MOONSHOT_BASE_URL", raising=False)
+    monkeypatch.delenv("WAKU_BASE_URL", raising=False)
     url = PROVIDERS["kimi"].catalog_url
     # cache tuple is (ts, models, error) — None error means a real listing
     monkeypatch.setattr(catalog, "_models_cache", {url: (time.time(), [{"id": "kimi-k3"}], None)})

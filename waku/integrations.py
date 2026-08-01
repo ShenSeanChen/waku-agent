@@ -52,6 +52,7 @@ class EnvField:
     options: tuple[str, ...] = ()
     placeholder: str = ""
     help: str = ""
+    option_labels: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -89,6 +90,7 @@ class FieldView:
     options: tuple[str, ...] = ()
     value: str = ""
     help: str = ""
+    option_labels: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -192,9 +194,15 @@ INTEGRATIONS: tuple[Integration, ...] = (
 
 
 def _integration_from_provider(name: str, provider: Provider) -> Integration:
+    fields = (EnvField(provider.key_env, "API Key", secret=True),)
+    if provider.base_url_env and provider.endpoints:
+        fields += (EnvField(provider.base_url_env, "Base URL", FieldKind.CHOICE,
+                            default=provider.base_url or "",
+                            options=tuple(endpoint.base_url for endpoint in provider.endpoints),
+                            option_labels=tuple(endpoint.label for endpoint in provider.endpoints)),)
     return Integration(name, "AI Providers", name.replace("_", " ").title(),
                        f"Uses {name.replace('_', ' ').title()} models.",
-                       (EnvField(provider.key_env, "API Key", secret=True),), None, None, "",
+                       fields, None, None, "",
                        ReloadMode.AGENT, lambda env, key=provider.key_env: bool(env.get(key)), _provider_probe)
 
 
@@ -316,7 +324,8 @@ def list_integrations() -> tuple[IntegrationView, ...]:
             FieldView(field.name, field.label, field.kind, field.required, field.secret,
                       _configured(field, env.get(field.name, "")),
                       env.get(field.name, "")[-4:] if field.secret else "",
-                      field.options, "" if field.secret else env.get(field.name, field.default), field.help)
+                      field.options, "" if field.secret else env.get(field.name, field.default), field.help,
+                      field.option_labels)
             for field in integration.env
         )
         views.append(IntegrationView(integration.key, integration.group, integration.name, integration.what,
@@ -427,7 +436,9 @@ def _provider_probe(values: Mapping[str, str]) -> None:
     provider = next((name for name, item in PROVIDERS.items() if item.key_env in values), "")
     if not provider:
         return
-    result = catalog.list_models(provider)
+    # A Save must validate the candidate key/endpoint, never a cached result
+    # produced by a previous credential for the same URL.
+    result = catalog.list_models(provider, use_cache=False)
     if result.get("error"):
         raise ValueError(result["error"])
 
@@ -572,61 +583,105 @@ def test_integration(key: str) -> IntegrationView:
 
 def apply_provider(provider: str, *, key: str | None = None, model: str | None = None,
                    small_model: str | None = None, base_url: str | None = None,
-                   custom_key: str | None = None, force: bool = False) -> ApplyResult:
-    """Apply global provider fields without carrying models across providers."""
+                   custom_key: str | None = None, force: bool = False,
+                   activate: bool = True) -> ApplyResult:
+    """Save provider fields and optionally make that provider active."""
     if provider not in PROVIDERS:
         return ApplyResult(False, error="unknown provider")
     from waku.ops import browser_agent, catalog
 
     previous = os.environ.get("WAKU_PROVIDER", "")
     selected = PROVIDERS[provider]
-    updates: dict[str, str] = {"WAKU_PROVIDER": provider}
+    switching = activate and provider != previous
+    updates: dict[str, str] = {"WAKU_PROVIDER": provider} if activate else {}
     if model is not None:
         updates["WAKU_MODEL"] = model
-    elif provider != previous:
+    elif switching:
         updates["WAKU_MODEL"] = catalog.default_model_for(provider)
     if small_model is not None:
         updates["WAKU_SMALL_MODEL"] = small_model
-    elif provider != previous:
+    elif switching:
         updates["WAKU_SMALL_MODEL"] = ""
     if key:
         updates[selected.key_env] = key
-    if base_url is not None:
+    # Regional providers own their endpoint choice.  Keeping it beside that
+    # provider's key prevents a MiniMax URL, for example, from leaking into Kimi
+    # after a switch.  A legacy WAKU_BASE_URL for the current provider is
+    # migrated the next time its endpoint is saved.
+    if selected.base_url_env and (base_url is not None or switching):
+        legacy = os.environ.get("WAKU_BASE_URL", "") if provider == previous else ""
+        selected_base_url = (base_url or legacy or selected.configured_base_url() or "").strip()
+        if selected_base_url:
+            updates[selected.base_url_env] = selected_base_url
+        updates["WAKU_BASE_URL"] = ""
+    elif base_url is not None:
         updates["WAKU_BASE_URL"] = base_url
     if custom_key is not None:
         updates["WAKU_API_KEY"] = custom_key
+    # The modal always submits its selected Base URL.  Compare effective values
+    # rather than field presence so reopening and saving an unchanged provider
+    # does not perform a synchronous network probe every time.
+    current_key = os.environ.get(selected.key_env, "")
+    legacy_base_url = os.environ.get("WAKU_BASE_URL", "") if provider == previous else ""
+    current_base_url = legacy_base_url or selected.configured_base_url() or ""
+    candidate_base_url = (
+        updates.get(selected.base_url_env, current_base_url)
+        if selected.base_url_env else updates.get("WAKU_BASE_URL", current_base_url)
+    )
+    key_changed = bool(key and key != current_key)
+    base_url_changed = (
+        base_url is not None
+        and candidate_base_url.rstrip("/") != current_base_url.rstrip("/")
+    )
+    changed_updates = {
+        name: value for name, value in updates.items()
+        if (os.environ.get(name) or "") != value
+    }
     path = _env_path()
     contents = path.read_text(encoding="utf-8") if path.exists() else None
-    before = {name: os.environ.get(name) for name in updates}
+    before = {name: os.environ.get(name) for name in changed_updates}
     try:
         # Validate a newly supplied key before persisting it.  catalog's probe
         # intentionally reads environment variables, so expose only the
         # candidate values for the duration of this non-writing request.
-        if key and not force:
-            probe_before = {"WAKU_PROVIDER": os.environ.get("WAKU_PROVIDER"),
-                            selected.key_env: os.environ.get(selected.key_env)}
+        candidate_key = key or os.environ.get(selected.key_env, "")
+        if candidate_key and (key_changed or base_url_changed) and not force:
+            probe_names = {"WAKU_PROVIDER", selected.key_env}
+            if selected.base_url_env:
+                probe_names.update({selected.base_url_env, "WAKU_BASE_URL"})
+            probe_before = {name: os.environ.get(name) for name in probe_names}
             os.environ["WAKU_PROVIDER"] = provider
-            os.environ[selected.key_env] = key
+            os.environ[selected.key_env] = candidate_key
+            if selected.base_url_env and selected.base_url_env in updates:
+                os.environ[selected.base_url_env] = updates[selected.base_url_env]
+                os.environ["WAKU_BASE_URL"] = ""
+            elif base_url is not None:
+                os.environ["WAKU_BASE_URL"] = base_url
             try:
-                _provider_probe({selected.key_env: key})
+                _provider_probe({selected.key_env: candidate_key})
             finally:
                 for name, old in probe_before.items():
                     if old is None:
                         os.environ.pop(name, None)
                     else:
                         os.environ[name] = old
-        _write_updates(updates, ())
-        if error := browser_agent.rebuild():
-            raise RuntimeError(error)
-        browser_agent.current().tracer.event("config", {"from": {"provider": previous},
-                                                         "to": {"provider": provider}})
+        if changed_updates:
+            _write_updates(changed_updates, ())
+        affects_active_agent = bool(changed_updates) and (provider == previous or activate)
+        if affects_active_agent and browser_agent.current() is not None:
+            if error := browser_agent.rebuild():
+                raise RuntimeError(error)
+            current_agent = browser_agent.current()
+            if current_agent is not None:
+                current_agent.tracer.event("config", {"from": {"provider": previous},
+                                                       "to": {"provider": provider}})
         status = (IntegrationStatus(IntegrationState.ERROR, "Saved without a successful test")
                   if force else IntegrationStatus(IntegrationState.CONNECTED))
         record_health(provider, status)
     except Exception as exc:
         _restore(path, contents, before)
-        result = _safe_error(exc, updates, _find_integration(provider) or provider_integrations()[0])
-        return ApplyResult(False, error=result, can_force=bool(key))
+        result = _safe_error(exc, changed_updates, _find_integration(provider) or provider_integrations()[0])
+        return ApplyResult(False, error=result, can_force=bool(key or os.environ.get(selected.key_env)))
     return ApplyResult(True, _current_view(provider))
 
 

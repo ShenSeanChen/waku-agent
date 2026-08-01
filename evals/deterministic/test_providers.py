@@ -121,6 +121,8 @@ def test_catalog_url_is_used_with_both_auth_styles(monkeypatch):
 
     monkeypatch.setenv("WAKU_PROVIDER", "kimi")
     monkeypatch.setenv("MOONSHOT_API_KEY", "fake-key-for-tests")
+    monkeypatch.delenv("MOONSHOT_BASE_URL", raising=False)
+    monkeypatch.delenv("WAKU_BASE_URL", raising=False)
     monkeypatch.delenv("WAKU_MODEL", raising=False)
     monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
     catalog._models_cache.clear()

@@ -1,0 +1,91 @@
+<h2>Model edit modal：三种下拉/选择方案</h2>
+<p class="subtitle">请选一种你觉得最合适的交互方式。Server 已返回 model 列表。</p>
+
+<div class="cards">
+  <div class="card" data-choice="native-select" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div class="mockup">
+        <div class="mockup-header">A. 原生 &lt;select&gt; 下拉</div>
+        <div class="mockup-body">
+          <label class="label">Main model</label>
+          <select class="mock-input" style="width:100%">
+            <option>deepseek-v4-pro</option>
+            <option>deepseek-v4-lite</option>
+            <option>deepseek-v3</option>
+          </select>
+          <label class="label">Gate / summary model</label>
+          <select class="mock-input" style="width:100%">
+            <option>deepseek-v4-pro</option>
+            <option>deepseek-v4-lite</option>
+          </select>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>A. 原生 &lt;select&gt;</h3>
+      <p>直接用浏览器原生下拉框，实现最简单，打开即展示全部模型。</p>
+      <div class="pros-cons">
+        <div class="pros"><ul><li>代码最少、无障碍支持最好</li><li>对短列表非常直观</li></ul></div>
+        <div class="cons"><ul><li>OpenRouter 等长列表难以快速定位</li><li>不能按名称搜索</li></ul></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card" data-choice="searchable-dropdown" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div class="mockup">
+        <div class="mockup-header">B. 可搜索下拉框</div>
+        <div class="mockup-body">
+          <label class="label">Main model</label>
+          <div class="mock-input" style="display:flex;justify-content:space-between;align-items:center">
+            <span>deepseek-v4-pro</span>
+            <span>▾</span>
+          </div>
+          <div style="border:1px solid #ccc;border-radius:4px;max-height:120px;overflow:auto;margin-top:4px;padding:4px;background:#fff">
+            <div style="padding:4px;border-bottom:1px solid #eee"><input placeholder="search models..." style="width:100%;border:none;outline:none"></div>
+            <div style="padding:4px">deepseek-v4-pro</div>
+            <div style="padding:4px;background:#f0f0f0">deepseek-v4-lite</div>
+            <div style="padding:4px">deepseek-v3</div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>B. 可搜索下拉框 (Recommended)</h3>
+      <p>一个可点击展开、支持实时过滤的自定义列表，兼顾短列表和长列表。</p>
+      <div class="pros-cons">
+        <div class="pros"><ul><li>OpenRouter 几百个模型也能快速定位</li><li>保留“手动输入”能力（不在列表里也能填）</li></ul></div>
+        <div class="cons"><ul><li>需要少量 JS 和点击外部关闭逻辑</li><li>略复杂于原生 select</li></ul></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card" data-choice="grouped-metadata" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div class="mockup">
+        <div class="mockup-header">C. 分组 + 元信息</div>
+        <div class="mockup-body">
+          <label class="label">Main model</label>
+          <div class="mock-input" style="display:flex;justify-content:space-between"><span>deepseek-v4-pro</span><span>▾</span></div>
+          <div style="border:1px solid #ccc;border-radius:4px;max-height:140px;overflow:auto;margin-top:4px;padding:4px;background:#fff;font-size:12px">
+            <div style="padding:2px;color:#666;font-weight:bold">Tool-capable</div>
+            <div style="padding:4px">deepseek-v4-pro <span class="srcpill" style="font-size:10px">tools</span></div>
+            <div style="padding:4px">deepseek-v4-lite <span class="srcpill" style="font-size:10px">tools</span></div>
+            <div style="padding:2px;color:#666;font-weight:bold;margin-top:4px">Other</div>
+            <div style="padding:4px">deepseek-v3</div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>C. 分组 + 元信息标签</h3>
+      <p>在 B 的基础上，按 tool/reasoning 等元信息分组并打标签。</p>
+      <div class="pros-cons">
+        <div class="pros"><ul><li>帮助用户选对 loop/gate 模型</li><li>信息密度高</li></ul></div>
+        <div class="cons"><ul><li>不是所有 provider 都返回元信息</li><li>前端实现最重</li></ul></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<p class="subtitle">点击上面的卡片做出选择，然后在终端告诉我你的想法。</p>

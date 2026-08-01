@@ -275,6 +275,8 @@ function openProviderModal(provider){
   if (!p) return;
   const current = provider === st.provider;
   const f = (p.fields || [])[0] || {};
+  const baseField = (p.fields || []).find(field => field.name.endsWith("_BASE_URL"));
+  const selectedBaseUrl = current && st.base_url ? st.base_url : (baseField?.value || "");
   const root = document.getElementById("prov-modal-root");
   root.innerHTML = `<div class="provmodal-back" onclick="closeProviderModal()">
     <div class="provmodal${current ? " provmodal-models" : ""}" onclick="event.stopPropagation()">
@@ -284,12 +286,19 @@ function openProviderModal(provider){
         ${f.configured ? `<span class="srcpill" style="background:var(--good-soft);color:var(--good)">set ····${esc(f.last4 || "")}</span>`
                        : `<span class="srcpill apple">not set</span>`}</span>
         <input type="password" id="pm-key" placeholder="${f.configured ? "key on file — blank keeps it" : "paste key"}"></label>
+      ${baseField ? `<label class="fld"><span>Base URL <span class="meta">(select the API key's region)</span></span>
+        <select id="pm-base-url" onfocus="markEditing()">
+          ${(baseField.options || []).map((url, index) => {
+            const label = (baseField.option_labels || [])[index];
+            return `<option value="${escAttr(url)}" ${url===selectedBaseUrl?"selected":""}>${label?esc(label)+" — ":""}${esc(url)}</option>`;
+          }).join("")}
+        </select></label>` : ""}
       ${current ? `
       ${renderModelPicker("pm-model", "Main model (runs the loop; needs tool calling)", st.model || "")}
       ${renderModelPicker("pm-small-model", "Gate / summary model", st.small_model || "")}` : ""}
       <div style="display:flex;gap:8px;margin-top:10px">
-        <button class="save" onclick="saveProviderModal('${esc(provider)}')">Save</button>
-        ${!current ? `<button class="save ghost" onclick="makeCurrentProvider('${esc(provider)}')">Set as current provider</button>` : ""}
+        <button class="save" id="pm-save" onclick="saveProviderModal('${esc(provider)}')">Save</button>
+        ${!current ? `<button class="save ghost" id="pm-make-current" onclick="makeCurrentProvider('${esc(provider)}')">Set as current provider</button>` : ""}
       </div>
       <span class="meta" id="pm-msg"></span>
     </div></div>`;
@@ -454,33 +463,57 @@ function modalKeyPayload(provider){
   const key = document.getElementById("pm-key")?.value;
   const payload = {provider};
   if (key) payload.key = key;
+  const baseUrl = document.getElementById("pm-base-url")?.value;
+  if (baseUrl) payload.base_url = baseUrl;
   return payload;
+}
+
+function setProviderModalBusy(activeId, busy){
+  ["pm-save", "pm-make-current"].forEach(id => {
+    const button = document.getElementById(id);
+    if (!button) return;
+    if (!button.dataset.label) button.dataset.label = button.textContent;
+    button.disabled = busy;
+    button.textContent = busy && id === activeId
+      ? (id === "pm-make-current" ? "Switching…" : "Saving…")
+      : button.dataset.label;
+  });
+  if (busy){
+    const msg = document.getElementById("pm-msg");
+    if (msg) msg.textContent = activeId === "pm-make-current"
+      ? "Switching provider…" : "Saving and validating changes…";
+  }
+}
+
+async function submitProviderModal(provider, payload, activeId){
+  setProviderModalBusy(activeId, true);
+  let r;
+  try { r = await postJSON("/api/providers", payload); }
+  catch(e){ r = {ok:false, error:e.message || String(e)}; }
+  if (!r.ok){
+    setProviderModalBusy(activeId, false);
+    const msg = document.getElementById("pm-msg");
+    if (msg) msg.textContent = r.error || "update failed";
+    return;
+  }
+  editing = false;
+  closeProviderModal();
+  await refresh();
 }
 
 async function saveProviderModal(provider){
   const st = (D && D.settings) || {};
   const payload = modalKeyPayload(provider);
+  payload.activate = false;
   if (provider === st.provider){
     payload.model = document.getElementById("pm-model")?.value ?? "";
     payload.small_model = document.getElementById("pm-small-model")?.value ?? "";
   }
-  const r = await postJSON("/api/providers", payload);
-  if (!r.ok){
-    const msg = document.getElementById("pm-msg");
-    if (msg) msg.textContent = r.error || "update failed";
-    return;
-  }
-  editing = false; closeProviderModal(); await refresh();
+  await submitProviderModal(provider, payload, "pm-save");
 }
 
 // "Set as current": apply_provider switches provider and picks its default
 // models when none are passed (keeps the key field if one was just typed).
 async function makeCurrentProvider(provider){
-  const r = await postJSON("/api/providers", modalKeyPayload(provider));
-  if (!r.ok){
-    const msg = document.getElementById("pm-msg");
-    if (msg) msg.textContent = r.error || "update failed";
-    return;
-  }
-  editing = false; closeProviderModal(); await refresh();
+  await submitProviderModal(provider, modalKeyPayload(provider), "pm-make-current");
 }
