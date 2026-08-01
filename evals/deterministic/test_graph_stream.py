@@ -40,8 +40,10 @@ def test_an_unknown_workflow_is_refused_without_importing_anything():
 
 
 def test_the_runner_table_maps_names_to_known_targets():
-    assert dashboard.WORKFLOW_RUNNERS == {"gather": "waku.ops.gather:run_gather"}
-    for target in dashboard.WORKFLOW_RUNNERS.values():
+    """Discovered rather than hand-listed since slash commands shipped — a
+    hardcoded table beside a command list is two registries of one fact."""
+    assert dashboard.WORKFLOW_RUNNERS()["gather"] == "waku.ops.gather:run_gather"
+    for target in dashboard.WORKFLOW_RUNNERS().values():
         module, _, fn = target.partition(":")
         assert module.startswith("waku.") and fn
 

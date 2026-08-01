@@ -31,7 +31,7 @@ from pathlib import Path
 
 from waku.config import load_settings
 from waku.db import connect
-from waku.ops import browser_agent, compare_history
+from waku.ops import browser_agent, commands, compare_history
 from waku.ops.arena import (
     compare_clear,
     compare_delete_run,
@@ -76,7 +76,16 @@ def chat_stream(message: str, emit) -> None:
     """Run one turn, calling emit(kind, event) for every harness event AS it
     happens — gate decision, tool calls, and the reply text token by token —
     so the browser can show thinking stream in (like the CLI/voice do). Ends
-    with a 'done' event carrying the final structured result."""
+    with a 'done' event carrying the final structured result.
+
+    A leading slash calls a graph workflow BY NAME instead of running a turn.
+    Both doors end in the same 'done' event, so the chat renders the answer the
+    same way whether the harness routed it or you named the shape yourself."""
+    command = commands.parse(message)
+    if command is not None:
+        _run_command(command, emit)
+        return
+
     events: list[dict] = []
 
     def observer(kind, ev):
@@ -116,7 +125,10 @@ def chat_stream(message: str, emit) -> None:
 # A NAME -> runner table, never a dynamic import of whatever the browser sent.
 # "run the workflow the client named" is one careless refactor away from "import
 # and call whatever string arrives", so the indirection is a dict on purpose.
-WORKFLOW_RUNNERS = {"gather": "waku.ops.gather:run_gather"}
+def WORKFLOW_RUNNERS() -> dict[str, str]:  # noqa: N802 — reads as a table
+    """Discovered, not hand-listed. A hardcoded table and a slash-command list
+    are two registries of the same fact, and they drift."""
+    return commands.discover()
 
 
 def graph_stream(payload: dict, emit) -> None:
@@ -129,7 +141,7 @@ def graph_stream(payload: dict, emit) -> None:
     serialises notify() behind one (engine.py), so events arrive whole.
     """
     name = (payload.get("workflow") or "").strip()
-    target = WORKFLOW_RUNNERS.get(name)
+    target = WORKFLOW_RUNNERS().get(name)
     if target is None:
         emit("done", {"error": f"unknown workflow '{name}'"})
         return
@@ -149,6 +161,42 @@ def graph_stream(payload: dict, emit) -> None:
         # Includes GraphStateCollision, which run_graph raises OUT (unlike node
         # errors) — better shown in the card than dropped on the floor.
         emit("done", {"error": f"{type(exc).__name__}: {exc}"})
+
+
+def _run_command(command: tuple[str, str], emit) -> None:
+    """Handle `/name` from the chat box.
+
+    The node events go out exactly as the engine emits them, so the topology
+    chart animates from the same trace poll that animates a normal turn — a
+    named workflow lights the picture as readily as a routed one.
+    """
+    name, _rest = command
+    start = datetime.now(UTC)
+    if name in ("graphs", "help", "?"):
+        emit("done", {"reply": commands.describe(), "tools": [], "iterations": 0,
+                      "latency_ms": 0, "gate": None})
+        return
+    try:
+        state = commands.run(name, emit)
+    except Exception as exc:
+        emit("done", {"reply": f"`/{name}` failed: {type(exc).__name__}: {exc}",
+                      "tools": [], "iterations": 0, "latency_ms": 0, "gate": None})
+        return
+    if state is None:
+        emit("done", {"reply": commands.unknown_reply(name), "tools": [],
+                      "iterations": 0, "latency_ms": 0, "gate": None})
+        return
+    reply = state.get("digest") or "(the workflow produced no text)"
+    if state.get("draft_path"):
+        reply += f"\n\n*saved to `{state['draft_path']}`*"
+    for node, err in (state.get("errors") or {}).items():
+        reply += f"\n\n*{node}: {err}*"
+    emit("done", {
+        "reply": reply, "tools": [], "gate": None, "consolidation": None,
+        "iterations": 0,
+        "latency_ms": int((datetime.now(UTC) - start).total_seconds() * 1000),
+        "workflow": name,
+    })
 
 
 def _parse_ts(ts: str):
