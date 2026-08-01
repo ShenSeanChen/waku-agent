@@ -22,13 +22,18 @@ where real callables meet the pure shape.
 So the rule is: `waku/graph/workflows/<name>.py` plus `waku/ops/<name>.py`
 exposing `run_<name>` gives you `/<name>`. Drop in both halves and the command
 appears; ship only the pure half and it stays a shape the dashboard can draw
-but nobody can invoke. triage has no binder — it is bound inside app.py as the
-per-message door — so it correctly never becomes a command.
+but nobody can invoke.
+
+A runner that declares a `message` parameter receives whatever followed the
+command. `gather` takes none — it always fetches the same four things, which is
+what makes it a fixed shape. `triage` needs one, because a router with nothing
+to route has nothing to decide.
 """
 
 from __future__ import annotations
 
 import importlib
+import inspect
 import pkgutil
 
 
@@ -69,9 +74,10 @@ def describe() -> str:
         lines.append(f"`/{name}` — {summary}" if summary else f"`/{name}`")
     lines += [
         "",
-        ("These are workflows you *call*. `triage` is different — it is a router "
-         "that runs itself on every message when graph workflows are on, which "
-         "is why it has no command."),
+        ("`triage` is the ROUTER — it also runs itself on every message when "
+         "graph workflows are on, so calling it by name just lets you watch one "
+         "message choose a door. The others are procedures: they only run when "
+         "you ask."),
     ]
     return "\n".join(lines)
 
@@ -89,8 +95,14 @@ def parse(message: str) -> tuple[str, str] | None:
     return head.strip().lower(), rest.strip()
 
 
-def run(name: str, emit) -> dict | None:
+def run(name: str, emit, arg: str = "") -> dict | None:
     """Run a workflow by name, streaming its node events through `emit`.
+
+    `arg` is whatever followed the command. It is passed only to runners that
+    declare a `message` parameter — a gather takes no input (the whole point is
+    that it always fetches the same four things), while a router needs
+    something to route. Inspecting the signature keeps that a property of each
+    binder rather than a second table someone has to remember to update.
 
     Returns the final state, or None if the name is unknown. Never raises: a
     bad command must answer in the chat, not kill the stream.
@@ -100,6 +112,8 @@ def run(name: str, emit) -> dict | None:
         return None
     module_name, _, fn_name = target.partition(":")
     fn = getattr(importlib.import_module(module_name), fn_name)
+    if "message" in inspect.signature(fn).parameters:
+        return fn(observer=emit, message=arg)
     return fn(observer=emit)
 
 

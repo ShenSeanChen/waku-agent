@@ -21,11 +21,19 @@ def test_gather_is_discovered():
     assert "gather" in commands.discover()
 
 
-def test_triage_is_not_a_command():
-    """The rule with teeth. triage is bound inside app.py as the per-message
-    door and has no waku/ops/triage.py, so it cannot be called by name — which
-    is correct: a router you invoke manually is just a slower loop."""
-    assert "triage" not in commands.discover()
+def test_triage_is_a_command_and_takes_a_message():
+    """The router got a front door too. It still runs itself on every message
+    when the flag is on — calling it by name just lets you watch ONE message
+    choose a branch, with the flag off and nothing else changed.
+
+    It is the one runner that needs an argument: a router with nothing to route
+    has nothing to decide."""
+    import importlib
+    import inspect
+
+    assert "triage" in commands.discover()
+    fn = importlib.import_module("waku.ops.triage").run_triage
+    assert "message" in inspect.signature(fn).parameters
 
 
 def test_discovery_requires_both_halves():
@@ -79,7 +87,7 @@ def test_the_listing_names_every_runnable_workflow():
     text = commands.describe()
     for name in commands.discover():
         assert f"/{name}" in text
-    assert "triage" in text, "should say why the router has no command"
+    assert "triage" in text, "should explain how the router differs"
 
 
 def test_running_an_unknown_name_returns_none_rather_than_raising():
@@ -96,3 +104,26 @@ def test_the_dashboard_no_longer_says_you_never_pick_a_mode():
 
     js = pathlib.Path(__file__).resolve().parents[2] / "waku/ops/static/js/views.js"
     assert "never pick a mode" not in js.read_text()
+
+
+def test_a_runner_without_a_message_parameter_is_not_given_one():
+    """gather takes no input — always the same four sources, which is what
+    makes it a fixed shape. Passing it an argument would be a TypeError, so the
+    dispatcher inspects rather than assumes."""
+    import importlib
+    import inspect
+
+    fn = importlib.import_module("waku.ops.gather").run_gather
+    assert "message" not in inspect.signature(fn).parameters
+
+
+def test_triage_without_a_message_explains_itself_instead_of_running():
+    """A bare /triage has nothing to route. Say so, and show the two commands
+    worth comparing, rather than routing an empty string."""
+    state = commands.run("triage", lambda *a: None, "")
+    assert state is not None
+    assert "/triage thanks!" in state["digest"]
+
+
+def test_the_listing_no_longer_says_triage_has_no_command():
+    assert "no command" not in commands.describe()

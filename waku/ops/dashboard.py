@@ -170,14 +170,14 @@ def _run_command(command: tuple[str, str], emit) -> None:
     chart animates from the same trace poll that animates a normal turn — a
     named workflow lights the picture as readily as a routed one.
     """
-    name, _rest = command
+    name, arg = command
     start = datetime.now(UTC)
     if name in ("graphs", "help", "?"):
         emit("done", {"reply": commands.describe(), "tools": [], "iterations": 0,
                       "latency_ms": 0, "gate": None})
         return
     try:
-        state = commands.run(name, emit)
+        state = commands.run(name, emit, arg)
     except Exception as exc:
         emit("done", {"reply": f"`/{name}` failed: {type(exc).__name__}: {exc}",
                       "tools": [], "iterations": 0, "latency_ms": 0, "gate": None})
