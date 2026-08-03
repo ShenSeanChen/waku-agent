@@ -81,6 +81,93 @@ def test_google_test_connection_records_connected(monkeypatch, tmp_path):
     assert view.status.checked_at is not None
 
 
+def _configure_apple(monkeypatch, tmp_path):
+    _isolate(monkeypatch, tmp_path)
+    monkeypatch.setattr(integrations.sys, "platform", "darwin")
+    monkeypatch.setenv("WAKU_APPLE_CALENDAR", "1")
+
+
+def test_apple_test_connection_records_connected(monkeypatch, tmp_path):
+    _configure_apple(monkeypatch, tmp_path)
+    called = []
+    monkeypatch.setattr(calendar, "probe_apple_calendar", lambda: called.append(True))
+
+    view = integrations.test_integration("apple_calendar")
+
+    assert called == [True]
+    assert view.status.state is IntegrationState.CONNECTED
+    assert view.status.checked_at is not None
+
+
+def test_apple_save_probes_before_recording_connected(monkeypatch, tmp_path):
+    _isolate(monkeypatch, tmp_path)
+    monkeypatch.setattr(integrations.sys, "platform", "darwin")
+    monkeypatch.setattr(browser_agent, "rebuild", lambda: None)
+    called = []
+    monkeypatch.setattr(calendar, "probe_apple_calendar", lambda: called.append(True))
+
+    result = integrations.apply_integration(
+        "apple_calendar", {"WAKU_APPLE_CALENDAR": "1", "WAKU_APPLE_CALENDARS": ""}
+    )
+
+    assert result.ok
+    assert called == [True]
+    assert result.view is not None
+    assert result.view.status.state is IntegrationState.CONNECTED
+
+
+def test_apple_probe_failure_records_error_and_can_recover(monkeypatch, tmp_path):
+    _configure_apple(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        calendar,
+        "probe_apple_calendar",
+        lambda: (_ for _ in ()).throw(RuntimeError("automation denied")),
+    )
+
+    view = integrations.test_integration("apple_calendar")
+    assert view.status.state is IntegrationState.ERROR
+    assert view.status.message == "automation denied"
+
+    monkeypatch.setattr(calendar, "probe_apple_calendar", lambda: None)
+    view = integrations.test_integration("apple_calendar")
+    assert view.status.state is IntegrationState.CONNECTED
+
+
+def test_apple_force_save_records_error_without_probe(monkeypatch, tmp_path):
+    _isolate(monkeypatch, tmp_path)
+    monkeypatch.setattr(integrations.sys, "platform", "darwin")
+    monkeypatch.setattr(browser_agent, "rebuild", lambda: None)
+
+    def unexpected_probe():
+        raise AssertionError("force save must skip the probe")
+
+    monkeypatch.setattr(calendar, "probe_apple_calendar", unexpected_probe)
+
+    result = integrations.apply_integration(
+        "apple_calendar", {"WAKU_APPLE_CALENDAR": "1"}, force=True
+    )
+
+    assert result.ok
+    assert result.view is not None
+    assert result.view.status.state is IntegrationState.ERROR
+    assert result.view.status.message == "Saved without a successful test"
+
+
+def test_disabling_apple_clears_connected_health(monkeypatch, tmp_path):
+    _configure_apple(monkeypatch, tmp_path)
+    (tmp_path / ".env").write_text("WAKU_APPLE_CALENDAR=1\n")
+    monkeypatch.setattr(browser_agent, "rebuild", lambda: None)
+    integrations.record_health("apple_calendar", IntegrationStatus(IntegrationState.CONNECTED))
+
+    result = integrations.apply_integration(
+        "apple_calendar", {"WAKU_APPLE_CALENDAR": ""}
+    )
+
+    assert result.ok
+    assert result.view is not None
+    assert result.view.status.state is IntegrationState.NOT_CONFIGURED
+
+
 def test_google_save_probes_candidate_and_records_connected(monkeypatch, tmp_path):
     _isolate(monkeypatch, tmp_path)
     monkeypatch.setattr(integrations, "_extra_installed", lambda name: True)

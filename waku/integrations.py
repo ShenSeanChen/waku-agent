@@ -439,6 +439,12 @@ def _google_calendar_probe(values: Mapping[str, str]) -> None:
     )
 
 
+def _apple_calendar_probe(values: Mapping[str, str]) -> None:
+    from waku.tools import calendar
+
+    calendar.probe_apple_calendar()
+
+
 def _tavily_probe(values: Mapping[str, str]) -> None:
     body = json.dumps({"api_key": values.get("TAVILY_API_KEY", ""), "query": "health check", "max_results": 1}).encode()
     request = urllib.request.Request("https://api.tavily.com/search", body, {"Content-Type": "application/json"})
@@ -463,6 +469,8 @@ def _provider_probe(values: Mapping[str, str]) -> None:
 
 
 def _probed(integration: Integration) -> Integration:
+    if integration.key == "apple_calendar":
+        return Integration(**{**integration.__dict__, "probe": _apple_calendar_probe})
     if integration.key == "google_calendar":
         return Integration(**{**integration.__dict__, "probe": _google_calendar_probe})
     if integration.key == "notion":

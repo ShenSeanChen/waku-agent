@@ -1,7 +1,121 @@
 """Apple Calendar AppleScript generation is pure string logic — evaluable
 offline without ever touching the real Calendar app."""
 
+from __future__ import annotations
+
+import subprocess
+from types import SimpleNamespace
+
+import pytest
+
+from waku import integrations
+from waku.integrations import IntegrationState
+from waku.tools import calendar
 from waku.tools.calendar import _applescript_date, sync_to_apple_calendar
+
+
+def _completed(stdout: str = "") -> SimpleNamespace:
+    return SimpleNamespace(returncode=0, stdout=stdout, stderr="")
+
+
+def test_probe_apple_calendar_is_read_only_and_requires_a_writable_calendar(monkeypatch):
+    captured = {}
+
+    def run(cmd, **kwargs):
+        captured.update(cmd=cmd, kwargs=kwargs)
+        return _completed("Personal\n")
+
+    monkeypatch.setattr(calendar.sys, "platform", "darwin")
+    monkeypatch.setattr(calendar.subprocess, "run", run)
+
+    calendar.probe_apple_calendar()
+
+    script = captured["cmd"][2]
+    assert captured["cmd"][:2] == ["osascript", "-e"]
+    assert captured["kwargs"]["timeout"] == 15
+    assert "launch application \"Calendar\"" in script
+    assert "writable" in script
+    assert "make new event" not in script
+    assert "make new calendar" not in script
+
+
+def test_probe_apple_calendar_rejects_unsupported_and_unwritable_hosts(monkeypatch):
+    monkeypatch.setattr(calendar.sys, "platform", "linux")
+    with pytest.raises(RuntimeError, match="macOS-only"):
+        calendar.probe_apple_calendar()
+
+    monkeypatch.setattr(calendar.sys, "platform", "darwin")
+    monkeypatch.setattr(calendar.subprocess, "run", lambda *args, **kwargs: _completed())
+    with pytest.raises(RuntimeError, match="no writable calendars"):
+        calendar.probe_apple_calendar()
+
+
+def test_probe_apple_calendar_reports_timeout_and_applescript_errors(monkeypatch):
+    monkeypatch.setattr(calendar.sys, "platform", "darwin")
+    monkeypatch.setattr(
+        calendar.subprocess,
+        "run",
+        lambda *args, **kwargs: (_ for _ in ()).throw(subprocess.TimeoutExpired("osascript", 15)),
+    )
+    with pytest.raises(RuntimeError, match="timed out after 15s"):
+        calendar.probe_apple_calendar()
+
+    monkeypatch.setattr(
+        calendar.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(returncode=1, stdout="", stderr="Not authorized"),
+    )
+    with pytest.raises(RuntimeError, match="Not authorized"):
+        calendar.probe_apple_calendar()
+
+
+def test_apple_sync_success_and_failure_update_connection_health(monkeypatch, tmp_path):
+    monkeypatch.setenv("WAKU_HOME", str(tmp_path))
+    monkeypatch.setattr(calendar.sys, "platform", "darwin")
+    monkeypatch.setattr(integrations, "_HEALTH", None)
+
+    monkeypatch.setattr(calendar.subprocess, "run", lambda *args, **kwargs: _completed("Personal\n"))
+    out = calendar.sync_to_apple_calendar("Standup", "2026-08-04T09:00", "2026-08-04T09:30")
+    status = integrations._health()["apple_calendar"]
+    assert "calendar 'Personal'" in out
+    assert status.state is IntegrationState.CONNECTED
+    assert "Personal" in status.message
+
+    monkeypatch.setattr(
+        calendar.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(returncode=1, stdout="", stderr="Access denied"),
+    )
+    out = calendar.sync_to_apple_calendar("Retro", "2026-08-04T10:00", "2026-08-04T10:30")
+    status = integrations._health()["apple_calendar"]
+    assert "FAILED" in out
+    assert status.state is IntegrationState.ERROR
+    assert "Access denied" in status.message
+
+    monkeypatch.setattr(calendar.subprocess, "run", lambda *args, **kwargs: _completed("Work\n"))
+    calendar.sync_to_apple_calendar("Retro", "2026-08-04T10:00", "2026-08-04T10:30")
+    status = integrations._health()["apple_calendar"]
+    assert status.state is IntegrationState.CONNECTED
+    assert "Work" in status.message
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [subprocess.TimeoutExpired("osascript", 30), OSError("osascript missing")],
+)
+def test_apple_sync_runtime_exceptions_record_error(monkeypatch, tmp_path, failure):
+    monkeypatch.setenv("WAKU_HOME", str(tmp_path))
+    monkeypatch.setattr(calendar.sys, "platform", "darwin")
+    monkeypatch.setattr(integrations, "_HEALTH", None)
+    monkeypatch.setattr(
+        calendar.subprocess,
+        "run",
+        lambda *args, **kwargs: (_ for _ in ()).throw(failure),
+    )
+
+    calendar.sync_to_apple_calendar("Planning", "2026-08-04T11:00", "2026-08-04T11:30")
+
+    assert integrations._health()["apple_calendar"].state is IntegrationState.ERROR
 
 
 def test_date_sets_day_first_to_avoid_overflow():
