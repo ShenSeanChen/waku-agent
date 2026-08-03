@@ -35,6 +35,8 @@ from datetime import datetime, timedelta
 from waku.tools.registry import Tool
 
 _TIMEOUT = 30
+_PROBE_TIMEOUT = 8
+_PROBE_APPS = ("Calendar", "Mail", "Reminders", "Notes")
 # A tool that takes 75s to FAIL is worse than no tool: it blocks a chat turn and
 # then apologises. These budgets are set so a broken app gives up quickly with an
 # actionable message. Measured on a real Mac 2026-07-31:
@@ -61,6 +63,20 @@ def _osa(script: str, timeout: int = _TIMEOUT) -> tuple[bool, str]:
     if r.returncode != 0:
         return False, (r.stderr or "failed").strip()[:200]
     return True, r.stdout.strip()
+
+
+def probe_apple_tools() -> None:
+    """Verify Automation access to every app without reading or writing user data."""
+    failures = []
+    for app in _PROBE_APPS:
+        ok, detail = _osa(
+            f'tell application "{app}" to return version',
+            timeout=_PROBE_TIMEOUT,
+        )
+        if not ok:
+            failures.append(f"{app}: {detail}")
+    if failures:
+        raise RuntimeError("Apple Tools probe failed: " + "; ".join(failures))
 
 
 def _parse_applescript_date(raw: str) -> datetime | None:
