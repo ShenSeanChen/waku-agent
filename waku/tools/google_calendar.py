@@ -1,13 +1,12 @@
 """Google Calendar — read your real schedule, with a sign-in you can actually do.
 
-Two doors, deliberately different:
+Two OAuth-client sources, with the same read-only access:
 
-  READ   (calendar.events.readonly)  waku's own OAuth client, shipped below.
-         Click, approve in the browser, done. No files to download.
+  DEFAULT   waku's own OAuth client, shipped below. Click, approve in the
+            browser, done. No files to download.
 
-  WRITE  (calendar.events)           your own `.waku/credentials.json`.
-         Creating events on someone's calendar is a sensitive scope, so waku
-         does not ask for it on your behalf — you bring your own client.
+  OVERRIDE  your own `.waku/credentials.json`, when present. This replaces the
+            OAuth client configuration only; it does not expand permissions.
 
 Why the read client can live in a public repo: for Google's "Desktop app" OAuth
 client type the secret is not confidential, and Google says so. It identifies
@@ -28,14 +27,22 @@ import datetime as _dt
 from pathlib import Path
 
 READONLY_SCOPE = "https://www.googleapis.com/auth/calendar.events.readonly"
-WRITE_SCOPE = "https://www.googleapis.com/auth/calendar.events"
+DEFAULT_SCOPES = [READONLY_SCOPE]
 TIMEOUT = 30
 
-# waku's own OAuth client (Desktop app). Fill these in from the Google Cloud
-# console — see docs. Empty means "not configured yet", and every entry point
-# below degrades to a clear instruction instead of a stack trace.
-CLIENT_ID = ""
-CLIENT_SECRET = ""
+# waku's own OAuth client (Desktop app).
+# TODO: Fill in the project-owned Google OAuth client ID and secret before
+# release. Desktop-app client secrets are identifiers, not confidential
+# credentials; every user must still grant access in their own browser.
+BUNDLED_CLIENT_CONFIG = {
+    "installed": {
+        "client_id": "",
+        "client_secret": "",
+        "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+        "token_uri": "https://oauth2.googleapis.com/token",
+        "redirect_uris": ["http://localhost"],
+    }
+}
 
 _INSTALL_HINT = (
     "Google Calendar support is not installed — run: pip install -e '.[gcal]'"
@@ -81,10 +88,9 @@ def connect(home: Path) -> str:
     """Open the browser, get consent, cache the token. The ONE place a browser
     window is allowed to appear — called from the CLI/dashboard, never mid-turn.
 
-    Uses waku's shipped client for read-only access. If you dropped your own
-    `.waku/credentials.json` in place, that wins and you get the write scope
-    too — bring-your-own-client is the escape hatch for people who want waku
-    creating events."""
+    Uses waku's bundled client by default. If you dropped your own
+    `.waku/credentials.json` in place, that OAuth client configuration wins.
+    Both paths request the same read-only scope."""
     try:
         from google_auth_oauthlib.flow import InstalledAppFlow
     except ImportError:
@@ -94,25 +100,22 @@ def connect(home: Path) -> str:
     try:
         if own.exists():
             flow = InstalledAppFlow.from_client_secrets_file(
-                str(own), scopes=[WRITE_SCOPE, READONLY_SCOPE]
+                str(own), scopes=DEFAULT_SCOPES
             )
-        elif CLIENT_ID and CLIENT_SECRET:
-            flow = InstalledAppFlow.from_client_config(
-                {"installed": {
-                    "client_id": CLIENT_ID,
-                    "client_secret": CLIENT_SECRET,
-                    "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-                    "token_uri": "https://oauth2.googleapis.com/token",
-                    "redirect_uris": ["http://localhost"],
-                }},
-                scopes=[READONLY_SCOPE],
-            )
+            client_source = "credentials.json override"
         else:
-            return (
-                "Google Calendar has no client configured. Either wait for a waku "
-                "release with one built in, or create your own OAuth client "
-                "(Desktop app) and save it as .waku/credentials.json."
+            bundled = BUNDLED_CLIENT_CONFIG.get("installed", {})
+            if not bundled.get("client_id") or not bundled.get("client_secret"):
+                return (
+                    "Google Calendar's bundled OAuth client is not configured "
+                    "yet. Add .waku/credentials.json to use your own Desktop "
+                    "OAuth client."
+                )
+            flow = InstalledAppFlow.from_client_config(
+                BUNDLED_CLIENT_CONFIG,
+                scopes=DEFAULT_SCOPES,
             )
+            client_source = "bundled OAuth client"
         # port=0 = any free local port. The redirect lands back on this machine,
         # so no server and no public URL are involved anywhere.
         creds = flow.run_local_server(port=0)
@@ -122,8 +125,10 @@ def connect(home: Path) -> str:
     path = _token_path(home)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(creds.to_json(), encoding="utf-8")
-    scope = "read and write" if own.exists() else "read-only"
-    return f"Google Calendar connected ({scope}). Token cached at {path}."
+    return (
+        f"Google Calendar connected (read-only via {client_source}). "
+        f"Token cached at {path}."
+    )
 
 
 def list_google_events(home: Path, start: str = "", end: str = "", limit: int = 20) -> str:
@@ -137,7 +142,7 @@ def list_google_events(home: Path, start: str = "", end: str = "", limit: int = 
     except ImportError:
         return _INSTALL_HINT
 
-    creds = _load_credentials(home, [READONLY_SCOPE, WRITE_SCOPE])
+    creds = _load_credentials(home, DEFAULT_SCOPES)
     if creds is None:
         return _SETUP_HINT
 
