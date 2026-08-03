@@ -1053,6 +1053,7 @@ def main() -> None:
         from waku.gateway.discord import start_in_background as start_discord
         from waku.gateway.supervisor import GatewaySupervisor
         from waku.gateway.telegram import start_in_background as start_telegram
+        from waku.gateway.whatsapp import start_in_background as start_whatsapp
         from waku.integrations import (
             INTEGRATIONS,
             register_gateway_reloader,
@@ -1061,22 +1062,12 @@ def main() -> None:
 
         gateway_items = [item for item in INTEGRATIONS if item.reload.value == "gateway"]
         supervisor = GatewaySupervisor(
-            {"telegram": start_telegram, "discord": start_discord},
+            {"telegram": start_telegram, "discord": start_discord, "whatsapp": start_whatsapp},
             {item.key: tuple(field.name for field in item.env) for item in gateway_items},
         )
         register_gateway_status_provider(supervisor.status)
         register_gateway_reloader(supervisor.reconcile)
         supervisor.reconcile()
-        # WhatsApp isn't a Connections integration yet, so the supervisor doesn't
-        # own it — start it standalone, in its OWN try: a WhatsApp failure must
-        # never block the dashboard.
-        try:
-            from waku.gateway.whatsapp import start_in_background as wa_background
-
-            if wa_background():
-                print("WhatsApp gateway → listening in the background (webhook on port 5000)")
-        except Exception as exc:  # noqa: BLE001 — never let a gateway block the dashboard
-            print(f"(whatsapp) not started: {exc}")
         print(f"Waku dashboard → http://localhost:{port}  (Ctrl-C to stop)")
         try:
             server.serve_forever()
