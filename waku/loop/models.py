@@ -4,10 +4,12 @@ The loop speaks one dialect: Anthropic's Messages shape (system/messages/tools
 in, content blocks out). Providers plug in two ways:
 
   anthropic wire format (native)     → Anthropic, Kimi/Moonshot, GLM/Z.ai, MiniMax
-  openai wire format (thin adapter)  → OpenAI, Google Gemini, DeepSeek, OpenRouter
+  openai wire format (thin adapter)  → OpenAI, Google Gemini, DeepSeek, OpenRouter, LiteLLM
 
-Pick with WAKU_PROVIDER=anthropic|openai|gemini|deepseek|minimax|kimi|glm|openrouter
-and set that provider's API key in .env. Override the model ids with WAKU_MODEL /
+Pick with WAKU_PROVIDER=anthropic|openai|gemini|deepseek|minimax|kimi|glm|openrouter|litellm
+and set that provider's API key in .env. litellm points at a self-hosted LiteLLM
+proxy (one OpenAI-compatible endpoint fronting 100+ providers); set WAKU_MODEL to a
+model your proxy serves. Override the model ids with WAKU_MODEL /
 WAKU_SMALL_MODEL if the defaults below age out — they're just strings. This
 matters most for openrouter: it's a single key in front of hundreds of models,
 so WAKU_MODEL=<vendor>/<model> (e.g. "google/gemini-3.5-flash") picks whichever
@@ -106,6 +108,14 @@ PROVIDERS: dict[str, Provider] = {
     "opencode_go":  Provider("openai", "OPENCODE_GO_API_KEY",
                                "https://opencode.ai/zen/go/v1",
                                "deepseek-v4-flash", "deepseek-v4-flash"),
+    # LiteLLM proxy — one OpenAI-compatible endpoint in front of 100+ providers
+    # (OpenAI, Anthropic, Bedrock, Vertex, Azure, Gemini, Groq, ...). base_url is
+    # your self-hosted proxy (default port 4000); LITELLM_API_KEY is the proxy's
+    # virtual/master key. Model ids are whatever your proxy config names them, so
+    # the defaults below are just starting points — set WAKU_MODEL to a model on
+    # your proxy, and the Settings picker lists its live catalog ({base_url}/models).
+    "litellm":   Provider("openai", "LITELLM_API_KEY", "http://localhost:4000/v1",
+                          "gpt-4o", "gpt-4o-mini"),
 }
 
 
@@ -125,6 +135,7 @@ KEY_URLS = {
     "xai": "https://console.x.ai",
     "opencode_zen": "https://opencode.ai/zen",
     "opencode_go": "https://opencode.ai/zen",
+    "litellm": "https://docs.litellm.ai/docs/proxy/virtual_keys",
 }
 
 
