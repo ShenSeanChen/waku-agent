@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import os
+import socket
+
+import pytest
 
 from waku import integrations
 from waku.integrations import IntegrationState, IntegrationStatus
@@ -44,6 +47,47 @@ def test_status_masking_health_persistence_and_invalidation(monkeypatch, tmp_pat
     assert next(view for view in integrations.list_integrations() if view.key == "openai").status.state is IntegrationState.CONNECTED
     integrations.invalidate_health("openai")
     assert next(view for view in integrations.list_integrations() if view.key == "openai").status.message == "Configured, not tested"
+
+
+def test_otel_probe_checks_configured_collector_tcp_port(monkeypatch):
+    captured = {}
+
+    class Connection:
+        def close(self):
+            captured["closed"] = True
+
+    def connect(address, timeout):
+        captured.update(address=address, timeout=timeout)
+        return Connection()
+
+    monkeypatch.setattr(socket, "create_connection", connect)
+
+    integrations._otel_probe({"OTEL_EXPORTER_OTLP_ENDPOINT": "localhost:4317"})
+
+    assert captured == {"address": ("localhost", 4317), "timeout": 3, "closed": True}
+
+
+def test_otel_probe_rejects_endpoint_without_tcp_port():
+    with pytest.raises(ValueError, match="host:port"):
+        integrations._otel_probe({"OTEL_EXPORTER_OTLP_ENDPOINT": "localhost"})
+
+
+def test_otel_probe_rejects_endpoint_with_a_signal_path(monkeypatch):
+    monkeypatch.setattr(socket, "create_connection", lambda address, timeout: None)
+
+    with pytest.raises(ValueError, match="host:port"):
+        integrations._otel_probe({"OTEL_EXPORTER_OTLP_ENDPOINT": "localhost:4317/v1/traces"})
+
+
+def test_otel_test_connection_records_connected_after_tcp_probe(monkeypatch, tmp_path):
+    _isolate(monkeypatch, tmp_path)
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "localhost:4317")
+    monkeypatch.setattr(integrations, "_extra_installed", lambda name: True)
+    monkeypatch.setattr(integrations, "_otel_probe", lambda values: None)
+
+    view = integrations.test_integration("otel")
+
+    assert view.status.state is IntegrationState.CONNECTED
 
 
 def test_apply_rejects_unknown_and_secret_clear(monkeypatch, tmp_path):

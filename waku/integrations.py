@@ -10,6 +10,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import socket
 import sys
 import urllib.request
 from collections.abc import Callable, Mapping
@@ -17,6 +18,7 @@ from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from waku.loop.models import PROVIDERS, Provider
 from waku.memory.episodic.notion_store import normalize_database_id
@@ -459,6 +461,21 @@ def _tavily_probe(values: Mapping[str, str]) -> None:
             raise ValueError(f"Tavily returned HTTP {response.status}")
 
 
+def _otel_probe(values: Mapping[str, str]) -> None:
+    """Check that the configured OTLP/gRPC collector accepts TCP connections."""
+    endpoint = values.get("OTEL_EXPORTER_OTLP_ENDPOINT", "").strip()
+    parsed = urlsplit(endpoint if "://" in endpoint else f"//{endpoint}")
+    try:
+        port = parsed.port
+    except ValueError as exc:
+        raise ValueError("OTLP endpoint must be a valid host:port") from exc
+    if (not parsed.hostname or port is None or parsed.path not in ("", "/")
+            or parsed.query or parsed.fragment or parsed.username or parsed.password):
+        raise ValueError("OTLP endpoint must be host:port (for example localhost:4317)")
+    connection = socket.create_connection((parsed.hostname, port), timeout=3)
+    connection.close()
+
+
 def _provider_probe(values: Mapping[str, str]) -> None:
     # Catalog has the provider-specific URL logic; a list operation is safe and
     # is deliberately the same non-writing check used by the existing UI.
@@ -485,6 +502,8 @@ def _probed(integration: Integration) -> Integration:
         return Integration(**{**integration.__dict__, "probe": _notion_probe})
     if integration.key == "tavily":
         return Integration(**{**integration.__dict__, "probe": _tavily_probe})
+    if integration.key == "otel":
+        return Integration(**{**integration.__dict__, "probe": _otel_probe})
     return integration
 
 
