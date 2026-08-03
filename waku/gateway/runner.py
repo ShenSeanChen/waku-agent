@@ -15,7 +15,6 @@ from collections.abc import Awaitable, Callable
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
-
 GATEWAY_ERROR_REPLY = "Waku couldn't process that message. Check the dashboard terminal."
 
 

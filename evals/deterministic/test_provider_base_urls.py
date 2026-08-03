@@ -16,7 +16,6 @@ from waku.loop import models
 from waku.loop.models import PROVIDERS
 from waku.ops import catalog
 
-
 EXPECTED_ENDPOINTS = {
     "minimax": [
         ("China", "https://api.minimaxi.com/anthropic",

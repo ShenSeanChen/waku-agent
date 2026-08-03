@@ -12,15 +12,15 @@ from types import SimpleNamespace
 import pytest
 
 from evals.helpers import ScriptedClient, make_waku, response, text_block
-from waku.gateway.discord import DiscordHandle
 from waku.gateway import discord as discord_gateway
+from waku.gateway import telegram as telegram_gateway
+from waku.gateway.discord import DiscordHandle
 from waku.gateway.runner import (
     GATEWAY_ERROR_REPLY,
     GatewayAgentRunner,
     run_gateway_turn,
 )
 from waku.gateway.telegram import TelegramHandle
-from waku.gateway import telegram as telegram_gateway
 from waku.integrations import IntegrationState
 
 
