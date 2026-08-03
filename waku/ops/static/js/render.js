@@ -25,6 +25,7 @@ const toolRow = x => `<div class="tool ${x.status||"ok"}">
 function histItem(m){
   if (m.role === "user") return {role:"user", text:m.content};
   if (m.meta) return {role:"waku", reply:m.content, gate:m.meta.gate,
+                      graph:m.meta.graph,
                       tools:m.meta.tools, iterations:m.meta.iterations,
                       latency_ms:m.meta.latency_ms, model:m.meta.model};
   return {role:"waku", reply:m.content, historical:true};
@@ -69,17 +70,23 @@ function stagesRow(t, live){
   const gateCls = live ? (t.gate ? "done" : "on") : "done";
   const replyCls = live ? (t.stream ? "on" : "") : "done";
   const tools = (t.tools||[]).map(x => toolChip(x.tool)).join("");
+  // graph chip first — the front door. A quick graph turn has NO gate stage
+  // (memory retrieval never ran), so the gate chip is honest and disappears.
+  const graph = (t.graph && t.graph.route)
+    ? `<span class="stage done">graph · ${esc(t.graph.route)}</span>` : "";
+  const gate = (t.graph && t.graph.route === "quick") ? ""
+    : `<span class="stage ${gateCls}">gate${t.gate?` · ${esc(t.gate.decision)}`:""}</span>`;
   return `<div class="stages${live?"":" tele"}">`
-    + `<span class="stage ${gateCls}">gate${t.gate?` · ${esc(t.gate.decision)}`:""}</span>`
-    + tools + `<span class="stage ${replyCls}">reply</span></div>`;
+    + graph + gate + tools + `<span class="stage ${replyCls}">reply</span></div>`;
 }
 // The per-turn telemetry footer: seconds · iterations · model · consolidation.
 const teleFooter = t => `<div class="meta tele">${secs(t.latency_ms)} · ${t.iterations??"?"} iter${
   t.model?` · ${esc(t.model)}`:""}${t.consolidation?` · consolidated ${t.consolidation.new_facts} fact(s)`:""}</div>`;
 
 const chatTurnCard = t => `<div class="card">
-  ${t.gate?`${stagesRow(t, false)}
-    <div class="meta tele" style="margin:0 0 6px">${esc(t.gate.reason||"")}</div>`:""}
+  ${(t.gate||t.graph)?`${stagesRow(t, false)}
+    <div class="meta tele" style="margin:0 0 6px">${esc((t.gate&&t.gate.reason)||(t.graph&&t.graph.reason)||"")}</div>`:""}
+  ${nodesRow(t)}
   ${(t.tools||[]).length?`<div class="tele">${(t.tools||[]).map(toolRow).join("")}</div>`:""}
   <div class="r" style="margin-top:8px">${renderMarkdown(t.reply)}</div>
   ${teleFooter(t)}
@@ -87,8 +94,22 @@ const chatTurnCard = t => `<div class="card">
 
 // While a turn runs we stream it live: stages light up as the harness reaches
 // them, and the reply text appears token by token (with a blinking caret).
+// Graph nodes as chips: lit while running, with their measured time once done.
+// Several lit at once IS the fan-out, which no amount of "thinking…" conveys.
+const nodesRow = m => {
+  const names = Object.keys(m.nodes || {});
+  if (!names.length) return "";
+  return `<div class="cmp-stats" style="margin:0 0 6px">` + names.map(n => {
+    const s = m.nodes[n];
+    const cls = s.status === "running" ? "chip live" : s.status === "error" ? "chip err" : "chip";
+    const suffix = s.status === "running" ? "" : s.ms != null ? ` ${s.ms}ms` : "";
+    return `<span class="${cls}">${esc(n)}${suffix}</span>`;
+  }).join("") + `</div>`;
+};
+
 const streamingCard = m => `<div class="card">
   ${stagesRow(m, true)}
+  ${nodesRow(m)}
   ${m.gate&&m.gate.reason?`<div class="meta" style="margin:0 0 6px">${esc(m.gate.reason)}</div>`:""}
   ${(m.tools||[]).map(toolRow).join("")}
   ${m.stream
@@ -125,7 +146,27 @@ function syncChatLogs(){
 
 // One streamed harness event updates the live card in place.
 function applyStreamEvent(pending, ev){
+  // Graph events arrive here too when a workflow is called from the chat box.
+  // The trace poller animates the chart either way, but it runs every 450ms
+  // and stages play on a 620ms stagger — going straight to graphLive() means
+  // the Overview panel swaps to the running workflow the moment you hit send.
+  if (ev.kind === "graph_start" && typeof graphLive === "function") graphLive(ev.workflow);
+  else if (ev.kind === "graph_end" && typeof graphLive === "function") graphLive(null);
+  // Graph nodes are not ToolRegistry tools, so none of them ever reached the
+  // tool chips — a /gather ran for thirteen seconds showing nothing but
+  // "thinking…". Track them separately and render them the same way, because
+  // "which four things are happening right now" is the entire point of a wave.
+  if (ev.kind === "node_start"){
+    (pending.nodes = pending.nodes || {})[ev.node] = {status: "running"};
+  } else if (ev.kind === "node_end"){
+    (pending.nodes = pending.nodes || {})[ev.node] =
+      {status: ev.error ? "error" : "done", ms: ev.ms};
+  }
   if (ev.kind === "gate") pending.gate = {decision: ev.decision, reason: ev.reason};
+  else if (ev.kind === "route")
+    pending.graph = {route: ev.target === "quick_reply" ? "quick" : "full",
+                     reason: (pending.graph || {}).reason};
+  else if (ev.kind === "triage") (pending.graph = pending.graph || {}).reason = ev.reason;
   else if (ev.kind === "text") pending.stream = (pending.stream || "") + (ev.delta || "");
   else if (ev.kind === "tool"){
     (pending.tools = pending.tools || []).push({

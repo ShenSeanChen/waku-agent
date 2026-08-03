@@ -1,17 +1,32 @@
 [project]
 name = "waku-agent"
-version = "0.1.0"
+version = "0.1.1"
 description = "A minimal, transparent, local-first Waku: harness + loop + memory + eval, in code you can read in an afternoon."
 readme = "README.md"
 license = { text = "MIT" }
 authors = [{ name = "Sean Chen (ShenSeanChen)" }]
 requires-python = ">=3.11"
+keywords = ["ai-agent", "llm", "agent-framework", "local-first", "llmops", "memory", "eval"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
 dependencies = [
     "anthropic>=0.40",   # anthropic wire format: Anthropic, Kimi, GLM, MiniMax
     "openai>=1.50",      # openai wire format: OpenAI, Gemini, DeepSeek (and embeddings)
     "python-dotenv>=1.0",
     "rich>=13.0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/ShenSeanChen/waku-agent"
+Repository = "https://github.com/ShenSeanChen/waku-agent"
+Issues = "https://github.com/ShenSeanChen/waku-agent/issues"
+Changelog = "https://github.com/ShenSeanChen/waku-agent/releases"
 
 [project.scripts]
 # Branded CLI: `waku dashboard`, `waku voice`, `waku` to chat, etc.
@@ -39,7 +54,6 @@ gcal = [
     "google-api-python-client>=2.0",
     "google-auth>=2.0",
     "google-auth-httplib2>=0.2",
-    "google-auth-oauthlib>=1.0",
     "httplib2>=0.22",
     # The browser consent flow. Without it the only way in is `gcloud auth
     # application-default login`, which is a developer ritual, not a sign-in.
@@ -48,6 +62,10 @@ gcal = [
 # Optional gateway: message Waku from Discord
 discord = [
     "discord.py>=2.4",
+]
+# Optional gateway: WhatsApp via Meta Cloud API (needs a public URL — see docstring)
+whatsapp = [
+    "httpx>=0.25",
 ]
 # Optional gateway: talk to your laptop. TTS uses macOS `say` by default;
 # for the neural British voice: pip install kokoro soundfile (pulls torch).
@@ -91,8 +109,30 @@ dev = [
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
+# An sdist should be what you need to BUILD and TEST waku — source, bundled
+# skills, schema, evals. Left alone it was 2.6 MB, and 2.5 MB of that was a
+# whiteboard PNG and the .excalidraw sources, plus the agent tooling (.claude,
+# .agents, .pi) that only matters inside this repo. All of it stays on GitHub,
+# where people actually read it; none of it belongs in a package download.
+[tool.hatch.build.targets.sdist]
+exclude = [
+    "docs", "examples", "pi-pokedex",
+    ".claude", ".agents", ".pi", ".deepeval", ".github",
+]
+
 [tool.hatch.build.targets.wheel]
 packages = ["waku"]
+
+# The bundled skills live at the repo root because that is where contributors
+# add them (CONTRIBUTING.md, CI's validate-skills job, `skills/community/`).
+# But `packages = ["waku"]` ships only the package, so before 2026-07-31 a
+# `pip install waku-agent` arrived with ZERO skills — procedural memory, one of
+# the four pillars, silently absent while the dashboard shipped fine (it lives
+# under waku/ops/static). Copying them in at build time keeps one contributor-
+# facing location and still ships them; waku.memory.bundled_skill_dirs() looks
+# in both places and explains why.
+[tool.hatch.build.targets.wheel.force-include]
+"skills" = "waku/skills"
 
 [tool.ruff]
 line-length = 100

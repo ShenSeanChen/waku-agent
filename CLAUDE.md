@@ -13,6 +13,9 @@ for its own sake is not.
 - `waku/gateway/` — cli, voice (wake word), telegram. Gateways only move text.
 - `waku/runtime/session.py` — working memory assembly (SOUL.md + memory + history)
 - `waku/loop/agent.py` — THE loop; `loop/models.py` — pluggable providers, 2 wire formats
+- `waku/graph/` — engine + node factories + `workflows/` (triage) — opt-in structure
+  AROUND the loop (the loop never changes; a graph node can BE a loop turn); every
+  failure fails open to the plain loop
 - `waku/tools/` — create_event / save_note / send_message (flagship task only)
 - `waku/memory/` — semantic (FTS5) / episodic / procedural (SKILL.md) +
   `retrieval_gate.py` (hero 1) + `consolidation.py` (every N exchanges)
