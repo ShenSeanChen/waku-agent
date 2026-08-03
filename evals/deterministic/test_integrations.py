@@ -8,7 +8,7 @@ from waku import integrations
 from waku.integrations import IntegrationState, IntegrationStatus
 from waku.loop.models import PROVIDERS
 from waku.ops import browser_agent
-from waku.tools import calendar
+from waku.tools import apple, calendar
 
 
 def _isolate(monkeypatch, tmp_path):
@@ -145,6 +145,72 @@ def test_apple_force_save_records_error_without_probe(monkeypatch, tmp_path):
 
     result = integrations.apply_integration(
         "apple_calendar", {"WAKU_APPLE_CALENDAR": "1"}, force=True
+    )
+
+    assert result.ok
+    assert result.view is not None
+    assert result.view.status.state is IntegrationState.ERROR
+    assert result.view.status.message == "Saved without a successful test"
+
+
+def _configure_apple_tools(monkeypatch, tmp_path):
+    _isolate(monkeypatch, tmp_path)
+    monkeypatch.setattr(integrations.sys, "platform", "darwin")
+    monkeypatch.setenv("WAKU_APPLE_TOOLS", "1")
+
+
+def test_apple_tools_save_probes_and_records_connected(monkeypatch, tmp_path):
+    _isolate(monkeypatch, tmp_path)
+    monkeypatch.setattr(integrations.sys, "platform", "darwin")
+    monkeypatch.setattr(browser_agent, "rebuild", lambda: None)
+    called = []
+    monkeypatch.setattr(apple, "probe_apple_tools", lambda: called.append(True))
+
+    result = integrations.apply_integration(
+        "apple_tools", {"WAKU_APPLE_TOOLS": "1"}
+    )
+
+    assert result.ok
+    assert called == [True]
+    assert os.environ["WAKU_APPLE_TOOLS"] == "1"
+    assert result.view is not None
+    assert result.view.status.state is IntegrationState.CONNECTED
+    assert result.view.status.checked_at is not None
+
+
+def test_apple_tools_probe_failure_records_error_and_recovers(monkeypatch, tmp_path):
+    _configure_apple_tools(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        apple,
+        "probe_apple_tools",
+        lambda: (_ for _ in ()).throw(RuntimeError("Mail: Not authorized")),
+    )
+
+    view = integrations.test_integration("apple_tools")
+
+    assert view.status.state is IntegrationState.ERROR
+    assert view.status.message == "Mail: Not authorized"
+    assert view.status.checked_at is not None
+
+    monkeypatch.setattr(apple, "probe_apple_tools", lambda: None)
+    view = integrations.test_integration("apple_tools")
+
+    assert view.status.state is IntegrationState.CONNECTED
+    assert view.status.checked_at is not None
+
+
+def test_apple_tools_force_save_skips_probe(monkeypatch, tmp_path):
+    _isolate(monkeypatch, tmp_path)
+    monkeypatch.setattr(integrations.sys, "platform", "darwin")
+    monkeypatch.setattr(browser_agent, "rebuild", lambda: None)
+
+    def unexpected_probe():
+        raise AssertionError("force save must skip the probe")
+
+    monkeypatch.setattr(apple, "probe_apple_tools", unexpected_probe)
+
+    result = integrations.apply_integration(
+        "apple_tools", {"WAKU_APPLE_TOOLS": "1"}, force=True
     )
 
     assert result.ok
