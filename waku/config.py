@@ -10,9 +10,35 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from dotenv import load_dotenv
+from dotenv import find_dotenv, load_dotenv
 
-load_dotenv()  # reads .env in the current directory, if present
+
+def _load_env() -> str:
+    """Find the user's .env the way the user expects: from where they ARE.
+
+    Bare `load_dotenv()` searches upward from the file that called it, not from
+    the working directory. Inside a git checkout that is invisible — config.py
+    lives in the project, so walking up from it lands on the project's .env and
+    everything works. Installed from PyPI it walks up from site-packages,
+    reaches the filesystem root, and finds nothing: the user stands in a folder
+    holding a perfectly good .env and Waku reports "No API key". Reported from
+    a clean install on 2026-07-31, from inside the repo folder itself.
+
+    usecwd=True is the whole fix. The walk upward is kept on purpose, so
+    running `waku` from a subdirectory of your project still finds the .env at
+    its root — the same rule git, npm and pytest already taught everyone.
+
+    Returns the path that was loaded (empty string if none) so `waku doctor`
+    and the first-run error can say WHICH file was read, rather than leaving
+    people guessing between three .env files.
+    """
+    path = find_dotenv(usecwd=True)
+    if path:
+        load_dotenv(path)
+    return path
+
+
+DOTENV_PATH = _load_env()
 
 
 @dataclass

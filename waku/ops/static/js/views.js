@@ -254,8 +254,8 @@ const VIEWS = {
       it stops. Some work has <b>shape</b> — steps that can run at the same time, and explicit "if this, go
       there" routing. A <b>graph workflow</b> makes that shape first-class: nodes (each does one job) connected
       by edges (what happens next). The loop did not change one line — the <code>full_agent</code> node below
-      IS the same loop, running as one step. You never pick a mode: the harness triages every message itself
-      and this page just shows which door each turn took.</div>`;
+      IS the same loop, running as one step. The harness routes every message itself — and workflows you
+      can also call BY NAME from the chat box: type <code>/graphs</code> to see them.</div>`;
     if (!g.enabled)
       h += `<div class="card"><b>Off</b> — every turn currently runs the classic loop.
         <div class="meta" style="margin-top:6px">Switch on <b>graph workflows</b> in
@@ -352,8 +352,9 @@ const VIEWS = {
     <h2>Graph workflows</h2><div class="card">
       <div class="meta" style="margin-bottom:8px">Off by default. When on, <b>every</b> message is triaged
         through a graph first: a small model classifies it while today's calendar loads in parallel — trivial
-        messages get a fast small-model reply, real tasks run the exact same loop as a node. You never pick a
-        mode; any failure fails open to the plain loop. Watch it live on the
+        messages get a fast small-model reply, real tasks run the exact same loop as a node. This flag governs
+        the AUTOMATIC door only — workflows you call by name (<code>/gather</code>) run either way. Any
+        failure fails open to the plain loop. Watch it live on the
         <a class="reveal" onclick="location.hash='graph'">Graph</a> tab.</div>
       <label class="fld">Triage-first turns
         <select id="set-graph-workflows" onfocus="markEditing()">
