@@ -2,7 +2,15 @@
 // Split out of app.js: classic <script>, shared global scope (no build
 // step, no modules). Load order + rules: static/README.md.
 
-const esc = s => (s??"").toString().replace(/[&<>]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
+// Escapes quotes too, not just &<>. Text nodes never needed it, and for a long
+// time nothing put model output inside an ATTRIBUTE — so the gap was invisible.
+// The copy buttons (#58) are the first place that happens, and a reply
+// containing one double quote was enough to close data-text="..." and attach
+// its own event handler. The model's output is not fully ours: search_web and
+// browse_web pull text off the open web, and this dashboard holds the memory,
+// the traces and the settings. Escape at the helper, once, for every caller.
+const esc = s => (s??"").toString().replace(/[&<>"']/g,
+  c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 
 // --- tiny markdown renderer for chat replies (no dependency, XSS-safe: we
 // escape first, then apply a small set of transforms the LLM actually uses:
