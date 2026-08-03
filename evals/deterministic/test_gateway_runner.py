@@ -310,6 +310,16 @@ def test_telegram_handler_uses_runner_and_returns_safe_error(monkeypatch):
 
 
 def test_discord_handler_uses_runner_and_delivers_reply(monkeypatch):
+    # Isolate from developer .env so the allowlist/budget defaults under test are predictable.
+    for key in (
+        "DISCORD_ALLOWED_USER",
+        "DISCORD_ALLOWED_CHANNEL",
+        "DISCORD_REQUIRE_MENTION",
+        "DISCORD_MAX_TURNS_PER_HOUR",
+        "DISCORD_HOME",
+    ):
+        monkeypatch.delenv(key, raising=False)
+
     callbacks = {}
 
     class Intents:
