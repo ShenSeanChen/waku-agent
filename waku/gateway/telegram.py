@@ -23,6 +23,7 @@ import threading
 
 from waku.app import Waku
 from waku.gateway.cli import _observer  # mirror gate/tool activity on the laptop terminal
+from waku.gateway.runner import GatewayAgentRunner, run_gateway_turn
 from waku.integrations import IntegrationState, IntegrationStatus
 
 
@@ -42,7 +43,13 @@ def posture() -> str:
             "                personal memory. Set TELEGRAM_ALLOWED_USER to lock it.")
 
 
-def _build_app(token: str, allowed: str = ""):
+def _new_runner() -> GatewayAgentRunner:
+    return GatewayAgentRunner(
+        Waku, session_id="telegram", source="telegram", observer=_observer
+    )
+
+
+def _build_app(token: str, allowed: str = "", runner: GatewayAgentRunner | None = None):
     """Build the polling app + message handler. Shared by the standalone
     gateway and the background poller `waku dashboard` starts.
 
@@ -53,17 +60,13 @@ def _build_app(token: str, allowed: str = ""):
     from telegram import Update
     from telegram.ext import Application, ContextTypes, MessageHandler, filters
 
-    waku = Waku()
-    waku.session.session_id = "telegram"   # its own conversation thread in the inbox
+    runner = runner or _new_runner()
 
     async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if allowed_ids and str(update.effective_user.id) not in allowed_ids:
             await update.message.reply_text("This Waku serves someone else. Run your own!")
             return
-        print(f"you › {update.message.text}")
-        result = waku.respond(update.message.text, observer=_observer, source="telegram")
-        print(f"waku › {result.reply}")
-        await update.message.reply_text(result.reply or "(no reply)")
+        await run_gateway_turn(runner, update.message.text, update.message.reply_text)
 
     app = Application.builder().token(token).build()
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle))
@@ -81,15 +84,20 @@ def main() -> None:
     token = load_settings().telegram_token
     if not token:
         raise SystemExit("Set TELEGRAM_BOT_TOKEN in .env (message @BotFather to create a bot).")
-    app = _build_app(token)
-    print("Waku is listening on Telegram — message your bot. Ctrl-C to stop.")
-    print(posture())
-    app.run_polling()
+    runner = _new_runner()
+    try:
+        app = _build_app(token, runner=runner)
+        print("Waku is listening on Telegram — message your bot. Ctrl-C to stop.")
+        print(posture())
+        app.run_polling()
+    finally:
+        runner.close()
 
 
 class TelegramHandle:
-    def __init__(self, loop, app, thread, conflict) -> None:
+    def __init__(self, loop, app, thread, conflict, runner: GatewayAgentRunner) -> None:
         self.loop, self.app, self.thread, self._conflict = loop, app, thread, conflict
+        self.runner = runner
 
     def stop(self) -> None:
         async def shutdown():
@@ -98,16 +106,25 @@ class TelegramHandle:
             if self.app.running:
                 await self.app.stop()
             await self.app.shutdown()
-        if self.thread.is_alive() and self.loop.is_running():
-            asyncio.run_coroutine_threadsafe(shutdown(), self.loop).result(timeout=10)
-            self.loop.call_soon_threadsafe(self.loop.stop)
-            self.thread.join(timeout=10)
+        try:
+            if self.thread.is_alive() and self.loop.is_running():
+                try:
+                    asyncio.run_coroutine_threadsafe(shutdown(), self.loop).result(timeout=10)
+                finally:
+                    if self.loop.is_running():
+                        self.loop.call_soon_threadsafe(self.loop.stop)
+            if self.thread.is_alive():
+                self.thread.join(timeout=10)
+        finally:
+            self.runner.close()
 
     def status(self) -> IntegrationStatus:
         if self._conflict["conflict"]:
             return IntegrationStatus(IntegrationState.ERROR, "another instance is polling this token")
         if not self.thread.is_alive():
             return IntegrationStatus(IntegrationState.ERROR, "gateway stopped unexpectedly")
+        if error := self.runner.error_status:
+            return IntegrationStatus(IntegrationState.ERROR, error)
         return IntegrationStatus(IntegrationState.CONNECTED)
 
 
@@ -147,7 +164,12 @@ def start_in_background() -> TelegramHandle | None:
                   "Telegram stays idle. Stop the other `waku telegram` and restart to use it here.")
 
     loop = asyncio.new_event_loop()
-    app = _build_app(token)
+    runner = _new_runner()
+    try:
+        app = _build_app(token, runner=runner)
+    except Exception:
+        runner.close()
+        raise
 
     def run() -> None:
         # keep PTB's own error logging out of the dashboard terminal; we report
@@ -167,7 +189,7 @@ def start_in_background() -> TelegramHandle | None:
 
     thread = threading.Thread(target=run, daemon=True, name="telegram-poll")
     thread.start()
-    return TelegramHandle(loop, app, thread, warned)
+    return TelegramHandle(loop, app, thread, warned, runner)
 
 
 if __name__ == "__main__":
