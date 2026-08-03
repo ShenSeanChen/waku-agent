@@ -80,15 +80,37 @@ class Settings:
     apple_tools: bool = field(
         default_factory=lambda: os.getenv("WAKU_APPLE_TOOLS", "") in ("1", "true", "yes")
     )
+    # Read-only GitHub access through the `gh` CLI's own auth (no token here).
+    # Off by default and deliberately so: every registered tool ships in every
+    # prompt, and reading PRs is maintainer capability, not assistant capability.
+    # The gather workflow calls waku/tools/github.py as a library and does NOT
+    # need this on — the switch only decides whether the MODEL can reach it.
+    gh_tool: bool = field(
+        default_factory=lambda: os.getenv("WAKU_GH_TOOL", "") in ("1", "true", "yes")
+    )
+    # owner/name to assume when a call omits it — for when Waku runs outside a
+    # checkout, where `gh` has no remote to infer from.
+    gh_repo: str = field(default_factory=lambda: os.getenv("WAKU_GH_REPO", ""))
     # Register the experimental tools (delegate_task -> pi sub-agent, ...). Env is
     # the global switch; the arena sets this per-race so a coding race can hand
     # work to pi WITHOUT flipping it on for the whole process.
     experimental: bool = field(
         default_factory=lambda: os.getenv("WAKU_EXPERIMENTAL", "") in ("1", "true", "yes")
     )
+    # Route every message through the triage graph workflow first (a small model
+    # classifies it; trivial messages get a fast small-model reply, real tasks
+    # run the normal loop as a graph node). Any failure anywhere fails open to
+    # the plain loop, so this can never make Waku worse — only faster/cheaper.
+    graph_workflows: bool = field(
+        default_factory=lambda: os.getenv("WAKU_GRAPH_WORKFLOWS", "") in ("1", "true", "yes")
+    )
 
     # --- Optional gateway
     telegram_token: str = field(default_factory=lambda: os.getenv("TELEGRAM_BOT_TOKEN", ""))
+    whatsapp_token: str = field(default_factory=lambda: os.getenv("WHATSAPP_TOKEN", ""))
+    whatsapp_phone_number_id: str = field(
+        default_factory=lambda: os.getenv("WHATSAPP_PHONE_NUMBER_ID", "")
+    )
 
     # --- Tracing (JSONL always; OTel exports if an endpoint is set)
     otel_endpoint: str = field(

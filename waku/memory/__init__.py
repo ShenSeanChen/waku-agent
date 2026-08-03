@@ -22,7 +22,24 @@ from waku.memory.episodic.store import SqliteEpisodeStore
 from waku.memory.procedural.loader import SkillLoader
 from waku.memory.semantic.store import SqliteFactStore
 
-REPO_SKILLS = Path(__file__).resolve().parents[2] / "skills"
+
+def bundled_skill_dirs() -> list[Path]:
+    """Where the skills that SHIP with Waku live — and why there are two answers.
+
+    Contributors add skills to `skills/` at the repo root: that is what
+    CONTRIBUTING.md documents, what CI validates, and what a checkout has. But
+    the wheel only packages the `waku/` directory, so a `pip install waku-agent`
+    would have found nothing there and silently started with zero skills —
+    procedural memory, one of the four pillars, quietly missing. (It did, until
+    2026-07-31.) pyproject force-includes the same folder into the wheel at
+    `waku/skills`, so an installed Waku finds it next to the code.
+
+    Exactly one of these exists at a time — the package copy only in a built
+    wheel, the repo copy only in a checkout — so returning both is not a
+    double-load, it is "wherever you installed from, the skills came too".
+    """
+    here = Path(__file__).resolve()
+    return [p for p in (here.parents[1] / "skills", here.parents[2] / "skills") if p.is_dir()]
 
 
 class Memory:
@@ -36,7 +53,7 @@ class Memory:
         self.client = client
         self.facts = self._make_fact_store(conn, settings)
         self.episodes = episode_store if episode_store is not None else self._make_episode_store(conn, settings)
-        self.skills = SkillLoader([REPO_SKILLS, settings.home / "skills"])
+        self.skills = SkillLoader([*bundled_skill_dirs(), settings.home / "skills"])
 
     @staticmethod
     def _make_fact_store(conn, settings):

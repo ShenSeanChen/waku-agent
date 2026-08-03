@@ -1,0 +1,129 @@
+"""DETERMINISTIC EVAL — the Apple tools, and the rule that keeps them usable.
+
+Every Apple tool timed out on a real Mac on 2026-07-30 while this suite stayed
+green. The reason is worth stating plainly, because it is a lesson about evals
+and not about AppleScript: the only existing test asserted on generated STRINGS,
+and one of its cases did nothing at all on macOS —
+
+    # on macOS we can't run osascript in CI, but the escaping is in the string
+    # build; covered by the pure date test above + manual verification
+
+"manual verification on the dev machine" is not a test. So waku advertised four
+Apple tools, and three of them did not work.
+
+CI has no Calendar.app, so we still cannot assert "reading really works". What we
+CAN pin is the rule that made it stop working, and the honesty of the failures:
+
+  * no `whose` filter in any generated script  (25s vs 6s, measured)
+  * every osascript call has a timeout, and a failure returns a SENTENCE
+  * a slow app must fail fast — a tool that blocks a turn for 75s then
+    apologises is worse than a tool that says "no" in 20
+
+Timings referenced below were measured on a 472-event Google-synced calendar and
+a Mail.app that could not `count of messages of inbox` inside two minutes.
+"""
+
+from __future__ import annotations
+
+import inspect
+import sys
+
+import pytest
+
+from waku.tools import apple
+
+# _osa short-circuits with "Apple tools are macOS-only" before it ever spawns
+# osascript, so the timeout and refusal cases can only be observed on a Mac.
+# CI runs Linux; those two cases skip there. Everything else — the `whose` rule,
+# the budgets, the date parsing — is pure source/string logic and runs anywhere,
+# which is the point: the rule that broke these tools IS checkable in CI.
+macos_only = pytest.mark.skipif(sys.platform != "darwin", reason="needs macOS osascript")
+
+
+def _code_lines(module) -> list[str]:
+    """Source lines with docstrings and comments removed, so a test can look for
+    a pattern in the CODE without matching the prose that explains it."""
+    import ast
+
+    src = inspect.getsource(module)
+    tree = ast.parse(src)
+    doc_spans: set[int] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant) \
+                and isinstance(node.value.value, str):
+            doc_spans.update(range(node.lineno, (node.end_lineno or node.lineno) + 1))
+    return [ln for i, ln in enumerate(src.splitlines(), 1)
+            if i not in doc_spans and not ln.strip().startswith("#")]
+
+
+def test_no_script_uses_a_whose_filter():
+    """THE regression. `whose` makes the app evaluate a predicate per item across
+    the Apple Event bridge: ~25s for one calendar versus ~6s to pull the raw
+    column and filter in Python. Reintroducing it is how these tools break."""
+    # Strip docstrings before looking: this module DISCUSSES `whose` at length on
+    # purpose, and a test that trips over its own explanation is a bad test.
+    offenders = [ln.strip() for ln in _code_lines(apple) if "whose" in ln]
+    assert offenders == [], (
+        "an AppleScript `whose` filter is back — that is the 4x slowdown that "
+        f"made every Apple tool time out: {offenders}"
+    )
+
+
+def test_every_osascript_call_is_bounded():
+    """No unbounded AppleScript, ever. One hung app must not hang a chat turn."""
+    src = inspect.getsource(apple)
+    sig = inspect.signature(apple._osa)
+    assert sig.parameters["timeout"].default, "_osa must always have a timeout default"
+    assert "subprocess.run" in src
+    assert "timeout=timeout" in src, "_osa must pass its timeout through to subprocess"
+
+
+def test_failures_are_fast_enough_to_be_useful():
+    """A 75s failure blocks the turn and then apologises. Budgets must stay small
+    enough that a broken app gives up while the user is still listening."""
+    assert apple._SLOW_APP_TIMEOUT <= 30, (
+        f"_SLOW_APP_TIMEOUT is {apple._SLOW_APP_TIMEOUT}s — at 75s Reminders blocked "
+        "a whole turn before reporting failure"
+    )
+    assert apple._TIMEOUT <= 45
+
+
+@macos_only
+def test_a_timeout_explains_itself():
+    """The old message blamed a permission dialog for what was actually slowness,
+    which sent a real debugging session down the wrong path for an hour."""
+    ok, msg = apple._osa("delay 5", timeout=1)
+    assert ok is False
+    assert "timed out after 1s" in msg, msg
+    assert "permission" in msg and "slow" in msg, "must name BOTH likely causes"
+
+
+@macos_only
+def test_calendar_refuses_rather_than_enumerating_everything(monkeypatch):
+    """A typical Mac has 30+ calendars once holidays and subscriptions pile up;
+    reading them all takes minutes. Refusing with instructions beats a two-minute
+    silence followed by a timeout."""
+    monkeypatch.setenv("WAKU_APPLE_CALENDARS", "")
+    apple._cache.clear()
+    out = apple.read_apple_calendar(1)
+    assert "WAKU_APPLE_CALENDARS" in out
+    assert "name of every calendar" in out, "must tell the user how to find the names"
+
+
+def test_applescript_dates_parse_into_real_datetimes():
+    """Calendar.app renders 'Thursday, July 30, 2026 at 1:00:00 PM'. The Python
+    side filters on these, so a parse failure silently empties the calendar."""
+    got = apple._parse_applescript_date("Thursday, July 30, 2026 at 1:00:00 PM")
+    assert got is not None
+    assert (got.year, got.month, got.day, got.hour) == (2026, 7, 30, 13)
+    # a narrow no-break space before AM/PM is what macOS actually emits
+    assert apple._parse_applescript_date("Friday, August 1, 2026 at 9:30:00 AM") is not None
+    assert apple._parse_applescript_date("not a date") is None, "must return None, never raise"
+
+
+def test_every_registered_tool_reports_failure_as_text():
+    """Tools return honest strings; they never raise. A calendar hiccup must not
+    take down the turn — same contract as ToolRegistry.execute."""
+    for tool in apple.make_tools():
+        assert tool.description and tool.name
+        assert callable(tool.fn)

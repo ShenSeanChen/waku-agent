@@ -1,8 +1,9 @@
 """The small Settings surface left after Connections owns integrations.
 
 Provider credentials, models, memory backends, search and gateways are managed
-by :mod:`waku.integrations`. This module retains the Experimental toggle and
-the model pin action; catalog remains the sole owner of pin persistence.
+by :mod:`waku.integrations`. This module retains the Experimental and
+Graph-workflows toggles and the model pin action; catalog remains the sole
+owner of pin persistence.
 """
 
 from __future__ import annotations
@@ -73,22 +74,32 @@ def settings_info() -> dict:
         # a toggle here, the sidebar chat could never delegate. See settings_save.
         "experimental": s.experimental,
         "pi_installed": bool(shutil.which("pi")),
+        # graph workflows (triage-first turns) — same toggle contract as
+        # experimental: the UI renders it, apply_settings writes it.
+        "graph_workflows": s.graph_workflows,
     }
 
 
 def apply_settings(payload: dict) -> dict:
-    """Save the remaining Settings concern: experimental tool opt-in.
+    """Save the remaining Settings concerns: the experimental and graph-workflows
+    toggles.
 
     Connection fields and provider changes deliberately live in integrations.
     """
+    import os
+
     from dotenv import find_dotenv, set_key
 
     if "episodic_store" in payload:
         return {"error": "episodic_store is managed in Connections"}
-    experimental = payload.get("experimental")
-    if experimental is not None:
-        value = "1" if str(experimental).strip() else ""
-        set_key(find_dotenv(usecwd=True) or ".env", "WAKU_EXPERIMENTAL", value)
-        import os
-        os.environ["WAKU_EXPERIMENTAL"] = value
+    env_path = find_dotenv(usecwd=True) or ".env"
+    # NOT `if toggle:` — turning it OFF sends "", which is falsy. Absent (None)
+    # means "don't touch"; "" means "switch it off".
+    toggles = (("experimental", "WAKU_EXPERIMENTAL"), ("graph_workflows", "WAKU_GRAPH_WORKFLOWS"))
+    for field, env_name in toggles:
+        value = payload.get(field)
+        if value is not None:
+            value = "1" if str(value).strip() else ""
+            set_key(env_path, env_name, value)
+            os.environ[env_name] = value
     return {"ok": True, **settings_info()}

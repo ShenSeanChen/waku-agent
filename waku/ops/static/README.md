@@ -22,6 +22,7 @@ runs the bootstrap and must load last**.
 | `models.js`  | `applyModel` (the one `/api/settings` writer), model picker / catalog / pins |
 | `render.js`  | formatters + chat card renderers (`stagesRow`/`teleFooter`) + chatlog + streaming + `sendChat` |
 | `diagram.js` | `archSVG` (the architecture chart) **and** its live animation (`STAGE`/`hot`/`pollEvents`) |
+| `graph.js`   | graph workflows: data-driven topology chart (`graphSVG` from `d.graph.workflows`), the Overview panel (`graphPanel`), and `animateGraphStage` for `graph_*`/`route` events |
 | `views.js`   | subtab/db helpers, SQL console, Memory/Tools sub-views, the `VIEWS` router object |
 | `compare.js` | the Model arena (`Arena` tab; internals keep the `compare` name) — race one message through several models at once |
 | `dock.js`    | chat sessions/history (`loadThreadInto`), model chip, stats toggle |
@@ -41,6 +42,11 @@ Data flows one way: `refresh()` (main.js) fetches `/api/data` into the global
   `data-node="…"`/`data-edge="…"` ids that the `STAGE` map (same file) drives the
   live animation from. If you ever change a node/edge id, change it in both
   places. (Both are in `diagram.js` precisely so they stay together.)
+- **The graph chart is data-driven — never hand-edit a topology.** `graphSVG`
+  renders `Graph.describe()` served in `/api/data`, so the picture is provably
+  what the engine runs (`test_graph_topology_payload.py` pins it). To change the
+  chart's shape, change the workflow in `waku/graph/workflows/`. Graph ids are
+  namespaced `g-<node>` / `g-<src>-<dst>` so they can never collide with archSVG's.
 - **No build step / no framework / no new dependencies.** If you reach for one,
   stop — the whole point is that this reads and runs with nothing installed.
 - **No emojis in UI** (project rule). Known pre-existing exception: the `★`/`☆`

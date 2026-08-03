@@ -2,11 +2,11 @@
 // Split out of app.js: classic <script>, shared global scope (no build
 // step, no modules). Load order + rules: static/README.md.
 
-
 async function saveSettings(){
   const experimental = document.getElementById("set-experimental")?.value;
+  const graph_workflows = document.getElementById("set-graph-workflows")?.value;
   document.getElementById("set-msg").textContent = "switching…";
-  const r = await postJSON("/api/settings", {experimental});
+  const r = await postJSON("/api/settings", {experimental, graph_workflows});
   document.getElementById("set-msg").textContent = r.error ? ("Error: "+r.error) : "Saved.";
 }
 function markEditing(){ editing = true; }

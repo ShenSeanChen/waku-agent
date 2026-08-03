@@ -40,7 +40,7 @@ from waku.integrations import (
     list_providers,
     test_integration,
 )
-from waku.ops import browser_agent, compare_history
+from waku.ops import browser_agent, commands, compare_history
 from waku.ops.arena import (
     compare_clear,
     compare_delete_run,
@@ -85,11 +85,20 @@ def chat_stream(message: str, emit) -> None:
     """Run one turn, calling emit(kind, event) for every harness event AS it
     happens — gate decision, tool calls, and the reply text token by token —
     so the browser can show thinking stream in (like the CLI/voice do). Ends
-    with a 'done' event carrying the final structured result."""
+    with a 'done' event carrying the final structured result.
+
+    A leading slash calls a graph workflow BY NAME instead of running a turn.
+    Both doors end in the same 'done' event, so the chat renders the answer the
+    same way whether the harness routed it or you named the shape yourself."""
+    command = commands.parse(message)
+    if command is not None:
+        _run_command(command, emit)
+        return
+
     events: list[dict] = []
 
     def observer(kind, ev):
-        if kind in ("gate", "consolidation"):
+        if kind in ("gate", "consolidation", "route", "triage"):
             events.append({"kind": kind, **ev})
         emit(kind, ev)
 
@@ -102,16 +111,104 @@ def chat_stream(message: str, emit) -> None:
 
     gate = next((e for e in events if e["kind"] == "gate"), None)
     cons = next((e for e in events if e["kind"] == "consolidation"), None)
+    route = next((e for e in events if e["kind"] == "route"), None)
+    triage = next((e for e in events if e["kind"] == "triage"), None)
+    quick = bool(route) and route.get("target") == "quick_reply"
     emit("done", {
         "reply": result.reply,
         "gate": {"decision": gate["decision"], "reason": gate.get("reason")} if gate else None,
+        "graph": ({"workflow": route.get("workflow", "triage"),
+                   "route": "quick" if quick else "full",
+                   "reason": (triage or {}).get("reason", "")} if route else None),
         "tools": [{"tool": c["tool"], "args": c["args"], "output": c["output"],
                    "status": _tool_status(c["output"]),
                    "summary": (c["output"] or "").split(". ")[0][:120]} for c in result.tool_calls],
         "consolidation": {"new_facts": cons["new_facts"]} if cons else None,
         "iterations": result.iterations,
         "latency_ms": latency_ms,
-        "model": agent.settings.model,   # which brain answered — shown per card
+        # which brain answered — shown per card; a quick graph turn was the small model
+        "model": agent.settings.small_model if quick else agent.settings.model,
+    })
+
+
+# A NAME -> runner table, never a dynamic import of whatever the browser sent.
+# "run the workflow the client named" is one careless refactor away from "import
+# and call whatever string arrives", so the indirection is a dict on purpose.
+def WORKFLOW_RUNNERS() -> dict[str, str]:  # noqa: N802 — reads as a table
+    """Discovered, not hand-listed. A hardcoded table and a slash-command list
+    are two registries of the same fact, and they drift."""
+    return commands.discover()
+
+
+def graph_stream(payload: dict, emit) -> None:
+    """Run a graph workflow, streaming its node events as SSE.
+
+    Only the engine's own events go out — graph_start / node_start / node_end /
+    route / graph_end. They already carry `workflow` and `node`, which is all a
+    card needs, and they carry no node OUTPUT, so a digest can never leak into
+    a frame. Unlike the Arena this needs no lock of its own: run_graph already
+    serialises notify() behind one (engine.py), so events arrive whole.
+    """
+    name = (payload.get("workflow") or "").strip()
+    target = WORKFLOW_RUNNERS().get(name)
+    if target is None:
+        emit("done", {"error": f"unknown workflow '{name}'"})
+        return
+    module_name, _, fn_name = target.partition(":")
+    try:
+        import importlib
+
+        run = getattr(importlib.import_module(module_name), fn_name)
+        state = run(observer=lambda kind, ev: emit(kind, ev))
+        emit("done", {
+            "workflow": name,
+            "digest": (state.get("digest") or "")[:4000],
+            "draft_path": state.get("draft_path", ""),
+            "errors": state.get("errors") or {},
+        })
+    except Exception as exc:
+        # Includes GraphStateCollision, which run_graph raises OUT (unlike node
+        # errors) — better shown in the card than dropped on the floor.
+        emit("done", {"error": f"{type(exc).__name__}: {exc}"})
+
+
+def _run_command(command: tuple[str, str], emit) -> None:
+    """Handle `/name` from the chat box.
+
+    The node events go out exactly as the engine emits them, so the topology
+    chart animates from the same trace poll that animates a normal turn — a
+    named workflow lights the picture as readily as a routed one.
+    """
+    name, arg = command
+    start = datetime.now(UTC)
+    if name in ("graphs", "help", "?"):
+        emit("done", {"reply": commands.describe(), "tools": [], "iterations": 0,
+                      "latency_ms": 0, "gate": None})
+        return
+    try:
+        state = commands.run(name, emit, arg)
+    except Exception as exc:
+        emit("done", {"reply": f"`/{name}` failed: {type(exc).__name__}: {exc}",
+                      "tools": [], "iterations": 0, "latency_ms": 0, "gate": None})
+        return
+    if state is None:
+        emit("done", {"reply": commands.unknown_reply(name), "tools": [],
+                      "iterations": 0, "latency_ms": 0, "gate": None})
+        return
+    reply = state.get("digest") or "(the workflow produced no text)"
+    if state.get("ignored_argument"):
+        reply = (f"*`/{name}` takes no input, so \u201c{state['ignored_argument']}\u201d "
+                 f"was not used — a fixed shape always fetches the same sources. "
+                 f"Ask a normal question to use the loop instead.*\n\n") + reply
+    if state.get("draft_path"):
+        reply += f"\n\n*saved to `{state['draft_path']}`*"
+    for node, err in (state.get("errors") or {}).items():
+        reply += f"\n\n*{node}: {err}*"
+    emit("done", {
+        "reply": reply, "tools": [], "gate": None, "consolidation": None,
+        "iterations": 0,
+        "latency_ms": int((datetime.now(UTC) - start).total_seconds() * 1000),
+        "workflow": name,
     })
 
 
@@ -228,6 +325,12 @@ def collect() -> dict:
         elif current is not None:
             if kind == "gate":
                 current["gate"] = ev
+            elif kind == "route":
+                current["graph"] = {"workflow": ev.get("workflow"),
+                                    "route": "quick" if ev.get("target") == "quick_reply" else "full",
+                                    "reason": (current.get("graph") or {}).get("reason", "")}
+            elif kind == "triage":
+                current.setdefault("graph", {})["reason"] = ev.get("reason", "")
             elif kind == "llm":
                 current["llm_calls"].append(ev)
             elif kind == "tool":
@@ -266,7 +369,7 @@ def collect() -> dict:
     def pct(p: float) -> int:
         return latencies[min(len(latencies) - 1, int(len(latencies) * p))] if latencies else 0
 
-    from waku.memory import REPO_SKILLS
+    from waku.memory import bundled_skill_dirs
     from waku.memory.procedural.loader import SkillLoader
 
     skills = [{"name": s.name, "description": s.description, "body": s.body,
@@ -274,7 +377,7 @@ def collect() -> dict:
                # relative path (for reveal) + whether it lives in the editable home dir
                "rel": _rel_to_home(s.path, home),
                "editable": str((home / "skills").resolve()) in str(s.path.resolve())}
-              for s in SkillLoader([REPO_SKILLS, home / "skills"]).skills]
+              for s in SkillLoader([*bundled_skill_dirs(), home / "skills"]).skills]
 
     eval_report = None
     report_path = home / "eval_report.json"
@@ -321,6 +424,21 @@ def collect() -> dict:
     # pay for an agent nobody has chatted with yet.
     live = browser_agent.current()
 
+    # --- graph workflows: topology straight from the engine (never hand-drawn,
+    # so the picture can't drift) + quick/full split from the trace events
+    from waku.graph.workflows.gather import gather_topology
+    from waku.graph.workflows.triage import triage_topology
+    graph_routes = [e.get("target") for e in events if e.get("type") == "route"]
+    # The last few completed runs, newest first. Overview needs this because the
+    # two workflows are two different JOBS with different triggers — triage runs
+    # itself on every message, gather runs when you ask — so "which chart is
+    # relevant right now" is a question only the trace can answer. Rendering a
+    # fixed workflow there showed triage forever, seconds after a gather ran.
+    graph_runs = [{"workflow": e.get("workflow"), "ms": e.get("ms"),
+                   "at": e.get("ts"), "steps": e.get("steps"),
+                   "path": e.get("path") or [], "error": e.get("error")}
+                  for e in events if e.get("type") == "graph_end"][-8:][::-1]
+
     return {
         "generated_at": datetime.now(UTC).isoformat(timespec="seconds"),
         "home": str(home.resolve()),
@@ -363,6 +481,16 @@ def collect() -> dict:
         "skills": skills,
         "eval_report": eval_report,
         "eval_history": eval_history,
+        "graph": {
+            # NOTE: `enabled` gates TRIAGE ONLY — the per-message front door.
+            # `waku gather` is a routine you run yourself and ignores this flag
+            # entirely, so the UI must not say "off = no graphs run".
+            "enabled": settings.graph_workflows,
+            "workflows": [triage_topology(), gather_topology()],
+            "runs": graph_runs,
+            "stats": {"quick": sum(1 for t in graph_routes if t == "quick_reply"),
+                      "full": sum(1 for t in graph_routes if t == "full_agent")},
+        },
         "db": db_info,
         "settings": info,
         "providers": [asdict(view) for view in list_providers()],
@@ -689,12 +817,12 @@ def memory_action(payload: dict) -> dict:
         # skills folders; validates the frontmatter before writing.
         from pathlib import Path
 
-        from waku.memory import REPO_SKILLS
+        from waku.memory import bundled_skill_dirs
         from waku.memory.procedural.loader import _parse_text
 
         text = (payload.get("content") or "").strip()
         dest = Path(payload.get("path") or "").resolve()
-        allowed = [REPO_SKILLS.resolve(), (settings.home / "skills").resolve()]
+        allowed = [d.resolve() for d in bundled_skill_dirs()] + [(settings.home / "skills").resolve()]
         if dest.name != "SKILL.md" or not any(a in dest.parents for a in allowed):
             return {"error": "can only edit SKILL.md files inside the skills folders"}
         if _parse_text(text, dest) is None:
@@ -854,6 +982,21 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as exc:
                 emit("done", {"error": f"{type(exc).__name__}: {exc}"})
             return
+        if self.path == "/api/graph/stream":
+            payload = json.loads(self.rfile.read(length) or "{}")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-cache")
+            self.end_headers()
+
+            def emit(kind, ev):
+                try:
+                    self.wfile.write(f"data: {json.dumps({'kind': kind, **ev}, default=str)}\n\n".encode())
+                    self.wfile.flush()
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
+            graph_stream(payload, emit)
+            return
         routes = {"/api/chat": None, "/api/memory": memory_action, "/api/settings": apply_settings,
                   "/api/query": run_query, "/api/session": session_action, "/api/pin": pin_action,
                   "/api/connections": None, "/api/connections/test": None,
@@ -924,6 +1067,16 @@ def main() -> None:
         register_gateway_status_provider(supervisor.status)
         register_gateway_reloader(supervisor.reconcile)
         supervisor.reconcile()
+        # WhatsApp isn't a Connections integration yet, so the supervisor doesn't
+        # own it — start it standalone, in its OWN try: a WhatsApp failure must
+        # never block the dashboard.
+        try:
+            from waku.gateway.whatsapp import start_in_background as wa_background
+
+            if wa_background():
+                print("WhatsApp gateway → listening in the background (webhook on port 5000)")
+        except Exception as exc:  # noqa: BLE001 — never let a gateway block the dashboard
+            print(f"(whatsapp) not started: {exc}")
         print(f"Waku dashboard → http://localhost:{port}  (Ctrl-C to stop)")
         try:
             server.serve_forever()

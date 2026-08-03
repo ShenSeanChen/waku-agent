@@ -22,7 +22,10 @@ def build_registry(conn: sqlite3.Connection, settings: Settings, memory=None) ->
             google_calendar_id=settings.google_calendar_id,
         )
     )
-    registry.register(calendar.make_list_tool(conn))   # read side: "what's on my calendar?"
+    # Read side: "what's on my calendar?" — one tool across every connected
+    # source (Google when signed in, plus waku's own), so the model never has
+    # to guess which calendar the user meant.
+    registry.register(calendar.make_list_tool(conn, settings.home))
     registry.register(notes.make_tool(conn))
     registry.register(messages.make_tool(settings.home))
     # Web search — pairs with create_event for the multi-tool loop demo
@@ -57,6 +60,12 @@ def build_registry(conn: sqlite3.Connection, settings: Settings, memory=None) ->
 
         for t in apple.make_tools():
             registry.register(t)
+
+    # Read-only GitHub via the gh CLI (opt-in; uses gh's own auth, no token here).
+    if getattr(settings, "gh_tool", False):
+        from waku.tools import github
+
+        registry.register(github.make_tool(default_repo=getattr(settings, "gh_repo", "")))
 
     # MCP servers (opt-in via .waku/mcp.json).
     mcp_config = settings.home / "mcp.json"

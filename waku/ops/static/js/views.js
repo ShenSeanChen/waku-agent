@@ -420,10 +420,66 @@ const VIEWS = {
     <h2>Retrieval gate — the hero decision</h2>${gateSplit(s)}
     <h2 style="margin-top:26px">Architecture — click any box <span class="arch-status"></span></h2>
     ${archSVG(d)}
+    <h2>Graph workflows — when a turn needs shape</h2>
+    ${graphPanel(d)}
     <h2>Latest turn</h2>${d.turns.length?turnCard(d.turns[0]):'<div class="card empty">no turns yet — talk to Waku first</div>'}`;
   },
   loop(d){
     return d.turns.length ? d.turns.map(turnCard).join("") : `<div class="card empty">no turns yet</div>`;
+  },
+  // Graph workflows: the loop's sibling. The chart is rendered from the
+  // engine's own describe() (served in d.graph.workflows) so it can never
+  // show a shape the engine doesn't run. Nothing here is a mode switch —
+  // the harness routes every message itself; this tab just tells the story.
+  graph(d){
+    const g = d.graph || {enabled:false, workflows:[], stats:{quick:0, full:0}};
+    let h = `<div class="meta" style="margin-bottom:14px">The loop is one agent turn: the model picks tools until
+      it stops. Some work has <b>shape</b> — steps that can run at the same time, and explicit "if this, go
+      there" routing. A <b>graph workflow</b> makes that shape first-class: nodes (each does one job) connected
+      by edges (what happens next). The loop did not change one line — the <code>full_agent</code> node below
+      IS the same loop, running as one step. The harness routes every message itself — and workflows you
+      can also call BY NAME from the chat box: type <code>/graphs</code> to see them.</div>`;
+    if (!g.enabled)
+      h += `<div class="card"><b>Off</b> — every turn currently runs the classic loop.
+        <div class="meta" style="margin-top:6px">Switch on <b>graph workflows</b> in
+        <a class="reveal" onclick="location.hash='settings'">Settings</a>, or set
+        <code>WAKU_GRAPH_WORKFLOWS=1</code> in <code>.env</code>. Any failure anywhere fails open to the
+        plain loop — this can never lose a reply, only save time and tokens.</div></div>`;
+    // The two workflows are two different JOBS with different triggers, which is
+    // the thing the page has to make obvious — otherwise two stacked charts read
+    // like two options you pick between.
+    const NOTE = {
+      triage: `<b>Runs itself, on every message.</b> Gated by the graph-workflows flag.
+        Solid arrows = always, dashed = the router's choice. <code>full_agent</code> is the
+        ordinary loop running as one node — a graph does not replace the loop, it arranges calls to it.`,
+      gather: `<b>Runs when you start it</b> — <code>make gather</code> or the button below — and
+        ignores the flag entirely. The four scans have no dependencies on each other, so the engine
+        runs them in ONE WAVE: together, not in turn. It proposes and never acts; the digest lands
+        in the outbox for you to read.`,
+    };
+    (g.workflows || []).forEach(w => {
+      if (!w) return;
+      h += `<h2>${esc(w.name)} — live topology <span class="arch-status"></span></h2>`;
+      const tot = g.stats.quick + g.stats.full;
+      const extra = w.name === "triage" && tot
+        ? ` · ${g.stats.quick} quick / ${g.stats.full} full so far` : "";
+      h += `<div class="card">${graphSVG(w)}
+        <div class="meta" style="margin-top:8px">${NOTE[w.name] || ""}${extra} ·
+        drawn from the engine's own <code>describe()</code>, so this picture cannot drift from the code</div></div>`;
+      if (w.name === "gather") h += graphRunPanel();
+    });
+    const gturns = (d.turns||[]).filter(t => t.graph && t.graph.route);
+    h += `<h2>Graph turns</h2>`;
+    h += gturns.length
+      ? gturns.slice(0,20).map(t => `<div class="card">
+          <div class="u">${esc(t.user_message)}</div>
+          <div class="meta" style="margin-top:4px"><span class="badge ${t.graph.route==="quick"?"":"retrieve"}">graph · ${esc(t.graph.route)}</span>
+            <span class="meta" style="margin:0">${esc(t.graph.reason||"")}</span></div>
+          <div class="r">${renderMarkdown(t.reply||"")}</div></div>`).join("")
+      : `<div class="card empty">no graph turns yet — ${g.enabled
+          ? 'say "thanks!" in the chat and watch it take the quick door'
+          : "switch the flag on first"}</div>`;
+    return h;
   },
   memory(d, sub){
     sub = sub || "overview";
@@ -482,6 +538,21 @@ const VIEWS = {
       ${st.pi_installed
         ? `<div class="meta"><span class="srcpill" style="background:var(--good-soft);color:var(--good)">pi found</span> on this machine</div>`
         : `<div class="meta"><span class="srcpill apple">pi not installed</span> — <code>npm install -g --ignore-scripts @earendil-works/pi-coding-agent</code></div>`}
+      <div style="margin-top:12px"><button class="save" onclick="saveSettings()">Save &amp; switch</button>
+        <span class="meta" style="margin-left:10px">rebuilds the agent in-process — no restart</span></div>
+    </div>
+    <h2>Graph workflows</h2><div class="card">
+      <div class="meta" style="margin-bottom:8px">Off by default. When on, <b>every</b> message is triaged
+        through a graph first: a small model classifies it while today's calendar loads in parallel — trivial
+        messages get a fast small-model reply, real tasks run the exact same loop as a node. This flag governs
+        the AUTOMATIC door only — workflows you call by name (<code>/gather</code>) run either way. Any
+        failure fails open to the plain loop. Watch it live on the
+        <a class="reveal" onclick="location.hash='graph'">Graph</a> tab.</div>
+      <label class="fld">Triage-first turns
+        <select id="set-graph-workflows" onfocus="markEditing()">
+          <option value="" ${!st.graph_workflows?"selected":""}>off — every turn runs the classic loop (default)</option>
+          <option value="1" ${st.graph_workflows?"selected":""}>on — triage graph routes each message</option>
+        </select></label>
       <div style="margin-top:12px"><button class="save" onclick="saveSettings()">Save &amp; switch</button>
         <span class="meta" style="margin-left:10px">rebuilds the agent in-process — no restart</span></div>
     </div>
