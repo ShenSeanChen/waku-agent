@@ -141,7 +141,9 @@ Run:
 .venv/bin/python -m pytest -q evals/deterministic/test_apple_tools.py
 ```
 
-Expected: PASS, including all new probe cases; tests must not invoke real `osascript`.
+Expected: PASS, including all new probe cases. The new probe cases must mock
+`_osa()` completely; the file's pre-existing `macos_only` checks may continue
+to invoke real `osascript` on macOS.
 
 - [ ] **Step 5: Commit the probe milestone**
 
