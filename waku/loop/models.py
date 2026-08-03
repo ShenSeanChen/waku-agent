@@ -95,7 +95,65 @@ PROVIDERS: dict[str, Provider] = {
     "xai":       Provider("openai", "XAI_API_KEY", "https://api.x.ai/v1",
                           "grok-4", "grok-4-fast",
                           catalog_url="https://api.x.ai/v1/models"),
+    # OpenCode — OpenAI-compatible platform. Two endpoints: "zen" and "go"
+    # share the same platform key. zen offers free models (default:
+    # deepseek-v4-flash-free); go uses the standard deepseek-v4-flash.
+    # The live catalog (GET /models) lists whatever the endpoint serves,
+    # and the picker is the authoritative menu.
+    "opencode_zen": Provider("openai", "OPENCODE_ZEN_API_KEY",
+                               "https://opencode.ai/zen/v1",
+                               "deepseek-v4-flash-free", "deepseek-v4-flash-free"),
+    "opencode_go":  Provider("openai", "OPENCODE_GO_API_KEY",
+                               "https://opencode.ai/zen/go/v1",
+                               "deepseek-v4-flash", "deepseek-v4-flash"),
 }
+
+
+# Where each provider's key actually comes from. Pointing at ".env.example"
+# was useless advice for anyone who installed from PyPI — that file only exists
+# in a git checkout, so the one instruction the message gave could not be
+# followed by the people most likely to need it.
+KEY_URLS = {
+    "anthropic": "https://console.anthropic.com/settings/keys",
+    "openai": "https://platform.openai.com/api-keys",
+    "gemini": "https://aistudio.google.com/apikey",
+    "deepseek": "https://platform.deepseek.com/api_keys",
+    "openrouter": "https://openrouter.ai/keys",
+    "kimi": "https://platform.moonshot.ai/console/api-keys",
+    "glm": "https://z.ai/manage-apikey/apikey-list",
+    "minimax": "https://platform.minimaxi.com/user-center/basic-information",
+    "xai": "https://console.x.ai",
+    "opencode_zen": "https://opencode.ai/zen",
+    "opencode_go": "https://opencode.ai/zen",
+}
+
+
+def _no_key_message(name: str, key_env: str) -> str:
+    """Say what to set, where to get it, and WHICH file we read.
+
+    The old message named one env var and pointed at a file that does not exist
+    off a git checkout. Three things were missing and each one cost a search:
+    the URL to get a key, the absolute path of the .env actually in play, and
+    the fact that Waku speaks to eleven providers, not one.
+    """
+    from waku.config import DOTENV_PATH
+
+    # Name the variable in BOTH branches. "add the line there" without saying
+    # which line is the same dead end as pointing at .env.example was.
+    where = (f"Add it to {DOTENV_PATH}:\n"
+             f"    {key_env}=your-key-here"
+             if DOTENV_PATH else
+             f"No .env found from {os.getcwd()} upward — create one here:\n"
+             f"    echo '{key_env}=your-key-here' >> .env")
+    url = KEY_URLS.get(name)
+    return (
+        f"No API key for provider '{name}'.\n\n"
+        f"  1. Get a key: {url}\n" if url else f"No API key for provider '{name}'.\n\n"
+    ) + (
+        f"  2. {where}\n\n"
+        f"Other providers: {', '.join(sorted(PROVIDERS))}\n"
+        f"Switch with WAKU_PROVIDER=<name> and that provider's key."
+    )
 
 
 def get_client(settings: Settings):
@@ -110,10 +168,7 @@ def get_client(settings: Settings):
     # auth header (headers are latin-1; a stray non-ASCII char errors cryptically).
     api_key = (settings.api_key or os.getenv(provider.key_env, "")).strip()
     if not api_key:
-        raise SystemExit(
-            f"No API key for provider '{settings.provider}'. "
-            f"Set {provider.key_env} in .env (see .env.example)."
-        )
+        raise SystemExit(_no_key_message(settings.provider, provider.key_env))
     try:
         api_key.encode("latin-1")
     except UnicodeEncodeError:

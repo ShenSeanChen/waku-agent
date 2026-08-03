@@ -93,6 +93,9 @@ def settings_info() -> dict:
         # a toggle here, the sidebar chat could never delegate. See settings_save.
         "experimental": s.experimental,
         "pi_installed": bool(shutil.which("pi")),
+        # graph workflows (triage-first turns) — same toggle contract as
+        # experimental: the UI renders it, settings_save writes it.
+        "graph_workflows": s.graph_workflows,
         # optional web-search key (Tavily) — same BYOK treatment as provider keys
         "search_key_env": "TAVILY_API_KEY",
         "search_key_set": bool(os.getenv("TAVILY_API_KEY")),
@@ -123,7 +126,7 @@ def apply_settings(payload: dict) -> dict:
               "model": os.getenv("WAKU_MODEL", ""),
               "small_model": os.getenv("WAKU_SMALL_MODEL", "")}
     writable = ({"WAKU_PROVIDER", "WAKU_MODEL", "WAKU_SMALL_MODEL", "TAVILY_API_KEY",
-                 "WAKU_EPISODIC_STORE", "WAKU_EXPERIMENTAL",
+                 "WAKU_EPISODIC_STORE", "WAKU_EXPERIMENTAL", "WAKU_GRAPH_WORKFLOWS",
                  "NOTION_TOKEN", "NOTION_EPISODES_DATABASE_ID"}
                 | {p.key_env for p in PROVIDERS.values()})
     env_path = find_dotenv(usecwd=True) or ".env"
@@ -138,6 +141,9 @@ def apply_settings(payload: dict) -> dict:
     experimental = payload.get("experimental")
     if experimental is not None:
         updates["WAKU_EXPERIMENTAL"] = "1" if str(experimental).strip() else ""
+    graph_workflows = payload.get("graph_workflows")  # same is-not-None rule
+    if graph_workflows is not None:
+        updates["WAKU_GRAPH_WORKFLOWS"] = "1" if str(graph_workflows).strip() else ""
     # Changing provider never carries a model across endpoints (live bug:
     # kimi->gemini kept gate model kimi-k3 and every turn 404'd on Gemini). But
     # if the user didn't newly type a model, use THIS provider's default (their

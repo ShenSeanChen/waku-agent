@@ -119,6 +119,7 @@ function hot(sel, cls, ms){
   });
 }
 function animateStage(ev){
+  if (GRAPH_KINDS.has(ev.type)) return animateGraphStage(ev);   // graph.js owns these
   const spec = STAGE[ev.type];
   if (!spec || !document.querySelector(".arch")) return;
   document.querySelectorAll(".arch-status").forEach(st => st.innerHTML = `<span class="live-dot"></span>${spec.label}`);

@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import re
 
-from waku.memory import REPO_SKILLS
+from waku.memory import bundled_skill_dirs
 from waku.memory.procedural.loader import _parse_text
 from waku.tools.registry import Tool
 
@@ -114,7 +114,7 @@ def make_create_skill_tool(settings, memory) -> Tool:
             return "Skill name must be a short slug like 'weekly-review' (lowercase, hyphens)."
         dest = settings.home / "skills" / name / "SKILL.md"
         # never silently overwrite an existing skill (built-in or user)
-        if dest.exists() or (REPO_SKILLS / name / "SKILL.md").exists():
+        if dest.exists() or any((d / name / "SKILL.md").exists() for d in bundled_skill_dirs()):
             return f"A skill named '{name}' already exists — pick another name."
         text = f"---\nname: {name}\ndescription: {description.strip()}\n---\n\n{body.strip()}\n"
         if _parse_text(text, dest) is None:

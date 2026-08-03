@@ -4,6 +4,7 @@
 
 let activeView = null, activeSub = null;
 const TITLES = {chat:"Chat & watch", ops:"LLM Ops",
+                graph:"Graph workflows — structure around the loop",
                 compare:"Arena — race models through the real loop",
                 database:"Database — everything Waku stores (state.db)"};
 function render(){
@@ -14,9 +15,9 @@ function render(){
   const subChanged = sub !== activeSub || view !== activeView;
   document.querySelectorAll("nav a").forEach(a=>a.classList.toggle("on", a.dataset.v===view));
   document.getElementById("title").textContent = TITLES[view] || view[0].toUpperCase()+view.slice(1);
-  if (view === "overview"){
+  if (view === "overview" || view === "graph"){
     // don't rebuild mid-animation or the glowing SVG gets wiped
-    if (activeView !== "overview" || !animating){ document.getElementById("view").innerHTML = VIEWS.overview(D); }
+    if (activeView !== view || !animating){ document.getElementById("view").innerHTML = VIEWS[view](D); }
   } else if ((view === "memory" || view === "settings" || view === "database" || view === "compare") && editing && !subChanged){
     // don't wipe an in-progress edit on the 5s refresh — but DO switch sub-tabs
   } else {
@@ -34,6 +35,8 @@ function render(){
   document.getElementById("model").textContent = `${D.provider} · ${D.model}`;
   document.getElementById("n-gw").textContent = (D.chat_log||[]).length;
   document.getElementById("n-loop").textContent = D.stats.turns;
+  document.getElementById("n-graph").textContent =
+    (D.graph && (D.graph.stats.quick + D.graph.stats.full)) || "";
   document.getElementById("n-mem").textContent = D.facts.length + D.episodes.length;
   document.getElementById("n-tools").textContent = D.calendar.length + D.outbox.length;
   document.getElementById("n-db").textContent = (D.db && D.db.all_tables.length) || "";

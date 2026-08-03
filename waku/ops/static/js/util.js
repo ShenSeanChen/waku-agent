@@ -2,7 +2,15 @@
 // Split out of app.js: classic <script>, shared global scope (no build
 // step, no modules). Load order + rules: static/README.md.
 
-const esc = s => (s??"").toString().replace(/[&<>]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
+// Escapes quotes too, not just &<>. Text nodes never needed it, and for a long
+// time nothing put model output inside an ATTRIBUTE — so the gap was invisible.
+// The copy buttons (#58) are the first place that happens, and a reply
+// containing one double quote was enough to close data-text="..." and attach
+// its own event handler. The model's output is not fully ours: search_web and
+// browse_web pull text off the open web, and this dashboard holds the memory,
+// the traces and the settings. Escape at the helper, once, for every caller.
+const esc = s => (s??"").toString().replace(/[&<>"']/g,
+  c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 
 // --- tiny markdown renderer for chat replies (no dependency, XSS-safe: we
 // escape first, then apply a small set of transforms the LLM actually uses:
@@ -43,6 +51,17 @@ function renderMarkdown(text){
       while (i < lines.length && /^\s*\d+\.\s+/.test(lines[i])){ items.push(mdInline(lines[i].replace(/^\s*\d+\.\s+/,""))); i++; }
       out.push(`<ol class="mdlist">${items.map(x=>`<li>${x}</li>`).join("")}</ol>`); continue;
     }
+    if (/^\s*`{3,}/.test(l)){                                       // fenced code block
+      const lang = l.replace(/^\s*`{3,}/, "").trim();
+      i++;
+      const codeLines = [];
+      while (i < lines.length && !/^\s*`{3,}\s*$/.test(lines[i])){ codeLines.push(lines[i]); i++; }
+      if (i < lines.length) i++;   // skip closing ```
+      const langLabel = lang ? `<span class="mdcode-lang">${lang}</span>` : "";
+      out.push(`<div class="mdcode"><div class="mdcode-head">${langLabel}<button class="mdcode-copy" onclick="copyCode(this)">Copy</button></div><pre><code>${codeLines.join("\n")}</code></pre></div>`);
+      continue;
+    }
+    if (/^\s*[-*_]{3,}\s*$/.test(l)){ out.push("<hr class='mdhr'>"); i++; continue; } // hr
     if (/^\s*$/.test(l)){ i++; continue; }
     const para = [];                                                // paragraph
     while (i < lines.length && lines[i].trim() && !/^\s*[-*]\s|^\s*\d+\.\s|^\s*#{1,6}\s/.test(lines[i])
@@ -52,6 +71,22 @@ function renderMarkdown(text){
     out.push(`<div class="mdp">${para.join("<br>")}</div>`);
   }
   return out.join("");
+}
+function copyCode(btn){
+  const code = btn.closest(".mdcode").querySelector("pre code");
+  navigator.clipboard.writeText(code.textContent).then(() => {
+    const orig = btn.textContent;
+    btn.textContent = "Copied!"; btn.classList.add("copied");
+    setTimeout(() => { btn.textContent = orig; btn.classList.remove("copied"); }, 2000);
+  });
+}
+function copyMsg(btn){
+  const text = btn.getAttribute("data-text") || "";
+  navigator.clipboard.writeText(text).then(() => {
+    const orig = btn.textContent;
+    btn.textContent = "Copied!"; btn.classList.add("copied");
+    setTimeout(() => { btn.textContent = orig; btn.classList.remove("copied"); }, 2000);
+  });
 }
 let D = null;
 

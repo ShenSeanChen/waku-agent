@@ -31,6 +31,8 @@ PRICING = {
     "anthropic": (3.0, 15.0), "openai": (2.5, 15.0), "gemini": (0.3, 2.5),
     "deepseek": (0.435, 0.87), "minimax": (0.30, 1.20), "kimi": (0.6, 2.5), "glm": (0.6, 2.2),
     "xai": (3.0, 15.0),   # Grok — rough est; keyed users get exact from the catalog
+    "opencode_zen": (0.435, 0.87),   # rough est (matching deepseek — same underlying model)
+    "opencode_go": (0.435, 0.87),    # rough est
     # openrouter fallback for paid models when the live catalog is unreachable
     # (rough mid-catalog guess). ":free" ids and catalog-priced models never
     # hit this: see price_for().
@@ -69,6 +71,10 @@ MODEL_PRICING = {
     # xAI Grok — docs.x.ai/developers/pricing
     "grok-4.5": (2.0, 6.0),
     "grok-4.3": (1.25, 2.5),
+    # OpenCode / deepseek — the default model for opencode_go
+    "deepseek-v4-flash": (0.15, 0.30),
+    # free tier on opencode_zen
+    "deepseek-v4-flash-free": (0.0, 0.0),
 }
 
 
@@ -99,6 +105,9 @@ MODEL_CUTOFF = {
     # xAI Grok — docs.x.ai model list
     "grok-4.5": "2026-02",
     "grok-4.3": "2025-12",
+    # OpenCode / deepseek
+    "deepseek-v4-flash": "2026-04",
+    "deepseek-v4-flash-free": "2026-04",
 }
 
 

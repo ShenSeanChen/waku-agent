@@ -153,6 +153,7 @@ def sync_to_google_calendar(
     attendees: str = "",
     notes: str = "",
     calendar_id: str = "primary",
+    home: Path | None = None,
 ) -> str:
     """Create one Google Calendar event without changing the local-first contract."""
     try:
@@ -168,7 +169,58 @@ def sync_to_google_calendar(
         )
 
     try:
-        credentials, _ = google.auth.default(scopes=[GOOGLE_CALENDAR_SCOPE])
+        credentials = None
+        if home is not None:
+            try:
+                from google.auth.transport.requests import Request
+                from google.oauth2.credentials import Credentials
+                from google_auth_oauthlib.flow import InstalledAppFlow
+            except ImportError:
+                return (
+                    "Google Calendar sync FAILED (support is not installed; "
+                    "install with pip install -e '.[gcal]') — the event is still in the "
+                    "local calendar."
+                )
+
+            token_path = home / "token.json"
+            creds_path = home / "credentials.json"
+
+            if token_path.exists():
+                try:
+                    credentials = Credentials.from_authorized_user_file(
+                        str(token_path), scopes=[GOOGLE_CALENDAR_SCOPE]
+                    )
+                except Exception:
+                    credentials = None
+
+            if credentials and credentials.expired and credentials.refresh_token:
+                try:
+                    credentials.refresh(Request())
+                    token_path.parent.mkdir(parents=True, exist_ok=True)
+                    token_path.write_text(credentials.to_json(), encoding="utf-8")
+                except Exception:
+                    credentials = None
+
+            if not credentials or not credentials.valid:
+                if not creds_path.exists():
+                    root_creds = Path("credentials.json")
+                    if root_creds.exists():
+                        creds_path = root_creds
+                    else:
+                        return (
+                            "Google Calendar sync FAILED (credentials.json not found in "
+                            f"{home / 'credentials.json'}; download OAuth 2.0 Client ID "
+                            "credentials from Google Cloud Console) — the event is still in the local calendar."
+                        )
+                flow = InstalledAppFlow.from_client_secrets_file(
+                    str(creds_path), scopes=[GOOGLE_CALENDAR_SCOPE]
+                )
+                credentials = flow.run_local_server(port=0)
+                token_path.parent.mkdir(parents=True, exist_ok=True)
+                token_path.write_text(credentials.to_json(), encoding="utf-8")
+        else:
+            credentials, _ = google.auth.default(scopes=[GOOGLE_CALENDAR_SCOPE])
+
         bounded_http = httplib2.Http(timeout=GOOGLE_CALENDAR_TIMEOUT)
         authorized_http = google_auth_httplib2.AuthorizedHttp(
             credentials, http=bounded_http
@@ -253,6 +305,7 @@ def make_tool(
                 attendees,
                 notes,
                 calendar_id=google_calendar_id,
+                home=home,
             )
         if not apple_calendar and not google_calendar:
             where += (
@@ -287,10 +340,26 @@ def make_tool(
     )
 
 
-def make_list_tool(conn: sqlite3.Connection) -> Tool:
-    """list_events — the read side of the calendar. create_event writes; without
-    this the agent can only book, never answer "what's on my calendar?"."""
-    def list_events(start: str = "", end: str = "", limit: int = 20) -> str:
+def make_list_tool(conn: sqlite3.Connection, home: Path | None = None) -> Tool:
+    """list_events — the read side of the calendar, across EVERY connected source.
+
+    One tool, not one per backend. Two calendar tools with overlapping names is
+    how the agent ends up answering "your calendar is clear" from a database of
+    demo events while the user is staring at a full Thursday in Calendar.app —
+    which is exactly what happened on 2026-07-30. The model should not have to
+    guess which calendar means "mine".
+
+    Order matters: Google first, because for anyone signed in that IS their real
+    schedule; the local SQLite calendar second, because it only ever holds what
+    waku itself created. Every source is LABELLED in the output, so the agent can
+    say where an answer came from instead of implying it saw everything.
+
+    Apple Calendar is deliberately not read here: going through AppleScript to
+    reach Google-synced calendars measured ~51 seconds on a real Mac (472 events,
+    two `whose` queries). It stays available as its own opt-in tool for genuinely
+    local calendars. Google's API answers the same question in ~0.4s.
+    """
+    def local_events(start: str = "", end: str = "", limit: int = 20) -> str:
         query = 'SELECT title, start, "end", attendees FROM calendar_events'
         clauses, params = [], []
         if start:
@@ -305,22 +374,49 @@ def make_list_tool(conn: sqlite3.Connection) -> Tool:
         params.append(max(1, min(int(limit or 20), 100)))
         rows = conn.execute(query, params).fetchall()
         if not rows:
-            window = f" between {start} and {end}" if (start or end) else ""
-            return f"No events found{window}. (This reads the local calendar in .waku/state.db.)"
-        lines = ["Events on the local calendar:"]
+            return ""
+        lines = []
         for r in rows:
             who = f" with {r['attendees']}" if r["attendees"] else ""
             lines.append(f"- {r['title']}: {r['start']} → {r['end']}{who}")
         return "\n".join(lines)
 
+    def list_events(start: str = "", end: str = "", limit: int = 20) -> str:
+        sections: list[str] = []
+        checked: list[str] = []
+
+        if home is not None:
+            from waku.tools.google_calendar import is_connected, list_google_events
+
+            if is_connected(home):
+                checked.append("Google Calendar")
+                g = list_google_events(home, start, end, limit)
+                # A "no events" sentence is not a section; only real rows are.
+                if g and not g.startswith(("No Google", "Google Calendar unavailable")):
+                    sections.append("From Google Calendar:\n" + g)
+
+        checked.append("waku's local calendar")
+        local = local_events(start, end, limit)
+        if local:
+            sections.append("From waku's local calendar (events waku created):\n" + local)
+
+        if sections:
+            return "\n\n".join(sections)
+        window = f" between {start} and {end}" if (start or end) else ""
+        # Name every source that was actually consulted. "Your calendar is clear"
+        # is only honest if the user knows WHICH calendars that covers.
+        return f"No events found{window}. Checked: {', '.join(checked)}."
+
     return Tool(
         name="list_events",
         description=(
-            "Read the user's calendar: list events, optionally within a date range. "
+            "Read the user's calendar across every connected source (Google Calendar "
+            "when signed in, plus waku's own local calendar). "
             "Use whenever the user asks what's on their calendar / schedule for a day, "
             "week, yesterday, etc. Dates are ISO (e.g. 2026-07-10); omit both to list "
             "everything upcoming. For 'yesterday'/'today' resolve the date from the "
-            "current time given in your system prompt."
+            "current time given in your system prompt. The result labels which "
+            "calendar each event came from — repeat that when it matters."
         ),
         input_schema={
             "type": "object",
