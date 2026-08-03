@@ -7,6 +7,8 @@ import os
 from waku import integrations
 from waku.integrations import IntegrationState, IntegrationStatus
 from waku.loop.models import PROVIDERS
+from waku.ops import browser_agent
+from waku.tools import calendar
 
 
 def _isolate(monkeypatch, tmp_path):
@@ -54,3 +56,154 @@ def test_apply_rejects_unknown_and_secret_clear(monkeypatch, tmp_path):
     assert result.ok
     assert "TAVILY_API_KEY" not in os.environ
     assert "TAVILY_API_KEY" not in (tmp_path / ".env").read_text()
+
+
+def _configure_google(monkeypatch, tmp_path):
+    _isolate(monkeypatch, tmp_path)
+    monkeypatch.setenv("WAKU_GOOGLE_CALENDAR", "1")
+    monkeypatch.setenv("WAKU_GOOGLE_CALENDAR_ID", "team@example.com")
+    monkeypatch.setattr(integrations, "_extra_installed", lambda name: True)
+
+
+def test_google_test_connection_records_connected(monkeypatch, tmp_path):
+    _configure_google(monkeypatch, tmp_path)
+    captured = {}
+    monkeypatch.setattr(
+        calendar,
+        "probe_google_calendar",
+        lambda home, calendar_id: captured.update(home=home, calendar_id=calendar_id),
+    )
+
+    view = integrations.test_integration("google_calendar")
+
+    assert captured == {"home": tmp_path, "calendar_id": "team@example.com"}
+    assert view.status.state is IntegrationState.CONNECTED
+    assert view.status.checked_at is not None
+
+
+def test_google_save_probes_candidate_and_records_connected(monkeypatch, tmp_path):
+    _isolate(monkeypatch, tmp_path)
+    monkeypatch.setattr(integrations, "_extra_installed", lambda name: True)
+    monkeypatch.setattr(browser_agent, "rebuild", lambda: None)
+    captured = {}
+    monkeypatch.setattr(
+        calendar,
+        "probe_google_calendar",
+        lambda home, calendar_id: captured.update(home=home, calendar_id=calendar_id),
+    )
+
+    result = integrations.apply_integration(
+        "google_calendar",
+        {
+            "WAKU_GOOGLE_CALENDAR": "1",
+            "WAKU_GOOGLE_CALENDAR_ID": "candidate@example.com",
+        },
+    )
+
+    assert result.ok
+    assert captured == {"home": tmp_path, "calendar_id": "candidate@example.com"}
+    assert result.view is not None
+    assert result.view.status.state is IntegrationState.CONNECTED
+
+
+def test_google_probe_failure_records_error(monkeypatch, tmp_path):
+    _configure_google(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        calendar,
+        "probe_google_calendar",
+        lambda home, calendar_id: (_ for _ in ()).throw(RuntimeError("access denied")),
+    )
+
+    view = integrations.test_integration("google_calendar")
+
+    assert view.status.state is IntegrationState.ERROR
+    assert view.status.message == "access denied"
+    assert view.status.checked_at is not None
+
+
+def test_google_save_failure_can_force_without_writing_first(monkeypatch, tmp_path):
+    _isolate(monkeypatch, tmp_path)
+    monkeypatch.setenv("WAKU_GOOGLE_CALENDAR", "")
+    monkeypatch.setenv("WAKU_GOOGLE_CALENDAR_ID", "old@example.com")
+    monkeypatch.setattr(integrations, "_extra_installed", lambda name: True)
+    monkeypatch.setattr(
+        calendar,
+        "probe_google_calendar",
+        lambda home, calendar_id: (_ for _ in ()).throw(RuntimeError("not authorized")),
+    )
+
+    result = integrations.apply_integration(
+        "google_calendar",
+        {
+            "WAKU_GOOGLE_CALENDAR": "1",
+            "WAKU_GOOGLE_CALENDAR_ID": "team@example.com",
+        },
+    )
+
+    assert not result.ok
+    assert result.can_force
+    assert result.error == "not authorized"
+    assert not (tmp_path / ".env").exists()
+    assert os.environ["WAKU_GOOGLE_CALENDAR"] == ""
+    assert os.environ["WAKU_GOOGLE_CALENDAR_ID"] == "old@example.com"
+
+
+def test_google_force_save_skips_probe_and_records_error(monkeypatch, tmp_path):
+    _isolate(monkeypatch, tmp_path)
+    monkeypatch.setattr(integrations, "_extra_installed", lambda name: True)
+    monkeypatch.setattr(browser_agent, "rebuild", lambda: None)
+
+    def unexpected_probe(home, calendar_id):
+        raise AssertionError("force save must skip the probe")
+
+    monkeypatch.setattr(calendar, "probe_google_calendar", unexpected_probe)
+
+    result = integrations.apply_integration(
+        "google_calendar",
+        {
+            "WAKU_GOOGLE_CALENDAR": "1",
+            "WAKU_GOOGLE_CALENDAR_ID": "team@example.com",
+        },
+        force=True,
+    )
+
+    assert result.ok
+    assert result.view is not None
+    assert result.view.status.state is IntegrationState.ERROR
+    assert result.view.status.message == "Saved without a successful test"
+
+
+def test_disabling_google_skips_probe(monkeypatch, tmp_path):
+    _configure_google(monkeypatch, tmp_path)
+    (tmp_path / ".env").write_text(
+        "WAKU_GOOGLE_CALENDAR=1\nWAKU_GOOGLE_CALENDAR_ID=team@example.com\n"
+    )
+    monkeypatch.setattr(browser_agent, "rebuild", lambda: None)
+
+    def unexpected_probe(home, calendar_id):
+        raise AssertionError("disabled integrations must not be probed")
+
+    monkeypatch.setattr(calendar, "probe_google_calendar", unexpected_probe)
+
+    result = integrations.apply_integration(
+        "google_calendar", {"WAKU_GOOGLE_CALENDAR": ""}
+    )
+
+    assert result.ok
+
+
+def test_disabled_google_test_connection_skips_probe(monkeypatch, tmp_path):
+    _isolate(monkeypatch, tmp_path)
+    monkeypatch.setenv("WAKU_GOOGLE_CALENDAR", "")
+    monkeypatch.setenv("WAKU_GOOGLE_CALENDAR_ID", "team@example.com")
+    monkeypatch.setattr(integrations, "_extra_installed", lambda name: True)
+
+    def unexpected_probe(home, calendar_id):
+        raise AssertionError("disabled integrations must not be probed")
+
+    monkeypatch.setattr(calendar, "probe_google_calendar", unexpected_probe)
+
+    view = integrations.test_integration("google_calendar")
+
+    assert view.status.state is not IntegrationState.CONNECTED
+    assert view.status.message == "integration is disabled"

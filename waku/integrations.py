@@ -429,6 +429,16 @@ def _notion_probe(values: Mapping[str, str]) -> None:
     NotionEpisodeStore(values.get("NOTION_TOKEN"), values.get("NOTION_EPISODES_DATABASE_ID"))
 
 
+def _google_calendar_probe(values: Mapping[str, str]) -> None:
+    from waku.config import load_settings
+    from waku.tools import calendar
+
+    calendar.probe_google_calendar(
+        load_settings().home,
+        values.get("WAKU_GOOGLE_CALENDAR_ID", "") or "primary",
+    )
+
+
 def _tavily_probe(values: Mapping[str, str]) -> None:
     body = json.dumps({"api_key": values.get("TAVILY_API_KEY", ""), "query": "health check", "max_results": 1}).encode()
     request = urllib.request.Request("https://api.tavily.com/search", body, {"Content-Type": "application/json"})
@@ -453,6 +463,8 @@ def _provider_probe(values: Mapping[str, str]) -> None:
 
 
 def _probed(integration: Integration) -> Integration:
+    if integration.key == "google_calendar":
+        return Integration(**{**integration.__dict__, "probe": _google_calendar_probe})
     if integration.key == "notion":
         return Integration(**{**integration.__dict__, "probe": _notion_probe})
     if integration.key == "tavily":
@@ -530,7 +542,7 @@ def apply_integration(key: str, values: Mapping[str, str], clear: tuple[str, ...
             return ApplyResult(False, error=f"missing {integration.extra} extra")
         tested = False
         effective = _probed(integration)
-        if effective.probe and not force:
+        if enabled and effective.probe and not force:
             effective.probe(merged)
             tested = True
     except Exception as exc:
@@ -571,6 +583,18 @@ def test_integration(key: str) -> IntegrationView:
     integration = _find_integration(key)
     if integration is None:
         raise ValueError("unknown integration")
+    values = {field.name: os.environ.get(field.name, field.default) for field in integration.env}
+    if not integration.enabled(values):
+        view = _current_view(key)
+        assert view is not None
+        state = (
+            IntegrationState.NOT_CONFIGURED
+            if view.status.state is IntegrationState.NOT_CONFIGURED
+            else IntegrationState.INSTALLED_BUT_UNCONFIGURED
+        )
+        status = IntegrationStatus(state, "integration is disabled", view.status.checked_at)
+        return IntegrationView(view.key, view.group, view.name, view.what, status, view.fields,
+                               view.install_command, view.setup_url)
     effective = _probed(integration)
     if effective.probe is None:
         view = _current_view(key)
@@ -578,7 +602,6 @@ def test_integration(key: str) -> IntegrationView:
         status = IntegrationStatus(view.status.state, "no test available", view.status.checked_at)
         return IntegrationView(view.key, view.group, view.name, view.what, status, view.fields,
                                view.install_command, view.setup_url)
-    values = {field.name: os.environ.get(field.name, field.default) for field in integration.env}
     try:
         effective.probe(values)
     except Exception as exc:

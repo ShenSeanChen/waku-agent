@@ -15,6 +15,7 @@ relays it, so Waku never over-claims what happened.
 
 from __future__ import annotations
 
+import json
 import sqlite3
 import subprocess
 import sys
@@ -144,6 +145,90 @@ def _google_event_body(
     if emails:
         body["attendees"] = [{"email": email} for email in emails]
     return body
+
+
+def probe_google_calendar(home: Path, calendar_id: str = "primary") -> None:
+    """Verify cached OAuth access to a calendar without reading event data."""
+    try:
+        import google_auth_httplib2
+        import httplib2
+        from google.auth.transport.requests import Request
+        from google.oauth2.credentials import Credentials
+        from googleapiclient.discovery import build
+        from googleapiclient.errors import HttpError
+    except ImportError as exc:
+        raise RuntimeError(
+            "Google Calendar support is not installed; install with "
+            "pip install -e '.[gcal]'"
+        ) from exc
+
+    token_path = home / "token.json"
+    if not token_path.exists():
+        raise RuntimeError(
+            "Google Calendar is not authorized; complete OAuth with "
+            f"{home / 'credentials.json'} and try again"
+        )
+
+    reauthorize = (
+        "Google Calendar OAuth token is invalid; reauthorize with "
+        f"{home / 'credentials.json'}"
+    )
+    try:
+        credentials = Credentials.from_authorized_user_file(
+            str(token_path), scopes=[GOOGLE_CALENDAR_SCOPE]
+        )
+    except Exception:
+        raise RuntimeError(reauthorize) from None
+
+    if credentials.expired and credentials.refresh_token:
+        try:
+            credentials.refresh(Request())
+            token_path.write_text(credentials.to_json(), encoding="utf-8")
+        except Exception:
+            raise RuntimeError(reauthorize) from None
+    if not credentials.valid:
+        raise RuntimeError(reauthorize)
+
+    try:
+        bounded_http = httplib2.Http(timeout=GOOGLE_CALENDAR_TIMEOUT)
+        authorized_http = google_auth_httplib2.AuthorizedHttp(
+            credentials, http=bounded_http
+        )
+        service = build(
+            "calendar",
+            "v3",
+            http=authorized_http,
+            cache_discovery=False,
+            static_discovery=True,
+        )
+        (
+            service.events()
+            .list(calendarId=calendar_id, maxResults=1, fields="kind")
+            .execute(num_retries=0)
+        )
+    except HttpError as exc:
+        status = getattr(getattr(exc, "resp", None), "status", None)
+        reasons: set[str] = set()
+        try:
+            content = exc.content.decode() if isinstance(exc.content, bytes) else exc.content
+            payload = json.loads(content)
+            reasons = {
+                item.get("reason", "")
+                for item in payload.get("error", {}).get("errors", [])
+                if isinstance(item, dict)
+            }
+        except (AttributeError, TypeError, ValueError, json.JSONDecodeError):
+            pass
+        if status == 401 or (
+            status == 403
+            and reasons.intersection({"authError", "insufficientPermissions"})
+        ):
+            raise RuntimeError(reauthorize) from None
+        detail = (str(exc).strip() or type(exc).__name__)[:160]
+        raise RuntimeError(f"Google Calendar probe failed ({detail})") from None
+    except Exception as exc:
+        detail = (str(exc).strip() or type(exc).__name__)[:160]
+        raise RuntimeError(f"Google Calendar probe failed ({detail})") from None
 
 
 def sync_to_google_calendar(
