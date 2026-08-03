@@ -84,6 +84,7 @@ const teleFooter = t => `<div class="meta tele">${secs(t.latency_ms)} · ${t.ite
   t.model?` · ${esc(t.model)}`:""}${t.consolidation?` · consolidated ${t.consolidation.new_facts} fact(s)`:""}</div>`;
 
 const chatTurnCard = t => `<div class="card">
+  <button class="msg-copy" onclick="copyMsg(this)" data-text="${esc(t.reply)}" title="Copy reply">Copy</button>
   ${(t.gate||t.graph)?`${stagesRow(t, false)}
     <div class="meta tele" style="margin:0 0 6px">${esc((t.gate&&t.gate.reason)||(t.graph&&t.graph.reason)||"")}</div>`:""}
   ${nodesRow(t)}
@@ -124,7 +125,10 @@ const streamingCard = m => `<div class="card">
 // latency/iteration data, and their stored form carries an internal
 // "[tools used: ...]" annotation — strip both so the thread reads cleanly.
 const stripTools = t => (t || "").replace(/\s*\[tools used:[\s\S]*\]\s*$/, "").trim();
-const historicalCard = m => `<div class="card"><div class="r">${renderMarkdown(stripTools(m.reply))}</div></div>`;
+const historicalCard = m => `<div class="card">
+  <button class="msg-copy" onclick="copyMsg(this)" data-text="${esc(stripTools(m.reply))}" title="Copy reply">Copy</button>
+  <div class="r">${renderMarkdown(stripTools(m.reply))}</div>
+</div>`;
 
 function renderChatLog(){
   if (!CHAT.length)

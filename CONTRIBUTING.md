@@ -91,9 +91,30 @@ Concretely, these get declined **even when the code is good**:
   time.** waku runs on people's own machines with their own keys.
 - **A "fix" that removes the thing it secures** — e.g. sandboxing a tool by
   making it not work.
+- **A rename.** The name is tied to the videos, the PyPI package and the
+  assistant's own identity. Fork it and rename freely — MIT only asks that you
+  keep the attribution line.
+- **A whiteboard that isn't about this codebase.** See below.
 
 None of this is about the quality of your code. It's about what everyone who
 installs waku has to carry.
+
+### Whiteboards: only the ones that explain waku
+
+`docs/whiteboards/` holds editable `.excalidraw` sources, and the bar for a new
+one is simple:
+
+> **A whiteboard belongs here if it explains THIS codebase. Everything else is
+> video production and stays on the maintainer's machine.**
+
+The reason is that the folder had drifted: five of its six charts were about
+*other* projects — Kimi K3, pi, Claude Code — and made up 1.8 MB of a 2 MB
+directory. Someone forking waku to build their own agent has no use for a chart
+about a model they aren't running, and the repo shouldn't ask them to clone it.
+
+Charts that explain waku's own architecture, its loop, or its graph engine are
+welcome and genuinely useful. Charts drawn for a video about something else are
+not part of the software.
 
 ## What you can expect from us
 

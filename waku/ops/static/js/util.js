@@ -43,6 +43,17 @@ function renderMarkdown(text){
       while (i < lines.length && /^\s*\d+\.\s+/.test(lines[i])){ items.push(mdInline(lines[i].replace(/^\s*\d+\.\s+/,""))); i++; }
       out.push(`<ol class="mdlist">${items.map(x=>`<li>${x}</li>`).join("")}</ol>`); continue;
     }
+    if (/^\s*`{3,}/.test(l)){                                       // fenced code block
+      const lang = l.replace(/^\s*`{3,}/, "").trim();
+      i++;
+      const codeLines = [];
+      while (i < lines.length && !/^\s*`{3,}\s*$/.test(lines[i])){ codeLines.push(lines[i]); i++; }
+      if (i < lines.length) i++;   // skip closing ```
+      const langLabel = lang ? `<span class="mdcode-lang">${lang}</span>` : "";
+      out.push(`<div class="mdcode"><div class="mdcode-head">${langLabel}<button class="mdcode-copy" onclick="copyCode(this)">Copy</button></div><pre><code>${codeLines.join("\n")}</code></pre></div>`);
+      continue;
+    }
+    if (/^\s*[-*_]{3,}\s*$/.test(l)){ out.push("<hr class='mdhr'>"); i++; continue; } // hr
     if (/^\s*$/.test(l)){ i++; continue; }
     const para = [];                                                // paragraph
     while (i < lines.length && lines[i].trim() && !/^\s*[-*]\s|^\s*\d+\.\s|^\s*#{1,6}\s/.test(lines[i])
@@ -52,6 +63,22 @@ function renderMarkdown(text){
     out.push(`<div class="mdp">${para.join("<br>")}</div>`);
   }
   return out.join("");
+}
+function copyCode(btn){
+  const code = btn.closest(".mdcode").querySelector("pre code");
+  navigator.clipboard.writeText(code.textContent).then(() => {
+    const orig = btn.textContent;
+    btn.textContent = "Copied!"; btn.classList.add("copied");
+    setTimeout(() => { btn.textContent = orig; btn.classList.remove("copied"); }, 2000);
+  });
+}
+function copyMsg(btn){
+  const text = btn.getAttribute("data-text") || "";
+  navigator.clipboard.writeText(text).then(() => {
+    const orig = btn.textContent;
+    btn.textContent = "Copied!"; btn.classList.add("copied");
+    setTimeout(() => { btn.textContent = orig; btn.classList.remove("copied"); }, 2000);
+  });
 }
 let D = null;
 

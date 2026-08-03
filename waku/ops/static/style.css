@@ -77,7 +77,7 @@
   .box span{color:var(--ink2);font-size:11.5px}
   .arrow{align-self:center;color:var(--ink3);padding:0 8px;font-size:13px}
   .card{background:var(--panel);border:1px solid var(--line);border-radius:8px;
-        padding:14px 16px;margin-bottom:10px}
+        padding:14px 16px;margin-bottom:10px;position:relative}
   .badge{display:inline-block;font-size:11px;padding:1px 8px;border-radius:99px;
          border:1px solid var(--line2);color:var(--ink2);margin-right:8px}
   .badge.retrieve{border-color:var(--accent);color:var(--accent)}
@@ -98,6 +98,33 @@
   .r .mdtable{border-collapse:collapse;margin:8px 0;font-size:12.5px;width:100%;display:block;overflow-x:auto}
   .r .mdtable th,.r .mdtable td{border:1px solid var(--line2);padding:5px 8px;text-align:left;white-space:nowrap}
   .r .mdtable th{background:var(--bg);font-weight:600;color:var(--ink)}
+  /* fenced code blocks */
+  .mdcode{border:1px solid var(--line);border-radius:var(--radius);overflow:hidden;margin:10px 0;
+          background:rgba(0,0,0,0.035)}
+  @media(prefers-color-scheme:dark){.mdcode{background:rgba(0,0,0,0.40)}}
+  .mdcode-head{display:flex;align-items:center;justify-content:space-between;padding:5px 12px;
+               border-bottom:1px solid var(--line);background:rgba(0,0,0,0.025)}
+  @media(prefers-color-scheme:dark){.mdcode-head{background:rgba(255,255,255,0.04)}}
+  .mdcode-lang{font-family:var(--mono);font-size:10.5px;text-transform:uppercase;
+               letter-spacing:.08em;color:var(--ink3);font-weight:600}
+  .mdcode-copy{background:none;border:1px solid var(--line2);border-radius:6px;color:var(--ink3);
+               font-size:11px;padding:2px 8px;cursor:pointer;font-family:inherit;
+               transition:color .15s,border-color .15s,background .15s}
+  .mdcode-copy:hover{color:var(--accent);border-color:var(--accent)}
+  .mdcode-copy.copied{color:var(--good);border-color:var(--good);background:var(--good-soft)}
+  .mdcode pre{margin:0;padding:12px 14px;overflow-x:auto;font-family:var(--mono);
+              font-size:12.5px;line-height:1.65;color:var(--ink2);white-space:pre}
+  .mdcode code{font-family:var(--mono);background:none;border:none;padding:0;border-radius:0;font-size:12.5px}
+  /* horizontal rule */
+  .mdhr{border:none;border-top:1px solid var(--line2);margin:14px 0}
+  /* copy-message button — appears on card hover */
+  .msg-copy{display:none;position:absolute;top:10px;right:12px;background:var(--panel);
+             border:1px solid var(--line2);border-radius:6px;color:var(--ink3);
+             font-size:11px;padding:2px 8px;cursor:pointer;font-family:inherit;
+             transition:color .15s,border-color .15s;z-index:2}
+  .card:hover .msg-copy{display:block}
+  .msg-copy:hover{color:var(--accent);border-color:var(--accent)}
+  .msg-copy.copied{color:var(--good);border-color:var(--good)}
   .meta{color:var(--ink3);font-size:11.5px;margin-top:8px;font-variant-numeric:tabular-nums}
   .tool{border:1px solid var(--line);border-radius:7px;padding:8px 10px;margin-top:8px;background:var(--bg)}
   .tool.error{border-color:var(--bad);background:var(--bad-soft)}
