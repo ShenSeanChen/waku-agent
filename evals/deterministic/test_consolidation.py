@@ -224,6 +224,24 @@ def test_unparseable_output_leaves_the_log_untouched(memory):
     assert unconsolidated(memory.conn) == 6
 
 
+def test_a_reasoning_model_that_never_reaches_text_leaves_the_log_untouched(memory):
+    """Live bug (2026-08-04): kimi-k2.6 spends its whole budget on a `thinking`
+    block before any JSON — on a real 40-row backlog it hit stop_reason=max_tokens
+    with ZERO text blocks. `text.index("{")` on the empty joined string used to
+    raise, get swallowed by the broad except, and return 0 — safe, but silently,
+    forever, since the same truncation repeats every turn. The fix bumped the
+    budget (600 -> 4096) AND added this explicit guard so the "no JSON at all"
+    case is recognized rather than stumbled into via an exception."""
+    add_exchanges(memory.conn, 3)
+    thinking_only = response(
+        [SimpleNamespace(type="thinking", thinking="reasoning about facts..." * 50)],
+        stop_reason="max_tokens",
+    )
+    assert run(memory, [thinking_only]) == 0
+    assert unconsolidated(memory.conn) == 6, "a thinking-only reply must not be mistaken for done"
+    assert memory.conn.execute("SELECT COUNT(*) FROM facts").fetchone()[0] == 0
+
+
 # ---------- the prompt
 
 
