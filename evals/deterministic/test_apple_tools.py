@@ -127,3 +127,52 @@ def test_every_registered_tool_reports_failure_as_text():
     for tool in apple.make_tools():
         assert tool.description and tool.name
         assert callable(tool.fn)
+
+
+def test_create_note_success_and_failure_paths(monkeypatch):
+    """create_note must report success/failure from _osa without real Notes.app."""
+    calls: list[tuple[str, float | None]] = []
+
+    def fake_osa(script: str, timeout: float | None = None):
+        calls.append((script, timeout))
+        if "FAIL" in script:
+            return False, "Notes refused"
+        return True, "ok"
+
+    monkeypatch.setattr(apple, "_osa", fake_osa)
+    assert apple.create_note("Hello", "world") == "Note created: Hello"
+    assert "Notes" in calls[-1][0]
+    assert calls[-1][1] is not None
+    # force failure path
+    def bad_osa(script: str, timeout: float | None = None):
+        return False, "denied"
+    monkeypatch.setattr(apple, "_osa", bad_osa)
+    assert apple.create_note("x").startswith("Note failed:")
+
+
+def test_create_reminder_includes_due_when_set(monkeypatch):
+    captured: dict[str, str] = {}
+
+    def fake_osa(script: str, timeout: float | None = None):
+        captured["script"] = script
+        return True, "ok"
+
+    monkeypatch.setattr(apple, "_osa", fake_osa)
+    assert apple.create_reminder("Buy milk", due="Monday 9:00 AM") == "Reminder created: Buy milk"
+    assert "Reminders" in captured["script"]
+    assert "due date" in captured["script"]
+    assert "Buy milk" in captured["script"]
+
+
+def test_read_apple_mail_uses_bounded_osa_and_formats_failure(monkeypatch):
+    def fake_osa(script: str, timeout: float | None = None):
+        assert timeout == 20
+        assert "Mail" in script
+        return False, "timeout"
+
+    monkeypatch.setattr(apple, "_osa", fake_osa)
+    # bypass cache
+    monkeypatch.setattr(apple, "_cached", lambda key, ttl, go: go())
+    out = apple.read_apple_mail(hours=12, limit=5)
+    assert out.startswith("Mail unavailable:")
+    assert "timeout" in out
