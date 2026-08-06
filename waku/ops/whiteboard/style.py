@@ -185,8 +185,7 @@ def ellipse(x, y, w, h, label="", *, color="pink", fill="chip", frame=None,
     if label:
         t = text(0, 0, label, size=FS_BODY, color=INK, align="center",
                  frame=frame, group=group)
-        t["containerId"] = e["id"]
-        t["verticalAlign"] = "middle"
+        t["containerId"] = e["id"]; t["verticalAlign"] = "middle"
         t["width"], t["height"] = w - 16, min(h - 12, FS_BODY * LINE_HEIGHT * 2)
         t["x"], t["y"] = x + 8, y + h / 2 - t["height"] / 2
         e["boundElements"] = [{"type": "text", "id": t["id"]}]
@@ -202,8 +201,7 @@ def diamond(x, y, w, h, label="", *, color="green", frame=None, group=None):
     if label:
         t = text(0, 0, label, size=FS_BODY, color=INK, align="center",
                  frame=frame, group=group)
-        t["containerId"] = d["id"]
-        t["verticalAlign"] = "middle"
+        t["containerId"] = d["id"]; t["verticalAlign"] = "middle"
         t["width"], t["height"] = w - 24, FS_BODY * LINE_HEIGHT * 2
         t["x"], t["y"] = x + 12, y + h / 2 - t["height"] / 2
         d["boundElements"] = [{"type": "text", "id": t["id"]}]
@@ -235,8 +233,7 @@ def labeled_arrow(x1, y1, x2, y2, label, *, color=INK, dashed=False, frame=None,
 
 def hand_line(x, y, pts, *, color=INK, sw=SW_DETAIL, frame=None, group=None):
     """Hand-drawn accent (underline / scribble). pts relative to (x,y)."""
-    xs = [p[0] for p in pts]
-    ys = [p[1] for p in pts]
+    xs = [p[0] for p in pts]; ys = [p[1] for p in pts]
     ln = _base("line", x, y, max(xs) - min(xs) or 1, max(ys) - min(ys) or 1,
                color, "transparent", sw, frame, group)
     ln["points"] = [[float(a), float(b)] for a, b in pts]
