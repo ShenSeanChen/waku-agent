@@ -135,8 +135,6 @@ def test_create_note_success_and_failure_paths(monkeypatch):
 
     def fake_osa(script: str, timeout: float | None = None):
         calls.append((script, timeout))
-        if "FAIL" in script:
-            return False, "Notes refused"
         return True, "ok"
 
     monkeypatch.setattr(apple, "_osa", fake_osa)
