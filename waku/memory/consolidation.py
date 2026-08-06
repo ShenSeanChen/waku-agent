@@ -53,10 +53,17 @@ def consolidate_if_due(
     try:
         response = client.messages.create(
             model=small_model,
-            max_tokens=600,
+            # generous budget: reasoning models (Kimi K2.6/K3, ...) spend a
+            # thinking block BEFORE the JSON, and this prompt carries the whole
+            # unconsolidated log (not one short message like the retrieval
+            # gate) — 600 was measured truncating kimi-k2.6 to a thinking-only
+            # reply (stop_reason=max_tokens, zero text blocks) on a 40-row backlog.
+            max_tokens=4096,
             messages=[{"role": "user", "content": SUMMARIZER_PROMPT.format(log=log)}],
         )
         text = "".join(b.text for b in response.content if b.type == "text")
+        if "{" not in text:  # a reasoning-only / truncated reply, not a parse error
+            return 0
         distilled = json.loads(text[text.index("{") : text.rindex("}") + 1])
     except Exception:
         return 0  # never lose the log — it stays unconsolidated for next time
