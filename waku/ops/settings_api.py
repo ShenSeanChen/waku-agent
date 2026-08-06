@@ -57,10 +57,17 @@ def settings_info() -> dict:
     for row in pinned:
         prov_order.setdefault(row["provider"], len(prov_order))
     pinned.sort(key=lambda row: prov_order[row["provider"]])
+    # Resolve the model the same way the loop does. `waku/loop/models.py` fills a
+    # blank WAKU_MODEL from the provider's default at build time, so the agent is
+    # always running SOMETHING — but this dict is what the nav pill and the Models
+    # page render, and reporting "" made a fresh install display `anthropic ·`,
+    # a trailing separator with no model name. The display must not claim less
+    # than the agent actually has.
+    prov = PROVIDERS.get(s.provider)
     return {
         "provider": s.provider,
-        "model": s.model,
-        "small_model": s.small_model,
+        "model": s.model or (prov.model if prov else ""),
+        "small_model": s.small_model or (prov.small_model if prov else ""),
         "base_url": s.base_url or "",
         "custom_key_set": bool(s.api_key),
         # Ids of providers the user disabled in the Models grid; the frontend
