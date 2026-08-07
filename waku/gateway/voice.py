@@ -26,24 +26,90 @@ import sys
 from waku.app import Waku
 from waku.gateway.cli import _observer  # show gate/tool lines in voice mode too
 
-SAMPLE_RATE = 16000
+SAMPLE_RATE = 16000  # what Whisper expects
+MIC_DEVICE = int(os.getenv("WAKU_MIC_DEVICE", "0")) or None  # 0 = system default
+MIC_RATE = int(os.getenv("WAKU_MIC_RATE", str(SAMPLE_RATE)))  # some mics only open at 44.1k
+
+
+def _mic_stream(**kw):
+    """One input stream, honoring WAKU_MIC_DEVICE/WAKU_MIC_RATE — on Windows the
+    default device is often broken or locked, and many mics refuse 16k outright."""
+    import sounddevice as sd
+
+    return sd.InputStream(device=MIC_DEVICE, samplerate=MIC_RATE, channels=1, dtype="float32", **kw)
+
+
+class _AsyncMic:
+    """Callback-driven input stream with a blocking .read() like the plain
+    sd.InputStream. Some Windows devices (WDM-KS) refuse PortAudio's blocking
+    API outright — only the callback API works there. This wraps the callback
+    in a queue so the rest of the module keeps its familiar blocking style."""
+
+    def __init__(self, block):
+        import queue
+
+        self._block = block
+        self._q: queue.Queue = queue.Queue()
+        self._carry = None
+        self.stream = _mic_stream(blocksize=block, callback=self._feed)
+
+    def _feed(self, indata, frame_count, time_info, status):
+        self._q.put(indata.copy())
+
+    def __enter__(self):
+        self.stream.__enter__()
+        return self
+
+    def __exit__(self, *exc):
+        return self.stream.__exit__(*exc)
+
+    @property
+    def read_available(self) -> int:
+        return self._q.qsize() * self._block + (self._carry.size if self._carry is not None else 0)
+
+    def read(self, n):
+        import numpy as np
+
+        got = self._carry if self._carry is not None else np.zeros(0, dtype="float32")
+        self._carry = None
+        while got.size < n:
+            try:
+                got = np.concatenate([got, self._q.get(timeout=5)[:, 0]])
+            except Exception:
+                break
+        if got.size > n:
+            self._carry = got[n:].copy()
+            got = got[:n]
+        if got.size < n:
+            got = np.pad(got, (0, n - got.size))
+        return got.reshape(n, 1), None
+
+
+def _resample(audio, src_rate, dst_rate):
+    """Linear resample to the rate Whisper wants (16k) when the mic only runs
+    at its native rate (e.g. 44.1k). Pure numpy, no new dependency."""
+    import numpy as np
+
+    if src_rate == dst_rate or audio.size < 2:
+        return audio
+    n = max(1, round(audio.size * dst_rate / src_rate))
+    return np.interp(np.linspace(0, audio.size - 1, n), np.arange(audio.size), audio).astype(np.float32)
 
 
 def record_until_enter():
-    """Capture mic audio between two Enter presses; returns a float32 array."""
+    """Capture mic audio between two Enter presses; returns a float32 array at SAMPLE_RATE."""
     import numpy as np
-    import sounddevice as sd
 
     frames: list[np.ndarray] = []
 
     def collect(indata, frame_count, time_info, status):
         frames.append(indata.copy())
 
-    with sd.InputStream(samplerate=SAMPLE_RATE, channels=1, dtype="float32", callback=collect):
+    with _mic_stream(callback=collect):
         input("recording — press Enter when done… ")
     if not frames:
         return np.zeros(0, dtype="float32")
-    return np.concatenate(frames)[:, 0]
+    return _resample(np.concatenate(frames)[:, 0], MIC_RATE, SAMPLE_RATE)
 
 
 class Ears:
@@ -195,10 +261,11 @@ def _mic_threshold() -> float:
 def record_command(stream, max_seconds: float = 15.0, silence_after: float = 1.2):
     """After the wake word: keep reading the SAME stream until the speaker
     goes quiet. Reusing the stream matters — opening a fresh macOS audio
-    stream per phase is how the first version froze."""
+    stream per phase is how the first version froze. Returns audio at
+    SAMPLE_RATE (resampled if the mic runs at another rate)."""
     import numpy as np
 
-    block = SAMPLE_RATE // 10  # 100ms blocks
+    block = MIC_RATE // 10  # 100ms blocks at the mic's own rate
     frames, quiet, spoke = [], 0, False
     for _ in range(int(max_seconds * 10)):
         data, _ = stream.read(block)
@@ -208,7 +275,7 @@ def record_command(stream, max_seconds: float = 15.0, silence_after: float = 1.2
         quiet = 0 if loud else quiet + 1
         if spoke and quiet >= int(silence_after * 10):
             break
-    return np.concatenate(frames)[:, 0]
+    return _resample(np.concatenate(frames)[:, 0], MIC_RATE, SAMPLE_RATE)
 
 
 def wait_for_speech(stream, timeout: float) -> bool:
@@ -217,7 +284,7 @@ def wait_for_speech(stream, timeout: float) -> bool:
     conversation stay open for follow-ups (Siri-style) without the wake word."""
     import numpy as np
 
-    block = SAMPLE_RATE // 10
+    block = MIC_RATE // 10
     for _ in range(int(timeout * 10)):
         data, _ = stream.read(block)
         if float(np.sqrt((data**2).mean())) > _mic_threshold() * 2:
@@ -242,13 +309,12 @@ def wake_loop(waku: Waku, mouth: Mouth, wake_word: str) -> None:
       the tail of its own voice (the "mm-hmm" self-trigger in the trace).
     """
     import numpy as np
-    import sounddevice as sd
 
     scout = Ears(model_size="tiny")  # cheap, always on
     ears = Ears()                    # accurate, only after wake
     ack = os.getenv("WAKU_WAKE_ACK", "Yes?")
     followup = float(os.getenv("WAKU_FOLLOWUP_SECONDS", "8"))  # stay open, Siri-style
-    block = SAMPLE_RATE // 10
+    block = MIC_RATE // 10
     # Pin the scout's transcription language to match the wake word's script —
     # otherwise Whisper hears "waku waku" and helpfully writes わくわく, which
     # a latin wake word never matches. Commands after wake still auto-detect.
@@ -259,7 +325,7 @@ def wake_loop(waku: Waku, mouth: Mouth, wake_word: str) -> None:
         sys.stdout.write(f"\r\x1b[2m{msg[:72]:<72}\x1b[0m")
         sys.stdout.flush()
 
-    with sd.InputStream(samplerate=SAMPLE_RATE, channels=1, dtype="float32", blocksize=block) as stream:
+    with _AsyncMic(block) as stream:
 
         def drain() -> None:
             while stream.read_available >= block:
@@ -271,7 +337,7 @@ def wake_loop(waku: Waku, mouth: Mouth, wake_word: str) -> None:
             window.append(data.copy())
             if len(window) < 25:  # gather 2.5s
                 continue
-            chunk = np.concatenate(window)[:, 0]
+            chunk = _resample(np.concatenate(window)[:, 0], MIC_RATE, SAMPLE_RATE)
             window = window[-5:]  # keep a 0.5s tail so the phrase can straddle chunks
 
             if float(np.sqrt((chunk**2).mean())) < _mic_threshold():
