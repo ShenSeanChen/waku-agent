@@ -20,6 +20,9 @@ PROMPT = "Brief me on my week: what's on my calendar, what's in my mail that nee
 
 
 def main() -> None:
+    from waku.gateway.cli import make_console_unicode_safe
+
+    make_console_unicode_safe()
     console = Console()
     waku = Waku()
     if not waku.settings.apple_tools:

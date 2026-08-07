@@ -163,6 +163,9 @@ def run_gather(waku: Waku | None = None, observer=None) -> dict:
 
 
 def main() -> None:
+    from waku.gateway.cli import make_console_unicode_safe
+
+    make_console_unicode_safe()
     console = Console()
     waku = Waku()
     try:

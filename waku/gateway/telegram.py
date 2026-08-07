@@ -90,7 +90,9 @@ def start_in_background() -> bool:
     False (quietly) if there's no token or the extra isn't installed. Never
     raises: a gateway problem must not take down the dashboard."""
     from waku.config import load_settings
+    from waku.gateway.cli import make_console_unicode_safe
 
+    make_console_unicode_safe()  # model replies can hold → ✓ emoji; a pipe must not kill the bot
     token = load_settings().telegram_token
     if not token:
         return False

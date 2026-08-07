@@ -308,6 +308,9 @@ def wake_loop(waku: Waku, mouth: Mouth, wake_word: str) -> None:
 
 
 def main() -> None:
+    from waku.gateway.cli import make_console_unicode_safe
+
+    make_console_unicode_safe()
     try:
         import sounddevice  # noqa: F401
     except ImportError:

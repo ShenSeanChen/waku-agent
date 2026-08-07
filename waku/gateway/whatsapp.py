@@ -286,7 +286,9 @@ def start_in_background() -> bool:
     extra isn't installed. Never raises: a gateway problem must not take
     down the dashboard."""
     from waku.config import load_settings
+    from waku.gateway.cli import make_console_unicode_safe
 
+    make_console_unicode_safe()
     settings = load_settings()
     token = settings.whatsapp_token
     phone_number_id = settings.whatsapp_phone_number_id

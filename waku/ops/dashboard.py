@@ -1001,6 +1001,9 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main() -> None:
+    from waku.gateway.cli import make_console_unicode_safe
+
+    make_console_unicode_safe()  # a backgrounded dashboard hits a cp125x pipe on Windows
     # Port precedence: WAKU_DASHBOARD_PORT, then the conventional PORT (used by
     # deploy platforms and IDE preview panes), then 7777. If it's taken, walk on.
     base = int(os.getenv("WAKU_DASHBOARD_PORT") or os.getenv("PORT") or PORT)

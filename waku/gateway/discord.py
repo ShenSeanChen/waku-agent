@@ -202,6 +202,9 @@ def main() -> None:
 
 def start_in_background() -> bool:
     """Start Discord on a daemon thread, returning False when it is not configured."""
+    from waku.gateway.cli import make_console_unicode_safe
+
+    make_console_unicode_safe()
     token = os.getenv("DISCORD_BOT_TOKEN", "")
     if not token:
         return False

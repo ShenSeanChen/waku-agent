@@ -8,6 +8,7 @@ with polling instead of input().
 from __future__ import annotations
 
 import sqlite3
+import sys
 
 from rich.console import Console
 from rich.panel import Panel
@@ -16,6 +17,25 @@ from rich.text import Text
 from waku.app import Waku
 
 console = Console()
+
+
+def make_console_unicode_safe() -> None:
+    """Waku prints model output and live text that may hold ANY unicode (→, ✓,
+    emoji) and arrows in its own status lines. On Windows, a redirected or
+    piped stdout/stderr defaults to the console code page (e.g. cp1251) and
+    dies with UnicodeEncodeError on the first such character — a backgrounded
+    `waku dashboard`, a `| tee` pipe, a task-scheduler run all hit it. Swap in
+    errors='replace' so no exotic char can take a gateway down; keep the code
+    page so the local log stays readable. No-op on POSIX, where normal streams
+    are already UTF-8-safe."""
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        try:
+            stream.reconfigure(errors="replace")
+        except (ValueError, OSError):
+            pass
 
 
 def _memory_snapshot(conn: sqlite3.Connection) -> str:
@@ -53,6 +73,7 @@ def _observer(kind: str, event: dict) -> None:
 
 
 def main() -> None:
+    make_console_unicode_safe()
     waku = Waku()
     waku.session.session_id = "terminal"   # its own conversation thread in the inbox
     console.print(Panel.fit(
