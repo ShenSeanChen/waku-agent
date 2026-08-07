@@ -46,7 +46,7 @@ def test_pin_persists_and_marks_first_per_provider_default(home):
     info = d.pin_action({"action": "pin", "provider": "kimi", "model": "kimi-k3"})
 
     # persisted to disk in insertion order
-    saved = json.loads((home / "models.json").read_text())["pinned"]
+    saved = json.loads((home / "models.json").read_text(encoding="utf-8"))["pinned"]
     assert saved == ["gemini:gemini-3.5-flash", "gemini:gemini-3.5-pro", "kimi:kimi-k3"]
 
     # settings_info() surfaces the shortlist; first-per-provider is the default

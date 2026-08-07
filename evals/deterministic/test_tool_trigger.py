@@ -22,7 +22,7 @@ from evals.helpers import HAS_KEY, ScriptedClient, make_waku, response, text_blo
 
 DATASET = [
     json.loads(line)
-    for line in (Path(__file__).resolve().parents[1] / "dataset.jsonl").read_text().splitlines()
+    for line in (Path(__file__).resolve().parents[1] / "dataset.jsonl").read_text(encoding="utf-8").splitlines()
     if line.strip()
 ]
 
@@ -42,7 +42,7 @@ def test_create_event_writes_db_and_ics(tmp_path):
     row = app.conn.execute("SELECT title, start FROM calendar_events").fetchone()
     assert row["title"] == "Coffee with Alex"
     assert row["start"] == "2026-07-14T09:00"
-    assert "SUMMARY:Coffee with Alex" in (tmp_path / "home" / "calendar.ics").read_text()
+    assert "SUMMARY:Coffee with Alex" in (tmp_path / "home" / "calendar.ics").read_text(encoding="utf-8")
 
 
 def test_create_event_is_idempotent(tmp_path):
@@ -61,7 +61,7 @@ def test_create_event_is_idempotent(tmp_path):
     rows = app.conn.execute("SELECT COUNT(*) FROM calendar_events").fetchone()[0]
     assert rows == 1, f"expected 1 event, got {rows}"
     assert "already exists" in result.tool_calls[1]["output"]
-    ics = (tmp_path / "home" / "calendar.ics").read_text()
+    ics = (tmp_path / "home" / "calendar.ics").read_text(encoding="utf-8")
     assert ics.count("SUMMARY:Swim with Sergey") == 1
 
 

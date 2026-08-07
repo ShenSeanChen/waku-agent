@@ -179,7 +179,7 @@ def test_google_failure_keeps_local_event_and_reports_partial_success(tmp_path, 
 
     row = conn.execute("SELECT title, start FROM calendar_events").fetchone()
     assert dict(row) == {"title": "Local first", "start": "2026-07-24T09:00"}
-    assert "SUMMARY:Local first" in (tmp_path / "calendar.ics").read_text()
+    assert "SUMMARY:Local first" in (tmp_path / "calendar.ics").read_text(encoding="utf-8")
     assert "Saved to the local calendar" in result
     assert "Google Calendar sync FAILED" in result
     assert "Local first" in calendar.make_list_tool(conn).fn()

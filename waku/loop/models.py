@@ -173,6 +173,13 @@ class OpenAICompatClient:
             elif message["role"] == "assistant":
                 # anthropic content blocks → assistant text + tool_calls
                 text = "".join(b.text for b in content if getattr(b, "type", "") == "text")
+                # the DeepSeek reasoning echo: the block parsed in _create goes
+                # back as the message-level reasoning_content the API demands
+                reasoning = "".join(
+                    b.text for b in content if getattr(b, "type", "") == "reasoning")
+                entry: dict = {"role": "assistant", "content": text or None}
+                if reasoning:
+                    entry["reasoning_content"] = reasoning
                 calls = []
                 for b in content:
                     if getattr(b, "type", "") != "tool_use":
@@ -183,7 +190,6 @@ class OpenAICompatClient:
                     if extra:
                         call["extra_content"] = extra
                     calls.append(call)
-                entry: dict = {"role": "assistant", "content": text or None}
                 if calls:
                     entry["tool_calls"] = calls
                 oai_messages.append(entry)
@@ -238,6 +244,16 @@ class OpenAICompatClient:
         blocks = []
         if choice.content:
             blocks.append(SimpleNamespace(type="text", text=choice.content))
+        # DeepSeek-style thinking models return the chain-of-thought here and
+        # REQUIRE it echoed back with the next request, or the follow-up 400s
+        # ("the reasoning_content in the thinking mode must be passed back").
+        # Carried as its own block (inert outside the adapter) so the loop is
+        # none the wiser — see _to_openai for the echo. model_extra covers
+        # endpoints whose field the SDK hasn't declared yet.
+        reasoning = getattr(choice, "reasoning_content", None) or (
+            getattr(choice, "model_extra", None) or {}).get("reasoning_content")
+        if reasoning:
+            blocks.append(SimpleNamespace(type="reasoning", text=reasoning))
         for call in choice.tool_calls or []:
             blocks.append(SimpleNamespace(
                 type="tool_use", id=call.id, name=call.function.name,
@@ -276,6 +292,7 @@ class _OpenAIStream:
         self._client = client
         self._kwargs = kwargs
         self._text: list[str] = []
+        self._reasoning: list[str] = []
         self._tools: dict[int, dict] = {}   # index → {id, name, args}
         self._usage = None
 
@@ -295,6 +312,8 @@ class _OpenAIStream:
             if not chunk.choices:
                 continue
             delta = chunk.choices[0].delta
+            if getattr(delta, "reasoning_content", None):
+                self._reasoning.append(delta.reasoning_content)
             if getattr(delta, "content", None):
                 self._text.append(delta.content)
                 yield delta.content
@@ -309,6 +328,9 @@ class _OpenAIStream:
 
     def get_final_message(self):
         blocks = []
+        if self._reasoning:
+            blocks.append(SimpleNamespace(
+                type="reasoning", text="".join(self._reasoning)))
         text = "".join(self._text)
         if text:
             blocks.append(SimpleNamespace(type="text", text=text))

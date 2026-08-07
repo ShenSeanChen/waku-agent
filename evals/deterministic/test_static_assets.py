@@ -14,9 +14,9 @@ import re
 from pathlib import Path
 
 STATIC = Path(__file__).resolve().parents[2] / "waku" / "ops" / "static"
-INDEX = (STATIC / "index.html").read_text()
+INDEX = (STATIC / "index.html").read_text(encoding="utf-8")
 JS_FILES = sorted((STATIC / "js").glob("*.js"))
-JS_SRC = "\n".join(f.read_text() for f in JS_FILES)
+JS_SRC = "\n".join(f.read_text(encoding="utf-8") for f in JS_FILES)
 
 # JS keywords / builtins / DOM globals an inline handler may call without a js/
 # definition. Kept small on purpose — anything else must be a real app function.

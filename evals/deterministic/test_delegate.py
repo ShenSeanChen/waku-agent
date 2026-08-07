@@ -8,6 +8,7 @@ and the honest strings for every failure mode (not installed / timeout / bad cwd
 from __future__ import annotations
 
 import subprocess
+import sys
 from types import SimpleNamespace
 
 import pytest
@@ -15,6 +16,22 @@ import pytest
 from evals.helpers import ScriptedClient, make_waku, response, text_block, tool_block
 from waku.config import Settings
 from waku.tools import experimental
+
+
+def fake_pi(tmp_path, source, name="pi"):
+    """A fake pi that is directly executable on ANY platform. POSIX gets the
+    script itself (chmod +x); Windows gets a .cmd shim that routes through the
+    interpreter that's running the tests (a bare shebang script is WinError 193)."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    script = bin_dir / f"{name}.py"
+    script.write_text(source, encoding="utf-8")
+    if sys.platform == "win32":
+        shim = bin_dir / f"{name}.cmd"
+        shim.write_text(f'@"{sys.executable}" "%~dp0{name}.py" %*\r\n', encoding="utf-8")
+        return shim
+    script.chmod(0o755)
+    return script
 
 
 @pytest.fixture(autouse=True)
@@ -66,7 +83,7 @@ def test_delegate_task_invokes_pi_print_mode(tmp_path, monkeypatch):
     assert "Done. Created hello.py." in output and "saved to" in output.lower()
     # the run landed in the dated workspace with a manifest + transcript
     manifests = list((tmp_path / "ws").rglob("MANIFEST.md"))
-    assert len(manifests) == 1 and "create hello.py" in manifests[0].read_text()
+    assert len(manifests) == 1 and "create hello.py" in manifests[0].read_text(encoding="utf-8")
     assert list((tmp_path / "ws").rglob("pi-transcript.log"))
 
 
@@ -155,10 +172,7 @@ def test_delegate_streams_pi_events_and_ledgers_cost(tmp_path, monkeypatch):
     from the final assistant message, the raw event stream is preserved, and —
     the arena-honesty fix — pi's tokens land in usage.jsonl as kind="subagent"
     so a delegated coding run is no longer free."""
-    fake = tmp_path / "bin" / "pi"
-    fake.parent.mkdir()
-    fake.write_text(FAKE_PI, encoding="utf-8")
-    fake.chmod(0o755)
+    fake = fake_pi(tmp_path, FAKE_PI)
     monkeypatch.setattr(experimental.shutil, "which", lambda _: str(fake))
 
     home = tmp_path / "home"
@@ -176,7 +190,7 @@ def test_delegate_streams_pi_events_and_ledgers_cost(tmp_path, monkeypatch):
         ev.get("tool") == "bash" for _, ev in seen if ev.get("type") == "tool")
     assert ("subagent", "turn_end") in kinds
     # the cost fix: pi's tokens are on the SAME ledger the arena prices from
-    ledger = (home / "usage.jsonl").read_text().strip().splitlines()
+    ledger = (home / "usage.jsonl").read_text(encoding="utf-8").strip().splitlines()
     rec = __import__("json").loads(ledger[-1])
     assert rec["kind"] == "subagent" and rec["in"] == 250 and rec["out"] == 50
     assert rec["model"] == "kimi-k3"
@@ -187,14 +201,11 @@ def test_delegate_streams_pi_events_and_ledgers_cost(tmp_path, monkeypatch):
 def test_delegate_kills_a_silent_pi_at_the_deadline(tmp_path, monkeypatch):
     """A pi that starts streaming then hangs forever must not hang the loop:
     the queue-based deadline kills it and the model hears an honest timeout."""
-    fake = tmp_path / "bin" / "pi"
-    fake.parent.mkdir()
-    fake.write_text('#!/usr/bin/env python3\nimport sys, time\n'
-                    'if "--help" in sys.argv:\n'
-                    '    print("--mode json"); sys.exit(0)\n'
-                    'print(\'{"type": "turn_start"}\', flush=True)\n'
-                    'time.sleep(60)\n', encoding="utf-8")
-    fake.chmod(0o755)
+    fake = fake_pi(tmp_path, '#!/usr/bin/env python3\nimport json, sys, time\n'
+                          'if "--help" in sys.argv:\n'
+                          '    print("--mode json"); sys.exit(0)\n'
+                          'print(\'{"type": "turn_start"}\', flush=True)\n'
+                          'time.sleep(60)\n')
     monkeypatch.setattr(experimental.shutil, "which", lambda _: str(fake))
 
     tool = experimental.make_delegate_tool(Settings(home=tmp_path / "home"))

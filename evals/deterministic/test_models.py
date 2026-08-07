@@ -58,6 +58,40 @@ def test_gemini_thought_signature_round_trips():
     assert kwargs["messages"][0]["tool_calls"][0]["extra_content"] == sig   # echoed back
 
 
+def test_deepseek_reasoning_content_round_trips():
+    """DeepSeek thinking models return `reasoning_content` (the chain of
+    thought) and REQUIRE it echoed back with the assistant message next turn,
+    or the tool-calling follow-up 400s — seen live on deepseek-v4-flash.
+    The adapter must capture it on parse (_create) and echo it on serialize
+    (_to_openai), and the loop must be blind to it (no extra text in replies)."""
+    from waku.loop.models import OpenAICompatClient
+
+    client = OpenAICompatClient.__new__(OpenAICompatClient)   # skip __init__ (no network)
+    toolcall = SimpleNamespace(id="t1", function=SimpleNamespace(
+        name="create_event", arguments='{"title":"x"}'))
+    resp = SimpleNamespace(
+        choices=[SimpleNamespace(message=SimpleNamespace(
+            content=None, reasoning_content="let me think about the event",
+            tool_calls=[toolcall]))],
+        usage=SimpleNamespace(prompt_tokens=1, completion_tokens=1))
+    client._call = lambda kwargs, **extra: resp
+
+    parsed = client._create(model="deepseek-v4-flash",
+                            messages=[{"role": "user", "content": "book it"}], max_tokens=10)
+    reasoning = next(b for b in parsed.content if b.type == "reasoning")
+    assert reasoning.text == "let me think about the event"   # captured on parse
+
+    kwargs = client._to_openai(model="deepseek-v4-flash", max_tokens=10,
+                               messages=[{"role": "assistant", "content": parsed.content}])
+    msg = kwargs["messages"][0]
+    assert msg["reasoning_content"] == "let me think about the event"   # echoed back
+    assert msg["tool_calls"][0]["function"]["name"] == "create_event"
+
+    # the loop only ever joins text + tool_use blocks, so the reasoning block
+    # can never leak into a reply
+    assert "".join(b.text for b in parsed.content if b.type == "text") == ""
+
+
 def test_deepseek_provider_uses_expected_key_endpoint_and_models(monkeypatch, tmp_path):
     captured = {}
 

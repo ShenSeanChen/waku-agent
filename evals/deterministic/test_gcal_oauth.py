@@ -166,7 +166,7 @@ def test_oauth_flow_runs_and_caches_token(tmp_path, monkeypatch):
     assert captured["ran_local_server_port"] == 0
     token_file = tmp_path / "token.json"
     assert token_file.exists()
-    assert 'fake-oauth-token' in token_file.read_text()
+    assert 'fake-oauth-token' in token_file.read_text(encoding="utf-8")
     assert "Also added to Google Calendar" in result
 
 

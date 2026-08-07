@@ -9,10 +9,15 @@ code, not pi's prose."""
 from __future__ import annotations
 
 import shutil
+import sys
 
 from waku.ops import coding_eval as ce
 
-_TRUE = shutil.which("true") or "/usr/bin/true"   # a real no-op binary, exits 0
+_TRUE = shutil.which("true") or (
+    sys.executable if sys.platform == "win32" else "/usr/bin/true")
+# verify strings run through a shell (coding_eval runs them with shell=True).
+# `python3` doesn't exist on Windows — use the interpreter running the tests.
+_PY = f'"{sys.executable}"'
 
 
 def _stub_pi(monkeypatch):
@@ -25,7 +30,7 @@ def test_verify_pass_is_the_verdict(tmp_path, monkeypatch):
     case = {"id": "ok", "input": "n/a",
             "files": {"fizzbuzz.py": "def fizzbuzz(n):\n"
                       "    return 'FizzBuzz' if n%15==0 else 'Fizz' if n%3==0 else 'Buzz' if n%5==0 else str(n)\n"},
-            "verify": "python3 -c \"from fizzbuzz import fizzbuzz; assert fizzbuzz(15)=='FizzBuzz'; print('ok')\""}
+            "verify": f"{_PY} -c \"from fizzbuzz import fizzbuzz; assert fizzbuzz(15)=='FizzBuzz'; print('ok')\""}
     passed, why, _secs = ce.run_coding_case("anthropic", "claude-opus-4-8", case)
     assert passed and why == "tests pass"
 
@@ -35,7 +40,7 @@ def test_verify_fail_when_code_is_wrong(tmp_path, monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "x")
     case = {"id": "bad", "input": "n/a",
             "files": {"fizzbuzz.py": "def fizzbuzz(n):\n    return 'wrong'\n"},
-            "verify": "python3 -c \"from fizzbuzz import fizzbuzz; assert fizzbuzz(3)=='Fizz'\""}
+            "verify": f"{_PY} -c \"from fizzbuzz import fizzbuzz; assert fizzbuzz(3)=='Fizz'\""}
     passed, _why, _ = ce.run_coding_case("anthropic", "claude-opus-4-8", case)
     assert not passed                       # pi 'ran' but the code fails verify
 
@@ -80,7 +85,7 @@ def test_stream_runner_scores_by_verify_and_emits_lines(tmp_path, monkeypatch):
         "anthropic", "claude-opus-4-8",
         task="n/a",
         files={"fizzbuzz.py": "def fizzbuzz(n):\n    return 'FizzBuzz' if n%15==0 else str(n)\n"},
-        verify="python3 -c \"from fizzbuzz import fizzbuzz; assert fizzbuzz(15)=='FizzBuzz'\"",
+        verify=f"{_PY} -c \"from fizzbuzz import fizzbuzz; assert fizzbuzz(15)=='FizzBuzz'\"",
         on_line=lines.append)
     assert passed is True and why == "tests pass"
     assert any(ln.startswith("$ pi") for ln in lines)   # the launch line streamed
