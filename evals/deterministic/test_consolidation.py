@@ -66,14 +66,21 @@ class CountingClient(ScriptedClient):
     caught exactly that: breaking the threshold from `every_n * 2` to `every_n`
     left this file green, because the extra call raised IndexError and was
     quietly swallowed into `return 0`.
+
+    It also keeps every call's kwargs. Some properties are invisible in the
+    RESULT and only legible in the REQUEST — `max_tokens` is one: a budget too
+    small for a reasoning model produces the same "return 0, log untouched"
+    outcome as a healthy refusal (see the budget test below).
     """
 
     def __init__(self, script):
         super().__init__(script)
         self.calls = 0
+        self.kwargs: list[dict] = []
 
     def _create(self, **kw):
         self.calls += 1
+        self.kwargs.append(kw)
         return super()._create(**kw)
 
 
@@ -240,6 +247,41 @@ def test_a_reasoning_model_that_never_reaches_text_leaves_the_log_untouched(memo
     assert run(memory, [thinking_only]) == 0
     assert unconsolidated(memory.conn) == 6, "a thinking-only reply must not be mistaken for done"
     assert memory.conn.execute("SELECT COUNT(*) FROM facts").fetchone()[0] == 0
+
+
+def test_the_summarizer_asks_for_a_budget_a_reasoning_model_can_finish_in(memory):
+    """THE assertion the test above cannot make.
+
+    The bug #74 fixed was a 600-token ceiling: a reasoning model spent all of it
+    thinking and never emitted the JSON. But the test above passes on the
+    UNFIXED code, because both versions end the same way — return 0, log
+    untouched, no facts. The old path just gets there by raising ValueError into
+    the broad `except`. Verified by reverting consolidation.py and re-running:
+    still green. A test that passes on broken code is not a regression test.
+
+    The only thing that actually distinguishes fixed from broken is the number
+    sent to the API, so assert on that. `CountingClient` already sees the
+    kwargs; nothing new is needed to reach them.
+
+    Why 2048 and not the exact 4096: pinning the literal would fail the day
+    someone tunes it upward, which is the wrong direction to defend. The floor
+    is what matters — the measured failure was a 40-row backlog truncating at
+    600, and 2048 was enough for it.
+
+    This is the same trap `CountingClient`'s own docstring warns about: when a
+    broad `except` swallows the difference, the observable outcome is identical
+    and only the call itself tells you which code you are running.
+    """
+    add_exchanges(memory.conn, 3)
+    run(memory, [response([text_block(DISTILLED)])])
+    budget = memory.client.kwargs[-1]["max_tokens"]
+    assert budget >= 2048, (
+        f"the summarizer asks for only {budget} output tokens. This prompt carries the "
+        "WHOLE unconsolidated log, and a reasoning model spends a thinking block before "
+        "any JSON — at 600 it returned zero text blocks on a real 40-row backlog and "
+        "memory silently stopped growing. Do not lower this below a reasoning model's "
+        "preamble."
+    )
 
 
 # ---------- the prompt

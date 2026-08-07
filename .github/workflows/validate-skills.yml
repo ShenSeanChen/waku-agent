@@ -19,5 +19,11 @@ jobs:
         run: python -m ruff check waku evals scripts
       - name: Validate skills (community PRs land here)
         run: python scripts/validate_skills.py
+      # .env.example's Connections block is GENERATED from waku/integrations.py.
+      # Without this step the generator is advisory: add an integration, forget
+      # `--write`, and the file every new user reads goes quietly stale — which
+      # is the exact failure generating it was meant to make impossible.
+      - name: .env.example matches the integrations registry
+        run: python scripts/generate_env_example.py --check
       - name: Deterministic evals (offline tier — no API key in CI)
         run: python -m pytest -q evals/deterministic

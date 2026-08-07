@@ -101,6 +101,7 @@ from urllib.parse import parse_qs, urlparse
 
 from waku.app import Waku
 from waku.gateway.cli import _observer  # mirror gate/tool activity on the laptop terminal
+from waku.integrations import IntegrationState, IntegrationStatus
 
 
 def _send_message(token: str, phone_number_id: str, to: str, text: str) -> bool:
@@ -279,12 +280,35 @@ def main() -> None:
         print("\nStopped.")
 
 
-def start_in_background() -> bool:
+class WhatsAppHandle:
+    """Supervisor contract for the background webhook server — same shape as
+    TelegramHandle/DiscordHandle so GatewaySupervisor can stop, restart and
+    report it like any other gateway."""
+
+    def __init__(self, server: ThreadingHTTPServer, thread: threading.Thread) -> None:
+        self.server, self.thread = server, thread
+
+    def stop(self) -> None:
+        # shutdown() must be called from a thread OTHER than the one running
+        # serve_forever, or it deadlocks — the supervisor always calls from
+        # the dashboard thread, so this is safe.
+        self.server.shutdown()
+        self.server.server_close()
+        if self.thread.is_alive():
+            self.thread.join(timeout=10)
+
+    def status(self) -> IntegrationStatus:
+        if not self.thread.is_alive():
+            return IntegrationStatus(IntegrationState.ERROR, "gateway stopped unexpectedly")
+        return IntegrationStatus(IntegrationState.CONNECTED)
+
+
+def start_in_background() -> WhatsAppHandle | None:
     """Start the WhatsApp webhook server on a daemon thread — so
     `waku dashboard` runs the browser cockpit AND WhatsApp from one command.
-    Returns True if started, False (quietly) if tokens aren't set or the
-    extra isn't installed. Never raises: a gateway problem must not take
-    down the dashboard."""
+    Returns a handle the supervisor can stop/status, None (quietly) if tokens
+    aren't set or the extra isn't installed. A bind failure (e.g. port 5000
+    busy) raises — the supervisor reports it as the gateway's error status."""
     from waku.config import load_settings
 
     settings = load_settings()
@@ -294,28 +318,20 @@ def start_in_background() -> bool:
     app_secret = os.getenv("WHATSAPP_APP_SECRET", "")
 
     if not token or not phone_number_id or not verify_token or not app_secret:
-        return False
+        return None
     try:
         import httpx  # noqa: F401
     except ImportError:
         print("(whatsapp) WHATSAPP_TOKEN is set but the extra isn't installed — "
               "pip install 'waku-agent[whatsapp]'")
-        return False
+        return None
 
     allowed = os.getenv("WHATSAPP_ALLOWED_PHONE", "")
-
-    def run() -> None:
-        try:
-            handler = _build_handler(
-                token, phone_number_id, verify_token, app_secret, allowed
-            )
-            server = ThreadingHTTPServer(("0.0.0.0", 5000), handler)
-            server.serve_forever()
-        except Exception as exc:  # noqa: BLE001 — isolate the dashboard from gateway errors
-            print(f"(whatsapp) background server stopped: {exc}")
-
-    threading.Thread(target=run, daemon=True, name="whatsapp-webhook").start()
-    return True
+    handler = _build_handler(token, phone_number_id, verify_token, app_secret, allowed)
+    server = ThreadingHTTPServer(("0.0.0.0", 5000), handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True, name="whatsapp-webhook")
+    thread.start()
+    return WhatsAppHandle(server, thread)
 
 
 if __name__ == "__main__":

@@ -1,29 +1,13 @@
-// waku dashboard — settings write (applyModel), model picker/catalog/pins.
+// waku dashboard — model picker/catalog/pins, and the remaining Settings toggle.
 // Split out of app.js: classic <script>, shared global scope (no build
 // step, no modules). Load order + rules: static/README.md.
 
-// The ONE writer to /api/settings (settings form, catalog "use", chat pill all
-// funnel through here) so the after-switch reset can't drift. On success it
-// releases the edit lock — else the render guard keeps showing the OLD state
-// (live bug: "Current:" card stayed on kimi after switching) — clears the stale
-// catalog, and re-fetches. Returns the response so callers show their own status.
-async function applyModel({provider, model, small_model, episodic_store, experimental, graph_workflows, keys = {}}){
-  const r = await postJSON("/api/settings", {provider, model, small_model, episodic_store, experimental, graph_workflows, keys});
-  if (!r.error){ editing = false; modelCatalog = null; await refresh(); }
-  return r;
-}
 async function saveSettings(){
-  const provider = document.getElementById("set-provider").value;
-  const model = document.getElementById("set-model").value.trim();
-  const small_model = (document.getElementById("set-small-model")?.value || "").trim();
-  const episodic_store = document.getElementById("set-episodic-store")?.value;
   const experimental = document.getElementById("set-experimental")?.value;
   const graph_workflows = document.getElementById("set-graph-workflows")?.value;
-  const keys = {};
-  document.querySelectorAll("[data-key]").forEach(i => { if(i.value.trim()) keys[i.dataset.key] = i.value.trim(); });
   document.getElementById("set-msg").textContent = "switching…";
-  const r = await applyModel({provider, model, small_model, episodic_store, experimental, graph_workflows, keys});
-  document.getElementById("set-msg").textContent = r.error ? ("Error: "+r.error) : "Switched to "+r.provider+" — live now.";
+  const r = await postJSON("/api/settings", {experimental, graph_workflows});
+  document.getElementById("set-msg").textContent = r.error ? ("Error: "+r.error) : "Saved.";
 }
 function markEditing(){ editing = true; }
 
@@ -154,14 +138,17 @@ function renderCatalogList(){
   list.innerHTML = h;
 }
 
-// One-click model switch: same /api/settings path as the Save button, keeping
-// the other slot (main vs gate) as-is. Live for the next turn.
+// One-click model switch: posts to /api/providers so the provider/model pair
+// is validated and applied by the integrations layer. Keeps the other slot
+// (main vs gate) as-is. Live for the next turn.
 async function switchModel(id, asGate){
   const st = (D && D.settings) || {};
   const msg = document.getElementById("free-switch-msg");
   if (msg) msg.textContent = "switching…";
-  const r = await applyModel({provider: st.provider,
-    model: asGate ? st.model : id, small_model: asGate ? id : st.small_model});
+  const payload = {provider: st.provider,
+    model: asGate ? st.model : id, small_model: asGate ? id : st.small_model};
+  const r = await postJSON("/api/providers", payload);
+  if (!r.error){ editing = false; modelCatalog = null; await refresh(); }
   if (msg) msg.textContent = r.error ? ("Error: " + r.error)
                                      : (asGate ? "Gate model is now " : "Model is now ") + id + ". Applies from your next message.";
 }
@@ -234,3 +221,299 @@ async function pinModel(provider, model, action){
   if (!r.error){ editing = false; await refresh(); }
 }
 
+// --- Models page: a grid of provider cards (logo, name, status dot, actions)
+// plus an edit modal. Status is derived, never stored: unconfigured = no key,
+// configured = key set but disabled, enabled = key set and available. The
+// ACTIVE provider (settings.provider) can't be disabled (server guards too).
+function providerCardStatus(p, st){
+  const keySet = !!(p.fields && p.fields[0] && p.fields[0].configured);
+  if (!keySet) return "unconfigured";
+  return (st.disabled_providers || []).includes(p.key) ? "configured" : "enabled";
+}
+
+function modelsGrid(d){
+  const st = d.settings || {};
+  const rank = p => p.key === st.provider ? 0
+    : providerCardStatus(p, st) === "enabled" ? 1
+    : providerCardStatus(p, st) === "configured" ? 2 : 3;
+  const providers = (d.providers || []).slice()
+    .sort((a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name));
+  return `<div class="provgrid">` + providers.map(p => providerCard(p, st)).join("") +
+    `</div><div id="prov-modal-root"></div>`;
+}
+
+function providerCard(p, st){
+  const status = providerCardStatus(p, st);
+  const current = p.key === st.provider;
+  const dot = status === "enabled" ? "var(--good)" : status === "configured" ? "#4c9aff" : "var(--bad)";
+  return `<div class="provcard" data-provider="${esc(p.key)}">
+    ${current ? `<span class="srcpill prov-current" style="background:var(--good-soft);color:var(--good)">current</span>` : ""}
+    <img class="provlogo" src="/static/logos/${esc(p.key)}.svg" alt="" onerror="this.style.display='none'">
+    <div class="provname">${esc(p.name)}</div>
+    <div class="provstatus"><span class="provdot" style="background:${dot}"></span>${status}</div>
+    <div class="provactions">
+      <button class="save ghost" onclick="openProviderModal('${esc(p.key)}')">edit</button>
+      ${status === "configured" ? `<button class="save ghost" onclick="toggleProvider('${esc(p.key)}',false)">enable</button>` : ""}
+      ${status === "enabled" && !current ? `<button class="save ghost" onclick="toggleProvider('${esc(p.key)}',true)">disable</button>` : ""}
+    </div></div>`;
+}
+
+// enable/disable a provider (the grid button). Server keeps the key; the
+// provider just leaves/enters the available list.
+async function toggleProvider(provider, disabled){
+  const r = await postJSON("/api/providers", {provider, disabled});
+  if (!r.ok) alert(r.error || "update failed");
+  else { editing = false; await refresh(); }
+}
+
+// --- edit modal: API key (+ main/small model when this provider is current,
+// with a searchable live catalog) and a "set as current" action.
+function openProviderModal(provider){
+  markEditing();   // keep the 5s refresh loop from wiping this modal
+  const st = (D && D.settings) || {};
+  const p = (D.providers || []).find(x => x.key === provider);
+  if (!p) return;
+  const current = provider === st.provider;
+  const f = (p.fields || [])[0] || {};
+  const baseField = (p.fields || []).find(field => field.name.endsWith("_BASE_URL"));
+  const selectedBaseUrl = current && st.base_url ? st.base_url : (baseField?.value || "");
+  const root = document.getElementById("prov-modal-root");
+  root.innerHTML = `<div class="provmodal-back" onclick="closeProviderModal()">
+    <div class="provmodal${current ? " provmodal-models" : ""}" onclick="event.stopPropagation()">
+      <div class="u" style="display:flex;justify-content:space-between;align-items:center">
+        <b>${esc(p.name)}</b><a class="reveal" onclick="closeProviderModal()">✕</a></div>
+      <label class="fld"><span>API key <span class="meta">(${esc(f.name || "")})</span>
+        ${f.configured ? `<span class="srcpill" style="background:var(--good-soft);color:var(--good)">set ····${esc(f.last4 || "")}</span>`
+                       : `<span class="srcpill apple">not set</span>`}</span>
+        <input type="password" id="pm-key" placeholder="${f.configured ? "key on file — blank keeps it" : "paste key"}"></label>
+      ${baseField ? `<label class="fld"><span>Base URL <span class="meta">(select the API key's region)</span></span>
+        <select id="pm-base-url" onfocus="markEditing()">
+          ${(baseField.options || []).map((url, index) => {
+            const label = (baseField.option_labels || [])[index];
+            return `<option value="${escAttr(url)}" ${url===selectedBaseUrl?"selected":""}>${label?esc(label)+" — ":""}${esc(url)}</option>`;
+          }).join("")}
+        </select></label>` : ""}
+      ${current ? `
+      ${renderModelPicker("pm-model", "Main model (runs the loop; needs tool calling)", st.model || "")}
+      ${renderModelPicker("pm-small-model", "Gate / summary model", st.small_model || "")}` : ""}
+      <div style="display:flex;gap:8px;margin-top:10px">
+        <button class="save" id="pm-save" onclick="saveProviderModal('${esc(provider)}')">Save</button>
+        ${!current ? `<button class="save ghost" id="pm-make-current" onclick="makeCurrentProvider('${esc(provider)}')">Set as current provider</button>` : ""}
+      </div>
+      <span class="meta" id="pm-msg"></span>
+    </div></div>`;
+  if (current) loadModalModels(provider);
+}
+
+function closeProviderModal(){
+  editing = false;
+  const root = document.getElementById("prov-modal-root");
+  if (root) root.innerHTML = "";
+}
+
+// Populate both modal pickers from one request: this provider's live catalog,
+// or its defaults when there is no catalog. Manual typing always still works.
+async function loadModalModels(provider){
+  setupModelPickers([], provider);
+  setModelPickerMeta("Loading models…");
+  let data;
+  try {
+    const response = await fetch("/api/models?provider=" + encodeURIComponent(provider));
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    data = await response.json();
+  } catch(e){
+    data = {models: [], listed: false, error: e.message || String(e)};
+  }
+  setupModelPickers(data.models || [], provider);
+  if (!data.listed){
+    setModelPickerMeta(data.error && !(data.models || []).length
+      ? "Could not load catalog — you can still type any model id."
+      : data.error
+        ? "Could not load catalog — showing defaults only."
+      : "Live catalog unavailable — showing defaults.");
+  }
+}
+
+// Shared model list for the currently open modal.
+let _modalModels = [];
+let _activeModelPicker = null;
+let _outsidePickerListener = false;
+
+function escAttr(s){
+  return esc(s).replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+}
+
+function renderModelPicker(id, label, value){
+  return `<label class="fld">${esc(label)}
+    <div class="model-picker" id="${escAttr(id)}-picker">
+      <div class="model-picker-input">
+        <input type="text" id="${escAttr(id)}" value="${escAttr(value || "")}" autocomplete="off" onfocus="markEditing()" onclick="event.stopPropagation()">
+        <button type="button" class="model-picker-toggle" onclick="toggleModelPicker('${escAttr(id)}'); event.stopPropagation();" aria-label="toggle models" aria-controls="${escAttr(id)}-list" aria-expanded="false">▾</button>
+      </div>
+      <div class="model-picker-list" id="${escAttr(id)}-list" role="listbox">
+        <input type="text" class="model-picker-search" id="${escAttr(id)}-search" placeholder="filter models..." autocomplete="off" aria-label="filter models" oninput="filterModelPicker('${escAttr(id)}')" onfocus="markEditing()" onclick="event.stopPropagation()">
+        <div class="model-picker-items" id="${escAttr(id)}-items"></div>
+        <div class="model-picker-meta" id="${escAttr(id)}-meta" aria-live="polite"></div>
+      </div>
+    </div>
+  </label>`;
+}
+
+function setupModelPickers(models, provider){
+  _modalModels = Array.isArray(models) ? models : [];
+  ["pm-model", "pm-small-model"].forEach(id => {
+    const input = document.getElementById(id);
+    if (!input) return;
+    const itemsBox = document.getElementById(id + "-items");
+    const search = document.getElementById(id + "-search");
+    if (itemsBox && !itemsBox.dataset.modelPickerBound){
+      itemsBox.dataset.modelPickerBound = "true";
+      itemsBox.addEventListener("click", e => {
+        const item = e.target.closest(".model-picker-item");
+        if (!item) return;
+        e.stopPropagation();
+        selectModelPicker(id, item.dataset.model || "");
+      });
+      search?.addEventListener("keydown", e => {
+        if (e.key !== "Enter") return;
+        const query = search.value.toLowerCase();
+        const first = _modalModels.find(m => (m.id || "").toLowerCase().includes(query));
+        if (!first) return;
+        e.preventDefault();
+        selectModelPicker(id, first.id || "");
+      });
+    }
+    renderModelPickerItems(id, (search?.value || "").toLowerCase());
+  });
+  if (!_outsidePickerListener){
+    _outsidePickerListener = true;
+    document.addEventListener("click", e => {
+      if (!e.target.closest?.(".model-picker")) closeAllModelPickers();
+    }, true);
+    document.addEventListener("keydown", e => { if (e.key === "Escape") closeAllModelPickers(); });
+  }
+}
+
+function setModelPickerMeta(message){
+  ["pm-model", "pm-small-model"].forEach(id => {
+    const meta = document.getElementById(id + "-meta");
+    if (meta) meta.textContent = message;
+  });
+}
+
+function toggleModelPicker(id){
+  const list = document.getElementById(id + "-list");
+  if (!list) return;
+  const isOpen = list.classList.contains("open");
+  closeAllModelPickers();
+  if (!isOpen){
+    list.classList.add("open");
+    list.parentElement.querySelector(".model-picker-toggle")?.setAttribute("aria-expanded", "true");
+    _activeModelPicker = id;
+    const search = document.getElementById(id + "-search");
+    if (search) search.focus();
+  }
+}
+
+function closeAllModelPickers(){
+  document.querySelectorAll(".model-picker-list.open").forEach(el => {
+    el.classList.remove("open");
+    el.parentElement.querySelector(".model-picker-toggle")?.setAttribute("aria-expanded", "false");
+  });
+  _activeModelPicker = null;
+}
+
+function closeModelPicker(id){
+  const list = document.getElementById(id + "-list");
+  if (list){
+    list.classList.remove("open");
+    list.parentElement.querySelector(".model-picker-toggle")?.setAttribute("aria-expanded", "false");
+  }
+  if (_activeModelPicker === id) _activeModelPicker = null;
+}
+
+function filterModelPicker(id){
+  const query = (document.getElementById(id + "-search")?.value || "").toLowerCase();
+  renderModelPickerItems(id, query);
+}
+
+function renderModelPickerItems(id, query){
+  const itemsBox = document.getElementById(id + "-items");
+  const metaBox = document.getElementById(id + "-meta");
+  if (!itemsBox) return;
+  const filtered = _modalModels.filter(m => (m.id || "").toLowerCase().includes(query));
+  itemsBox.innerHTML = filtered.map((m, index) => `<div class="model-picker-item${index === 0 ? " active" : ""}" role="option" data-model="${escAttr(m.id)}">${esc(m.id)}</div>`).join("");
+  if (metaBox){
+    if (_modalModels.length === 0) metaBox.textContent = "No models loaded — you can still type any model id.";
+    else if (filtered.length === 0) metaBox.textContent = `No models match "${query}".`;
+    else metaBox.textContent = "";
+  }
+}
+
+function selectModelPicker(id, value){
+  const input = document.getElementById(id);
+  if (input){
+    input.value = value;
+    input.focus();
+  }
+  closeModelPicker(id);
+}
+
+function modalKeyPayload(provider){
+  const key = document.getElementById("pm-key")?.value;
+  const payload = {provider};
+  if (key) payload.key = key;
+  const baseUrl = document.getElementById("pm-base-url")?.value;
+  if (baseUrl) payload.base_url = baseUrl;
+  return payload;
+}
+
+function setProviderModalBusy(activeId, busy){
+  ["pm-save", "pm-make-current"].forEach(id => {
+    const button = document.getElementById(id);
+    if (!button) return;
+    if (!button.dataset.label) button.dataset.label = button.textContent;
+    button.disabled = busy;
+    button.textContent = busy && id === activeId
+      ? (id === "pm-make-current" ? "Switching…" : "Saving…")
+      : button.dataset.label;
+  });
+  if (busy){
+    const msg = document.getElementById("pm-msg");
+    if (msg) msg.textContent = activeId === "pm-make-current"
+      ? "Switching provider…" : "Saving and validating changes…";
+  }
+}
+
+async function submitProviderModal(provider, payload, activeId){
+  setProviderModalBusy(activeId, true);
+  let r;
+  try { r = await postJSON("/api/providers", payload); }
+  catch(e){ r = {ok:false, error:e.message || String(e)}; }
+  if (!r.ok){
+    setProviderModalBusy(activeId, false);
+    const msg = document.getElementById("pm-msg");
+    if (msg) msg.textContent = r.error || "update failed";
+    return;
+  }
+  editing = false;
+  closeProviderModal();
+  await refresh();
+}
+
+async function saveProviderModal(provider){
+  const st = (D && D.settings) || {};
+  const payload = modalKeyPayload(provider);
+  payload.activate = false;
+  if (provider === st.provider){
+    payload.model = document.getElementById("pm-model")?.value ?? "";
+    payload.small_model = document.getElementById("pm-small-model")?.value ?? "";
+  }
+  await submitProviderModal(provider, payload, "pm-save");
+}
+
+// "Set as current": apply_provider switches provider and picks its default
+// models when none are passed (keeps the key field if one was just typed).
+async function makeCurrentProvider(provider){
+  await submitProviderModal(provider, modalKeyPayload(provider), "pm-make-current");
+}

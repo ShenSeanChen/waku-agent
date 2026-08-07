@@ -11,12 +11,57 @@ from __future__ import annotations
 import re
 import sqlite3
 
+# The scripts unicode61 does not segment. It counts these as alphanumeric but
+# puts no word boundary between them, so a whole run — 「阿历克斯喜欢游泳」 — is
+# indexed as ONE term. An exact match on a name inside that run can therefore
+# never hit, which is why these tokens, and only these, are searched as
+# prefixes. Turning *every* token into `token*` would quietly make "car" match
+# "carpet": a worse failure than this one, because it still looks like it works.
+_UNSEGMENTED = re.compile(
+    "["
+    "\u3040-\u309f"  # Hiragana
+    "\u30a0-\u30ff"  # Katakana
+    "\u3400-\u4dbf"  # CJK Unified Ideographs Extension A
+    "\u4e00-\u9fff"  # CJK Unified Ideographs
+    "\uf900-\ufaff"  # CJK Compatibility Ideographs
+    "]"
+)
+
 
 def _fts_query(text: str) -> str:
-    """User text isn't a valid FTS5 query (quotes/punctuation break MATCH).
-    Reduce it to `word OR word OR ...` over alphanumeric tokens."""
-    words = re.findall(r"[a-zA-Z0-9]{2,}", text.lower())
-    return " OR ".join(dict.fromkeys(words)) if words else ""
+    r"""User text isn't a valid FTS5 query (quotes/punctuation break MATCH).
+    Reduce it to `word OR word OR ...` over alphanumeric tokens.
+
+    "Alphanumeric" has to mean what the *index* means by it. facts_fts and
+    episodes_fts declare no tokenizer, so they get FTS5's default — unicode61,
+    which keeps every Unicode alphanumeric and folds diacritics ("München" is
+    stored as `munchen`). An ASCII-only `[a-zA-Z0-9]` disagreed with that
+    index, and the index was not the side that was wrong:
+
+      * accented Latin was truncated to a fragment — "Müller" became `ller`,
+        which matches nothing, so German, French, Spanish, Portuguese, Turkish
+        and Vietnamese users got silently wrong answers;
+      * every non-Latin script reduced to "" — and an empty query is not a
+        no-op. SqliteEpisodeStore.search() reads it as "just give me the recent
+        ones", so a user asking about Сергей got an unrelated English episode
+        handed to the model under the heading "Relevant memory". Waku wasn't
+        skipping memory for those users, it was confidently supplying someone
+        else's.
+
+    `[^\W_]` is the same set unicode61 keeps. Underscore is excluded because
+    unicode61 treats it as a separator, so `waku_agent` is two terms in the
+    index and has to be two terms here too, or it matches nothing.
+
+    Everything stays lowercased, and that is load-bearing beyond tidiness:
+    FTS5's AND/OR/NOT/NEAR are operators only in UPPERCASE, so lowercasing is
+    what stops a user's "Alex and Bob" from parsing as a boolean expression.
+    """
+    words = re.findall(r"[^\W_]{2,}", text.lower())
+    if not words:
+        return ""
+    return " OR ".join(
+        f"{w}*" if _UNSEGMENTED.search(w) else w for w in dict.fromkeys(words)
+    )
 
 
 class SqliteFactStore:

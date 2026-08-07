@@ -52,6 +52,11 @@ class Settings:
     model: str = field(default_factory=lambda: os.getenv("WAKU_MODEL", ""))
     # Cheap model used by the retrieval gate and the consolidation summarizer.
     small_model: str = field(default_factory=lambda: os.getenv("WAKU_SMALL_MODEL", ""))
+    # Providers the user turned off in the dashboard (comma-separated ids).
+    # Disabled providers are hidden from pickers/switchers; the ACTIVE provider
+    # can't be disabled (guarded in integrations.apply_provider_disabled).
+    disabled_providers: frozenset[str] = field(default_factory=lambda: frozenset(
+        p.strip() for p in os.getenv("WAKU_DISABLED_PROVIDERS", "").split(",") if p.strip()))
 
     # --- Home: where Waku keeps its state (memory DB, calendar, outbox, traces).
     # Defaults to ./.waku next to where you run it, so you can open every file

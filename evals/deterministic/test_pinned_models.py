@@ -12,6 +12,7 @@ these tests drive the same helpers the dashboard's /api/pin route calls."""
 from __future__ import annotations
 
 import json
+import os
 
 import pytest
 
@@ -79,17 +80,23 @@ def test_unpin_removes_and_promotes_next_default(home):
 
 
 def test_switching_provider_adopts_its_pinned_default(home, monkeypatch):
-    """apply_settings on a provider change uses that provider's pinned default,
+    """apply_provider on a provider change uses that provider's pinned default,
     never carrying the previous provider's model across endpoints (the live
     kimi->gemini 404)."""
     monkeypatch.setenv("GEMINI_API_KEY", "g")
     monkeypatch.setenv("MOONSHOT_API_KEY", "k")
     (home / "models.json").write_text(json.dumps({"pinned": ["kimi:kimi-k3"]}))
-    # start on gemini with a gemini model, then switch to kimi without naming one
-    d.apply_settings({"provider": "gemini", "model": "gemini-3.5-flash", "keys": {}})
-    info = d.apply_settings({"provider": "kimi", "keys": {}})
-    assert info["provider"] == "kimi"
-    assert info["model"] == "kimi-k3"          # adopted the pinned default, not gemini's model
+    from waku import integrations
+    from waku.ops import browser_agent
+
+    monkeypatch.setattr(browser_agent, "rebuild", lambda: None)
+    monkeypatch.setattr(browser_agent, "current", lambda: type("A", (), {"tracer": type("T", (), {"event": lambda *args: None})()})())
+    monkeypatch.setenv("WAKU_PROVIDER", "gemini")
+    monkeypatch.setenv("WAKU_MODEL", "gemini-3.5-flash")
+    result = integrations.apply_provider("kimi")
+    assert result.ok
+    assert os.getenv("WAKU_PROVIDER") == "kimi"
+    assert os.getenv("WAKU_MODEL") == "kimi-k3"  # not gemini's model
 
 
 def test_pinned_are_grouped_by_provider_for_display(home):
@@ -157,12 +164,12 @@ def test_known_catalog_providers_can_list(home):
     openai has no base_url by default, so it MUST set catalog_url — without it
     the picker fell back to just its 2 hardcoded defaults.
 
-    minimax/glm are anthropic-wire with no verified public /models endpoint, so
-    they intentionally show their curated defaults until we wire+verify one."""
+    glm is anthropic-wire with no verified public /models endpoint, so it
+    intentionally shows its curated defaults until we wire and verify one."""
     from waku.loop.models import PROVIDERS
 
-    CAN_LIST = {"anthropic", "openai", "openrouter", "gemini", "deepseek", "kimi", "xai",
-                "opencode_zen", "opencode_go"}
+    CAN_LIST = {"anthropic", "openai", "openrouter", "gemini", "deepseek", "minimax",
+                "kimi", "xai", "opencode_zen", "opencode_go"}
     for name in CAN_LIST:
         prov = PROVIDERS[name]
         can_list = bool(prov.catalog_url) or (prov.kind == "openai" and bool(prov.base_url))
@@ -176,6 +183,8 @@ def test_list_models_honors_provider_override(home, monkeypatch):
 
     from waku.loop.models import PROVIDERS
 
+    monkeypatch.delenv("MOONSHOT_BASE_URL", raising=False)
+    monkeypatch.delenv("WAKU_BASE_URL", raising=False)
     url = PROVIDERS["kimi"].catalog_url
     # cache tuple is (ts, models, error) — None error means a real listing
     monkeypatch.setattr(catalog, "_models_cache", {url: (time.time(), [{"id": "kimi-k3"}], None)})

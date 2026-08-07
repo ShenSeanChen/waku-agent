@@ -94,6 +94,8 @@ def test_minimax_provider_uses_expected_key_endpoint_and_models(monkeypatch, tmp
             self.messages = None
 
     monkeypatch.setenv("MINIMAX_API_KEY", "test-minimax-key")
+    monkeypatch.delenv("MINIMAX_BASE_URL", raising=False)
+    monkeypatch.delenv("WAKU_BASE_URL", raising=False)
     monkeypatch.setitem(
         __import__("sys").modules,
         "anthropic",

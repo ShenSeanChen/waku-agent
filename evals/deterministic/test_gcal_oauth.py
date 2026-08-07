@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import json
 import sys
-from types import ModuleType
+from types import ModuleType, SimpleNamespace
+
+import pytest
 
 from waku.tools import calendar, google_calendar
 
@@ -38,11 +41,15 @@ def _install_fake_oauth_modules(monkeypatch, *, execute_error: Exception | None 
 
         @classmethod
         def from_authorized_user_file(cls, path, scopes=None):
+            if load_error := captured.get("load_error"):
+                raise load_error
             captured["loaded_token_path"] = path
             captured["loaded_scopes"] = scopes
             return FakeCredentials(valid=captured.get("creds_valid", True), expired=captured.get("creds_expired", False))
 
         def refresh(self, request):
+            if refresh_error := captured.get("refresh_error"):
+                raise refresh_error
             captured["refreshed"] = True
             self.valid = True
             self.expired = False
@@ -96,15 +103,29 @@ def _install_fake_oauth_modules(monkeypatch, *, execute_error: Exception | None 
 
     google_auth_httplib2.AuthorizedHttp = authorized_http
 
-    # googleapiclient.discovery
+    # googleapiclient.discovery & googleapiclient.errors
+    class FakeHttpError(Exception):
+        def __init__(self, status, reason, message):
+            self.resp = SimpleNamespace(status=status)
+            self.content = json.dumps(
+                {"error": {"errors": [{"reason": reason}], "message": message}}
+            ).encode()
+            super().__init__(message)
+
     class FakeRequest:
         def execute(self, *, num_retries):
             captured["num_retries"] = num_retries
             if execute_error is not None:
+                if isinstance(execute_error, tuple):
+                    raise FakeHttpError(*execute_error)
                 raise execute_error
             return {"id": "google-event"}
 
     class FakeEvents:
+        def list(self, **kwargs):
+            captured["list"] = kwargs
+            return FakeRequest()
+
         def insert(self, **kwargs):
             captured["insert"] = kwargs
             return FakeRequest()
@@ -120,8 +141,11 @@ def _install_fake_oauth_modules(monkeypatch, *, execute_error: Exception | None 
         return FakeService()
 
     discovery.build = build
+    errors = ModuleType("googleapiclient.errors")
+    errors.HttpError = FakeHttpError
     googleapiclient = ModuleType("googleapiclient")
     googleapiclient.discovery = discovery
+    googleapiclient.errors = errors
 
     for name, module in {
         "google": google,
@@ -136,6 +160,7 @@ def _install_fake_oauth_modules(monkeypatch, *, execute_error: Exception | None 
         "google_auth_httplib2": google_auth_httplib2,
         "googleapiclient": googleapiclient,
         "googleapiclient.discovery": discovery,
+        "googleapiclient.errors": errors,
     }.items():
         monkeypatch.setitem(sys.modules, name, module)
 
@@ -211,6 +236,113 @@ def test_expired_token_is_refreshed(tmp_path, monkeypatch):
     assert captured.get("refreshed") is True
     assert "client_secrets_path" not in captured
     assert "Also added to Google Calendar" in result
+
+
+def test_probe_uses_cached_token_and_minimal_read(tmp_path, monkeypatch):
+    captured = _install_fake_oauth_modules(monkeypatch)
+    token_file = tmp_path / "token.json"
+    token_file.write_text('{"token": "existing"}', encoding="utf-8")
+
+    calendar.probe_google_calendar(tmp_path, "team@example.com")
+
+    assert captured["loaded_token_path"] == str(token_file)
+    assert captured["loaded_scopes"] == [calendar.GOOGLE_CALENDAR_SCOPE]
+    assert captured["list"] == {
+        "calendarId": "team@example.com",
+        "maxResults": 1,
+        "fields": "kind",
+    }
+    assert captured["timeout"] == calendar.GOOGLE_CALENDAR_TIMEOUT
+    assert captured["num_retries"] == 0
+    assert "insert" not in captured
+    assert "client_secrets_path" not in captured
+
+
+def test_probe_requires_cached_oauth_token(tmp_path, monkeypatch):
+    _install_fake_oauth_modules(monkeypatch)
+
+    with pytest.raises(RuntimeError, match="not authorized.*credentials.json"):
+        calendar.probe_google_calendar(tmp_path)
+
+
+def test_probe_refreshes_expired_token(tmp_path, monkeypatch):
+    captured = _install_fake_oauth_modules(monkeypatch)
+    captured["creds_valid"] = False
+    captured["creds_expired"] = True
+    token_file = tmp_path / "token.json"
+    token_file.write_text('{"token": "expired"}', encoding="utf-8")
+
+    calendar.probe_google_calendar(tmp_path)
+
+    assert captured["refreshed"] is True
+    assert 'fake-oauth-token' in token_file.read_text()
+    assert captured["list"]["calendarId"] == "primary"
+
+
+def test_probe_reports_invalid_token_without_starting_oauth(tmp_path, monkeypatch):
+    captured = _install_fake_oauth_modules(monkeypatch)
+    captured["load_error"] = ValueError("bad token json")
+    token_file = tmp_path / "token.json"
+    token_file.write_text("not-json", encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="OAuth token.*reauthorize.*credentials.json"):
+        calendar.probe_google_calendar(tmp_path)
+
+    assert "client_secrets_path" not in captured
+
+
+def test_probe_reports_refresh_failure(tmp_path, monkeypatch):
+    captured = _install_fake_oauth_modules(monkeypatch)
+    captured["creds_valid"] = False
+    captured["creds_expired"] = True
+    captured["refresh_error"] = TimeoutError("refresh timed out")
+    token_file = tmp_path / "token.json"
+    token_file.write_text('{"token": "expired"}', encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="OAuth token.*reauthorize.*credentials.json"):
+        calendar.probe_google_calendar(tmp_path)
+
+
+def test_probe_reports_google_api_failure(tmp_path, monkeypatch):
+    captured = _install_fake_oauth_modules(
+        monkeypatch, execute_error=PermissionError("calendar access denied")
+    )
+    token_file = tmp_path / "token.json"
+    token_file.write_text('{"token": "existing"}', encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="probe failed.*calendar access denied"):
+        calendar.probe_google_calendar(tmp_path, "missing@example.com")
+
+    assert captured["list"]["calendarId"] == "missing@example.com"
+
+
+@pytest.mark.parametrize(
+    ("status", "reason"),
+    [(401, "authError"), (403, "insufficientPermissions")],
+)
+def test_probe_maps_google_auth_failure_to_reauthorization(
+    tmp_path, monkeypatch, status, reason
+):
+    _install_fake_oauth_modules(
+        monkeypatch,
+        execute_error=(status, reason, "Request had invalid authentication credentials"),
+    )
+    token_file = tmp_path / "token.json"
+    token_file.write_text('{"token": "existing"}', encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="OAuth token.*reauthorize.*credentials.json"):
+        calendar.probe_google_calendar(tmp_path)
+
+
+def test_probe_keeps_non_auth_http_failure_generic(tmp_path, monkeypatch):
+    _install_fake_oauth_modules(
+        monkeypatch, execute_error=(404, "notFound", "Not Found")
+    )
+    token_file = tmp_path / "token.json"
+    token_file.write_text('{"token": "existing"}', encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match=r"probe failed \(Not Found\)"):
+        calendar.probe_google_calendar(tmp_path, "missing@example.com")
 
 
 def test_google_calendar_uses_bundled_client_and_readonly_scope_by_default(
