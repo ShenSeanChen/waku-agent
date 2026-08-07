@@ -1,6 +1,6 @@
 [project]
 name = "waku-agent"
-version = "0.1.3"
+version = "0.1.4"
 description = "A minimal, transparent, local-first Waku: harness + loop + memory + eval, in code you can read in an afternoon."
 readme = "README.md"
 license = { text = "MIT" }
