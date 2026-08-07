@@ -86,6 +86,35 @@ def test_the_handlers_behind_the_routes_exist_and_are_callable():
         assert callable(fn), f"handler missing or not callable: {name}"
 
 
+def test_api_models_returns_picker_contract(monkeypatch):
+    """The model picker depends on /api/models returning models and listed."""
+    import io
+    import json
+    import urllib.request
+
+    from waku.ops import catalog
+
+    monkeypatch.setenv("WAKU_PROVIDER", "openrouter")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "fake-key")
+    monkeypatch.delenv("WAKU_MODEL", raising=False)
+    monkeypatch.delenv("WAKU_SMALL_MODEL", raising=False)
+
+    def fake_urlopen(req, timeout=10):
+        return io.BytesIO(json.dumps(
+            {"data": [{"id": "vendor/model:free"}]}
+        ).encode())
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    catalog._models_cache.clear()
+
+    result = catalog.list_models("openrouter")
+    assert result["listed"] is True
+    assert isinstance(result["models"], list)
+    assert result["models"][0]["id"] == "vendor/model:free"
+
+    catalog._models_cache.clear()
+
+
 def test_collect_returns_the_keys_the_page_reads():
     """`/api/data` is read by every view in static/js/. These are the keys the
     frontend indexes into; dropping one blanks a tab with no error."""

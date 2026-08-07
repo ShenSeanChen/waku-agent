@@ -14,11 +14,14 @@ Two tiers:
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pytest
 
 from evals.helpers import HAS_KEY, ScriptedClient, make_waku, response, text_block, tool_block
+
+RUN_LIVE_EVALS = os.getenv("WAKU_RUN_LIVE_EVALS") == "1"
 
 DATASET = [
     json.loads(line)
@@ -102,7 +105,8 @@ def test_iteration_guardrail_stops_runaway_loop(tmp_path):
 # ---------- live tier: the actual model eval over the dataset
 
 
-@pytest.mark.skipif(not HAS_KEY, reason="live eval needs the active provider's API key")
+@pytest.mark.skipif(not (HAS_KEY and RUN_LIVE_EVALS),
+                    reason="set WAKU_RUN_LIVE_EVALS=1 and configure an API key to run live evals")
 @pytest.mark.parametrize("case", DATASET, ids=[c["id"] for c in DATASET])
 def test_dataset_case(case, tmp_path):
     app = make_waku(tmp_path / "home")

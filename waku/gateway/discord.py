@@ -41,12 +41,16 @@ Setup:
 
 from __future__ import annotations
 
+import asyncio
 import os
+import threading
 import time
 from pathlib import Path
 
 from waku.app import Waku
 from waku.gateway.cli import _observer
+from waku.gateway.runner import GatewayAgentRunner, run_gateway_turn
+from waku.integrations import IntegrationState, IntegrationStatus
 
 
 def _ids(env: str) -> set[str]:
@@ -124,7 +128,13 @@ def _build_agent() -> Waku:
     return Waku(settings=settings)
 
 
-def _build_client():
+def _new_runner() -> GatewayAgentRunner:
+    return GatewayAgentRunner(
+        _build_agent, session_id="discord", source="discord", observer=_observer
+    )
+
+
+def _build_client(runner: GatewayAgentRunner | None = None):
     """Build the Discord client and its message handler."""
     import discord
 
@@ -136,8 +146,7 @@ def _build_client():
     intents = discord.Intents.default()
     intents.message_content = True
     client = discord.Client(intents=intents)
-    waku = _build_agent()
-    waku.session.session_id = "discord"
+    runner = runner or _new_runner()
 
     @client.event
     async def on_message(message: discord.Message) -> None:
@@ -159,11 +168,8 @@ def _build_client():
         text = _strip_mention(message.content, str(client.user.id))
         if not text:
             return
-        print(f"you › {text}")
         async with message.channel.typing():
-            result = waku.respond(text, observer=_observer, source="discord")
-        print(f"waku › {result.reply}")
-        await message.reply(result.reply or "(no reply)")
+            await run_gateway_turn(runner, text, message.reply)
 
     return client
 
@@ -194,37 +200,80 @@ def main() -> None:
     token = os.getenv("DISCORD_BOT_TOKEN", "")
     if not token:
         raise SystemExit("Set DISCORD_BOT_TOKEN in .env (create a bot in the Discord Developer Portal).")
-    client = _build_client()
-    print("Waku is listening on Discord. Ctrl-C to stop.")
-    print(describe_posture())
-    client.run(token)
+    runner = _new_runner()
+    try:
+        client = _build_client(runner)
+        print("Waku is listening on Discord. Ctrl-C to stop.")
+        print(describe_posture())
+        client.run(token)
+    finally:
+        runner.close()
 
 
-def start_in_background() -> bool:
+class DiscordHandle:
+    def __init__(self, client, thread, started, runner: GatewayAgentRunner) -> None:
+        self.client, self.thread, self.started = client, thread, started
+        self.runner = runner
+
+    def stop(self) -> None:
+        try:
+            self.started.wait(timeout=5)
+            loop = getattr(self.client, "loop", None)
+            try:
+                if loop and loop.is_running():
+                    asyncio.run_coroutine_threadsafe(self.client.close(), loop).result(timeout=10)
+            finally:
+                if self.thread.is_alive():
+                    self.thread.join(timeout=10)
+        finally:
+            self.runner.close()
+
+    def status(self) -> IntegrationStatus:
+        if not self.thread.is_alive() or self.client.is_closed():
+            return IntegrationStatus(IntegrationState.ERROR, "gateway stopped unexpectedly")
+        if error := self.runner.error_status:
+            return IntegrationStatus(IntegrationState.ERROR, error)
+        if self.client.is_ready():
+            return IntegrationStatus(IntegrationState.CONNECTED)
+        return IntegrationStatus(IntegrationState.INSTALLED_BUT_UNCONFIGURED, "starting")
+
+
+def start_in_background() -> DiscordHandle | None:
     """Start Discord on a daemon thread, returning False when it is not configured."""
     token = os.getenv("DISCORD_BOT_TOKEN", "")
     if not token:
-        return False
+        return None
     try:
         import discord  # noqa: F401
     except ImportError:
         print("(discord) DISCORD_BOT_TOKEN is set but the extra isn't installed — "
               "pip install 'waku-agent[discord]'")
-        return False
-
-    import threading
+        return None
 
     print("(discord) starting:")
     print(describe_posture())
 
+    runner = _new_runner()
+    try:
+        client = _build_client(runner)
+    except Exception:
+        runner.close()
+        raise
+    started = threading.Event()
+
+    @client.event
+    async def on_ready():
+        started.set()
+
     def run() -> None:
         try:
-            _build_client().run(token)
+            client.run(token)
         except Exception as exc:  # noqa: BLE001 — isolate the dashboard from bot errors
             print(f"(discord) background client stopped: {exc}")
 
-    threading.Thread(target=run, daemon=True, name="discord-client").start()
-    return True
+    thread = threading.Thread(target=run, daemon=True, name="discord-client")
+    thread.start()
+    return DiscordHandle(client, thread, started, runner)
 
 
 if __name__ == "__main__":

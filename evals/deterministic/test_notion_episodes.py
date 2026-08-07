@@ -11,6 +11,11 @@ import types
 
 import pytest
 
+from waku.memory.episodic.notion_store import (
+    NotionEpisodeStore,
+    normalize_database_id,
+)
+
 
 class _FakeNotionClient:
     """In-memory fake for notion_client.Client (>= 2.5, data-sources API)."""
@@ -48,12 +53,6 @@ class _FakeNotionClient:
     def _query(self, *, data_source_id: str, start_cursor: str | None = None) -> dict:
         assert data_source_id == "test-ds-id"
         return {"results": list(self._pages), "has_more": False}
-
-
-from waku.memory.episodic.notion_store import (
-    NotionEpisodeStore,
-    normalize_database_id,
-)
 
 
 @pytest.fixture

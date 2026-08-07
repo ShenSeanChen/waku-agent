@@ -56,6 +56,70 @@ def _code_lines(module) -> list[str]:
             if i not in doc_spans and not ln.strip().startswith("#")]
 
 
+def test_probe_apple_tools_checks_all_apps_without_touching_user_data(monkeypatch):
+    calls = []
+
+    def osa(script, timeout):
+        calls.append((script, timeout))
+        return True, "1.0"
+
+    monkeypatch.setattr(apple, "_osa", osa)
+
+    assert apple.probe_apple_tools() is None
+    assert calls == [
+        (f'tell application "{app}" to return version', 8)
+        for app in ("Calendar", "Mail", "Reminders", "Notes")
+    ]
+
+
+def test_probe_apple_tools_aggregates_failures_and_checks_every_app(monkeypatch):
+    responses = iter([
+        (True, "16.0"),
+        (False, "Not authorized"),
+        (False, "timed out after 8s"),
+        (True, "7.0"),
+    ])
+    calls = []
+
+    def osa(script, timeout):
+        calls.append((script, timeout))
+        return next(responses)
+
+    monkeypatch.setattr(apple, "_osa", osa)
+
+    with pytest.raises(RuntimeError) as caught:
+        apple.probe_apple_tools()
+
+    message = str(caught.value)
+    assert message.startswith("Apple Tools probe failed:")
+    assert "Mail: Not authorized" in message
+    assert "Reminders: timed out after 8s" in message
+    assert "Calendar:" not in message
+    assert "Notes:" not in message
+    assert len(calls) == 4
+
+
+@pytest.mark.parametrize(
+    "detail",
+    [
+        "Apple tools are macOS-only.",
+        "timed out after 8s. The app may be waiting for permission.",
+    ],
+)
+def test_probe_apple_tools_names_the_app_for_transport_failures(monkeypatch, detail):
+    def osa(script, timeout):
+        if 'application "Mail"' in script:
+            return False, detail
+        return True, "1.0"
+
+    monkeypatch.setattr(apple, "_osa", osa)
+
+    with pytest.raises(RuntimeError, match="Mail") as caught:
+        apple.probe_apple_tools()
+
+    assert detail in str(caught.value)
+
+
 def test_no_script_uses_a_whose_filter():
     """THE regression. `whose` makes the app evaluate a predicate per item across
     the Apple Event bridge: ~25s for one calendar versus ~6s to pull the raw

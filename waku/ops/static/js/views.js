@@ -200,7 +200,190 @@ function toolsMCP(t){
   return h;
 }
 
+function connectionField(key, field, prefix="connection"){
+  const id = `${prefix}-${key}-${field.name}`;
+  const label = `${esc(field.label)}${field.required?" *":""}`;
+  const help = field.help ? `<div class="conn-field-help">${esc(field.help)}</div>` : "";
+  if (field.kind === "bool") return `<div class="conn-field">
+    <label class="conn-check" for="${id}"><input id="${id}" data-field="${esc(field.name)}" type="checkbox" ${field.value?"checked":""}>
+      <span>${label}</span></label>${help}</div>`;
+  if (field.kind === "choice") return `<div class="conn-field"><label class="fld" for="${id}"><span>${label}</span>
+    <select id="${id}" data-field="${esc(field.name)}">${field.options.map(o=>`<option value="${esc(o)}" ${o===field.value?"selected":""}>${esc(o)}</option>`).join("")}</select>
+    </label>${help}</div>`;
+  const configured = field.secret && field.configured
+    ? ` <span class="conn-secret-state">set ····${esc(field.last4)}</span>` : "";
+  const clear = field.secret && field.configured
+    ? `<label class="conn-clear"><input type="checkbox" data-clear="${esc(field.name)}"> Clear saved value</label>` : "";
+  return `<div class="conn-field"><label class="fld" for="${id}"><span>${label}${configured}</span>
+    <input id="${id}" data-field="${esc(field.name)}" type="${field.secret?"password":"text"}"
+      value="${field.secret?"":esc(field.value)}" placeholder="${field.secret?(field.configured?"Blank keeps the saved value":"Not configured"):""}">
+    </label>${clear}${help}</div>`;
+}
+async function saveConnection(key, force){
+  const modal = document.querySelector(`.connmodal[data-connection="${key}"]`), values = {}, clear = [];
+  if (!modal) return;
+  modal.querySelectorAll("[data-field]").forEach(el => values[el.dataset.field] = el.type === "checkbox" ? (el.checked ? "1" : "") : el.value);
+  modal.querySelectorAll("[data-clear]").forEach(el => { if (el.checked) clear.push(el.dataset.clear); });
+  const msg = document.getElementById(`connection-msg-${key}`);
+  msg.textContent = force ? "saving without a successful test…" : "saving…";
+  const r = await postJSON("/api/connections", {key, values, clear, force:!!force});
+  if (!r.ok && r.can_force) {
+    msg.innerHTML = `${esc(r.error)} <button class="save ghost conn-force" onclick="saveConnection('${esc(key)}',true)">Save anyway</button>`;
+  } else if (!r.ok) {
+    msg.textContent = r.error || "failed";
+  } else {
+    closeConnectionModal();
+    await refresh();
+  }
+}
+async function testConnection(key){
+  const msg = document.getElementById(`connection-msg-${key}`);
+  if (msg) msg.textContent = "testing…";
+  const r = await postJSON("/api/connections/test", {key});
+  if (!r.status) {
+    if (msg) msg.textContent = r.error || "failed";
+    return;
+  }
+  const display = connectionStatusDisplay(r.status);
+  const status = document.getElementById("connection-modal-status");
+  if (status) {
+    status.className = `connstatus ${display.className}`;
+    status.innerHTML = `<span class="conndot"></span>${esc(display.label)}`;
+  }
+  const detail = document.getElementById("connection-modal-status-detail");
+  if (detail) detail.textContent = r.status.message || "";
+  const checked = document.getElementById("connection-modal-checked");
+  if (checked) checked.textContent = r.status.checked_at ? `Last checked ${r.status.checked_at}` : "";
+  if (msg) msg.textContent = r.status.message || display.label;
+  await refresh();
+}
+async function saveProvider(provider){
+  const info = (D.providers || []).find(x => x.key === provider);
+  const field = info && info.fields[0] && document.getElementById(`provider-${provider}-${info.fields[0].name}`);
+  const payload = {provider};
+  if (field && field.value) payload.key = field.value;
+  // Models are global fields for the *current* provider. Switching cards must
+  // omit them so apply_provider selects the new provider's own default.
+  if (provider === stProvider()) {
+    const model = document.getElementById("provider-model"), small = document.getElementById("provider-small-model"), base = document.getElementById("provider-base-url"), custom = document.getElementById("provider-custom-key");
+    if (model) payload.model = model.value;
+    if (small) payload.small_model = small.value;
+    if (base) payload.base_url = base.value;
+    if (custom && custom.value) payload.custom_key = custom.value;
+    if (document.getElementById("provider-clear-custom-key")?.checked) payload.custom_key = "";
+  }
+  const r = await postJSON("/api/providers", payload);
+  if (!r.ok) alert(r.error || "Provider update failed"); else refresh();
+}
+function stProvider(){ return (D.settings || {}).provider || "anthropic"; }
+
+const CONNECTION_GROUPS = ["Channels", "Productivity", "Storage", "Tools"];
+const CONNECTION_GROUP_MAP = {
+  "Channels": "Channels",
+  "Calendar & Productivity": "Productivity",
+  "Memory & Storage": "Storage",
+  "Search & Observability": "Tools",
+};
+
+function connectionDisplayGroup(item){
+  if (item.key === "apple_tools") return "Tools";
+  return CONNECTION_GROUP_MAP[item.group] || "Tools";
+}
+
+function connectionStatusDisplay(status){
+  const state = (status && status.state) || "not_configured";
+  if (state === "connected") return {label:"connected", className:"connected"};
+  if (state === "error") return {label:"error", className:"error"};
+  if (state === "installed_but_unconfigured") return {label:"needs setup", className:"needs-setup"};
+  return {label:"not configured", className:"not-configured"};
+}
+
+function connectionCard(item){
+  const display = connectionStatusDisplay(item.status);
+  const action = item.status && item.status.state !== "not_configured" ? "Edit" : "Configure";
+  return `<article class="provcard conncard" data-connection-card="${esc(item.key)}">
+    <img class="provlogo connlogo" src="/static/logos/connections/${esc(item.key)}.svg" alt="">
+    <div class="provname">${esc(item.name)}</div>
+    <div class="connstatus ${display.className}"><span class="conndot"></span>${esc(display.label)}</div>
+    <div class="conndesc">${esc(item.what)}</div>
+    <div class="provactions connactions">
+      <button class="save ghost" onclick="openConnectionModal('${esc(item.key)}')">${action}</button>
+    </div>
+  </article>`;
+}
+
+function connectionsGrid(items){
+  const grouped = Object.fromEntries(CONNECTION_GROUPS.map(group => [group, []]));
+  items.forEach(item => grouped[connectionDisplayGroup(item)].push(item));
+  return CONNECTION_GROUPS.map(group => `<section class="connsection">
+    <h2>${group}</h2>
+    <div class="provgrid conngrid">${grouped[group].map(connectionCard).join("")}</div>
+  </section>`).join("") + `<div id="connection-modal-root"></div>`;
+}
+
+function openConnectionModal(key){
+  const item = ((D && D.connections) || []).find(connection => connection.key === key);
+  const root = document.getElementById("connection-modal-root");
+  if (!item || !root) return;
+  markEditing();
+  const display = connectionStatusDisplay(item.status);
+  const status = item.status || {};
+  const fields = item.fields.map(field => connectionField(item.key, field)).join("");
+  root.innerHTML = `<div class="connmodal-back" onclick="closeConnectionModal()" onkeydown="connectionModalKeydown(event)">
+    <section class="connmodal" data-connection="${esc(item.key)}" role="dialog" aria-modal="true" aria-labelledby="connection-modal-title" onclick="event.stopPropagation()">
+      <header class="connmodal-head">
+        <img class="provlogo connlogo" src="/static/logos/connections/${esc(item.key)}.svg" alt="">
+        <div class="connmodal-title">
+          <h3 id="connection-modal-title">${esc(item.name)}</h3>
+          <div class="connstatus ${display.className}" id="connection-modal-status"><span class="conndot"></span>${esc(display.label)}</div>
+        </div>
+        <button class="connmodal-close" type="button" onclick="closeConnectionModal()" aria-label="Close">Close</button>
+      </header>
+      <p class="conndesc connmodal-desc">${esc(item.what)}</p>
+      <div class="connmodal-meta">
+        <span id="connection-modal-status-detail">${esc(status.message || "")}</span>
+        <span id="connection-modal-checked">${status.checked_at?`Last checked ${esc(status.checked_at)}`:""}</span>
+      </div>
+      ${(item.install_command || item.setup_url) ? `<div class="connsetup">
+        ${item.install_command?`<code>${esc(item.install_command)}</code>`:""}
+        ${item.setup_url?`<a href="${esc(item.setup_url)}" target="_blank" rel="noopener noreferrer">Setup guide ↗</a>`:""}
+      </div>` : ""}
+      <div class="connection-fields">${fields}</div>
+      <footer class="connmodal-actions">
+        <button class="save" onclick="saveConnection('${esc(item.key)}')">Save</button>
+        <button class="save ghost" onclick="testConnection('${esc(item.key)}')">Test connection</button>
+        <span class="connmodal-message" id="connection-msg-${esc(item.key)}" aria-live="polite"></span>
+      </footer>
+    </section>
+  </div>`;
+  setTimeout(() => {
+    const target = root.querySelector(".connection-fields input, .connection-fields select")
+      || root.querySelector(".connmodal-close");
+    target?.focus();
+  }, 0);
+}
+
+function closeConnectionModal(){
+  editing = false;
+  const root = document.getElementById("connection-modal-root");
+  if (root) root.innerHTML = "";
+  if (activeView === "connections") render();
+}
+
+function connectionModalKeydown(event){
+  if (event.key === "Escape") closeConnectionModal();
+}
+
 const VIEWS = {
+  models(d){
+    // Provider card grid (logo / status dot / edit / enable-disable). Editing
+    // happens in a modal opened from a card; both live in js/models.js.
+    return modelsGrid(d);
+  },
+  connections(d){
+    const items = d.connections || [];
+    return items.length ? connectionsGrid(items) : `<div class="card empty">No integrations registered.</div>`;
+  },
   // Gateway: ONE unified conversation across every channel (dashboard, telegram,
   // voice, cli) — the same loop + memory answer all of them. Each message is
   // tagged with where it came in, Hermes-style. You type in the dock on the right.
@@ -313,42 +496,13 @@ const VIEWS = {
   },
   settings(d){
     const st = d.settings || {providers:[]};
-    let h = `<div class="card">Current: <b>${esc(st.provider)}</b> · loop brain <code>${esc(st.model)}</code> · gate &amp; summarizer <code>${esc(st.small_model)}</code><div class="meta" style="margin:4px 0 0">two jobs, two brains: the loop brain answers you; the small gate model decides memory retrieval and distills chats</div></div>`;
-    h += yourModelsCard(st);
-    h += `<h2>Provider &amp; keys (BYOK)</h2><div class="card">
-      <label class="fld">Provider
-        <select id="set-provider" onfocus="markEditing()">${st.providers.map(p=>`<option value="${p.name}" ${p.name===st.provider?"selected":""}>${p.name}${p.name===st.provider?` — now: ${esc(st.model)}`:` — provider default: ${esc(p.default_model)}`}</option>`).join("")}</select></label>
-      ${st.base_url?`<div class="meta" style="margin:4px 0 8px">Custom endpoint active: <code>${esc(st.base_url)}</code> (WAKU_BASE_URL${st.custom_key_set?" + WAKU_API_KEY":""}). The model list below comes from it.</div>`:""}
-      <details class="adv"><summary>Type a model id manually (advanced; the catalog below switches in one click)</summary>
-      <label class="fld">Model (runs the loop; needs tool calling) <input id="set-model" list="model-list" onfocus="markEditing()" placeholder="blank = provider default" value="${st.model===st.providers.find(p=>p.name===st.provider)?.default_model?"":esc(st.model)}"></label>
-      <label class="fld">Gate / summary model (the small model that decides whether a message needs memory, and distills chats into facts; pick something cheap and terse) <input id="set-small-model" list="model-list" onfocus="markEditing()" placeholder="blank = provider default" value="${st.small_model===st.providers.find(p=>p.name===st.provider)?.default_small_model?"":esc(st.small_model)}"></label>
-      <datalist id="model-list"></datalist>
-      <div class="meta" id="model-list-msg" style="margin:4px 0 8px"></div></details>${(setTimeout(loadModelList,0),"")}
-      <details class="adv" ${st.providers.find(p=>p.name===st.provider)?.key_set?"":"open"}><summary>API keys (${st.providers.find(p=>p.name===st.provider)?.key_set?`${esc(st.provider)} key set`:`${esc(st.provider)} key needed`})</summary>
-      <div class="meta" style="margin:10px 0 4px">Keys stay in your local <code>.env</code> — never sent back to this page (only a set/not-set status and the last 4 digits). Leave a field blank to keep the current key.</div>
-      ${st.providers.map(p=>`<label class="fld"><span>${p.name} key <span class="meta">(${p.key_env})</span>
-        ${p.key_set?`<span class="srcpill" style="background:var(--good-soft);color:var(--good)">set ····${esc(p.key_last4)}</span>`
-                   :`<span class="srcpill apple">not set</span>`}</span>
-        <input type="password" data-key="${p.key_env}" placeholder="${p.key_set?"key on file — blank keeps it":"paste key"}"></label>`).join("")}
-      </details>
-      <div style="margin-top:12px"><button class="save" onclick="saveSettings()">Save &amp; switch</button>
-        <span class="meta" id="set-msg" style="margin-left:10px"></span></div>
-    </div>
-    <h2>Experimental tools</h2><div class="card">
-      <div class="meta" style="margin-bottom:8px">Off by default. Turns on <code>delegate_task</code>, which hands
-        a coding job to <b>pi</b> — a separate coding agent running locally, on this same model. The Arena's
-        <b>coding (pi)</b> checkbox switches this on per-race; this switches it on for the <b>chat</b>.</div>
-      <label class="fld">Sub-agent delegation
-        <select id="set-experimental" onfocus="markEditing()">
-          <option value="" ${!st.experimental?"selected":""}>off — the flagship tools only (default)</option>
-          <option value="1" ${st.experimental?"selected":""}>on — chat can delegate coding to pi</option>
-        </select></label>
-      ${st.pi_installed
-        ? `<div class="meta"><span class="srcpill" style="background:var(--good-soft);color:var(--good)">pi found</span> on this machine</div>`
-        : `<div class="meta"><span class="srcpill apple">pi not installed</span> — <code>npm install -g --ignore-scripts @earendil-works/pi-coding-agent</code></div>`}
-      <div style="margin-top:12px"><button class="save" onclick="saveSettings()">Save &amp; switch</button>
-        <span class="meta" style="margin-left:10px">rebuilds the agent in-process — no restart</span></div>
-    </div>
+    return `<h2>Experimental tools</h2><div class="card">
+      <div class="meta" style="margin-bottom:8px">Opt in to local coding delegation for chat.</div>
+      <label class="fld">Sub-agent delegation<select id="set-experimental" onfocus="markEditing()">
+        <option value="" ${!st.experimental?"selected":""}>off</option>
+        <option value="1" ${st.experimental?"selected":""}>on</option>
+      </select></label>
+      <button class="save" onclick="saveSettings()">Save</button><span class="meta" id="set-msg"></span></div>
     <h2>Graph workflows</h2><div class="card">
       <div class="meta" style="margin-bottom:8px">Off by default. When on, <b>every</b> message is triaged
         through a graph first: a small model classifies it while today's calendar loads in parallel — trivial
@@ -363,40 +517,7 @@ const VIEWS = {
         </select></label>
       <div style="margin-top:12px"><button class="save" onclick="saveSettings()">Save &amp; switch</button>
         <span class="meta" style="margin-left:10px">rebuilds the agent in-process — no restart</span></div>
-    </div>
-    <h2>Episodic memory</h2><div class="card">
-      <div class="meta" style="margin-bottom:8px">Where dated episode summaries live. Default is the local
-        <code>state.db</code> (zero setup). Pick <code>notion</code> to store them in a Notion database instead
-        (requires <code>pip install -e '.[notion]'</code>).</div>
-      <label class="fld">Backend
-        <select id="set-episodic-store" onfocus="markEditing()">
-          <option value="sqlite" ${st.episodic_store!=="notion"?"selected":""}>sqlite — local state.db (default)</option>
-          <option value="notion" ${st.episodic_store==="notion"?"selected":""}>notion — a Notion database</option>
-        </select></label>
-      <label class="fld"><span>Notion token <span class="meta">(NOTION_TOKEN)</span>
-        ${st.notion_token_set?`<span class="srcpill" style="background:var(--good-soft);color:var(--good)">set ····${esc(st.notion_token_last4)}</span>`
-                             :`<span class="srcpill apple">not set</span>`}</span>
-        <input type="password" data-key="NOTION_TOKEN" placeholder="${st.notion_token_set?"key on file — blank keeps it":"paste integration token"}"></label>
-      <label class="fld"><span>Notion database link <span class="meta">(paste the link from Notion)</span>
-        ${st.notion_db_set?`<span class="srcpill" style="background:var(--good-soft);color:var(--good)">set ····${esc(st.notion_db_last4)}</span>`
-                          :`<span class="srcpill apple">not set</span>`}</span>
-        <input data-key="NOTION_EPISODES_DATABASE_ID" placeholder="${st.notion_db_set?"database link on file — blank keeps it":"paste the database link"}"></label>
-      <div style="margin-top:12px"><button class="save" onclick="saveSettings()">Save &amp; switch</button>
-        <span class="meta" style="margin-left:10px">rebuilds the agent in-process — a bad token leaves notion selected with the error shown on Memory ▸ Episodic; fix the token or switch back</span></div>
-    </div>
-    <h2 id="catalog-h" style="display:none">Model catalog: click to switch</h2>
-    <div class="card" id="catalog" style="display:none"></div>
-    <h2>Web search key (optional)</h2><div class="card">
-      <div class="meta" style="margin-bottom:8px">A free <a class="reveal" onclick="window.open('https://tavily.com','_blank')">Tavily</a> key makes the <code>search_web</code> tool reliable (the World Cup demo). Stored in your local <code>.env</code>, same as above.</div>
-      <label class="fld"><span>Tavily key <span class="meta">(${esc(st.search_key_env||"TAVILY_API_KEY")})</span>
-        ${st.search_key_set?`<span class="srcpill" style="background:var(--good-soft);color:var(--good)">set ····${esc(st.search_key_last4)}</span>`
-                          :`<span class="srcpill apple">not set</span>`}</span>
-        <input type="password" data-key="TAVILY_API_KEY" placeholder="${st.search_key_set?"key on file — blank keeps it":"paste key"}"></label>
-      <div style="margin-top:12px"><button class="save" onclick="saveSettings()">Save</button>
-        <span class="meta" style="margin-left:10px">reads live — no restart needed for search</span></div>
-      <div class="meta" style="margin-top:10px">Note: running terminal / voice / Telegram gateways keep their old provider until restarted.</div>
     </div>`;
-    return h;
   },
   tools(d, sub){
     const t = d.tools || {catalog:[], mcp:{configured:false,servers:[],live:false}, apple_on:false};

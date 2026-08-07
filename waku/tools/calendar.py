@@ -15,6 +15,7 @@ relays it, so Waku never over-claims what happened.
 
 from __future__ import annotations
 
+import json
 import sqlite3
 import subprocess
 import sys
@@ -25,6 +26,7 @@ from pathlib import Path
 from waku.tools.registry import Tool
 
 APPLE_CALENDAR_NAME = "Waku"
+APPLE_CALENDAR_PROBE_TIMEOUT = 15
 GOOGLE_CALENDAR_SCOPE = "https://www.googleapis.com/auth/calendar.events"
 GOOGLE_CALENDAR_TIMEOUT = 30
 
@@ -66,6 +68,58 @@ def _applescript_date(var: str, iso: str) -> str:
     )
 
 
+def probe_apple_calendar() -> None:
+    """Verify Calendar.app automation access and find one writable calendar.
+
+    This is deliberately read-only: Connections can test the integration
+    without leaving a synthetic event or calendar behind.
+    """
+    if sys.platform != "darwin":
+        raise RuntimeError("Apple Calendar probe is macOS-only.")
+    script = '''
+launch application "Calendar"
+tell application "Calendar"
+  repeat with cal in calendars
+    try
+      if writable of cal then return name of cal
+    end try
+  end repeat
+end tell
+return ""'''
+    try:
+        result = subprocess.run(
+            ["osascript", "-e", script],
+            capture_output=True,
+            text=True,
+            timeout=APPLE_CALENDAR_PROBE_TIMEOUT,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        raise RuntimeError(
+            f"Apple Calendar probe timed out after {APPLE_CALENDAR_PROBE_TIMEOUT}s; "
+            "Calendar.app may be slow or waiting for Automation permission."
+        ) from None
+    except OSError as exc:
+        raise RuntimeError(f"Apple Calendar probe could not run osascript ({exc}).") from None
+    if result.returncode != 0:
+        detail = (result.stderr or "failed").strip()[:200]
+        raise RuntimeError(f"Apple Calendar probe failed: {detail}")
+    if not (result.stdout or "").strip():
+        raise RuntimeError("Apple Calendar has no writable calendars.")
+
+
+def _record_apple_calendar_health(ok: bool, message: str) -> None:
+    """Publish real runtime outcomes without making calendar sync depend on UI."""
+    try:
+        from waku.integrations import IntegrationState, IntegrationStatus, record_health
+
+        state = IntegrationState.CONNECTED if ok else IntegrationState.ERROR
+        record_health("apple_calendar", IntegrationStatus(state, message))
+    except Exception:
+        # A health-cache write must never change whether the user's event lands.
+        pass
+
+
 def sync_to_apple_calendar(title: str, start: str, end: str, notes: str = "") -> str:
     """Create the event in Calendar.app under the 'Waku' calendar (created on
     first use). Returns a short human-readable outcome for the tool output."""
@@ -103,21 +157,28 @@ end tell'''
             ["osascript", "-e", script], capture_output=True, text=True, timeout=30, check=False
         )
     except subprocess.TimeoutExpired:
-        return (
+        message = (
             "Apple Calendar sync timed out — this usually means macOS is showing a "
             "permission dialog ('would like to add to your Calendar'). The event is safe "
             "in the local calendar; approve the dialog and ask me to create it again."
         )
+        _record_apple_calendar_health(False, message)
+        return message
     except OSError as exc:
-        return f"Apple Calendar sync FAILED ({exc}) — the event is still in the local calendar."
+        message = f"Apple Calendar sync FAILED ({exc}) — the event is still in the local calendar."
+        _record_apple_calendar_health(False, message)
+        return message
     if result.returncode != 0:
         detail = (result.stderr or "").strip()[:120]
-        return (
+        message = (
             f"Apple Calendar sync FAILED ({detail}) — the event is still in the local "
             "calendar. If this is a permissions error, allow your terminal to control "
             "Calendar in System Settings > Privacy & Security > Automation."
         )
+        _record_apple_calendar_health(False, message)
+        return message
     used = (result.stdout or "").strip() or APPLE_CALENDAR_NAME
+    _record_apple_calendar_health(True, f"Last write succeeded (calendar '{used}').")
     return f"Also added to Apple Calendar (calendar '{used}')."
 
 
@@ -144,6 +205,90 @@ def _google_event_body(
     if emails:
         body["attendees"] = [{"email": email} for email in emails]
     return body
+
+
+def probe_google_calendar(home: Path, calendar_id: str = "primary") -> None:
+    """Verify cached OAuth access to a calendar without reading event data."""
+    try:
+        import google_auth_httplib2
+        import httplib2
+        from google.auth.transport.requests import Request
+        from google.oauth2.credentials import Credentials
+        from googleapiclient.discovery import build
+        from googleapiclient.errors import HttpError
+    except ImportError as exc:
+        raise RuntimeError(
+            "Google Calendar support is not installed; install with "
+            "pip install -e '.[gcal]'"
+        ) from exc
+
+    token_path = home / "token.json"
+    if not token_path.exists():
+        raise RuntimeError(
+            "Google Calendar is not authorized; complete OAuth with "
+            f"{home / 'credentials.json'} and try again"
+        )
+
+    reauthorize = (
+        "Google Calendar OAuth token is invalid; reauthorize with "
+        f"{home / 'credentials.json'}"
+    )
+    try:
+        credentials = Credentials.from_authorized_user_file(
+            str(token_path), scopes=[GOOGLE_CALENDAR_SCOPE]
+        )
+    except Exception:
+        raise RuntimeError(reauthorize) from None
+
+    if credentials.expired and credentials.refresh_token:
+        try:
+            credentials.refresh(Request())
+            token_path.write_text(credentials.to_json(), encoding="utf-8")
+        except Exception:
+            raise RuntimeError(reauthorize) from None
+    if not credentials.valid:
+        raise RuntimeError(reauthorize)
+
+    try:
+        bounded_http = httplib2.Http(timeout=GOOGLE_CALENDAR_TIMEOUT)
+        authorized_http = google_auth_httplib2.AuthorizedHttp(
+            credentials, http=bounded_http
+        )
+        service = build(
+            "calendar",
+            "v3",
+            http=authorized_http,
+            cache_discovery=False,
+            static_discovery=True,
+        )
+        (
+            service.events()
+            .list(calendarId=calendar_id, maxResults=1, fields="kind")
+            .execute(num_retries=0)
+        )
+    except HttpError as exc:
+        status = getattr(getattr(exc, "resp", None), "status", None)
+        reasons: set[str] = set()
+        try:
+            content = exc.content.decode() if isinstance(exc.content, bytes) else exc.content
+            payload = json.loads(content)
+            reasons = {
+                item.get("reason", "")
+                for item in payload.get("error", {}).get("errors", [])
+                if isinstance(item, dict)
+            }
+        except (AttributeError, TypeError, ValueError, json.JSONDecodeError):
+            pass
+        if status == 401 or (
+            status == 403
+            and reasons.intersection({"authError", "insufficientPermissions"})
+        ):
+            raise RuntimeError(reauthorize) from None
+        detail = (str(exc).strip() or type(exc).__name__)[:160]
+        raise RuntimeError(f"Google Calendar probe failed ({detail})") from None
+    except Exception as exc:
+        detail = (str(exc).strip() or type(exc).__name__)[:160]
+        raise RuntimeError(f"Google Calendar probe failed ({detail})") from None
 
 
 def sync_to_google_calendar(

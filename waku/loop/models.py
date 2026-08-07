@@ -26,6 +26,15 @@ from waku.config import Settings
 
 
 @dataclass(frozen=True)
+class ProviderEndpoint:
+    """One official regional endpoint and its matching model catalog."""
+
+    label: str
+    base_url: str
+    catalog_url: str | None = None
+
+
+@dataclass(frozen=True)
 class Provider:
     kind: str        # 'anthropic' or 'openai' — the wire format
     key_env: str     # which env var holds the key
@@ -44,11 +53,29 @@ class Provider:
     # flagship you'd showcase is opus-4.8. Blank falls back to model/small_model.
     flagship: str = ""
     fast: str = ""
+    # Providers with separately-issued regional keys keep their endpoint choice
+    # in a provider-specific env var.  WAKU_BASE_URL remains the global custom
+    # override for backwards compatibility, but must not leak across providers.
+    base_url_env: str = ""
+    endpoints: tuple[ProviderEndpoint, ...] = ()
 
     def default_pair(self) -> list[str]:
         """[flagship, fast], deduped — the switcher's default picks."""
         pair = [self.flagship or self.model, self.fast or self.small_model]
         return list(dict.fromkeys(m for m in pair if m))
+
+    def configured_base_url(self) -> str | None:
+        """Provider-scoped endpoint, falling back to the built-in default."""
+        configured = os.getenv(self.base_url_env, "").strip() if self.base_url_env else ""
+        return configured or self.base_url
+
+    def catalog_for(self, base_url: str | None) -> str | None:
+        """Return the catalog paired with *base_url*'s region."""
+        normalized = (base_url or "").rstrip("/")
+        for endpoint in self.endpoints:
+            if endpoint.base_url.rstrip("/") == normalized:
+                return endpoint.catalog_url
+        return self.catalog_url
 
 
 PROVIDERS: dict[str, Provider] = {
@@ -79,16 +106,36 @@ PROVIDERS: dict[str, Provider] = {
     "deepseek":  Provider("openai", "DEEPSEEK_API_KEY", "https://api.deepseek.com",
                           "deepseek-v4-pro", "deepseek-v4-pro"),
     "minimax":   Provider("anthropic", "MINIMAX_API_KEY", "https://api.minimaxi.com/anthropic",
-                          "MiniMax-M3", "MiniMax-M2"),
+                          "MiniMax-M3", "MiniMax-M2",
+                          catalog_url="https://api.minimaxi.com/anthropic/v1/models",
+                          base_url_env="MINIMAX_BASE_URL",
+                          endpoints=(
+                              ProviderEndpoint("China", "https://api.minimaxi.com/anthropic",
+                                               "https://api.minimaxi.com/anthropic/v1/models"),
+                              ProviderEndpoint("Global", "https://api.minimax.io/anthropic",
+                                               "https://api.minimax.io/anthropic/v1/models"),
+                          )),
     # K3 is the flagship default; the gate/summarizer stays on cheap K2.6
     # (the live catalog has no plain "kimi-k2.7" — only -code variants; we
     # checked). Override with WAKU_SMALL_MODEL=kimi-k3 if your key is K3-only.
     "kimi":      Provider("anthropic", "MOONSHOT_API_KEY", "https://api.moonshot.ai/anthropic",
                           "kimi-k3", "kimi-k2.6",
                           catalog_url="https://api.moonshot.ai/v1/models",
-                          flagship="kimi-k3", fast="kimi-k2.7-code-highspeed"),
+                          flagship="kimi-k3", fast="kimi-k2.7-code-highspeed",
+                          base_url_env="MOONSHOT_BASE_URL",
+                          endpoints=(
+                              ProviderEndpoint("Global", "https://api.moonshot.ai/anthropic",
+                                               "https://api.moonshot.ai/v1/models"),
+                              ProviderEndpoint("China", "https://api.moonshot.cn/anthropic",
+                                               "https://api.moonshot.cn/v1/models"),
+                          )),
     "glm":       Provider("anthropic", "ZHIPU_API_KEY", "https://api.z.ai/api/anthropic",
-                          "glm-5.2", "glm-5-turbo"),
+                          "glm-5.2", "glm-5-turbo",
+                          base_url_env="ZHIPU_BASE_URL",
+                          endpoints=(
+                              ProviderEndpoint("Global", "https://api.z.ai/api/anthropic"),
+                              ProviderEndpoint("China", "https://open.bigmodel.cn/api/anthropic"),
+                          )),
     # xAI Grok on its OpenAI-compatible endpoint. The model ids below are
     # starting points — add XAI_API_KEY and the picker lists the live catalog
     # (the authoritative source); pin whatever the current flagship/fast are.
@@ -179,7 +226,7 @@ def get_client(settings: Settings):
 
     settings.model = settings.model or provider.model
     settings.small_model = settings.small_model or provider.small_model
-    base_url = settings.base_url or provider.base_url
+    base_url = settings.base_url or provider.configured_base_url()
 
     # a hung network call must never freeze a turn silently
     timeout = float(os.getenv("WAKU_LLM_TIMEOUT", "120"))

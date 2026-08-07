@@ -45,7 +45,7 @@ def _known_default_ids(prov, out: dict, is_active: bool) -> list[dict]:
     return [{"id": m} for m in dict.fromkeys(m for m in ids if m)]
 
 
-def list_models(provider: str | None = None) -> dict:
+def list_models(provider: str | None = None, *, use_cache: bool = True) -> dict:
     """Model ids available on a provider, for the settings model picker — the
     defaults are starting points, never the menu. Pass `provider` to list ANY
     provider's catalog (the "Your models" add-row picks a provider first);
@@ -65,7 +65,8 @@ def list_models(provider: str | None = None) -> dict:
     # WAKU_BASE_URL only applies to the provider it was set for).
     name = provider or s.provider
     prov = PROVIDERS.get(name)
-    base = (s.base_url if name == s.provider else None) or (prov.base_url if prov else None)
+    base = ((s.base_url if name == s.provider else None)
+            or (prov.configured_base_url() if prov else None))
     out = {
         "provider": name,
         "model": s.model or (prov.model if prov else ""),
@@ -76,8 +77,9 @@ def list_models(provider: str | None = None) -> dict:
     # (kimi chats on the anthropic wire but lists on its OpenAI-compatible API;
     # anthropic itself has GET /v1/models); otherwise openai-wire endpoints get
     # {base_url}/models; otherwise fall back to the two known defaults.
-    if prov is not None and prov.catalog_url:
-        url = prov.catalog_url
+    catalog_url = prov.catalog_for(base) if prov is not None else None
+    if catalog_url:
+        url = catalog_url
     elif prov is not None and prov.kind == "openai" and base:
         url = base.rstrip("/") + "/models"
     else:
@@ -86,7 +88,7 @@ def list_models(provider: str | None = None) -> dict:
         return {**out, "listed": False,
                 "models": _known_default_ids(prov, out, name == s.provider)}
 
-    cached = _models_cache.get(url)
+    cached = _models_cache.get(url) if use_cache else None
     if cached and time.time() - cached[0] < 300:
         _ts, cmodels, cerr = cached          # cerr None on a real listing
         r = {**out, "listed": cerr is None, "models": cmodels}

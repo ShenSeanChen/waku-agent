@@ -2,6 +2,7 @@
 
   waku                       chat in the terminal (default)
   waku dashboard             the browser cockpit → localhost:7777 (+ Telegram if configured)
+  waku connections           list configured integrations and their health
   waku voice                 talk to it (needs the [voice] extra)
   waku telegram              phone → laptop (needs TELEGRAM_BOT_TOKEN)
   waku discord               Discord → laptop (needs DISCORD_BOT_TOKEN)
@@ -27,6 +28,10 @@ def main() -> None:
         from waku.ops.dashboard import main as dash_main
 
         dash_main()
+    elif args[0] == "connections":
+        from waku.integrations import cli_main
+
+        sys.exit(cli_main())
     elif args[0] == "voice":
         from waku.gateway.voice import main as voice_main
 
