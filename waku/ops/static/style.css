@@ -526,7 +526,14 @@ details.subterm > summary.subterm-h::-webkit-details-marker{ display:none; }
 .connstatus.error .conndot{background:var(--bad)}
 .connstatus.needs-setup{color:#a87312}
 .connstatus.needs-setup .conndot{background:#c8951f}
+/* Configured but unproven: deliberately calm. Amber here would read as a
+   warning about something that is merely untested, which is the whole bug
+   this state exists to fix. Accent, not alarm. */
+.connstatus.configured{color:var(--accent)}
+.connstatus.configured .conndot{background:var(--accent)}
 .connstatus.not-configured .conndot{background:var(--ink3)}
+/* The one-line reason under the pill: what to actually do about it. */
+.connwhy{font-size:11px;color:var(--ink3);margin-top:2px;font-family:var(--mono)}
 .conndesc{color:var(--ink2);font-size:12px;line-height:1.5}
 .conncard .conndesc{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;
   overflow:hidden;min-height:36px}

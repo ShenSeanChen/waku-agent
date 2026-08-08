@@ -25,9 +25,22 @@ from waku.memory.episodic.notion_store import normalize_database_id
 
 
 class IntegrationState(StrEnum):
-    NOT_CONFIGURED = "not_configured"
-    INSTALLED_BUT_UNCONFIGURED = "installed_but_unconfigured"
-    CONNECTED = "connected"
+    """Where an integration stands, from empty to proven working.
+
+    CONFIGURED exists because the other four could not tell two very different
+    situations apart. "Telegram is missing its token" and "Telegram has
+    everything and I simply have not probed it yet" both returned
+    INSTALLED_BUT_UNCONFIGURED, and the dashboard renders that as "needs
+    setup" — so a working Tavily key, a live Telegram gateway and a connected
+    Notion database all told the user they needed setting up. The health store
+    is empty on a fresh checkout, which means EVERY user saw that on their
+    first visit, about integrations that were already working.
+    """
+
+    NOT_CONFIGURED = "not_configured"                        # nothing filled in
+    INSTALLED_BUT_UNCONFIGURED = "installed_but_unconfigured"  # something REQUIRED is missing
+    CONFIGURED = "configured"                                # complete, never tested
+    CONNECTED = "connected"                                  # probed, and it worked
     ERROR = "error"
 
 
@@ -323,8 +336,11 @@ def _status(integration: Integration, env: Mapping[str, str]) -> IntegrationStat
         status = _gateway_status_provider(integration.key)
         if status is not None:
             return status
-    return _health().get(integration.key, IntegrationStatus(IntegrationState.INSTALLED_BUT_UNCONFIGURED,
-                                                              "Configured, not tested"))
+    # Everything required is present and the extra is installed. Whether it
+    # actually WORKS is a separate question, answered only by a probe — so the
+    # honest answer when no probe has run is "configured", not "needs setup".
+    return _health().get(integration.key, IntegrationStatus(IntegrationState.CONFIGURED,
+                                                            "configured — not tested yet"))
 
 
 def list_integrations() -> tuple[IntegrationView, ...]:
@@ -622,10 +638,15 @@ def test_integration(key: str) -> IntegrationView:
     if not integration.enabled(values):
         view = _current_view(key)
         assert view is not None
+        # Switched off. The two "not ready" states survive as they are — turning
+        # a toggle off doesn't fill in a missing token. Anything that WAS ready
+        # (configured / connected / error) drops to CONFIGURED, because a
+        # disabled integration must never keep claiming it is connected.
         state = (
-            IntegrationState.NOT_CONFIGURED
-            if view.status.state is IntegrationState.NOT_CONFIGURED
-            else IntegrationState.INSTALLED_BUT_UNCONFIGURED
+            view.status.state
+            if view.status.state in (IntegrationState.NOT_CONFIGURED,
+                                     IntegrationState.INSTALLED_BUT_UNCONFIGURED)
+            else IntegrationState.CONFIGURED
         )
         status = IntegrationStatus(state, "integration is disabled", view.status.checked_at)
         return IntegrationView(view.key, view.group, view.name, view.what, status, view.fields,

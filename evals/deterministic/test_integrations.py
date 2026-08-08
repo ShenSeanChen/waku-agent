@@ -39,14 +39,19 @@ def test_status_masking_health_persistence_and_invalidation(monkeypatch, tmp_pat
     _isolate(monkeypatch, tmp_path)
     monkeypatch.setenv("OPENAI_API_KEY", "super-secret-1234")
     view = next(view for view in integrations.list_integrations() if view.key == "openai")
-    assert view.status.state is IntegrationState.INSTALLED_BUT_UNCONFIGURED
+    # A key is present and nothing required is missing, so this is CONFIGURED —
+    # not INSTALLED_BUT_UNCONFIGURED, which the dashboard renders as "needs
+    # setup". See test_configured_is_not_confused_with_needing_setup below.
+    assert view.status.state is IntegrationState.CONFIGURED
     assert view.fields[0].value == ""
     assert view.fields[0].last4 == "1234"
     integrations.record_health("openai", IntegrationStatus(IntegrationState.CONNECTED))
     integrations._HEALTH = None
     assert next(view for view in integrations.list_integrations() if view.key == "openai").status.state is IntegrationState.CONNECTED
     integrations.invalidate_health("openai")
-    assert next(view for view in integrations.list_integrations() if view.key == "openai").status.message == "Configured, not tested"
+    after = next(view for view in integrations.list_integrations() if view.key == "openai")
+    assert after.status.state is IntegrationState.CONFIGURED
+    assert after.status.message == "configured — not tested yet"
 
 
 def test_otel_probe_checks_configured_collector_tcp_port(monkeypatch):
@@ -404,3 +409,46 @@ def test_disabled_google_test_connection_skips_probe(monkeypatch, tmp_path):
 
     assert view.status.state is not IntegrationState.CONNECTED
     assert view.status.message == "integration is disabled"
+
+
+def test_configured_is_not_confused_with_needing_setup(monkeypatch, tmp_path):
+    """THE regression. Both of these used to return INSTALLED_BUT_UNCONFIGURED,
+    which the dashboard renders as "needs setup" — so a working Tavily key
+    reported itself as broken. The health store is empty on a fresh checkout,
+    so EVERY user met that on their first visit to Connections, about
+    integrations that were already working.
+
+    The two situations are not the same and now cannot collapse:
+      missing a required value -> installed_but_unconfigured ("needs setup")
+      complete but never probed -> configured ("configured, not tested")
+    """
+    _isolate(monkeypatch, tmp_path)
+    monkeypatch.setenv("TAVILY_API_KEY", "tvly-working-key")
+    tavily = next(v for v in integrations.list_integrations() if v.key == "tavily")
+    assert tavily.status.state is IntegrationState.CONFIGURED, (
+        "a filled-in integration must not tell the user it needs setting up"
+    )
+
+    monkeypatch.delenv("TAVILY_API_KEY")
+    integrations._HEALTH = None
+    empty = next(v for v in integrations.list_integrations() if v.key == "tavily")
+    assert empty.status.state is IntegrationState.NOT_CONFIGURED
+
+
+def test_a_genuinely_missing_required_field_still_says_needs_setup(monkeypatch, tmp_path):
+    """The other half: widening the states must not swallow a real problem.
+    Telegram with a token but no allowed-chat id is incomplete, and has to keep
+    saying so."""
+    _isolate(monkeypatch, tmp_path)
+    monkeypatch.setattr(integrations, "_extra_installed", lambda name: True)
+    # Notion, not Telegram: Telegram has a single required field, so "half
+    # filled in" is not expressible there and the test would prove nothing.
+    notion = next(i for i in integrations.registry() if i.key == "notion")
+    required = [f.name for f in notion.env if f.required]
+    assert len(required) > 1, "this test needs an integration with 2+ required fields"
+    monkeypatch.setenv(required[0], "set")
+    for name in required[1:]:
+        monkeypatch.delenv(name, raising=False)
+    view = next(v for v in integrations.list_integrations() if v.key == "notion")
+    assert view.status.state is IntegrationState.INSTALLED_BUT_UNCONFIGURED
+    assert required[1] in view.status.message

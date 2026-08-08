@@ -294,6 +294,12 @@ function connectionStatusDisplay(status){
   const state = (status && status.state) || "not_configured";
   if (state === "connected") return {label:"connected", className:"connected"};
   if (state === "error") return {label:"error", className:"error"};
+  // "configured" means every required field is filled and the extra is
+  // installed — it just hasn't been probed. That is not a warning, so it must
+  // not wear the amber "needs setup" pill: this state covers most of a working
+  // setup on first visit, and colouring it like a problem told every new user
+  // their Telegram, Notion and Tavily needed fixing when they were fine.
+  if (state === "configured") return {label:"configured · not tested", className:"configured"};
   if (state === "installed_but_unconfigured") return {label:"needs setup", className:"needs-setup"};
   return {label:"not configured", className:"not-configured"};
 }
@@ -301,10 +307,19 @@ function connectionStatusDisplay(status){
 function connectionCard(item){
   const display = connectionStatusDisplay(item.status);
   const action = item.status && item.status.state !== "not_configured" ? "Edit" : "Configure";
+  // Say WHY on the card. "needs setup" covers two unrelated fixes — a missing
+  // value ("missing NOTION_TOKEN") and a missing package ("missing notion
+  // extra", which wants a pip install, not a key) — and the reason used to be
+  // hidden until you opened the modal. The message repeats the label for
+  // connected/configured, so only show it where it adds something.
+  const why = (item.status && item.status.message
+    && (item.status.state === "installed_but_unconfigured" || item.status.state === "error"))
+    ? `<div class="connwhy">${esc(item.status.message)}</div>` : "";
   return `<article class="provcard conncard" data-connection-card="${esc(item.key)}">
     <img class="provlogo connlogo" src="/static/logos/connections/${esc(item.key)}.svg" alt="">
     <div class="provname">${esc(item.name)}</div>
     <div class="connstatus ${display.className}"><span class="conndot"></span>${esc(display.label)}</div>
+    ${why}
     <div class="conndesc">${esc(item.what)}</div>
     <div class="provactions connactions">
       <button class="save ghost" onclick="openConnectionModal('${esc(item.key)}')">${action}</button>
