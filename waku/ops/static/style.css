@@ -601,3 +601,5 @@ details.subterm > summary.subterm-h::-webkit-details-marker{ display:none; }
 .ma-miss{color:var(--ink3)}
 .ma-expect{color:var(--good);font-family:var(--mono);font-size:12px}
 .ma-forbid{color:var(--bad);font-family:var(--mono);font-size:12px}
+.ma-source{margin-top:10px;padding:8px 10px;border-radius:6px;background:var(--accent-soft);
+           color:var(--ink2);font-size:12px;line-height:1.6}

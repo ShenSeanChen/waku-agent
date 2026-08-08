@@ -17,6 +17,8 @@ a legal probe where the deadline was never given.
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from waku.ops import memory_arena as arena
@@ -61,13 +63,17 @@ def test_declining_gracefully_passes_the_restraint_probe():
     assert certain is False
 
 
-def test_a_legal_deadline_that_was_never_given_is_invented():
-    """The business-track version, and the one with real consequences: an
-    invented filing date is a missed court date, not a bad reply."""
-    probe = arena.load_fixture()["tracks"]["business"]["probes"][2]
-    assert probe["id"] == "business-restraint"
-    outcome, _, _ = arena.score("The filing deadline is 14 October.", probe)
-    assert outcome == INVENTED
+def test_inventing_a_deadline_that_was_never_given_is_invented():
+    """The version with real consequences. An assistant that makes up a filing
+    date has not been unhelpful, it has caused a missed court date — which is
+    why INVENTED is scored apart from MISS rather than both counting as "fail".
+
+    Written against an inline probe on purpose: the scorer's behaviour must not
+    depend on which fixture happens to be loaded, since the interesting probe
+    sets live outside this repo (see WAKU_MEMORY_PROBES)."""
+    probe = {"expect_refusal": True}
+    assert arena.score("The filing deadline is 14 October.", probe)[0] == INVENTED
+    assert arena.score("You never gave me a deadline for that.", probe)[0] == PASS
 
 
 # --- the two probe types that need more than a substring ---------------------
@@ -125,9 +131,10 @@ FIXTURE = arena.load_fixture()
 PROBES = [(t, p) for t, spec in FIXTURE["tracks"].items() for p in spec["probes"]]
 
 
-def test_both_tracks_run_the_same_four_tests():
-    """Two audiences, one methodology. If the business track quietly tested
-    something else, the two scoreboards couldn't be compared."""
+def test_every_track_runs_the_same_four_tests():
+    """One methodology, however many tracks a probe file defines. A track that
+    quietly tested something else could not be compared against the others on
+    the same scoreboard."""
     for track, spec in FIXTURE["tracks"].items():
         tests = {p["test"] for p in spec["probes"]}
         assert tests == {"recall", "update", "restraint", "reasoning"}, track
@@ -162,3 +169,29 @@ def test_the_superseded_fact_was_actually_said_during_seeding():
         for probe in spec["probes"]:
             for stale in probe.get("stale_any", []):
                 assert stale.casefold() in seed, f"{probe['id']}: {stale} never seeded"
+
+
+# --- where the probes come from ----------------------------------------------
+
+def test_the_shipped_fixture_is_only_an_example():
+    """waku ships the mechanism, not the questions. The bundled probes exist to
+    document the format and give this file something to grade; a real benchmark
+    is against facts the maintainer's own users store. If this ever stops being
+    an example, the repo has started carrying somebody's content."""
+    assert arena.load_fixture()["is_example"] is True
+    assert arena.fixture_path() == arena._EXAMPLE
+
+
+def test_probes_can_be_pointed_somewhere_else(monkeypatch, tmp_path):
+    mine = tmp_path / "probes.json"
+    mine.write_text(json.dumps({"tracks": {"mine": {"label": "Mine", "seed": ["hi"], "probes": [
+        {"id": "x", "test": "recall", "question": "?", "expect_any": ["y"], "note": "n"}]}}}),
+        encoding="utf-8")
+    monkeypatch.setenv(arena.PROBES_ENV, str(mine))
+
+    fixture = arena.load_fixture()
+
+    assert arena.fixture_path() == mine
+    assert list(fixture["tracks"]) == ["mine"]
+    assert fixture["is_example"] is False, "a caller's own probes must not claim to be the example"
+    assert fixture["source"] == str(mine), "the UI names the file it scored, so it cannot be a guess"

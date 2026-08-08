@@ -502,6 +502,10 @@ function memoryArenaView(){
       Scored by <code>waku/ops/memory_arena.py</code>; tokens counted on every probe.</div>
     <div class="ma-legend">${OUTCOME_HELP.map(([k,v])=>
       `<div><span class="ma-o ma-${k}">${k}</span> <span class="meta">${esc(v)}</span></div>`).join("")}</div>
+    <div class="ma-source">${memoryArenaFixture.is_example
+      ? `Scoring the shipped <b>example</b> probes — four dull questions that document the format.
+         Point <code>WAKU_MEMORY_PROBES</code> at your own file to score something you care about.`
+      : `Probes: <code>${esc(memoryArenaFixture.source)}</code>`}</div>
     <div class="meta" style="margin-top:10px">No runs yet — the runner needs the Mem0 / Zep / LangMem
       adapters, which are not wired up. Everything below is what they will be asked.</div>
   </div>${tracks}`;
