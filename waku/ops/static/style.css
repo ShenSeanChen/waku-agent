@@ -32,13 +32,26 @@
   body.nav-hidden #nav-reopen{display:block}
   .brand{font-weight:650;font-size:15px;padding:0 10px 4px}
   .brand small{display:block;color:var(--ink3);font-weight:400;font-size:11px;margin-top:2px}
+  /* Links are indented past their group header, which is what makes the header
+     read as a PARENT instead of a line of text dropped between rows. Header and
+     links used to share the same 10px left edge, so the sidebar looked like one
+     flat list with two captions randomly inserted into it. */
   nav a{display:flex;justify-content:space-between;align-items:center;color:var(--ink2);
-        text-decoration:none;padding:6px 10px;border-radius:6px;font-size:13.5px;margin-top:2px}
+        text-decoration:none;padding:6px 10px 6px 20px;border-radius:6px;font-size:13.5px;margin-top:2px}
   nav a:hover{background:var(--panel);color:var(--ink)}
   nav a.on{background:var(--accent-soft);color:var(--accent);font-weight:550}
   nav .n{font-size:11px;color:var(--ink3);font-variant-numeric:tabular-nums}
+  /* Proximity does the rest: a big gap ABOVE the header, a small one below it,
+     so each header sits with its own children rather than floating between two
+     groups. The rule separates sections without adding another colour. */
   nav .grp{font-size:10.5px;text-transform:uppercase;letter-spacing:.09em;color:var(--ink3);
-           padding:16px 10px 4px}
+           font-weight:600;padding:8px 10px 5px;margin-top:14px;border-top:1px solid var(--line)}
+  /* NOT :first-of-type — that is type-based, and `.brand` is the first div in
+     the nav, so the selector silently matched nothing and the top header kept a
+     stray rule under the brand. The adjacent-sibling form says what is meant:
+     the header that comes straight after the brand opens the list, so it has
+     nothing to be separated from. */
+  nav .brand + .grp{margin-top:6px;border-top:none;padding-top:2px}
   main{flex:1;min-width:0;height:100vh;overflow-y:auto;padding:0 40px 32px}
   .pagehead{position:sticky;top:0;z-index:6;background:var(--bg);padding:28px 0 10px;
             border-bottom:1px solid var(--line);margin-bottom:18px}
