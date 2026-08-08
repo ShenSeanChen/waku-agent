@@ -111,7 +111,7 @@ Type these in the chat dock (or `make run`) and watch the dashboard light up:
 
 **The money shot** is the World Cup one. In one turn, Waku searches the web a few times, reasons
 over the results, and books every remaining match — **8 loop iterations**, live. Needs a free
-`TAVILY_API_KEY` (paste it in **Settings**). Watch the **LOOP** box pulse per cycle. That's loop
+`TAVILY_API_KEY` (paste it in **Connections**). Watch the **LOOP** box pulse per cycle. That's loop
 engineering, on tape.
 
 ## How is this different from ChatGPT / Claude Desktop?

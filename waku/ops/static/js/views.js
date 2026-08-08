@@ -442,7 +442,7 @@ const VIEWS = {
     if (!g.enabled)
       h += `<div class="card"><b>Off</b> — every turn currently runs the classic loop.
         <div class="meta" style="margin-top:6px">Switch on <b>graph workflows</b> in
-        <a class="reveal" onclick="location.hash='settings'">Settings</a>, or set
+        <a class="reveal" onclick="location.hash='settings'">Behaviour</a>, or set
         <code>WAKU_GRAPH_WORKFLOWS=1</code> in <code>.env</code>. Any failure anywhere fails open to the
         plain loop — this can never lose a reply, only save time and tokens.</div></div>`;
     // The two workflows are two different JOBS with different triggers, which is

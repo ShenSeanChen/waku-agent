@@ -3,9 +3,15 @@
 // step, no modules). Load order + rules: static/README.md.
 
 let activeView = null, activeSub = null;
+// The hash keys stay as they are — #settings is linked from graph.js, views.js,
+// the README and DEMO-CHECKLIST, and from anyone's bookmark. Only the LABEL
+// moved: after the Connections registry took keys, providers and integrations
+// out of that page, what remained was two switches that change how a turn runs,
+// which is a behaviour, not a setting.
 const TITLES = {chat:"Chat & watch", ops:"LLM Ops",
                 graph:"Graph workflows — structure around the loop",
                 compare:"Arena — race models through the real loop",
+                settings:"Behaviour — how a turn runs",
                 database:"Database — everything Waku stores (state.db)"};
 function render(){
   if (!D) return;
