@@ -200,6 +200,17 @@ INTEGRATIONS: tuple[Integration, ...] = (
                  EnvField("NOTION_EPISODES_DATABASE_ID", "Episodes database ID", required=True)),
                 "notion", "notion_client", "https://www.notion.so/my-integrations", ReloadMode.AGENT,
                 lambda env: env.get("WAKU_EPISODIC_STORE") == "notion", None, _notion_normalize),
+    Integration("mem0", "Memory & Storage", "Mem0", "Stores semantic memory in the Mem0 service.",
+                (EnvField("WAKU_SEMANTIC_STORE", "Semantic store", FieldKind.CHOICE,
+                          default="sqlite", options=("sqlite", "mem0")),
+                 EnvField("MEM0_API_KEY", "API key", required=True, secret=True,
+                          help="From app.mem0.ai. The adapter sends infer=False so add() always "
+                               "stores — a bake-off against it measures retrieval, not Mem0's "
+                               "own extraction step."),
+                 EnvField("MEM0_USER_ID", "User id", help="Defaults to 'waku'. Change it only if "
+                                                          "several people share one Mem0 account.")),
+                "arena", "mem0", "", ReloadMode.AGENT,
+                lambda env: env.get("WAKU_SEMANTIC_STORE") == "mem0", None),
     Integration("supabase", "Memory & Storage", "Supabase", "Stores semantic memory in Supabase pgvector.",
                 (EnvField("WAKU_SEMANTIC_STORE", "Semantic store", FieldKind.CHOICE,
                           default="sqlite", options=("sqlite", "supabase")),

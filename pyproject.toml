@@ -88,6 +88,12 @@ voice-neural = [
 supabase = [
     "supabase>=2.0",
 ]
+# The Memory arena: hosted memory backends raced against waku's own FTS5 store.
+# Never installed by default — the core is stdlib + anthropic/openai, and these
+# only exist so `make arena` can benchmark them.
+arena = [
+    "mem0ai>=2.0",
+]
 # Optional episodic-memory backend: Notion database
 # Requires >=2.5: the adapter uses the data_sources API (Notion API 2025-09-03).
 notion = [

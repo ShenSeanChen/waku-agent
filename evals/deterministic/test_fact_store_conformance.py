@@ -54,7 +54,20 @@ def _supabase_store(tmp_path):
     return SupabaseFactStore(Settings(home=tmp_path))
 
 
-BACKENDS = {"sqlite": _sqlite_store, "supabase": _supabase_store}
+def _mem0_store(tmp_path):
+    """Opt-in only, same reasoning as Supabase: this one talks to a paid hosted
+    service and writes real memories into a real account. A maintainer running
+    the suite must not start filling somebody's Mem0 workspace with test facts
+    about Priya's meeting preferences."""
+    if os.getenv("WAKU_TEST_MEM0") != "1":
+        pytest.skip("set WAKU_TEST_MEM0=1 (plus MEM0_API_KEY) to include it")
+    from waku.config import Settings
+    from waku.memory.semantic.mem0_store import Mem0FactStore
+
+    return Mem0FactStore(Settings(home=tmp_path))
+
+
+BACKENDS = {"sqlite": _sqlite_store, "supabase": _supabase_store, "mem0": _mem0_store}
 
 
 @pytest.fixture(params=list(BACKENDS), ids=list(BACKENDS))
