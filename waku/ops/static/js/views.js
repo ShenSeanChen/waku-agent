@@ -277,11 +277,17 @@ async function saveProvider(provider){
 }
 function stProvider(){ return (D.settings || {}).provider || "anthropic"; }
 
-const CONNECTION_GROUPS = ["Channels", "Productivity", "Storage", "Tools"];
+const CONNECTION_GROUPS = ["Channels", "Productivity", "Memory", "Tools"];
+// "Memory", not "Storage". The registry already calls this group "Memory &
+// Storage"; the display map was dropping the half that says what these
+// actually are. Notion is the episodic store, Supabase the semantic one, and
+// every hosted memory service that joins them is semantic too — none of it is
+// generic storage, and Memory is one of the four pillars the rest of the
+// dashboard is organised around.
 const CONNECTION_GROUP_MAP = {
   "Channels": "Channels",
   "Calendar & Productivity": "Productivity",
-  "Memory & Storage": "Storage",
+  "Memory & Storage": "Memory",
   "Search & Observability": "Tools",
 };
 
