@@ -1,137 +1,70 @@
 {
   "_doc": [
-    "The memory bake-off's fixture: what every contestant gets told, and what it",
-    "is then asked. One file so a run is reproducible and a viewer can check the",
-    "questions were not tilted.",
+    "The example fixture for the memory bake-off: four probes, one per test.",
     "",
-    "JSON, not JSONL, on purpose. evals/dataset.jsonl is a stream of independent",
-    "cases; this is one structured fixture with two halves (seed, then probes)",
-    "that only mean anything together.",
+    "Deliberately dull. This file exists to document the FORMAT and to give the",
+    "scorer's tests something to grade — it is not the benchmark anyone should",
+    "care about. Bring your own:",
     "",
-    "SEEDING IS CONVERSATIONAL, and that is a fairness decision. Mem0's whole",
-    "product is deciding for itself what is worth remembering; handing every",
-    "backend a pre-extracted fact list via add() would skip the feature it exists",
-    "to provide. So every system hears the same sentences a user would say.",
+    "    WAKU_MEMORY_PROBES=/path/to/your/probes.json",
     "",
-    "Two tracks, same four tests. 'dinner' is the one you watch; 'business' is",
-    "the one a CTO screenshots. Failures cost differently: forgetting Jensen's",
-    "jacket is funny, inventing a legal filing deadline is a missed court date.",
+    "waku ships the mechanism (waku/ops/memory_arena.py scores it, the Arena's",
+    "Memory tab renders whatever is loaded). The questions are yours, and they",
+    "should be: a memory benchmark is only meaningful against the kind of facts",
+    "your users actually store.",
     "",
-    "Each probe declares what a right answer contains, and — more usefully —",
-    "what a WRONG one contains. That is what separates 'I don't know' (honest)",
-    "from 'the launch is in March' (confidently stale) from an invented fact.",
-    "See waku/ops/memory_arena.py for how the three outcomes are scored."
+    "SEEDING IS CONVERSATIONAL, and that is a fairness decision. Some backends",
+    "sell their own extraction step — deciding for themselves what is worth",
+    "remembering. Handing every backend a pre-extracted fact list would skip the",
+    "feature half of them exist to provide, so each hears the same sentences a",
+    "user would type.",
+    "",
+    "Each probe declares what a right answer contains and — more usefully — what",
+    "a WRONG one contains. That is what separates 'I don't know' (honest) from a",
+    "confidently superseded answer. See waku/ops/memory_arena.py for how the four",
+    "outcomes are scored."
   ],
 
   "tracks": {
-    "dinner": {
-      "label": "The dinner party",
+    "example": {
+      "label": "Example — a working week",
       "seed": [
-        "I'm planning a dinner party. Let me tell you about the guests.",
-        "Jensen's coming — he wears that leather jacket to absolutely everything, even breakfast.",
-        "Paul Graham will be there. He'd rather write an essay than sit through a meeting.",
-        "Elon's coming too. He told me the launch is in March.",
-        "Tom Holland's on the list. Do not tell him anything you want kept secret.",
-        "Sam is coming, and they've got a big announcement dropping soon.",
-        "And Pikachu's coming, obviously.",
-        "Update on Elon — the launch moved to June."
+        "Let me tell you about this week so you can keep track.",
+        "Priya prefers morning meetings — she's heads-down after lunch.",
+        "The design review is on Tuesday.",
+        "Marcus is out of office on Thursday and Friday.",
+        "Correction: the design review moved to Wednesday."
       ],
       "probes": [
         {
-          "id": "dinner-recall-exact",
+          "id": "example-recall",
           "test": "recall",
-          "question": "What does Jensen always wear?",
-          "expect_any": ["leather jacket", "leather"],
-          "note": "The floor. A system that misses this stored nothing."
+          "question": "When does Priya like to meet?",
+          "expect_any": ["morning"],
+          "note": "The floor. A backend that misses this stored nothing."
         },
         {
-          "id": "dinner-recall-paraphrase",
-          "test": "recall",
-          "question": "What's Jensen's usual outfit?",
-          "expect_any": ["leather jacket", "leather"],
-          "note": "Same fact, none of the same words. Keyword stores lose here and vector stores win — this is the probe waku is expected to fail."
-        },
-        {
-          "id": "dinner-recall-chinese",
-          "test": "recall",
-          "question": "保罗·格雷厄姆最不喜欢做什么？",
-          "expect_any": ["meeting", "essay", "会议", "开会"],
-          "note": "Asked in a language it was never told in. unicode61 does not segment CJK, so waku matches prefix-only here."
-        },
-        {
-          "id": "dinner-update",
+          "id": "example-update",
           "test": "update",
-          "question": "When is the launch?",
-          "expect_any": ["June"],
-          "stale_any": ["March"],
-          "note": "THE test. Both facts were stated; only the newer one is true. Answering March is not a miss, it is a confident wrong answer."
+          "question": "When is the design review?",
+          "expect_any": ["Wednesday"],
+          "stale_any": ["Tuesday"],
+          "note": "Both days were stated; only the later one is true. Answering Tuesday is not a gap in knowledge, it is a confident wrong answer — which is why stale is scored apart from miss."
         },
         {
-          "id": "dinner-restraint-invent",
+          "id": "example-restraint",
           "test": "restraint",
-          "question": "What is Pikachu's favourite food?",
+          "question": "What is Priya's phone number?",
           "expect_refusal": true,
-          "note": "Pikachu IS a seeded guest, but no food was ever mentioned. Knowing the entity is what makes a system confident enough to fill the gap — a system that invents an answer here is the one that lies."
+          "note": "Priya was introduced, but no number ever was. Knowing the person is what makes a system confident enough to fill the gap — inventing one here is the failure that matters outside a demo."
         },
         {
-          "id": "dinner-restraint-gate",
-          "test": "restraint",
-          "question": "What's 17 times 4?",
-          "expect_any": ["68"],
-          "expect_retrieval": false,
-          "note": "Nothing about the user's life. Retrieving here wastes a call and risks biasing the answer with irrelevant memory. Only scorable on backends that expose a retrieval decision."
-        },
-        {
-          "id": "dinner-reasoning",
+          "id": "example-reasoning",
           "test": "reasoning",
-          "question": "Is there anyone I should avoid seating next to each other?",
-          "expect_any": ["tom", "holland"],
-          "expect_all": ["sam"],
-          "note": "Neither fact answers this alone: Tom cannot keep a secret AND Sam has an unannounced announcement. Requires finding two and combining them."
-        }
-      ]
-    },
-
-    "business": {
-      "label": "The business track",
-      "seed": [
-        "Let me brief you on a few live client matters.",
-        "The German buyer for the cosmetics order requires vegan certification on every SKU.",
-        "On the Riverside project, the client approved steel spec S355 back in March.",
-        "Guest in room 402 has complained twice about noise.",
-        "The wedding party has booked the ballroom directly below room 402 for Saturday night.",
-        "Correction on Riverside — the client changed the steel spec to S275 in May."
-      ],
-      "probes": [
-        {
-          "id": "business-recall",
-          "test": "recall",
-          "question": "Any special requirements on the German cosmetics order?",
-          "expect_any": ["vegan"],
-          "note": "Export sales. Forgetting this ships a container that gets rejected at the border."
-        },
-        {
-          "id": "business-update",
-          "test": "update",
-          "question": "Which steel spec are we building Riverside to?",
-          "expect_any": ["S275"],
-          "stale_any": ["S355"],
-          "note": "Construction. A stale answer here is not a bad reply — it is the wrong building, and the rework is physical."
-        },
-        {
-          "id": "business-restraint",
-          "test": "restraint",
-          "question": "What's the filing deadline on the Riverside contract dispute?",
-          "expect_refusal": true,
-          "note": "Legal. No deadline was ever given. An invented date is not a bad UX — it is a missed court date. This is the probe every system is most likely to fail, including waku."
-        },
-        {
-          "id": "business-reasoning",
-          "test": "reasoning",
-          "question": "Any problem with Saturday night's bookings?",
-          "expect_any": ["402"],
-          "expect_all": ["ballroom", "noise"],
-          "note": "Hotel. Two facts, neither sufficient alone: a guest already complaining about noise, and a wedding booked directly below them."
+          "question": "Can Marcus make the design review?",
+          "expect_any": ["yes", "can", "able"],
+          "expect_all": ["Wednesday"],
+          "note": "Neither fact answers this alone: the review moved to Wednesday AND Marcus is only away Thursday and Friday. Requires finding two and combining them."
         }
       ]
     }

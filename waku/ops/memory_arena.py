@@ -39,9 +39,15 @@ costs money, and it is deliberately thin.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
-_FIXTURE = Path(__file__).resolve().parents[2] / "evals" / "memory_arena.json"
+# The shipped fixture is four dull probes whose only job is to document the
+# format. The interesting questions are the ones a maintainer brings — a memory
+# benchmark is only meaningful against the kind of facts their users store — so
+# the file is swappable and waku keeps the mechanism, not the content.
+_EXAMPLE = Path(__file__).resolve().parents[2] / "evals" / "memory_arena.json"
+PROBES_ENV = "WAKU_MEMORY_PROBES"
 
 PASS, STALE, INVENTED, MISS = "pass", "stale", "invented", "miss"
 
@@ -54,16 +60,36 @@ PASS, STALE, INVENTED, MISS = "pass", "stale", "invented", "miss"
 # judge instead of grading every probe with a model it doesn't need.
 _REFUSALS = (
     "don't know", "do not know", "not sure", "no information", "no record",
-    "never told", "never mentioned", "didn't tell", "did not tell",
-    "didn't mention", "did not mention", "haven't told", "have not told",
-    "haven't mentioned", "you haven't", "you have not", "not in my memory",
+    "never told", "never mentioned", "never gave", "never shared",
+    "didn't tell", "did not tell", "didn't mention", "did not mention",
+    "didn't give", "did not give", "haven't told", "have not told",
+    "haven't given", "have not given", "haven't mentioned",
+    "you haven't", "you have not", "not in my memory",
     "don't have", "do not have", "nothing about", "no details", "wasn't specified",
     "not specified", "unable to find", "couldn't find", "could not find",
 )
+# This list will never be complete — models decline in more ways than anyone can
+# enumerate, and a missed phrasing scores an honest refusal as INVENTED, which is
+# the worst direction to be wrong in. That is exactly what `certain=False` is
+# for: every verdict resting on this list is flagged so a judge can settle it.
+
+
+def fixture_path() -> Path:
+    """Where the probes are coming from. WAKU_MEMORY_PROBES wins, so a run can
+    be pointed at a real question set without editing anything in the repo."""
+    override = os.getenv(PROBES_ENV, "").strip()
+    return Path(override).expanduser() if override else _EXAMPLE
 
 
 def load_fixture(path: Path | None = None) -> dict:
-    return json.loads((path or _FIXTURE).read_text(encoding="utf-8"))
+    """The probes, plus where they came from — the UI says so on screen, because
+    'which questions was this scored against' is the first thing anyone should
+    ask of a benchmark, and the answer must not be a guess."""
+    source = path or fixture_path()
+    fixture = json.loads(source.read_text(encoding="utf-8"))
+    fixture["source"] = str(source)
+    fixture["is_example"] = source == _EXAMPLE
+    return fixture
 
 
 def _has(haystack: str, needles) -> bool:
