@@ -334,7 +334,19 @@ function compareCol(res){
   </div>`;
 }
 
-VIEWS.compare = function(d){
+// The Arena runs two races, and they are the same machine with a different
+// dial: Models holds the harness constant and varies the brain; Memory holds
+// the harness AND the brain constant and varies where facts live. Sub-tabs
+// rather than two sidebar rows, so "Models" doesn't appear twice in the nav
+// (once as a race, once as configuration) — the same reason Memory keeps
+// semantic / episodic / skills behind tabs instead of four sidebar entries.
+VIEWS.compare = function(d, sub){
+  sub = sub === "memory" ? "memory" : "models";
+  const bar = subtabBar("compare", [["models","Models"],["memory","Memory"]], sub);
+  return bar + (sub === "memory" ? memoryArenaView() : modelArenaView(d));
+};
+
+function modelArenaView(d){
   const pinned = compareModels(d);
   const chips = pinned.length ? pinned.map(p => {
     const spec = `${p.provider}:${p.model}`, on = compareState.picked.has(spec);
@@ -419,7 +431,81 @@ VIEWS.compare = function(d){
       oninput="compareState.message=this.value">${esc(compareState.message)}</textarea>
     <div class="cmp-picks">${chips}</div>
   </div>${grid}${compareHistoryHtml()}`;
-};
+}
+
+// --- Memory arena -----------------------------------------------------------
+// Same four tests, two tracks. Until a runner exists this tab shows the
+// FIXTURE: what every contestant is told and what it is then asked. That is
+// deliberately not a placeholder — a benchmark whose questions you cannot read
+// is a benchmark you have to take on faith, and the whole point of this one is
+// that the numbers are checkable.
+let memoryArenaFixture;   // undefined = not fetched, null = unavailable here
+
+async function loadMemoryArena(){
+  try {
+    const r = await fetch("/api/memory-arena");
+    const j = await r.json();
+    memoryArenaFixture = j && j.available ? j : null;
+  } catch { memoryArenaFixture = null; }
+  render();
+}
+
+const OUTCOME_HELP = [
+  ["pass", "the expected answer is there"],
+  ["stale", "the expected answer is missing and a SUPERSEDED one is asserted"],
+  ["invented", "a refusal was correct and it answered anyway — the fact was never given"],
+  ["miss", "the expected answer is missing and nothing wrong was asserted"],
+];
+
+function probeRow(p){
+  const expect = p.expect_refusal
+    ? `<span class="ma-expect">must decline</span>`
+    : `<span class="ma-expect">${esc((p.expect_any||[]).join(" / "))}</span>`
+      + ((p.expect_all||[]).length ? ` <span class="meta">+ ${esc(p.expect_all.join(", "))}</span>` : "");
+  const forbid = (p.stale_any||[]).length
+    ? `<span class="ma-forbid">${esc(p.stale_any.join(" / "))}</span>` : '<span class="meta">—</span>';
+  return `<tr>
+    <td><code>${esc(p.test)}</code></td>
+    <td>${esc(p.question)}</td>
+    <td>${expect}</td>
+    <td>${forbid}</td>
+    <td class="meta">${esc(p.note||"")}</td></tr>`;
+}
+
+function memoryArenaView(){
+  if (memoryArenaFixture === undefined){
+    setTimeout(loadMemoryArena, 0);
+    return `<div class="card empty">loading the fixture…</div>`;
+  }
+  if (memoryArenaFixture === null){
+    return `<div class="card empty">The bake-off fixture lives in <code>evals/memory_arena.json</code>,
+      which a packaged install does not ship. Run Waku from a clone to see it.</div>`;
+  }
+  const tracks = Object.entries(memoryArenaFixture.tracks).map(([key, t]) => `
+    <h2 style="margin-top:22px">${esc(t.label)}
+      <span class="meta" style="font-weight:400">— ${t.probes.length} probes</span></h2>
+    <div class="card">
+      <div class="meta" style="margin-bottom:8px">Seeded conversationally, in this order — the same
+        sentences a user would type. Handing each backend a pre-extracted fact list would skip the
+        extraction step that is half of what some of them sell.</div>
+      <ol class="ma-seed">${t.seed.map(s=>`<li>${esc(s)}</li>`).join("")}</ol>
+    </div>
+    <div class="card" style="padding:4px 8px"><div class="tablescroll"><table>
+      <tr><th>test</th><th>question</th><th>expects</th><th>must not say</th><th>why</th></tr>
+      ${t.probes.map(probeRow).join("")}
+    </table></div></div>`).join("");
+
+  return `<div class="card">
+    <div class="meta">One agent, one model, one loop — only the memory backend changes. Four tests:
+      <b>recall</b> (can it get the fact back), <b>update</b> (does the newest fact win),
+      <b>restraint</b> (does it invent things it was never told), <b>reasoning</b> (can it combine two).
+      Scored by <code>waku/ops/memory_arena.py</code>; tokens counted on every probe.</div>
+    <div class="ma-legend">${OUTCOME_HELP.map(([k,v])=>
+      `<div><span class="ma-o ma-${k}">${k}</span> <span class="meta">${esc(v)}</span></div>`).join("")}</div>
+    <div class="meta" style="margin-top:10px">No runs yet — the runner needs the Mem0 / Zep / LangMem
+      adapters, which are not wired up. Everything below is what they will be asked.</div>
+  </div>${tracks}`;
+}
 
 // The cumulative view under the current race: a per-model scoreboard averaged
 // across every logged race, then the list of recent races (click to reopen).

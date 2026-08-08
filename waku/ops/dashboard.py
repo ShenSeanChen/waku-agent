@@ -898,6 +898,19 @@ class Handler(BaseHTTPRequestHandler):
         elif self.path == "/api/compare/history":
             runs = compare_history.load_runs(load_settings().home)
             self._send(json.dumps(history_response(runs)).encode(), "application/json")
+        elif self.path == "/api/memory-arena":
+            # The bake-off fixture, so the Arena's Memory tab can show WHAT is
+            # being asked before any of it has been run. It lives in evals/,
+            # which a wheel does not ship — a pip-installed Waku answers with
+            # `available: false` instead of 500ing on a file that was never
+            # meant to be there.
+            from waku.ops import memory_arena
+
+            try:
+                self._send(json.dumps({"available": True, **memory_arena.load_fixture()}).encode(),
+                           "application/json")
+            except (OSError, ValueError):
+                self._send(json.dumps({"available": False}).encode(), "application/json")
         elif self.path.startswith("/api/models"):
             from urllib.parse import parse_qs, urlparse
 
