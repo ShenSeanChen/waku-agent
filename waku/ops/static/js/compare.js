@@ -472,6 +472,78 @@ function probeRow(p){
     <td class="meta">${esc(p.note||"")}</td></tr>`;
 }
 
+// --- running it -------------------------------------------------------------
+let maRun = {running:false, rows:[], board:null, log:"", error:null};
+
+async function runMemoryArena(){
+  if (maRun.running) return;
+  const fx = memoryArenaFixture;
+  const track = Object.keys(fx.tracks)[0];
+  maRun = {running:true, rows:[], board:null, log:"seeding…", error:null};
+  editing = false; render();
+  try {
+    const res = await fetch("/api/memory-arena/stream", {
+      method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({backends: maBackends(), track})});
+    const reader = res.body.getReader(), dec = new TextDecoder();
+    let buf = "";
+    for(;;){
+      const {done, value} = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, {stream:true});
+      const chunks = buf.split("\n\n"); buf = chunks.pop();
+      for (const c of chunks){
+        if (!c.startsWith("data: ")) continue;
+        const ev = JSON.parse(c.slice(6));
+        if (ev.kind === "start")  maRun.log = `${ev.contestant}: seeding…`;
+        if (ev.kind === "seeded") maRun.log = `${ev.contestant}: ${ev.line}`;
+        if (ev.kind === "probe"){ maRun.rows.push(ev); maRun.log = `${ev.contestant}: ${ev.probe}`; }
+        if (ev.kind === "failed") maRun.error = `${ev.contestant} — ${ev.error}`;
+        if (ev.kind === "done"){ maRun.board = ev.scoreboard || null;
+                                 if (ev.error) maRun.error = ev.error; }
+        editing = false; render();
+      }
+    }
+  } catch(e){ maRun.error = String(e); }
+  maRun.running = false; maRun.log = ""; editing = false; render();
+}
+
+// Which stores to race. sqlite is always in — it is the baseline and needs no
+// account. Anything else has to be BOTH configured and installed, so the arena
+// can't offer a contestant that will only fail on a missing key.
+function maBackends(){
+  const conns = (D && D.connections) || [];
+  const ready = new Set(conns.filter(c => c.status && c.status.state !== "not_configured"
+    && c.status.state !== "installed_but_unconfigured").map(c => c.key));
+  return ["sqlite", ...["mem0", "supabase"].filter(k => ready.has(k))];
+}
+
+const OUTCOME_CELL = (r) => `<span class="ma-o ma-${r.outcome}" title="${esc(r.why||"")}">${r.outcome}</span>`;
+
+function maResultsHtml(){
+  if (!maRun.rows.length && !maRun.running && !maRun.error) return "";
+  const names = [...new Set(maRun.rows.map(r => r.contestant))];
+  const probes = [...new Set(maRun.rows.map(r => r.probe))];
+  const cell = (p, n) => {
+    const r = maRun.rows.find(x => x.probe === p && x.contestant === n);
+    return r ? `<td>${OUTCOME_CELL(r)}<div class="ma-ans">${esc((r.answer||"").slice(0,140))}</div></td>`
+             : `<td class="meta">—</td>`;
+  };
+  const board = maRun.board ? `<div class="card" style="padding:4px 8px"><div class="tablescroll"><table>
+      <tr><th>store</th><th>pass</th><th>stale</th><th>invented</th><th>miss</th><th>tokens</th></tr>
+      ${maRun.board.map(b=>`<tr><td><code>${esc(b.contestant)}</code></td>
+        <td>${b.pass}</td><td>${b.stale}</td><td>${b.invented}</td><td>${b.miss}</td>
+        <td class="meta">${b.tokens}</td></tr>`).join("")}
+    </table></div></div>` : "";
+  return `<h2 style="margin-top:22px">Results${maRun.running?' <span class="meta" style="font-weight:400">— running…</span>':""}</h2>
+    ${maRun.error?`<div class="card" style="color:var(--bad)">${esc(maRun.error)}</div>`:""}
+    ${board}
+    <div class="card" style="padding:4px 8px"><div class="tablescroll"><table>
+      <tr><th>probe</th>${names.map(n=>`<th>${esc(n)}</th>`).join("")}</tr>
+      ${probes.map(p=>`<tr><td><code>${esc(p)}</code></td>${names.map(n=>cell(p,n)).join("")}</tr>`).join("")}
+    </table></div></div>`;
+}
+
 function memoryArenaView(){
   if (memoryArenaFixture === undefined){
     setTimeout(loadMemoryArena, 0);
@@ -506,9 +578,13 @@ function memoryArenaView(){
       ? `Scoring the shipped <b>example</b> probes — four dull questions that document the format.
          Point <code>WAKU_MEMORY_PROBES</code> at your own file to score something you care about.`
       : `Probes: <code>${esc(memoryArenaFixture.source)}</code>`}</div>
-    <div class="meta" style="margin-top:10px">No runs yet — the runner needs the Mem0 / Zep / LangMem
-      adapters, which are not wired up. Everything below is what they will be asked.</div>
-  </div>${tracks}`;
+    <div class="ma-race">
+      <button class="save" onclick="runMemoryArena()" ${maRun.running?"disabled":""}>
+        ${maRun.running ? "Racing…" : `Race ${maBackends().length} store${maBackends().length===1?"":"s"}`}</button>
+      <span class="meta">${maRun.running ? esc(maRun.log)
+        : `Each store gets its own throwaway home — your real memory is never touched.`}</span>
+    </div>
+  </div>${maResultsHtml()}${tracks}`;
 }
 
 // The cumulative view under the current race: a per-model scoreboard averaged

@@ -175,3 +175,103 @@ def render(rows: list[dict]) -> str:
     if unsure:
         lines.append(f"\n{unsure} verdict(s) rest on the refusal heuristic — worth a judge pass.")
     return "\n".join(lines)
+
+
+# --- the runner -------------------------------------------------------------
+# Everything above is pure. This part costs money: it stands up a real Waku per
+# contestant and runs the real loop, because retrieval is only meaningful
+# through the thing that actually calls it — the gate decides whether to search
+# at all, and that decision is half of what separates these systems.
+
+def run_arena(backends: list[str], track: str, emit, fixture: dict | None = None) -> None:
+    """Seed the same conversation into each backend, ask the same probes, score.
+
+    One agent, one model, one loop. The ONLY variable is `WAKU_SEMANTIC_STORE`.
+    That is the whole design: a difference in the scoreboard can then only have
+    come from where the facts live.
+
+    Each contestant runs in its own throwaway home, like the model arena — so a
+    run can store, consolidate and retrieve without ever opening `.waku/`. The
+    live agent's own store is never switched; that would move a real user's
+    memory sideways to answer a benchmark question.
+
+    Seeding goes through `respond()` rather than `facts.add()` on purpose. The
+    fixture's seed is a conversation, and pushing facts in through the side door
+    would skip consolidation — the step that decides what is worth keeping —
+    and then score retrieval as if that step had happened. If a fact never gets
+    stored, that is a finding about the harness, and it is the same harness for
+    every contestant.
+    """
+    import tempfile
+    import time
+    from pathlib import Path
+
+    from waku.app import Waku
+    from waku.config import Settings
+
+    fixture = fixture or load_fixture()
+    spec = fixture["tracks"][track]
+    results: list[dict] = []
+
+    for backend in backends:
+        emit("start", {"contestant": backend})
+        home = Path(tempfile.mkdtemp(prefix=f"memarena-{backend}-"))
+        try:
+            app = Waku(settings=Settings(home=home, semantic_store=backend,
+                                         apple_calendar=False, google_calendar=False,
+                                         apple_tools=False, graph_workflows=False))
+            for line in spec["seed"]:
+                app.respond(line, source="memory-arena")
+                emit("seeded", {"contestant": backend, "line": line})
+
+            # The ledger is cumulative, so each probe's cost is the DELTA. Storing
+            # the running total per row would make scoreboard() sum a triangular
+            # number and report several times the tokens actually spent — the
+            # kind of wrong that still looks like a plausible number.
+            spent = _tokens(home)
+            for probe in spec["probes"]:
+                gate: dict = {}
+
+                def watch(kind, ev, _g=gate):
+                    if kind == "gate":
+                        _g["retrieved"] = ev.get("decision") in (True, "retrieve", "yes")
+
+                t0 = time.perf_counter()
+                turn = app.respond(probe["question"], source="memory-arena", observer=watch)
+                after = _tokens(home)
+                outcome, certain, why = score(turn.reply, probe, gate.get("retrieved"))
+                row = {"contestant": backend, "probe": probe["id"], "test": probe["test"],
+                       "question": probe["question"], "answer": turn.reply,
+                       "outcome": outcome, "certain": certain, "why": why,
+                       "tokens": after - spent, "ms": int((time.perf_counter() - t0) * 1000)}
+                spent = after
+                results.append(row)
+                emit("probe", row)
+        except Exception as exc:
+            # One backend failing must not lose the other's results — a missing
+            # key or a service outage is a fact about that contestant, not a
+            # reason to abandon the run.
+            emit("failed", {"contestant": backend, "error": f"{type(exc).__name__}: {exc}"})
+
+    emit("done", {"scoreboard": scoreboard(results), "results": results})
+
+
+def _tokens(home) -> int:
+    """Running total this contestant has spent, from its own throwaway ledger.
+    Cumulative by nature — callers take the difference across a turn."""
+    ledger = home / "usage.jsonl"
+    if not ledger.exists():
+        return 0
+    total = 0
+    for line in ledger.read_text(encoding="utf-8").splitlines():
+        try:
+            row = json.loads(line)
+            # The ledger's keys are "in" and "out" — NOT input_tokens /
+            # output_tokens, which is what this first read, and every probe
+            # reported 0 tokens with no error at all, because `.get(name, 0)`
+            # turns a wrong field name into a plausible number. A benchmark that
+            # silently reports zero cost is worse than one that crashes.
+            total += int(row["in"]) + int(row["out"])
+        except (KeyError, ValueError, TypeError):
+            continue
+    return total

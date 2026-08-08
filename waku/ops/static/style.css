@@ -603,3 +603,5 @@ details.subterm > summary.subterm-h::-webkit-details-marker{ display:none; }
 .ma-forbid{color:var(--bad);font-family:var(--mono);font-size:12px}
 .ma-source{margin-top:10px;padding:8px 10px;border-radius:6px;background:var(--accent-soft);
            color:var(--ink2);font-size:12px;line-height:1.6}
+.ma-race{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-top:12px}
+.ma-ans{font-size:11px;color:var(--ink3);margin-top:4px;max-width:280px;line-height:1.45}

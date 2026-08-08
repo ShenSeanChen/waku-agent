@@ -195,3 +195,37 @@ def test_probes_can_be_pointed_somewhere_else(monkeypatch, tmp_path):
     assert list(fixture["tracks"]) == ["mine"]
     assert fixture["is_example"] is False, "a caller's own probes must not claim to be the example"
     assert fixture["source"] == str(mine), "the UI names the file it scored, so it cannot be a guess"
+
+
+def test_token_counting_reads_the_keys_the_ledger_actually_writes(tmp_path):
+    """This shipped broken and reported 0 tokens for every probe with no error:
+    _tokens() read "input_tokens"/"output_tokens" while usage.jsonl writes
+    "in"/"out", and `.get(name, 0)` turned the wrong name into a plausible
+    number. The line below is copied from a real ledger — if the writer's schema
+    ever moves, this fails instead of quietly costing nothing."""
+    (tmp_path / "usage.jsonl").write_text(
+        '{"ts": "2026-08-08T23:41:43.306+00:00", "provider": "anthropic", '
+        '"model": "claude-fable-5", "kind": "loop", "in": 3164, "out": 94}\n'
+        '{"ts": "2026-08-08T23:41:48.028+00:00", "provider": "anthropic", '
+        '"model": "claude-fable-5", "kind": "loop", "in": 3241, "out": 92}\n',
+        encoding="utf-8")
+
+    assert arena._tokens(tmp_path) == 3164 + 94 + 3241 + 92
+
+
+def test_the_arena_and_the_ledger_writer_agree_on_field_names():
+    """Pin the two halves together. _tokens() cannot be verified by its own
+    fixture alone — the fixture would just encode whatever mistake was made."""
+    import inspect
+
+    from waku.ops import tracing
+
+    writer = inspect.getsource(tracing)
+    assert 'usage.jsonl' in writer, "the ledger moved — find its new writer"
+    assert '"in":' in writer and '"out":' in writer, (
+        "the usage ledger no longer writes 'in'/'out' — _tokens() must follow it"
+    )
+
+
+def test_a_ledger_that_is_missing_is_zero_not_a_crash(tmp_path):
+    assert arena._tokens(tmp_path) == 0

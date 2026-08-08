@@ -995,6 +995,30 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as exc:
                 emit("done", {"error": f"{type(exc).__name__}: {exc}"})
             return
+        # /api/memory-arena/stream — same shape as the model race above, one dial
+        # over: every contestant is the same agent on the same model, and only
+        # the semantic store changes.
+        if self.path == "/api/memory-arena/stream":
+            payload = json.loads(self.rfile.read(length) or "{}")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-cache")
+            self.end_headers()
+
+            def emit_mem(kind, ev):
+                try:
+                    self.wfile.write(f"data: {json.dumps({'kind': kind, **ev}, default=str)}\n\n".encode())
+                    self.wfile.flush()
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
+            try:
+                from waku.ops import memory_arena
+
+                memory_arena.run_arena(payload.get("backends") or ["sqlite"],
+                                       payload.get("track") or "example", emit_mem)
+            except Exception as exc:
+                emit_mem("done", {"error": f"{type(exc).__name__}: {exc}"})
+            return
         if self.path == "/api/graph/stream":
             payload = json.loads(self.rfile.read(length) or "{}")
             self.send_response(200)
