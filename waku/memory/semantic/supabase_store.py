@@ -56,3 +56,105 @@ class SupabaseFactStore:
             {"query_embedding": self._embed(query), "match_count": top_k},
         ).execute()
         return [f"[{row['source']}] {row['text']}" for row in (result.data or [])]
+
+    # --- CRUD ----------------------------------------------------------------
+    # These four went missing until 2026-08-08 and nothing noticed, because
+    # nothing described what a fact store owes its callers. See
+    # semantic/base.py: the dashboard's memory page and manage_memory's
+    # update/delete raised AttributeError here, and search_with_ids was worse —
+    # a `hasattr` guard upstream turned it into "no matching facts" while the
+    # facts sat in this table.
+    #
+    # Two schema notes, both inherited from launch-rag and neither obvious:
+    #
+    #   * `source` is the SUBJECT here, not provenance. SqliteFactStore keeps
+    #     them apart (subject="alex", source="consolidation"); rag_chunks has
+    #     one column and add() puts the subject in it. So `list()` below cannot
+    #     report who claimed a fact. The protocol only promises id/subject/
+    #     content, so this is honest rather than broken — but it is why the
+    #     dashboard's provenance column is blank on this backend.
+    #   * ids: rag_chunks has BOTH `id BIGSERIAL` and `chunk_id TEXT`. We expose
+    #     the integer, because dashboard.py does `int(payload["id"])` and would
+    #     reject a string outright. Strings are still accepted on the way back
+    #     in (matched against chunk_id) the same way memory_admin coerces
+    #     Notion's page ids — by shape, not by parsing.
+
+    def _column_for(self, fact_id: int | str) -> str:
+        return "id" if isinstance(fact_id, int) or str(fact_id).isdigit() else "chunk_id"
+
+    def list(self, limit: int = 200) -> list[dict]:
+        rows = (
+            self.supabase.table("rag_chunks")
+            .select("id, source, text, created_at")
+            .order("id", desc=True)
+            .limit(limit)
+            .execute()
+        )
+        return [
+            {"id": r["id"], "subject": r["source"], "content": r["text"],
+             "source": "", "created_at": r.get("created_at")}
+            for r in (rows.data or [])
+        ]
+
+    def search_with_ids(self, query: str, top_k: int = 8) -> list[dict]:
+        """Semantic search that also returns the ids update/delete need.
+
+        match_chunks() returns chunk_id but not id, so this is two round trips:
+        rank first, then resolve. Changing the SQL function would be one trip,
+        but it ships in launch-rag and anyone who followed those videos already
+        has it — silently requiring them to re-run a migration is a worse trade
+        than an extra select on a query that already paid for an embedding."""
+        ranked = self.supabase.rpc(
+            "match_chunks",
+            {"query_embedding": self._embed(query), "match_count": top_k},
+        ).execute()
+        chunk_ids = [r["chunk_id"] for r in (ranked.data or [])]
+        if not chunk_ids:
+            return []
+        rows = (
+            self.supabase.table("rag_chunks")
+            .select("id, chunk_id, source, text")
+            .in_("chunk_id", chunk_ids)
+            .execute()
+        )
+        by_chunk = {r["chunk_id"]: r for r in (rows.data or [])}
+        # re-impose the RPC's similarity order; the `in_` select does not keep it
+        return [
+            {"id": by_chunk[c]["id"], "subject": by_chunk[c]["source"],
+             "content": by_chunk[c]["text"]}
+            for c in chunk_ids
+            if c in by_chunk
+        ]
+
+    def update(self, fact_id: int | str, content: str, subject: str | None = None) -> bool:
+        """Re-embeds. A vector store where update() rewrote the text but left
+        the old embedding would keep answering the old question correctly and
+        the new one not at all — the silent-wrong-answer failure this whole
+        file is a reaction to."""
+        column = self._column_for(fact_id)
+        current = (
+            self.supabase.table("rag_chunks").select("source").eq(column, fact_id).execute()
+        )
+        if not current.data:
+            return False
+        new_subject = (subject or current.data[0]["source"]).lower().strip()
+        result = (
+            self.supabase.table("rag_chunks")
+            .update({
+                "source": new_subject,
+                "text": content,
+                "embedding": self._embed(f"{new_subject}: {content}"),
+            })
+            .eq(column, fact_id)
+            .execute()
+        )
+        return bool(result.data)
+
+    def delete(self, fact_id: int | str) -> bool:
+        result = (
+            self.supabase.table("rag_chunks")
+            .delete()
+            .eq(self._column_for(fact_id), fact_id)
+            .execute()
+        )
+        return bool(result.data)
