@@ -10,7 +10,11 @@ let activeView = null, activeSub = null;
 // which is a behaviour, not a setting.
 const TITLES = {chat:"Chat & watch", ops:"LLM Ops",
                 graph:"Graph workflows — structure around the loop",
-                compare:"Arena — race models through the real loop",
+                // Covers both sub-tabs. TITLES is keyed by view, not by view+sub,
+                // so a models-only title sat above the Memory race and read as a
+                // mislabel; one honest sentence beats teaching the router about
+                // sub-tabs for a single page.
+                compare:"Arena — race models and memory through the same loop",
                 settings:"Behaviour — how a turn runs",
                 database:"Database — everything Waku stores (state.db)"};
 function render(){
