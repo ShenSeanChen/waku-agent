@@ -45,6 +45,7 @@ import os
 import time
 
 from waku.config import Settings
+from waku.memory.semantic.base import env_or
 
 _DEFAULT_USER = "waku"
 
@@ -53,7 +54,7 @@ _DEFAULT_USER = "waku"
 # wait or to report a graph that has not finished thinking as empty. A fixed
 # pause is unsatisfying and it is disclosed rather than hidden: a bake-off that
 # quietly out-waits one contestant is not measuring what it claims to.
-_SETTLE_SECONDS = float(os.getenv("ZEP_SETTLE_SECONDS", "2.0"))
+_SETTLE_SECONDS = float(env_or("ZEP_SETTLE_SECONDS", "2.0"))
 
 
 class ZepFactStore:
@@ -61,7 +62,7 @@ class ZepFactStore:
         from zep_cloud import Zep
 
         self.client = Zep(api_key=os.environ["ZEP_API_KEY"])
-        self.user_id = os.getenv("ZEP_USER_ID", _DEFAULT_USER)
+        self.user_id = env_or("ZEP_USER_ID", _DEFAULT_USER)
         self.top_k = settings.retrieval_top_k
         self._ensure_user()
 

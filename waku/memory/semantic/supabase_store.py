@@ -21,6 +21,7 @@ import os
 import uuid
 
 from waku.config import Settings
+from waku.memory.semantic.base import env_or
 
 
 class SupabaseFactStore:
@@ -32,7 +33,7 @@ class SupabaseFactStore:
             os.environ["SUPABASE_URL"], os.environ["SUPABASE_SERVICE_KEY"]
         )
         self.openai = openai.OpenAI()  # reads OPENAI_API_KEY
-        self.embed_model = os.getenv("OPENAI_EMBED_MODEL", "text-embedding-3-small")
+        self.embed_model = env_or("OPENAI_EMBED_MODEL", "text-embedding-3-small")
         self.top_k = settings.retrieval_top_k
 
     def _embed(self, text: str) -> list[float]:

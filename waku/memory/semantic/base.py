@@ -35,7 +35,24 @@ semantic side matches rather than inventing a second convention.
 
 from __future__ import annotations
 
+import os
 from typing import Protocol, runtime_checkable
+
+
+def env_or(name: str, default: str) -> str:
+    """`os.getenv` that treats an EMPTY value as absent.
+
+    Backend authors reach for `os.getenv(name, default)` and it is wrong here.
+    The Connections form writes every optional field it is shown, so leaving one
+    blank does not omit it — it stores `NAME=''`, and os.getenv only falls back
+    to its default when the variable is MISSING. So a blank "Settle seconds" box
+    produced `float("")` and took every Zep call down with it, while a blank
+    "User id" would have silently scoped the graph to "" instead of "waku".
+
+    Found the first time a real key was saved through the dashboard, which is
+    the only way to hit it — a hand-edited .env just omits the line.
+    """
+    return os.getenv(name, "").strip() or default
 
 # A row id as its backend chose to express it: sqlite counts, Supabase and
 # hosted APIs hand out opaque strings. Never parse it — pass it back verbatim.

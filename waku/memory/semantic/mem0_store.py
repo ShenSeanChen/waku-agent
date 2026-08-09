@@ -33,6 +33,7 @@ from __future__ import annotations
 import os
 
 from waku.config import Settings
+from waku.memory.semantic.base import env_or
 
 # Every fact Waku stores belongs to the one person running it, and Mem0 scopes
 # by user_id. A stable default keeps a single-user install from scattering its
@@ -45,7 +46,7 @@ class Mem0FactStore:
         from mem0 import MemoryClient
 
         self.client = MemoryClient(api_key=os.environ["MEM0_API_KEY"])
-        self.user_id = os.getenv("MEM0_USER_ID", _DEFAULT_USER)
+        self.user_id = env_or("MEM0_USER_ID", _DEFAULT_USER)
         self.top_k = settings.retrieval_top_k
 
     # Waku keeps subject and content apart; Mem0 stores one blob. Round-tripping

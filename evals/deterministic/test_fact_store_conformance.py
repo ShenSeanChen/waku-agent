@@ -187,3 +187,48 @@ def test_every_method_on_the_contract_is_actually_exercised_here():
     untested = [m for m in _protocol_methods() if f"store.{m}(" not in body
                 and f'"{m}"' not in body]
     assert untested == [], f"FactStore methods with no test in this file: {untested}"
+
+
+# --- the blank-optional-field trap -------------------------------------------
+
+def test_a_blank_optional_field_falls_back_to_its_default(monkeypatch):
+    """The Connections form writes EVERY optional field it shows, so leaving one
+    blank stores NAME='' rather than omitting it — and os.getenv only applies a
+    default when the variable is MISSING.
+
+    Found the first time a real key was saved through the dashboard, which is the
+    only way to hit it: a hand-edited .env just leaves the line out. A blank
+    "Settle seconds" box made float("") raise on every Zep call, and a blank
+    "User id" would have silently scoped the graph to "" instead of "waku" —
+    which is the worse half, because nothing would have errored.
+    """
+    from waku.memory.semantic.base import env_or
+
+    monkeypatch.setenv("WAKU_TEST_BLANK", "")
+    assert env_or("WAKU_TEST_BLANK", "fallback") == "fallback"
+    assert float(env_or("WAKU_TEST_BLANK", "2.0")) == 2.0
+
+    monkeypatch.setenv("WAKU_TEST_BLANK", "   ")
+    assert env_or("WAKU_TEST_BLANK", "fallback") == "fallback", "whitespace is blank too"
+
+    monkeypatch.setenv("WAKU_TEST_BLANK", "real")
+    assert env_or("WAKU_TEST_BLANK", "fallback") == "real"
+
+    monkeypatch.delenv("WAKU_TEST_BLANK")
+    assert env_or("WAKU_TEST_BLANK", "fallback") == "fallback"
+
+
+def test_no_backend_reads_an_optional_setting_with_bare_os_getenv():
+    """os.getenv(name, default) is the wrong tool for anything the Connections
+    form can write blank. Required fields are fine — those use os.environ[...]
+    and should raise loudly when absent."""
+    import re
+    from pathlib import Path
+
+    semantic = Path(__file__).resolve().parents[2] / "waku" / "memory" / "semantic"
+    offenders = []
+    for path in semantic.glob("*_store.py"):
+        for num, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            if re.search(r'os\.getenv\(\s*["\'][A-Z_]+["\']\s*,\s*["\'][^"\']+["\']', line):
+                offenders.append(f"{path.name}:{num}")
+    assert offenders == [], f"use env_or() — a blank form field defeats these: {offenders}"

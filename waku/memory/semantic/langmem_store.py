@@ -35,6 +35,7 @@ import os
 import uuid
 
 from waku.config import Settings
+from waku.memory.semantic.base import env_or
 
 _NAMESPACE = ("waku", "facts")
 
@@ -49,8 +50,8 @@ class LangMemFactStore:
         """Postgres when it is configured, in-process otherwise. The index block
         is what makes search() semantic rather than exact — without it the store
         is a plain key-value dict and every probe that rephrases a fact fails."""
-        index = {"dims": 1536, "embed": os.getenv("OPENAI_EMBED_MODEL",
-                                                  "openai:text-embedding-3-small")}
+        index = {"dims": 1536,
+                 "embed": env_or("OPENAI_EMBED_MODEL", "openai:text-embedding-3-small")}
         dsn = os.getenv("WAKU_LANGMEM_POSTGRES", "").strip()
         if dsn:
             from langgraph.store.postgres import PostgresStore
