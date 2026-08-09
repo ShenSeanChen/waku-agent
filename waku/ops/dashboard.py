@@ -898,6 +898,17 @@ class Handler(BaseHTTPRequestHandler):
         elif self.path == "/api/compare/history":
             runs = compare_history.load_runs(load_settings().home)
             self._send(json.dumps(history_response(runs)).encode(), "application/json")
+        elif self.path == "/api/memory-arena/stores":
+            # What each configured store holds right now. On demand only —
+            # every hosted backend here is a live round trip, and a dashboard
+            # that bills you for leaving a tab open is not one to ship.
+            from waku.ops import memory_arena
+
+            try:
+                self._send(json.dumps(memory_arena.store_contents()).encode(), "application/json")
+            except Exception as exc:
+                self._send(json.dumps([{"store": "?", "error": f"{type(exc).__name__}: {exc}"}]).encode(),
+                           "application/json")
         elif self.path == "/api/memory-arena":
             # The bake-off fixture, so the Arena's Memory tab can show WHAT is
             # being asked before any of it has been run. It lives in evals/,
@@ -907,8 +918,9 @@ class Handler(BaseHTTPRequestHandler):
             from waku.ops import memory_arena
 
             try:
-                self._send(json.dumps({"available": True, **memory_arena.load_fixture()}).encode(),
-                           "application/json")
+                payload = {"available": True, "backends": memory_arena._available_backends(),
+                           **memory_arena.load_fixture()}
+                self._send(json.dumps(payload).encode(), "application/json")
             except (OSError, ValueError):
                 self._send(json.dumps({"available": False}).encode(), "application/json")
         elif self.path.startswith("/api/models"):

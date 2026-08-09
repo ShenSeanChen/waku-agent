@@ -243,6 +243,11 @@ def run_arena(backends: list[str], track: str, emit, fixture: dict | None = None
                 row = {"contestant": backend, "probe": probe["id"], "test": probe["test"],
                        "question": probe["question"], "answer": turn.reply,
                        "outcome": outcome, "certain": certain, "why": why,
+                       # Whether the gate went to memory at all. Computed since the
+                       # first version and thrown away at render time, so "did
+                       # retrieval even happen" was unanswerable from the results —
+                       # which is most of what a memory benchmark is for.
+                       "retrieved": gate.get("retrieved"),
                        "tokens": after - spent, "ms": int((time.perf_counter() - t0) * 1000)}
                 spent = after
                 results.append(row)
@@ -275,3 +280,100 @@ def _tokens(home) -> int:
         except (KeyError, ValueError, TypeError):
             continue
     return total
+
+
+# --- what is actually in there ----------------------------------------------
+# The Memory tab used to explain the benchmark and show none of it. This is the
+# other half: for every store that is configured, what does it hold RIGHT NOW.
+# Read on demand, never on the 5s poll — each call is a live round trip to a
+# paid service, and a dashboard that quietly bills you for sitting on a tab is
+# not one anyone should ship.
+
+def store_contents(limit: int = 8) -> list[dict]:
+    """Per-backend: how many facts it holds and a sample of them.
+
+    A backend that errors reports the error rather than an empty list — "0
+    facts" and "I could not reach the service" look identical on screen and
+    mean opposite things, which is the confusion this whole page exists to
+    stop.
+    """
+    from waku.config import Settings, load_settings
+    from waku.memory import Memory
+
+    out = []
+    for key in _available_backends():
+        # `kind` is the label that stops this page misleading. sqlite here is the
+        # LIVE agent's store — months of real use — while a hosted backend has
+        # only ever received what the arena wrote to it. Side by side without
+        # saying so, "53 vs 17" reads as "waku remembers more", when it only
+        # means waku has been used and the others were connected yesterday.
+        row = {"store": key, "count": 0, "facts": [], "error": "", "span": "",
+               "kind": "live" if key == "sqlite" else "connected",
+               "note": _store_note(key)}
+        if row["note"]:
+            out.append(row)   # nothing meaningful to read — say why, don't report 0
+            continue
+        try:
+            settings = Settings(home=load_settings().home, semantic_store=key)
+            facts = Memory._make_fact_store(_conn_for(key, settings), settings)
+            rows = facts.list(200)
+            row["count"] = len(rows)
+            row["span"] = _span(rows)
+            row["facts"] = [{"subject": r.get("subject", ""), "content": r.get("content", "")}
+                            for r in rows[:limit]]
+        except Exception as exc:
+            row["error"] = f"{type(exc).__name__}: {exc}"[:160]
+        out.append(row)
+    return out
+
+
+def _span(rows: list[dict]) -> str:
+    """Oldest to newest, as plain dates. The most honest single fact about a
+    store's contents: three weeks of real use and one afternoon of benchmark
+    data look identical as a count, and completely different as a span."""
+    stamps = sorted(str(r.get("created_at") or "")[:10] for r in rows if r.get("created_at"))
+    stamps = [s for s in stamps if s]
+    if not stamps:
+        return ""
+    return stamps[0] if stamps[0] == stamps[-1] else f"{stamps[0]} to {stamps[-1]}"
+
+
+def _store_note(key: str) -> str:
+    """Why a store's contents cannot be listed, when that is the case.
+
+    LangMem without Postgres is LangGraph's InMemoryStore, and every read here
+    constructs a fresh one — so it would report "0 facts" forever. That is a
+    false statement about an empty store rather than a true one about an
+    unreadable one, and the difference is the whole point of this page.
+    """
+    if key == "langmem" and not os.getenv("WAKU_LANGMEM_POSTGRES", "").strip():
+        return ("in-memory store — contents live inside the process that wrote them "
+                "and cannot be read back here. Set WAKU_LANGMEM_POSTGRES to persist.")
+    return ""
+
+
+def _conn_for(key: str, settings):
+    """Only the sqlite store needs a connection; the hosted ones ignore it. The
+    live .waku/state.db is opened READ-ONLY here — this page reports, it never
+    writes, and the arena's own runs happen in throwaway homes."""
+    if key != "sqlite":
+        return None
+    from waku.db import connect
+
+    return connect(settings.home)
+
+
+def _available_backends() -> list[str]:
+    """sqlite always; a hosted store only when it is configured AND installed,
+    so this page never reports an error that just means "you have not set this
+    up", which is what the Connections tab is for."""
+    from waku.integrations import IntegrationState, list_integrations
+
+    ready = {v.key for v in list_integrations()
+             if v.status.state in (IntegrationState.CONFIGURED, IntegrationState.CONNECTED)}
+    # SLOW ones last, deliberately. Zep waits for graph ingestion on every
+    # write — minutes where the others take milliseconds — so putting it in the
+    # middle means the fast columns sit unread behind it while it finishes.
+    # Order here is the order the columns appear.
+    order = ("mem0", "langmem", "supabase", "zep")
+    return ["sqlite", *[k for k in order if k in ready]]

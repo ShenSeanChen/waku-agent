@@ -49,12 +49,22 @@ from waku.memory.semantic.base import env_or
 
 _DEFAULT_USER = "waku"
 
-# graph.add() is async: the episode is queued, then decomposed into nodes and
-# edges. There is no "is it ready" call in the SDK, so the only options are to
-# wait or to report a graph that has not finished thinking as empty. A fixed
-# pause is unsatisfying and it is disclosed rather than hidden: a bake-off that
-# quietly out-waits one contestant is not measuring what it claims to.
-_SETTLE_SECONDS = float(env_or("ZEP_SETTLE_SECONDS", "2.0"))
+# graph.add() is async: it returns an Episode with processed=False in ~0.2s,
+# and the text only becomes searchable once Zep has decomposed it into nodes
+# and edges.
+#
+# This started as a blind two-second sleep, on my claim that the SDK offered no
+# readiness signal. That claim was wrong — Episode.processed is exactly that
+# signal — and the sleep was far too short besides: a first live run found the
+# data still unsearchable, which I nearly reported as "Zep ingested nothing".
+# It had ingested everything; I had asked too early and then misread an empty
+# result as an empty store.
+#
+# So: poll until Zep says it is done, and cap it. A benchmark must wait for a
+# contestant to be ready — anything else measures queue depth — but it must
+# also not hang forever on one that never finishes.
+_MAX_WAIT = float(env_or("ZEP_MAX_WAIT_SECONDS", "120"))
+_POLL_EVERY = 2.0
 
 
 class ZepFactStore:
@@ -76,13 +86,37 @@ class ZepFactStore:
             pass
 
     def add(self, subject: str, content: str, source: str = "user") -> None:
-        self.client.graph.add(
+        episode = self.client.graph.add(
             data=f"{subject.lower().strip()}: {content}",
             type="text",
             user_id=self.user_id,
         )
-        if _SETTLE_SECONDS:
-            time.sleep(_SETTLE_SECONDS)
+        self._wait_processed(getattr(episode, "uuid_", None))
+
+    def _wait_processed(self, uuid: str | None) -> bool:
+        """Block until Zep has turned this episode into graph, or give up.
+
+        Polls the user's episode list rather than episode.get(uuid_) — the
+        per-uuid fetch did not reflect the processed flag when this was written,
+        and trusting it made a fully-ingested graph look empty for two minutes.
+        Returns whether it settled, so a caller can report a timeout as a
+        timeout instead of as a memory that was never stored.
+        """
+        if not uuid:
+            return False
+        deadline = time.monotonic() + _MAX_WAIT
+        while time.monotonic() < deadline:
+            try:
+                found = self.client.graph.episode.get_by_user_id(user_id=self.user_id, lastn=20)
+                for ep in (getattr(found, "episodes", None) or []):
+                    if getattr(ep, "uuid_", None) == uuid:
+                        if getattr(ep, "processed", False):
+                            return True
+                        break
+            except Exception:  # noqa: S110 — transient; the deadline is the real bound
+                pass
+            time.sleep(_POLL_EVERY)
+        return False
 
     def search(self, query: str, top_k: int = 4) -> list[str]:
         return [row["content"] for row in self._search_rows(query, top_k)]
@@ -101,9 +135,25 @@ class ZepFactStore:
         """A graph has no in-place edit — see the module docstring. The
         correction is ingested and the older edge is superseded by its validity
         dates, which is the mechanism Zep exists for. Deleting first would throw
-        away the history that makes that work."""
+        away the history that makes that work.
+
+        But the id still has to exist. This used to return True unconditionally,
+        so `update(999999, ...)` reported success on a row that was never there —
+        caught by the conformance suite on the first live run, which is the
+        entire reason that suite is parametrized over every backend."""
+        if not self._exists(fact_id):
+            return False
         self.add(subject or "", content, source="correction")
         return True
+
+    def _exists(self, fact_id: int | str) -> bool:
+        for get in (self.client.graph.edge.get, self.client.graph.node.get):
+            try:
+                if get(uuid_=str(fact_id)) is not None:
+                    return True
+            except Exception:  # noqa: S110 — wrong kind for this uuid, or unknown
+                pass
+        return False
 
     def delete(self, fact_id: int | str) -> bool:
         """A uuid can name a node or an edge and the caller has no way to know

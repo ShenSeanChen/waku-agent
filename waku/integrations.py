@@ -219,10 +219,11 @@ INTEGRATIONS: tuple[Integration, ...] = (
                                "correction supersedes the old value instead of ranking beside it — "
                                "the one backend built for the update test."),
                  EnvField("ZEP_USER_ID", "User id", help="Defaults to 'waku'. Zep scopes a graph per user."),
-                 EnvField("ZEP_SETTLE_SECONDS", "Settle seconds",
-                          help="Ingestion is asynchronous: graph.add returns before the episode becomes "
-                               "nodes and edges. Waku waits this long after each write so a benchmark "
-                               "does not read a graph that is still thinking. Default 2.")),
+                 EnvField("ZEP_MAX_WAIT_SECONDS", "Max wait (s)",
+                          help="Ingestion is asynchronous: graph.add returns in ~0.2s with the episode "
+                               "unprocessed, and the text is not searchable until Zep has turned it into "
+                               "nodes and edges. Waku polls until it has, up to this long. Default 120 — "
+                               "raise it if seeding times out, never lower it to make a benchmark finish.")),
                 "arena", "zep_cloud", "", ReloadMode.AGENT,
                 lambda env: env.get("WAKU_SEMANTIC_STORE") == "zep", None),
     Integration("langmem", "Memory & Storage", "LangMem",
