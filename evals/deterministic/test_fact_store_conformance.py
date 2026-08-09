@@ -67,7 +67,30 @@ def _mem0_store(tmp_path):
     return Mem0FactStore(Settings(home=tmp_path))
 
 
-BACKENDS = {"sqlite": _sqlite_store, "supabase": _supabase_store, "mem0": _mem0_store}
+def _zep_store(tmp_path):
+    if os.getenv("WAKU_TEST_ZEP") != "1":
+        pytest.skip("set WAKU_TEST_ZEP=1 (plus ZEP_API_KEY) to include it")
+    from waku.config import Settings
+    from waku.memory.semantic.zep_store import ZepFactStore
+
+    return ZepFactStore(Settings(home=tmp_path))
+
+
+def _langmem_store(tmp_path):
+    """Needs no account — LangMem is a toolkit, not a service — but semantic
+    search still bills OpenAI for embeddings, so it stays opt-in like the rest.
+    Without the index the store is a plain dict and the tests would pass while
+    measuring nothing."""
+    if os.getenv("WAKU_TEST_LANGMEM") != "1":
+        pytest.skip("set WAKU_TEST_LANGMEM=1 (plus OPENAI_API_KEY) to include it")
+    from waku.config import Settings
+    from waku.memory.semantic.langmem_store import LangMemFactStore
+
+    return LangMemFactStore(Settings(home=tmp_path))
+
+
+BACKENDS = {"sqlite": _sqlite_store, "supabase": _supabase_store, "mem0": _mem0_store,
+            "zep": _zep_store, "langmem": _langmem_store}
 
 
 @pytest.fixture(params=list(BACKENDS), ids=list(BACKENDS))

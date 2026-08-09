@@ -211,6 +211,33 @@ INTEGRATIONS: tuple[Integration, ...] = (
                                                           "several people share one Mem0 account.")),
                 "arena", "mem0", "", ReloadMode.AGENT,
                 lambda env: env.get("WAKU_SEMANTIC_STORE") == "mem0", None),
+    Integration("zep", "Memory & Storage", "Zep", "Stores semantic memory in a Zep temporal graph.",
+                (EnvField("WAKU_SEMANTIC_STORE", "Semantic store", FieldKind.CHOICE,
+                          default="sqlite", options=("sqlite", "zep")),
+                 EnvField("ZEP_API_KEY", "API key", required=True, secret=True,
+                          help="From getzep.com. Facts become graph edges with validity dates, so a "
+                               "correction supersedes the old value instead of ranking beside it — "
+                               "the one backend built for the update test."),
+                 EnvField("ZEP_USER_ID", "User id", help="Defaults to 'waku'. Zep scopes a graph per user."),
+                 EnvField("ZEP_SETTLE_SECONDS", "Settle seconds",
+                          help="Ingestion is asynchronous: graph.add returns before the episode becomes "
+                               "nodes and edges. Waku waits this long after each write so a benchmark "
+                               "does not read a graph that is still thinking. Default 2.")),
+                "arena", "zep_cloud", "", ReloadMode.AGENT,
+                lambda env: env.get("WAKU_SEMANTIC_STORE") == "zep", None),
+    Integration("langmem", "Memory & Storage", "LangMem",
+                "Stores semantic memory in a LangGraph store via LangMem.",
+                (EnvField("WAKU_SEMANTIC_STORE", "Semantic store", FieldKind.CHOICE,
+                          default="sqlite", options=("sqlite", "langmem")),
+                 EnvField("WAKU_LANGMEM_POSTGRES", "Postgres URL",
+                          help="Optional. Without it LangGraph's InMemoryStore is used, which its own "
+                               "docs describe as a reference implementation whose data dies with the "
+                               "process — fine for a benchmark run, not a persistence story."),
+                 EnvField("OPENAI_API_KEY", "OpenAI key", required=True, secret=True,
+                          help="LangMem has no key of its own; it bills through embeddings. Semantic "
+                               "search needs this or the store is a plain key-value dict.")),
+                "arena", "langmem", "", ReloadMode.AGENT,
+                lambda env: env.get("WAKU_SEMANTIC_STORE") == "langmem", None),
     Integration("supabase", "Memory & Storage", "Supabase", "Stores semantic memory in Supabase pgvector.",
                 (EnvField("WAKU_SEMANTIC_STORE", "Semantic store", FieldKind.CHOICE,
                           default="sqlite", options=("sqlite", "supabase")),

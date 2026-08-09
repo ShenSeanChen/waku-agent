@@ -69,6 +69,14 @@ class Memory:
             from waku.memory.semantic.mem0_store import Mem0FactStore
 
             return Mem0FactStore(settings)
+        if settings.semantic_store == "zep":
+            from waku.memory.semantic.zep_store import ZepFactStore
+
+            return ZepFactStore(settings)
+        if settings.semantic_store == "langmem":
+            from waku.memory.semantic.langmem_store import LangMemFactStore
+
+            return LangMemFactStore(settings)
         return SqliteFactStore(conn)
 
     @staticmethod

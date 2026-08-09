@@ -93,6 +93,9 @@ supabase = [
 # only exist so `make arena` can benchmark them.
 arena = [
     "mem0ai>=2.0",
+    "zep-cloud>=2.0",
+    "langmem>=0.0.30",
+    "langgraph>=0.3",
 ]
 # Optional episodic-memory backend: Notion database
 # Requires >=2.5: the adapter uses the data_sources API (Notion API 2025-09-03).
