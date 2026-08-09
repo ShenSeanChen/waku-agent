@@ -179,3 +179,99 @@ def test_every_priced_model_has_a_knowledge_cutoff():
     # The motivating case, plus the unknown-model path (no guessing).
     assert cutoff_for("gemini-3.1-pro-preview") == "2025-01"
     assert cutoff_for("some-future-model") is None
+
+
+# --- a model name belongs to the provider it was configured for --------------
+# Found live: `.venv/bin/python examples/tiny_memory_agent.py` under
+# WAKU_PROVIDER=xai printed "gate failed open (BadRequestError)". WAKU_SMALL_MODEL
+# is global, so anthropic's gate model was sent to xAI, which 400s. The retrieval
+# gate fails open on error BY DESIGN, so this did not surface as a failure — it
+# surfaced as "retrieve", on every turn, for every non-anthropic model in the
+# arena. These pin the rule that stops it.
+
+def test_env_model_names_do_not_leak_into_another_provider(monkeypatch):
+    from waku.config import Settings
+    from waku.loop.models import get_client
+
+    monkeypatch.setenv("WAKU_PROVIDER", "anthropic")
+    monkeypatch.setenv("WAKU_MODEL", "claude-fable-5")
+    monkeypatch.setenv("WAKU_SMALL_MODEL", "claude-haiku-4-5-20251001")
+    monkeypatch.setenv("XAI_API_KEY", "test-key")
+
+    settings = Settings(provider="xai")
+    get_client(settings)
+
+    assert settings.model == "grok-4", "anthropic's model was sent to xAI"
+    assert settings.small_model == "grok-4-fast", (
+        "anthropic's gate model was sent to xAI — the gate 400s and fails open, "
+        "so this bug reports itself as a healthy 'retrieve' forever"
+    )
+
+
+def test_an_explicit_model_survives_the_provider_switch(monkeypatch):
+    """The rule drops INHERITED env values, not deliberate ones. Without this
+    the fix would quietly override the arena's own model picker."""
+    from waku.config import Settings
+    from waku.loop.models import get_client
+
+    monkeypatch.setenv("WAKU_PROVIDER", "anthropic")
+    monkeypatch.setenv("WAKU_MODEL", "claude-fable-5")
+    monkeypatch.setenv("XAI_API_KEY", "test-key")
+
+    settings = Settings(provider="xai", model="grok-4.3")
+    get_client(settings)
+
+    assert settings.model == "grok-4.3"
+
+
+def test_the_env_still_wins_for_its_own_provider(monkeypatch):
+    """The whole point of WAKU_MODEL is to override the default — the fix must
+    not break the ordinary single-provider case."""
+    from waku.config import Settings
+    from waku.loop.models import get_client
+
+    monkeypatch.setenv("WAKU_PROVIDER", "anthropic")
+    monkeypatch.setenv("WAKU_MODEL", "claude-fable-5")
+    monkeypatch.setenv("WAKU_SMALL_MODEL", "claude-haiku-4-5-20251001")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+
+    settings = Settings(provider="anthropic")
+    get_client(settings)
+
+    assert settings.model == "claude-fable-5"
+    assert settings.small_model == "claude-haiku-4-5-20251001"
+
+
+def test_a_foreign_gate_model_is_dropped_even_when_the_env_names_the_provider(monkeypatch):
+    """The case that was actually live in Sean's .env: WAKU_PROVIDER=xai with
+    WAKU_SMALL_MODEL still holding anthropic's gate model. Scoping by "did the
+    caller switch provider" missed this one — the env agreed with itself and was
+    still wrong."""
+    from waku.config import Settings
+    from waku.loop.models import get_client
+
+    monkeypatch.setenv("WAKU_PROVIDER", "xai")
+    monkeypatch.setenv("WAKU_SMALL_MODEL", "claude-haiku-4-5-20251001")
+    monkeypatch.setenv("XAI_API_KEY", "test-key")
+
+    settings = Settings(provider="xai")
+    get_client(settings)
+
+    assert settings.small_model == "grok-4-fast"
+
+
+def test_an_unfamiliar_model_name_is_left_alone(monkeypatch):
+    """The check asks "is this positively someone else's?", not "does it look
+    like ours?". The second question would silently downgrade any id we don't
+    recognise — a preview name, a model released after this code was written."""
+    from waku.config import Settings
+    from waku.loop.models import get_client
+
+    monkeypatch.setenv("WAKU_PROVIDER", "kimi")
+    monkeypatch.setenv("WAKU_SMALL_MODEL", "moonshot-v1-8k")
+    monkeypatch.setenv("MOONSHOT_API_KEY", "test-key")
+
+    settings = Settings(provider="kimi")
+    get_client(settings)
+
+    assert settings.small_model == "moonshot-v1-8k", "a deliberate choice was overridden"
