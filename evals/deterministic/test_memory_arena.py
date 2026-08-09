@@ -210,7 +210,11 @@ def test_token_counting_reads_the_keys_the_ledger_actually_writes(tmp_path):
         '"model": "claude-fable-5", "kind": "loop", "in": 3241, "out": 92}\n',
         encoding="utf-8")
 
-    assert arena._tokens(tmp_path) == 3164 + 94 + 3241 + 92
+    tokens, calls = arena._ledger(tmp_path)
+    assert tokens == 3164 + 94 + 3241 + 92
+    # One ROW is one API call. The grid reports this so "why did one question
+    # cost 4,783 tokens" is answered by a count, not by my inference.
+    assert calls == 2
 
 
 def test_the_arena_and_the_ledger_writer_agree_on_field_names():
@@ -228,7 +232,7 @@ def test_the_arena_and_the_ledger_writer_agree_on_field_names():
 
 
 def test_a_ledger_that_is_missing_is_zero_not_a_crash(tmp_path):
-    assert arena._tokens(tmp_path) == 0
+    assert arena._ledger(tmp_path) == (0, 0)
 
 
 # --- the runner --------------------------------------------------------------

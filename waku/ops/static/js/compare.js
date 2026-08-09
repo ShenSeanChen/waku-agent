@@ -441,6 +441,14 @@ function modelArenaView(d){
 // that the numbers are checkable.
 let memoryArenaFixture;   // undefined = not fetched, null = unavailable here
 let maFile = null, maTrack = null;   // chosen probe set; null = whatever loaded
+let maModel = null;                  // "provider:model"; null = cheapest offered
+function pickArenaModel(spec){ maModel = spec; render(); }
+function maModels(){ return (memoryArenaFixture && memoryArenaFixture.models) || []; }
+// Cheapest FIRST from the server, so "no choice made" costs the least. The
+// arena holds the model constant and varies only the store, so the expensive
+// default was buying nothing: a measured dinner race cost ~$4.36 on fable-5
+// ($10/$50 per M) against ~$0.55 on grok-4.3 ($1.25/$2.50), same finding.
+function maModelSpec(){ const m = maModels(); return maModel || (m[0] && m[0].spec) || ""; }
 
 async function pickProbeFile(id){
   maFile = id;
@@ -502,7 +510,8 @@ async function runMemoryArena(){
   try {
     const res = await fetch("/api/memory-arena/stream", {
       method:"POST", headers:{"Content-Type":"application/json"},
-      body: JSON.stringify({backends: maPicks(), track, probes: maFile || ""})});
+      body: JSON.stringify({backends: maPicks(), track, probes: maFile || "",
+                            model: maModelSpec()})});
     const reader = res.body.getReader(), dec = new TextDecoder();
     let buf = "";
     for(;;){
@@ -585,7 +594,8 @@ function maResultsHtml(){
   const cell = (p, n) => {
     const r = maRun.rows.find(x => x.probe === p && x.contestant === n);
     if (r) return `<td>${OUTCOME_CELL(r)}
-      <div class="ma-facts-meta">${(r.ms/1000).toFixed(1)}s &middot; ${r.tokens} tok &middot; ${
+      <div class="ma-facts-meta">${(r.ms/1000).toFixed(1)}s &middot; ${r.tokens} tok${
+        r.calls ? " in " + r.calls + (r.calls === 1 ? " call" : " calls") : ""} &middot; ${
         r.retrieved === true ? "searched memory" : r.retrieved === false ? "no lookup" : "gate unknown"}</div>
       <div class="ma-ans">${esc((r.answer||"").slice(0,140))}</div></td>`;
     if (!maRun.running) return `<td class="meta">—</td>`;
@@ -662,6 +672,11 @@ function memoryArenaView(){
           ${sets.map(s=>`<option value="${esc(s.id)}" ${s.id===chosen?"selected":""}>${
             esc(s.label)} — ${s.facts} facts, ${s.probes} questions</option>`).join("")}
         </select></label>
+      ${maModels().length ? `<label class="fld" style="margin:0">Model
+        <select onchange="pickArenaModel(this.value)">
+          ${maModels().map(m=>`<option value="${esc(m.spec)}" ${
+            m.spec===maModelSpec()?"selected":""}>${esc(m.spec)} — $${m.price_in}/$${m.price_out} per M</option>`).join("")}
+        </select></label>` : ""}
       <span class="meta">Drop a JSON file in <code>.waku/probes/</code> to add more.</span>
     </div>`;
   const race = `<div class="card">

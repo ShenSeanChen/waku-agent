@@ -605,12 +605,28 @@ details.subterm > summary.subterm-h::-webkit-details-marker{ display:none; }
            color:var(--ink2);font-size:12px;line-height:1.6}
 .ma-race{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-top:12px}
 .ma-ans{font-size:11px;color:var(--ink3);margin-top:4px;max-width:280px;line-height:1.45}
-.ma-stores{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:10px}
-.ma-store{margin-bottom:0}
-.ma-store-h{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px}
-.ma-facts{margin:0;padding-left:16px;font-size:12px;color:var(--ink2);line-height:1.65}
+/* Equal-height cards. `align-items:stretch` is the grid default, so every card
+   already spans its row — the cards were ragged because each one sized to its
+   own content. Fixing the ROW height and scrolling only the facts keeps the
+   header and provenance line readable while you compare stores side by side:
+   the thing you scan across (name, count, date span) never moves. */
+.ma-stores{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));
+  gap:10px;align-items:stretch}
+.ma-store{margin-bottom:0;display:flex;flex-direction:column;max-height:340px;min-height:0}
+.ma-store-h{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px;
+  flex:0 0 auto}
+/* The scroll region. `min-height:0` is load-bearing: a flex child defaults to
+   min-height:auto (its intrinsic content height), so without it the list
+   refuses to shrink and pushes the card taller instead of scrolling. */
+.ma-facts{margin:0;padding-left:16px;font-size:12px;color:var(--ink2);line-height:1.65;
+  flex:1 1 auto;min-height:0;overflow-y:auto;overscroll-behavior:contain}
+/* An error or an "unreadable, and here's why" note fills the same space. */
+.ma-store > .ma-ans{flex:1 1 auto;min-height:0;overflow-y:auto}
+/* "showing 8 of 53 - see all" stays pinned under the scroll region. */
+.ma-store > .meta{flex:0 0 auto}
 .ma-facts li{margin:2px 0}
-.ma-prov{font-size:10.5px;color:var(--ink3);margin:-2px 0 8px;font-family:var(--mono);line-height:1.5}
+.ma-prov{font-size:10.5px;color:var(--ink3);margin:-2px 0 8px;font-family:var(--mono);line-height:1.5;
+  flex:0 0 auto}
 .ma-warn{margin-top:10px;padding:8px 10px;border-radius:6px;background:var(--accent-soft);
          color:var(--ink2);font-size:12px;line-height:1.6}
 .ma-facts-meta{font-size:10.5px;color:var(--ink3);font-family:var(--mono);margin:4px 0 2px}

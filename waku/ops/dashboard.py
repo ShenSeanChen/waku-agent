@@ -935,6 +935,7 @@ class Handler(BaseHTTPRequestHandler):
                 hit = next((s for s in sets if s["id"] == wanted), None)
                 payload = {"available": True, "backends": memory_arena._available_backends(),
                            "sets": sets, "chosen": hit["id"] if hit else "",
+                           "models": memory_arena.arena_models(),
                            **memory_arena.load_fixture(_P(hit["path"]) if hit else None)}
                 self._send(json.dumps(payload).encode(), "application/json")
             except (OSError, ValueError):
@@ -1052,7 +1053,8 @@ class Handler(BaseHTTPRequestHandler):
                 fixture = memory_arena.load_fixture(_P(hit["path"])) if hit else None
                 track = hit["track"] if hit else (payload.get("track") or "example")
                 memory_arena.run_arena(payload.get("backends") or ["sqlite"],
-                                       track, emit_mem, fixture=fixture)
+                                       track, emit_mem, fixture=fixture,
+                                       model=(payload.get("model") or "").strip())
             except Exception as exc:
                 emit_mem("done", {"error": f"{type(exc).__name__}: {exc}"})
             return

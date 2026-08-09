@@ -81,6 +81,36 @@ def fixture_path() -> Path:
     return Path(override).expanduser() if override else _EXAMPLE
 
 
+def arena_models() -> list[dict]:
+    """Your pinned shortlist, priced, CHEAPEST FIRST.
+
+    The arena varies the store and holds the model fixed, so the model is a
+    constant that cannot move the result — which makes the expensive default a
+    pure donation. Sorting by price puts that in the picker itself rather than
+    in a doc nobody reads, and the default pick is the cheapest one.
+    """
+    import json as _json
+
+    from waku.config import load_settings
+    from waku.ops import pricing
+
+    home = load_settings().home
+    try:
+        pinned = _json.loads((home / "models.json").read_text(encoding="utf-8"))["pinned"]
+    except (OSError, ValueError, KeyError):
+        return []
+    out = []
+    for spec in pinned:
+        prov, _, mod = spec.partition(":")
+        try:
+            pin, pout = pricing.price_for(prov, mod)
+        except Exception:
+            pin = pout = 0.0
+        out.append({"spec": spec, "provider": prov, "model": mod,
+                    "price_in": pin, "price_out": pout})
+    return sorted(out, key=lambda m: (m["price_in"] + m["price_out"], m["spec"]))
+
+
 def probe_sets() -> list[dict]:
     """Every runnable question set, flat: one entry per TRACK, not per file.
 
@@ -227,7 +257,8 @@ def render(rows: list[dict]) -> str:
 # through the thing that actually calls it — the gate decides whether to search
 # at all, and that decision is half of what separates these systems.
 
-def run_arena(backends: list[str], track: str, emit, fixture: dict | None = None) -> None:
+def run_arena(backends: list[str], track: str, emit, fixture: dict | None = None,
+              model: str = "") -> None:
     """Seed the same conversation into each backend, ask the same probes, score.
 
     One agent, one model, one loop. The ONLY variable is `WAKU_SEMANTIC_STORE`.
@@ -253,6 +284,13 @@ def run_arena(backends: list[str], track: str, emit, fixture: dict | None = None
     from waku.app import Waku
     from waku.config import Settings
 
+    # `model` is "provider:model". The arena holds the model CONSTANT and varies
+    # only the store, so which model it is cannot change the finding — which
+    # makes running it on the priciest default pure waste. A measured dinner
+    # race cost ~$4.36 on claude-fable-5 ($10/$50 per M); the same race on
+    # grok-4.3 ($1.25/$2.50) is a fraction of that for the same answer.
+    prov, _, mod = model.partition(":")
+
     fixture = fixture or load_fixture()
     if track not in fixture["tracks"]:
         emit("done", {"error": f"no track '{track}' in {fixture.get('source', 'the probe file')}"})
@@ -264,9 +302,10 @@ def run_arena(backends: list[str], track: str, emit, fixture: dict | None = None
         emit("start", {"contestant": backend})
         home = Path(tempfile.mkdtemp(prefix=f"memarena-{backend}-"))
         try:
+            opts = {"provider": prov, "model": mod} if prov and mod else {}
             app = Waku(settings=Settings(home=home, semantic_store=backend,
                                          apple_calendar=False, google_calendar=False,
-                                         apple_tools=False, graph_workflows=False))
+                                         apple_tools=False, graph_workflows=False, **opts))
             for line in spec["seed"]:
                 app.respond(line, source="memory-arena")
                 emit("seeded", {"contestant": backend, "line": line})
@@ -275,7 +314,7 @@ def run_arena(backends: list[str], track: str, emit, fixture: dict | None = None
             # the running total per row would make scoreboard() sum a triangular
             # number and report several times the tokens actually spent — the
             # kind of wrong that still looks like a plausible number.
-            spent = _tokens(home)
+            spent, calls_at = _ledger(home)
             for probe in spec["probes"]:
                 gate: dict = {}
 
@@ -285,7 +324,7 @@ def run_arena(backends: list[str], track: str, emit, fixture: dict | None = None
 
                 t0 = time.perf_counter()
                 turn = app.respond(probe["question"], source="memory-arena", observer=watch)
-                after = _tokens(home)
+                after, calls_now = _ledger(home)
                 outcome, certain, why = score(turn.reply, probe, gate.get("retrieved"))
                 row = {"contestant": backend, "probe": probe["id"], "test": probe["test"],
                        "question": probe["question"], "answer": turn.reply,
@@ -295,8 +334,16 @@ def run_arena(backends: list[str], track: str, emit, fixture: dict | None = None
                        # retrieval even happen" was unanswerable from the results —
                        # which is most of what a memory benchmark is for.
                        "retrieved": gate.get("retrieved"),
-                       "tokens": after - spent, "ms": int((time.perf_counter() - t0) * 1000)}
-                spent = after
+                       "tokens": after - spent,
+                       # How many API calls this ONE question actually took. The
+                       # token delta alone left "why does one question cost 4,783
+                       # tokens" answerable only by inference — I guessed two
+                       # calls and happened to be close, which is not the same as
+                       # knowing. The ledger writes one row per call, so counting
+                       # rows settles it for every probe, for free.
+                       "calls": calls_now - calls_at,
+                       "ms": int((time.perf_counter() - t0) * 1000)}
+                spent, calls_at = after, calls_now
                 results.append(row)
                 emit("probe", row)
         except Exception as exc:
@@ -308,13 +355,15 @@ def run_arena(backends: list[str], track: str, emit, fixture: dict | None = None
     emit("done", {"scoreboard": scoreboard(results), "results": results})
 
 
-def _tokens(home) -> int:
-    """Running total this contestant has spent, from its own throwaway ledger.
-    Cumulative by nature — callers take the difference across a turn."""
+def _ledger(home) -> tuple[int, int]:
+    """(tokens, calls) this contestant has spent, from its own throwaway ledger.
+    Both cumulative — callers take the difference across a turn. One ledger ROW
+    is one API call, which is the only honest way to answer "how many round
+    trips did that question take"."""
     ledger = home / "usage.jsonl"
     if not ledger.exists():
-        return 0
-    total = 0
+        return (0, 0)
+    total = calls = 0
     for line in ledger.read_text(encoding="utf-8").splitlines():
         try:
             row = json.loads(line)
@@ -324,9 +373,10 @@ def _tokens(home) -> int:
             # turns a wrong field name into a plausible number. A benchmark that
             # silently reports zero cost is worse than one that crashes.
             total += int(row["in"]) + int(row["out"])
+            calls += 1
         except (KeyError, ValueError, TypeError):
             continue
-    return total
+    return (total, calls)
 
 
 # --- what is actually in there ----------------------------------------------
