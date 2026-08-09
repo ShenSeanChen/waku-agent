@@ -479,7 +479,14 @@ async function runMemoryArena(){
   if (maRun.running) return;
   const fx = memoryArenaFixture;
   const track = Object.keys(fx.tracks)[0];
-  maRun = {running:true, rows:[], board:null, log:"seeding…", error:null};
+  // Record the grid UP FRONT. Seeding is five real turns per contestant, so the
+  // first result is ~40s away — and a table built only from rows that have
+  // landed renders an empty header for that whole first minute, which reads as
+  // broken rather than busy. Columns and rows are both known before we start;
+  // only the cells are pending.
+  maRun = {running:true, rows:[], board:null, log:"seeding…", error:null,
+           backends: maBackends(), probes: fx.tracks[track].probes.map(p=>p.id),
+           seeded: {}};
   editing = false; render();
   try {
     const res = await fetch("/api/memory-arena/stream", {
@@ -495,8 +502,10 @@ async function runMemoryArena(){
       for (const c of chunks){
         if (!c.startsWith("data: ")) continue;
         const ev = JSON.parse(c.slice(6));
-        if (ev.kind === "start")  maRun.log = `${ev.contestant}: seeding…`;
-        if (ev.kind === "seeded") maRun.log = `${ev.contestant}: ${ev.line}`;
+        if (ev.kind === "start"){ maRun.log = `${ev.contestant}: seeding…`;
+                                  maRun.seeded[ev.contestant] = 0; }
+        if (ev.kind === "seeded"){ maRun.log = `${ev.contestant}: ${ev.line}`;
+                                   maRun.seeded[ev.contestant] = (maRun.seeded[ev.contestant]||0) + 1; }
         if (ev.kind === "probe"){ maRun.rows.push(ev); maRun.log = `${ev.contestant}: ${ev.probe}`; }
         if (ev.kind === "failed") maRun.error = `${ev.contestant} — ${ev.error}`;
         if (ev.kind === "done"){ maRun.board = ev.scoreboard || null;
@@ -522,12 +531,22 @@ const OUTCOME_CELL = (r) => `<span class="ma-o ma-${r.outcome}" title="${esc(r.w
 
 function maResultsHtml(){
   if (!maRun.rows.length && !maRun.running && !maRun.error) return "";
-  const names = [...new Set(maRun.rows.map(r => r.contestant))];
-  const probes = [...new Set(maRun.rows.map(r => r.probe))];
+  // The grid comes from what was ASKED, not from what has answered — so every
+  // column and row is on screen from the first second, and each cell says
+  // whether it is seeding, queued, or done. An empty table under a "running"
+  // heading is indistinguishable from a broken one.
+  const seedTotal = (memoryArenaFixture && memoryArenaFixture.tracks
+    ? (Object.values(memoryArenaFixture.tracks)[0].seed || []).length : 0);
+  const names = maRun.backends || [...new Set(maRun.rows.map(r => r.contestant))];
+  const probes = maRun.probes || [...new Set(maRun.rows.map(r => r.probe))];
   const cell = (p, n) => {
     const r = maRun.rows.find(x => x.probe === p && x.contestant === n);
-    return r ? `<td>${OUTCOME_CELL(r)}<div class="ma-ans">${esc((r.answer||"").slice(0,140))}</div></td>`
-             : `<td class="meta">—</td>`;
+    if (r) return `<td>${OUTCOME_CELL(r)}<div class="ma-ans">${esc((r.answer||"").slice(0,140))}</div></td>`;
+    if (!maRun.running) return `<td class="meta">—</td>`;
+    const seeded = (maRun.seeded || {})[n];
+    if (seeded === undefined) return `<td class="meta">queued</td>`;
+    if (seeded < seedTotal) return `<td class="meta">seeding ${seeded}/${seedTotal}<span class="caret"></span></td>`;
+    return `<td class="meta">asking<span class="caret"></span></td>`;
   };
   const board = maRun.board ? `<div class="card" style="padding:4px 8px"><div class="tablescroll"><table>
       <tr><th>store</th><th>pass</th><th>stale</th><th>invented</th><th>miss</th><th>tokens</th></tr>
