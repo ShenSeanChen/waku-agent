@@ -898,18 +898,27 @@ class Handler(BaseHTTPRequestHandler):
         elif self.path == "/api/compare/history":
             runs = compare_history.load_runs(load_settings().home)
             self._send(json.dumps(history_response(runs)).encode(), "application/json")
-        elif self.path == "/api/memory-arena/stores":
+        elif self.path.startswith("/api/memory-arena/stores"):
             # What each configured store holds right now. On demand only —
             # every hosted backend here is a live round trip, and a dashboard
             # that bills you for leaving a tab open is not one to ship.
+            from urllib.parse import parse_qs, urlparse
+
             from waku.ops import memory_arena
 
             try:
-                self._send(json.dumps(memory_arena.store_contents()).encode(), "application/json")
+                q = parse_qs(urlparse(self.path).query)
+                # "see all" asks for ONE store in full. It used to be a link to
+                # the Memory page, which only ever renders sqlite — so clicking
+                # it under mem0 showed you waku's local facts and said nothing.
+                only = (q.get("store", [""])[0] or "").strip()
+                limit = 500 if only else 8
+                self._send(json.dumps(memory_arena.store_contents(limit, only)).encode(),
+                           "application/json")
             except Exception as exc:
                 self._send(json.dumps([{"store": "?", "error": f"{type(exc).__name__}: {exc}"}]).encode(),
                            "application/json")
-        elif self.path == "/api/memory-arena":
+        elif self.path.startswith("/api/memory-arena?") or self.path == "/api/memory-arena":
             # The bake-off fixture, so the Arena's Memory tab can show WHAT is
             # being asked before any of it has been run. It lives in evals/,
             # which a wheel does not ship — a pip-installed Waku answers with
@@ -918,8 +927,15 @@ class Handler(BaseHTTPRequestHandler):
             from waku.ops import memory_arena
 
             try:
+                from pathlib import Path as _P
+                from urllib.parse import parse_qs, unquote, urlparse
+
+                wanted = unquote(parse_qs(urlparse(self.path).query).get("probes", [""])[0]).strip()
+                sets = memory_arena.probe_sets()
+                hit = next((s for s in sets if s["id"] == wanted), None)
                 payload = {"available": True, "backends": memory_arena._available_backends(),
-                           **memory_arena.load_fixture()}
+                           "sets": sets, "chosen": hit["id"] if hit else "",
+                           **memory_arena.load_fixture(_P(hit["path"]) if hit else None)}
                 self._send(json.dumps(payload).encode(), "application/json")
             except (OSError, ValueError):
                 self._send(json.dumps({"available": False}).encode(), "application/json")
@@ -1024,10 +1040,19 @@ class Handler(BaseHTTPRequestHandler):
                 except (BrokenPipeError, ConnectionResetError):
                     pass
             try:
+                # The chosen file must be one this server offered. Echoing a
+                # browser-supplied path straight into read_text() would turn a
+                # benchmark page into an arbitrary local file reader.
+                from pathlib import Path as _P
+
                 from waku.ops import memory_arena
 
+                wanted = (payload.get("probes") or "").strip()
+                hit = next((s for s in memory_arena.probe_sets() if s["id"] == wanted), None)
+                fixture = memory_arena.load_fixture(_P(hit["path"])) if hit else None
+                track = hit["track"] if hit else (payload.get("track") or "example")
                 memory_arena.run_arena(payload.get("backends") or ["sqlite"],
-                                       payload.get("track") or "example", emit_mem)
+                                       track, emit_mem, fixture=fixture)
             except Exception as exc:
                 emit_mem("done", {"error": f"{type(exc).__name__}: {exc}"})
             return

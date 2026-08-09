@@ -81,6 +81,50 @@ def fixture_path() -> Path:
     return Path(override).expanduser() if override else _EXAMPLE
 
 
+def probe_sets() -> list[dict]:
+    """Every runnable question set, flat: one entry per TRACK, not per file.
+
+    A file is a container, not a choice. Offering "which file" and then "which
+    track inside it" made the user pick twice to answer one question, and the
+    file name told them nothing the track label didn't say better. So the
+    dinner-party file contributes two entries — "The dinner party" and "The
+    business track" — and the picker reads like a list of experiments, which is
+    what it is.
+    """
+    sets = []
+    for f in probe_files():
+        try:
+            tracks = json.loads(Path(f["path"]).read_text(encoding="utf-8")).get("tracks", {})
+        except (OSError, ValueError):
+            continue
+        for key, spec in tracks.items():
+            sets.append({"id": f"{f['path']}::{key}", "path": f["path"], "track": key,
+                         "label": spec.get("label") or f"{f['name']} / {key}",
+                         "facts": len(spec.get("seed") or []),
+                         "probes": len(spec.get("probes") or [])})
+    return sets
+
+
+def probe_files() -> list[dict]:
+    """Every probe set the arena can offer, as {name, path}.
+
+    Scanned from a directory, never taken as a path from the browser. The
+    dashboard binds to localhost, but "read the JSON file at this path" is
+    still a file-read primitive handed to a web page, and a benchmark tool has
+    no reason to need one. Drop a file in `.waku/probes/` and it appears.
+    """
+    files = [{"name": "example (shipped)", "path": str(_EXAMPLE)}]
+    from waku.config import load_settings
+
+    folder = load_settings().home / "probes"
+    if folder.is_dir():
+        files += [{"name": f.stem, "path": str(f)} for f in sorted(folder.glob("*.json"))]
+    override = os.getenv(PROBES_ENV, "").strip()
+    if override and all(f["path"] != override for f in files):
+        files.append({"name": f"{Path(override).stem} (env)", "path": override})
+    return files
+
+
 def load_fixture(path: Path | None = None) -> dict:
     """The probes, plus where they came from — the UI says so on screen, because
     'which questions was this scored against' is the first thing anyone should
@@ -210,6 +254,9 @@ def run_arena(backends: list[str], track: str, emit, fixture: dict | None = None
     from waku.config import Settings
 
     fixture = fixture or load_fixture()
+    if track not in fixture["tracks"]:
+        emit("done", {"error": f"no track '{track}' in {fixture.get('source', 'the probe file')}"})
+        return
     spec = fixture["tracks"][track]
     results: list[dict] = []
 
@@ -289,7 +336,7 @@ def _tokens(home) -> int:
 # paid service, and a dashboard that quietly bills you for sitting on a tab is
 # not one anyone should ship.
 
-def store_contents(limit: int = 8) -> list[dict]:
+def store_contents(limit: int = 8, only: str = "") -> list[dict]:
     """Per-backend: how many facts it holds and a sample of them.
 
     A backend that errors reports the error rather than an empty list — "0
@@ -302,6 +349,8 @@ def store_contents(limit: int = 8) -> list[dict]:
 
     out = []
     for key in _available_backends():
+        if only and key != only:
+            continue
         # `kind` is the label that stops this page misleading. sqlite here is the
         # LIVE agent's store — months of real use — while a hosted backend has
         # only ever received what the arena wrote to it. Side by side without

@@ -440,10 +440,21 @@ function modelArenaView(d){
 // is a benchmark you have to take on faith, and the whole point of this one is
 // that the numbers are checkable.
 let memoryArenaFixture;   // undefined = not fetched, null = unavailable here
+let maFile = null, maTrack = null;   // chosen probe set; null = whatever loaded
+
+async function pickProbeFile(id){
+  maFile = id;
+  maTrack = (id.split("::")[1]) || null;   // the id carries its own track
+  maPicked = null;
+  memoryArenaFixture = undefined;   // refetch so the questions match the choice
+  maRun = {running:false, rows:[], board:null, log:"", error:null};
+  editing = false; render();
+}
+function pickTrack(name){ maTrack = name; editing = false; render(); }
 
 async function loadMemoryArena(){
   try {
-    const r = await fetch("/api/memory-arena");
+    const r = await fetch("/api/memory-arena" + (maFile ? `?probes=${encodeURIComponent(maFile)}` : ""));
     const j = await r.json();
     memoryArenaFixture = j && j.available ? j : null;
   } catch { memoryArenaFixture = null; }
@@ -478,7 +489,7 @@ let maRun = {running:false, rows:[], board:null, log:"", error:null};
 async function runMemoryArena(){
   if (maRun.running) return;
   const fx = memoryArenaFixture;
-  const track = Object.keys(fx.tracks)[0];
+  const track = (maTrack && fx.tracks[maTrack]) ? maTrack : Object.keys(fx.tracks)[0];
   // Record the grid UP FRONT. Seeding is five real turns per contestant, so the
   // first result is ~40s away — and a table built only from rows that have
   // landed renders an empty header for that whole first minute, which reads as
@@ -491,7 +502,7 @@ async function runMemoryArena(){
   try {
     const res = await fetch("/api/memory-arena/stream", {
       method:"POST", headers:{"Content-Type":"application/json"},
-      body: JSON.stringify({backends: maPicks(), track})});
+      body: JSON.stringify({backends: maPicks(), track, probes: maFile || ""})});
     const reader = res.body.getReader(), dec = new TextDecoder();
     let buf = "";
     for(;;){
@@ -607,6 +618,21 @@ function maResultsHtml(){
     </table></div></div>`;
 }
 
+async function maSeeAll(store){
+  // Expand THIS store in place. Never navigate — the Memory page is sqlite's
+  // and sending mem0's "see all" there showed the wrong store's facts.
+  const cards = Array.isArray(maStores) ? maStores : null;   // "loading" is a string
+  const i = cards ? cards.findIndex(c => c.store === store) : -1;
+  if (i < 0) return;
+  cards[i] = Object.assign({}, cards[i], {loading: true}); render();
+  try {
+    const r = await fetch(`/api/memory-arena/stores?store=${encodeURIComponent(store)}`);
+    const full = (await r.json())[0];
+    if (full) cards[i] = full;
+  } catch (e){ cards[i].error = String(e); }
+  cards[i].loading = false; render();
+}
+
 function memoryArenaView(){
   if (memoryArenaFixture === undefined){
     setTimeout(loadMemoryArena, 0);
@@ -616,7 +642,8 @@ function memoryArenaView(){
     return `<div class="card empty">The probe file lives in <code>evals/memory_arena.json</code>,
       which a packaged install does not ship. Run Waku from a clone to see it.</div>`;
   }
-  const track = Object.values(memoryArenaFixture.tracks)[0];
+  const track = memoryArenaFixture.tracks[(maTrack && memoryArenaFixture.tracks[maTrack])
+    ? maTrack : Object.keys(memoryArenaFixture.tracks)[0]];
   const picks = maPicks();
   const chips = maBackends().map(k => {
     const on = maPickedSet().has(k);
@@ -624,7 +651,21 @@ function memoryArenaView(){
       <input type="checkbox" ${on?"checked":""} onchange="maTogglePick('${esc(k)}')"> ${esc(k)}${
       MA_SLOW[k] ? ' <span class="meta">slow</span>' : ""}</label>`;
   }).join("");
+  // ONE dropdown. A file is a container, not a choice — picking "which file"
+  // and then "which track inside it" made you answer one question twice, and
+  // the filename told you less than the track label already did.
+  const sets = (memoryArenaFixture.sets || []);
+  const chosen = maFile || memoryArenaFixture.chosen || (sets[0] && sets[0].id);
+  const picker = `<div class="ma-race" style="margin-bottom:10px">
+      <label class="fld" style="margin:0">Questions
+        <select onchange="pickProbeFile(this.value)">
+          ${sets.map(s=>`<option value="${esc(s.id)}" ${s.id===chosen?"selected":""}>${
+            esc(s.label)} — ${s.facts} facts, ${s.probes} questions</option>`).join("")}
+        </select></label>
+      <span class="meta">Drop a JSON file in <code>.waku/probes/</code> to add more.</span>
+    </div>`;
   const race = `<div class="card">
+    ${picker}
     <div class="ma-race">
       <button class="save" onclick="runMemoryArena()" ${maRun.running||!picks.length?"disabled":""}>
         ${maRun.running ? "Racing…" : `Race ${picks.length} store${picks.length===1?"":"s"}`}</button>
@@ -673,7 +714,7 @@ function maStoresHtml(){
               ? `<b>${esc(f.subject)}</b> — ` : ""}${esc(f.content)}</li>`).join("")}</ul>${
               s.count > s.facts.length
                 ? `<div class="meta" style="margin-top:6px">showing ${s.facts.length} of ${s.count}
-                     &middot; <a class="reveal" onclick="location.hash='#memory/semantic'">see all</a></div>`
+                     &middot; <a class="reveal" onclick="maSeeAll('${esc(s.store)}')">see all</a></div>`
                 : ""}`
           : `<div class="meta">empty</div>`}
     </div>`).join("");
