@@ -35,6 +35,7 @@ cost of a tool the question never needed.
 from __future__ import annotations
 
 import sys
+from dataclasses import replace
 
 from waku.config import load_settings
 from waku.db import connect
@@ -51,10 +52,34 @@ Answer their question using ONLY what is above. If the answer is not there, say
 so plainly — do not guess. Be brief."""
 
 
-def ask(question: str) -> str:
+def demo_store(settings, client):
+    """A throwaway store holding the shipped example facts — for filming.
+
+    Read the real store and the screen fills with the operator's actual life:
+    where they sleep, who they meet, colleagues by name. That is fine at a
+    terminal and not fine in a video, and "remember to close that window" is
+    not a safety mechanism. --demo builds a fresh sqlite in a temp directory,
+    seeds it from evals/memory_arena.json, and never opens .waku at all.
+    """
+    import json
+    import tempfile
+    from pathlib import Path
+
+    home = Path(tempfile.mkdtemp(prefix="tiny-demo-"))
+    fixture = Path(__file__).resolve().parents[1] / "evals" / "memory_arena.json"
+    seed = json.loads(fixture.read_text(encoding="utf-8"))["tracks"]["example"]["seed"]
+    memory = Memory(connect(home), replace(settings, home=home), client)
+    for line in seed:
+        memory.facts.add("example", line, source="demo")
+    print(f"store     : demo, {len(seed)} seeded facts (your real memory is untouched)")
+    return memory
+
+
+def ask(question: str, demo: bool = False) -> str:
     settings = load_settings()
     client = get_client(settings)
-    memory = Memory(connect(settings.home), settings, client)
+    memory = (demo_store(settings, client) if demo
+              else Memory(connect(settings.home), settings, client))
 
     # 1. THE GATE. "what's 17 times 4" needs no memory; asking anyway costs a
     #    search and risks an irrelevant fact biasing the answer.
@@ -89,6 +114,8 @@ def ask(question: str) -> str:
 
 
 if __name__ == "__main__":
-    q = " ".join(sys.argv[1:]) or "What do you remember about me?"
+    args = [a for a in sys.argv[1:] if a != "--demo"]
+    demo = "--demo" in sys.argv[1:]
+    q = " ".join(args) or "What do you remember about me?"
     print(f"question  : {q}")
-    print(f"\n{ask(q)}")
+    print(f"\n{ask(q, demo=demo)}")
