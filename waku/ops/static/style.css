@@ -1,4 +1,7 @@
 :root{
+    /* let native UI (scrollbars, form controls) follow the active scheme,
+       otherwise they stay light even in dark mode */
+    color-scheme:light dark;
     --bg:#fafaf9;--panel:#ffffff;--line:#e7e6e4;--line2:#d9d8d5;
     --ink:#21201d;--ink2:#6f6e69;--ink3:#a3a29d;
     --accent:#5e6ad2;--accent-soft:#eef0fb;
@@ -12,6 +15,13 @@
     --good:#4cc38a;--good-soft:#12291d;--bad:#e5655a;--bad-soft:#331714;
   }}
   *{box-sizing:border-box;margin:0}
+  /* thin theme-colored scrollbars (like the chat dock's), instead of the
+     chunky native ones */
+  *{scrollbar-width:thin;scrollbar-color:var(--line2) transparent}
+  *::-webkit-scrollbar{width:6px;height:6px}
+  *::-webkit-scrollbar-track{background:transparent}
+  *::-webkit-scrollbar-thumb{background:var(--line2);border-radius:3px}
+  *::-webkit-scrollbar-thumb:hover{background:var(--ink3)}
   /* three fixed-height columns, each scrolling independently: the main
      content's scrollbar sits at its own right edge (the "middle"), never over
      the chat dock. */
