@@ -1,6 +1,14 @@
 """The smallest agent that can answer from memory. Forty lines, no tools.
 
-    python examples/tiny_memory_agent.py "When is the design review?"
+    .venv/bin/python examples/tiny_memory_agent.py "When is the design review?"
+
+The explicit interpreter is not pedantry: on macOS `python` is usually aliased
+to /usr/bin/python3, which does not have waku installed, and the failure is a
+bare ModuleNotFoundError that looks like a broken example rather than a shell
+pointing somewhere else. `source .venv/bin/activate` first if you prefer.
+
+Your keys are picked up automatically — waku/config.py calls find_dotenv from
+the working directory, so no exports are needed.
 
 WHY THIS FILE EXISTS
 
