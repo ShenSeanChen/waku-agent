@@ -57,6 +57,21 @@ Reply with ONLY a JSON object, no prose:
 {{"score": <int 0-10>, "reason": "<one short sentence>"}}"""
 
 
+def judge_client(provider: str | None = None, model: str | None = None):
+    """The referee's client and resolved model id, for callers whose question is
+    not the 0-10 rubric — the memory arena asks a binary "did this reply
+    decline?". Sharing this keeps one definition of who the referee is: a model
+    that isn't racing, configured in one place.
+
+    Returns (client, model_id). get_client fills in the provider's default when
+    the id is blank, so read the id back off settings rather than the argument.
+    """
+    settings = Settings(provider=provider or JUDGE_PROVIDER, model=model or JUDGE_MODEL,
+                        small_model="", home=load_settings().home, apple_calendar=False)
+    client = get_client(settings)
+    return client, settings.model
+
+
 def judge_reply(task: str, reply: str, provider: str | None = None,
                 model: str | None = None, tools: list | None = None) -> dict | None:
     """Grade one reply. `tools` is the list of tool names that ACTUALLY fired this

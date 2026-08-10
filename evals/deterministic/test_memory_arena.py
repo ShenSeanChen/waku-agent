@@ -18,6 +18,7 @@ a legal probe where the deadline was never given.
 from __future__ import annotations
 
 import json
+from typing import ClassVar
 
 import pytest
 
@@ -245,12 +246,25 @@ class _FakeWaku:
     """Records what it was told, answers what the script says, and writes the
     same usage.jsonl the real app does — so token accounting is exercised too."""
 
+    built: ClassVar[list] = []   # every instance a run created, so a test can inspect it
+
     def __init__(self, settings=None, **kw):
+        from types import SimpleNamespace
         self.settings = settings
         self.seen: list[str] = []
         self.home = settings.home
         self.home.mkdir(parents=True, exist_ok=True)
         self._answers = dict(_FakeWaku.script)
+        self.client = object()
+        # The runner flushes consolidation and then CLEARS the session before
+        # probing, so a seeded fact can only be reached through the store. A
+        # fake that cannot do that would let the real thing regress silently —
+        # which is the whole reason the bypass survived until a live race.
+        self.memory = SimpleNamespace(conn=object(), facts=object(), episodes=object())
+        self.cleared_after: list[int] = []
+        self.session = SimpleNamespace(
+            start_new=lambda sid: self.cleared_after.append(len(self.seen)))
+        _FakeWaku.built.append(self)
 
     def respond(self, message, source="cli", observer=None, **kw):
         from types import SimpleNamespace
@@ -275,11 +289,24 @@ def _arena_fixture(tmp_path):
     return fx
 
 
+def _offline(monkeypatch, declined=None):
+    """No network. The consolidation flush and the referee are both real calls
+    in run_arena now; `declined=None` is the adjudicator's own "judge
+    unreachable" answer, which must leave the heuristic verdict untouched."""
+    from waku.memory import consolidation
+
+    monkeypatch.setattr(consolidation, "consolidate_if_due", lambda *a, **k: 0)
+    monkeypatch.setattr(arena, "adjudicate_refusal", lambda *a, **k: declined)
+
+
 def _run(monkeypatch, tmp_path, script, gate=False, backends=("sqlite",)):
     import waku.app
+
     _FakeWaku.script = script
     _FakeWaku.gate = gate
+    _FakeWaku.built = []
     monkeypatch.setattr(waku.app, "Waku", _FakeWaku)
+    _offline(monkeypatch)
     events = []
     arena.run_arena(list(backends), "t", lambda k, e: events.append((k, e)),
                     fixture=_arena_fixture(tmp_path))
@@ -324,6 +351,7 @@ def test_a_backend_that_blows_up_does_not_take_the_others_with_it(monkeypatch, t
 
     monkeypatch.setattr(_FakeWaku, "__init__", explode)
     monkeypatch.setattr(waku.app, "Waku", _FakeWaku)
+    _offline(monkeypatch)
     events = []
     arena.run_arena(["boom", "sqlite"], "t", lambda k, e: events.append((k, e)),
                     fixture=_arena_fixture(tmp_path))
@@ -344,6 +372,7 @@ def test_the_gate_decision_reaches_the_scorer(monkeypatch, tmp_path):
     _FakeWaku.script = {"q1?": "68"}
     _FakeWaku.gate = True          # it retrieved when it should not have
     monkeypatch.setattr(waku.app, "Waku", _FakeWaku)
+    _offline(monkeypatch)
     events = []
     arena.run_arena(["sqlite"], "t", lambda k, e: events.append((k, e)), fixture=fx)
 
@@ -360,3 +389,58 @@ def test_the_live_store_is_never_switched(monkeypatch, tmp_path):
     assert homes == {"sqlite", "mem0"}
     from waku.config import load_settings
     assert load_settings().semantic_store == "sqlite", "the real config must be untouched"
+
+
+# --- the two fixes this file exists to hold in place -------------------------
+
+def test_the_conversation_is_cleared_before_any_probe_is_asked(monkeypatch, tmp_path):
+    """history_turns is 12 (24 messages), and a track seeds far fewer than that,
+    so every seeded fact was still in the context window when the probes ran.
+    Three probes in the first honest race passed while the gate reported "no
+    lookup" — the store was never consulted. A benchmark whose subject can be
+    bypassed is not measuring it."""
+    events = _run(monkeypatch, tmp_path, {"q1?": "alpha", "q2?": "the new one"})
+    assert [e for k, e in events if k == "probe"], "the run must have happened"
+    app = _FakeWaku.built[0]
+    assert app.cleared_after == [2], (
+        "the session must be cleared exactly once, after the 2 seed lines and "
+        f"before any probe — got {app.cleared_after}"
+    )
+
+
+def test_an_unreachable_judge_leaves_the_heuristic_verdict_alone(monkeypatch, tmp_path):
+    """adjudicate_refusal returns None when the referee cannot be reached. That
+    must not be read as either verdict — an unavailable judge cannot turn "I
+    could not check" into "it passed" or "it lied"."""
+    fx = {"tracks": {"t": {"label": "T", "seed": ["s"], "probes": [
+        {"id": "p", "test": "restraint", "question": "q?", "expect_refusal": True, "note": "n"}]}}}
+    import waku.app
+
+    _FakeWaku.script = {"q?": "Pikachu loves ketchup."}
+    _FakeWaku.gate = False
+    monkeypatch.setattr(waku.app, "Waku", _FakeWaku)
+    _offline(monkeypatch)
+    events = []
+    arena.run_arena(["sqlite"], "t", lambda k, e: events.append((k, e)), fixture=fx)
+    row = next(e for k, e in events if k == "probe")
+    assert row["outcome"] == INVENTED
+    assert row["certain"] is False, "an unchecked verdict must still say it is unchecked"
+
+
+def test_the_judge_overrules_a_phrase_the_list_never_had(monkeypatch, tmp_path):
+    """The live miss: LangMem replied "Nothing shared about Pikachu's food
+    preferences" — a correct refusal — and scored INVENTED, because _REFUSALS
+    holds "nothing about" and not "nothing shared"."""
+    fx = {"tracks": {"t": {"label": "T", "seed": ["s"], "probes": [
+        {"id": "p", "test": "restraint", "question": "q?", "expect_refusal": True, "note": "n"}]}}}
+    import waku.app
+
+    _FakeWaku.script = {"q?": "Nothing shared about Pikachu's food preferences."}
+    _FakeWaku.gate = False
+    monkeypatch.setattr(waku.app, "Waku", _FakeWaku)
+    _offline(monkeypatch, declined=True)
+    events = []
+    arena.run_arena(["sqlite"], "t", lambda k, e: events.append((k, e)), fixture=fx)
+    row = next(e for k, e in events if k == "probe")
+    assert row["outcome"] == PASS, "a correct refusal must not be published as INVENTED"
+    assert row["certain"] is True

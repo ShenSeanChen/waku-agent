@@ -171,6 +171,55 @@ def _has(haystack: str, needles) -> bool:
     return any(n.casefold() in low for n in needles)
 
 
+# --- the judge the scorer has always asked for ------------------------------
+# score() returns `certain=False` on every refusal verdict, because that verdict
+# rests on a phrase list that cannot be complete. The runner counted those rows
+# as `needs_judge` and then never judged them, so the list was the final word.
+#
+# It got one wrong in the first honest race: LangMem answered "Nothing shared
+# about Pikachu's food preferences" — a correct refusal — and scored INVENTED,
+# because _REFUSALS holds "nothing about" and not "nothing shared". INVENTED is
+# the headline number, and that is a public accusation against someone else's
+# product for doing the right thing. A benchmark may not publish a verdict it
+# cannot defend.
+
+_ADJUDICATE = """A user asked an assistant a question the assistant was never told the answer to.
+The only correct behaviour is to DECLINE — to say it does not know or has nothing on file.
+
+Question: {question}
+Reply: {answer}
+
+Did the reply DECLINE, or did it assert an answer? Wording varies enormously;
+judge the meaning, not the phrasing. A reply that declines and then adds general
+knowledge clearly marked as general knowledge still counts as declining.
+
+Reply with ONLY this JSON: {{"declined": true/false}}"""
+
+
+def adjudicate_refusal(question: str, answer: str) -> bool | None:
+    """Did this reply decline? True/False, or None if the judge is unreachable.
+
+    None is deliberate and is NOT treated as either verdict — an unavailable
+    judge must leave the heuristic's answer standing and say so, rather than
+    silently converting "I could not check" into "it passed" or "it lied".
+    """
+    from waku.ops import judge as _judge
+
+    try:
+        client, model = _judge.judge_client()
+        with _judge._JUDGE_SEM:   # same cap as the model arena: don't stampede the referee
+            reply = client.messages.create(
+                model=model, max_tokens=200,
+                messages=[{"role": "user",
+                           "content": _ADJUDICATE.format(question=question, answer=answer)}])
+        text = "".join(b.text for b in reply.content if b.type == "text")
+        if "{" not in text:
+            return None
+        return bool(json.loads(text[text.index("{"): text.rindex("}") + 1])["declined"])
+    except Exception:
+        return None
+
+
 def score(answer: str, probe: dict, retrieved: bool | None = None) -> tuple[str, bool, str]:
     """Grade one answer. Returns (outcome, certain, why).
 
@@ -283,6 +332,7 @@ def run_arena(backends: list[str], track: str, emit, fixture: dict | None = None
 
     from waku.app import Waku
     from waku.config import Settings
+    from waku.memory import consolidation
 
     # `model` is "provider:model". The arena holds the model CONSTANT and varies
     # only the store, so which model it is cannot change the finding — which
@@ -310,6 +360,32 @@ def run_arena(backends: list[str], track: str, emit, fixture: dict | None = None
                 app.respond(line, source="memory-arena")
                 emit("seeded", {"contestant": backend, "line": line})
 
+            # SEEDING IS DONE. Two things have to happen before the first probe,
+            # or this measures something other than memory.
+            #
+            # 1. FLUSH. Consolidation runs every N exchanges, so the tail of the
+            #    seed conversation can still be sitting unconsolidated in
+            #    chat_log — facts the store was never given. every_n=1 drains
+            #    it. If a fact still does not land, THAT is a finding about the
+            #    harness, and it is the same harness for every contestant.
+            # 2. FORGET THE CONVERSATION. history_turns is 12, so the prompt
+            #    carries the last 24 messages — and the dinner track seeds 8
+            #    exchanges, which is 16. Every seeded fact was therefore still
+            #    sitting in the context window when the probes ran, and the
+            #    model could answer without consulting the store at all. Three
+            #    probes did exactly that: they passed with the gate reporting
+            #    "no lookup", which means the contestant was never used. A
+            #    benchmark where the thing under test can be bypassed is not
+            #    measuring it.
+            #
+            #    This was invisible until the gate was fixed (#94). While the
+            #    gate was failing open, every probe reported "searched", so the
+            #    bypass never showed up on screen.
+            consolidation.consolidate_if_due(app.memory.conn, app.client,
+                                             app.settings.small_model, 1,
+                                             app.memory.facts, app.memory.episodes)
+            app.session.start_new("probes")
+
             # The ledger is cumulative, so each probe's cost is the DELTA. Storing
             # the running total per row would make scoreboard() sum a triangular
             # number and report several times the tokens actually spent — the
@@ -326,6 +402,22 @@ def run_arena(backends: list[str], track: str, emit, fixture: dict | None = None
                 turn = app.respond(probe["question"], source="memory-arena", observer=watch)
                 after, calls_now = _ledger(home)
                 outcome, certain, why = score(turn.reply, probe, gate.get("retrieved"))
+
+                # `certain=False` means the verdict came from the refusal phrase
+                # list, which cannot be complete. Ask the referee rather than let
+                # a missing phrase publish a false INVENTED. A judge that cannot
+                # be reached returns None and changes nothing — the heuristic
+                # stands, still flagged uncertain, which is the honest state.
+                if not certain:
+                    declined = adjudicate_refusal(probe["question"], turn.reply)
+                    if declined is True and outcome == INVENTED:
+                        outcome, certain, why = PASS, True, "declined — judge overruled the phrase list"
+                    elif declined is False and outcome == PASS:
+                        outcome, certain, why = (INVENTED, True,
+                                                 "asserted an answer — judge overruled the phrase list")
+                    elif declined is not None:
+                        certain, why = True, why + " (judge agreed)"
+
                 row = {"contestant": backend, "probe": probe["id"], "test": probe["test"],
                        "question": probe["question"], "answer": turn.reply,
                        "outcome": outcome, "certain": certain, "why": why,
