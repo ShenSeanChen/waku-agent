@@ -464,8 +464,23 @@ def run_arena(backends: list[str], track: str, emit, fixture: dict | None = None
     # Name the leaks explicitly rather than leaving them to be noticed. A probe
     # the control passed did not test memory in THIS run, whatever the other
     # columns scored on it.
+    # ...but only for probes that ASSERT RECALLED CONTENT. Two kinds are
+    # supposed to be answerable with nothing stored, and flagging them was the
+    # first thing the control caught — in itself:
+    #   * expect_retrieval=False ("what's 17 times 4") is designed to need no
+    #     memory; passing it with none is the correct behaviour, not a leak.
+    #   * expect_refusal ("what's the filing deadline") is passed by declining,
+    #     and a contestant with no memory declines every time. It would be
+    #     flagged in every single run, forever, and mean nothing.
+    def _asserts_recall(probe_id: str) -> bool:
+        probe = next((q for q in spec["probes"] if q["id"] == probe_id), {})
+        return bool(probe.get("expect_any") or probe.get("expect_all")) \
+            and not probe.get("expect_refusal") \
+            and probe.get("expect_retrieval") is not False
+
     leaked = sorted({r["probe"] for r in results
-                     if r["contestant"] == CONTROL and r["outcome"] == PASS})
+                     if r["contestant"] == CONTROL and r["outcome"] == PASS
+                     and _asserts_recall(r["probe"])})
     emit("done", {"scoreboard": scoreboard(results), "results": results, "leaked": leaked})
 
 

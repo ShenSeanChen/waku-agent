@@ -471,3 +471,35 @@ def test_a_probe_the_control_passes_is_reported_as_leaked(monkeypatch, tmp_path)
         "p-recall was answered without any memory, so it must be named a leak; "
         f"got {done['leaked']}"
     )
+
+
+def test_probes_designed_to_need_no_memory_are_not_called_leaks(monkeypatch, tmp_path):
+    """The control caught this in itself on its first live run. Two probe kinds
+    are SUPPOSED to be answerable with an empty store: expect_retrieval=False
+    ("what's 17 times 4") and expect_refusal ("what's the filing deadline",
+    which is passed BY declining, and a contestant with nothing stored declines
+    every time). Flagging those would fire in every run forever and mean
+    nothing — the badge has to stay rare enough to be worth reading."""
+    fx = {"tracks": {"t": {"label": "T", "seed": ["s"], "probes": [
+        {"id": "p-arith", "test": "restraint", "question": "q1?",
+         "expect_any": ["68"], "expect_retrieval": False, "note": "n"},
+        {"id": "p-decline", "test": "restraint", "question": "q2?",
+         "expect_refusal": True, "note": "n"},
+        {"id": "p-real", "test": "recall", "question": "q3?",
+         "expect_any": ["alpha"], "note": "n"},
+    ]}}}
+    import waku.app
+
+    _FakeWaku.script = {"q1?": "68", "q2?": "I don't have that saved.", "q3?": "alpha"}
+    _FakeWaku.gate = False
+    _FakeWaku.built = []
+    monkeypatch.setattr(waku.app, "Waku", _FakeWaku)
+    _offline(monkeypatch)
+    events = []
+    arena.run_arena([arena.CONTROL], "t", lambda k, e: events.append((k, e)), fixture=fx)
+
+    done = next(e for k, e in events if k == "done")
+    assert done["leaked"] == ["p-real"], (
+        "only the probe that asserts recalled content is a leak; the arithmetic "
+        f"and refusal probes are designed to pass without memory — got {done['leaked']}"
+    )
