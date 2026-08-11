@@ -444,3 +444,30 @@ def test_the_judge_overrules_a_phrase_the_list_never_had(monkeypatch, tmp_path):
     row = next(e for k, e in events if k == "probe")
     assert row["outcome"] == PASS, "a correct refusal must not be published as INVENTED"
     assert row["certain"] is True
+
+
+def test_the_control_contestant_is_never_seeded(monkeypatch, tmp_path):
+    """The control is told nothing and asked everything. If it is ever handed
+    the seed, it stops being a control and silently agrees with whatever the
+    other columns say."""
+    events = _run(monkeypatch, tmp_path, {"q1?": "alpha", "q2?": "the new one"},
+                  backends=(arena.CONTROL,))
+    assert [e["line"] for k, e in events if k == "seeded"] == [], (
+        "the control must receive no facts at all"
+    )
+    assert [e["probe"] for k, e in events if k == "probe"] == ["p-recall", "p-update"], (
+        "but it must still be asked every probe"
+    )
+
+
+def test_a_probe_the_control_passes_is_reported_as_leaked(monkeypatch, tmp_path):
+    """A probe the model can answer with no memory measures training data, not
+    the store. Three of the dinner track's seven did exactly that, and nothing
+    on screen said so — which is the whole reason this contestant exists."""
+    events = _run(monkeypatch, tmp_path, {"q1?": "alpha", "q2?": "nothing useful"},
+                  backends=(arena.CONTROL,))
+    done = next(e for k, e in events if k == "done")
+    assert done["leaked"] == ["p-recall"], (
+        "p-recall was answered without any memory, so it must be named a leak; "
+        f"got {done['leaked']}"
+    )

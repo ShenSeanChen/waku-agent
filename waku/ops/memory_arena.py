@@ -51,6 +51,11 @@ PROBES_ENV = "WAKU_MEMORY_PROBES"
 
 PASS, STALE, INVENTED, MISS = "pass", "stale", "invented", "miss"
 
+# A contestant that is told nothing and then asked everything. It should fail
+# every probe; a probe it passes is one the model can answer without memory, so
+# that probe measures training data rather than the store. See run_arena.
+CONTROL = "control"
+
 # How models decline when they genuinely have nothing. Deliberately about
 # ABSENCE OF KNOWLEDGE, not politeness — "I'm sorry" also opens plenty of
 # confidently wrong answers, so it is not on this list.
@@ -350,13 +355,25 @@ def run_arena(backends: list[str], track: str, emit, fixture: dict | None = None
 
     for backend in backends:
         emit("start", {"contestant": backend})
+        # THE CONTROL. A contestant that is told nothing, then asked everything.
+        # It should fail every probe — and any probe it PASSES is not a memory
+        # probe at all, it is one the model can answer from training data.
+        #
+        # This is not hypothetical. The dinner track used to ask what Jensen
+        # always wears and what Paul Graham dislikes; with an empty store and
+        # the real system prompt the model answers both correctly, citing his
+        # essay. Three of seven probes were scoring the model, not the store,
+        # and nothing on screen said so. A benchmark that cannot show its
+        # questions require the thing under test is decoration.
+        seeding = [] if backend == CONTROL else spec["seed"]
+        store = "sqlite" if backend == CONTROL else backend
         home = Path(tempfile.mkdtemp(prefix=f"memarena-{backend}-"))
         try:
             opts = {"provider": prov, "model": mod} if prov and mod else {}
-            app = Waku(settings=Settings(home=home, semantic_store=backend,
+            app = Waku(settings=Settings(home=home, semantic_store=store,
                                          apple_calendar=False, google_calendar=False,
                                          apple_tools=False, graph_workflows=False, **opts))
-            for line in spec["seed"]:
+            for line in seeding:
                 app.respond(line, source="memory-arena")
                 emit("seeded", {"contestant": backend, "line": line})
 
@@ -444,7 +461,12 @@ def run_arena(backends: list[str], track: str, emit, fixture: dict | None = None
             # reason to abandon the run.
             emit("failed", {"contestant": backend, "error": f"{type(exc).__name__}: {exc}"})
 
-    emit("done", {"scoreboard": scoreboard(results), "results": results})
+    # Name the leaks explicitly rather than leaving them to be noticed. A probe
+    # the control passed did not test memory in THIS run, whatever the other
+    # columns scored on it.
+    leaked = sorted({r["probe"] for r in results
+                     if r["contestant"] == CONTROL and r["outcome"] == PASS})
+    emit("done", {"scoreboard": scoreboard(results), "results": results, "leaked": leaked})
 
 
 def _ledger(home) -> tuple[int, int]:
@@ -567,4 +589,5 @@ def _available_backends() -> list[str]:
     # middle means the fast columns sit unread behind it while it finishes.
     # Order here is the order the columns appear.
     order = ("mem0", "langmem", "supabase", "zep")
-    return ["sqlite", *[k for k in order if k in ready]]
+    # CONTROL last: it is the integrity check, not a contestant you rank.
+    return ["sqlite", *[k for k in order if k in ready], CONTROL]

@@ -529,6 +529,7 @@ async function runMemoryArena(){
         if (ev.kind === "probe"){ maRun.rows.push(ev); maRun.log = `${ev.contestant}: ${ev.probe}`; }
         if (ev.kind === "failed") maRun.error = `${ev.contestant} — ${ev.error}`;
         if (ev.kind === "done"){ maRun.board = ev.scoreboard || null;
+                                 maRun.leaked = ev.leaked || [];
                                  if (ev.error) maRun.error = ev.error; }
         editing = false; render();
       }
@@ -553,6 +554,7 @@ function maBackends(){
 // live account. Racing it by default turned a four-minute experiment into a
 // forty-minute one and made the whole tab feel broken. It is one click away,
 // deliberately, rather than one click away from being avoided.
+const MA_NOTE = {control: "Told nothing, asked everything. It should fail every probe — one it passes is a probe the model can answer without memory."};
 const MA_SLOW = {zep: "waits for graph ingestion — minutes per fact"};
 let maPicked = null;
 
@@ -618,8 +620,10 @@ function maResultsHtml(){
       ${probes.map(p=>{
         const any = maRun.rows.find(x => x.probe === p);
         const fx = maProbe(p);
+        const leaked = (maRun.leaked || []).includes(p);
         return `<tr>
-          <td><span class="ma-test">${esc((any && any.test) || (fx && fx.test) || "")}</span>
+          <td><span class="ma-test">${esc((any && any.test) || (fx && fx.test) || "")}</span>${
+            leaked ? ' <span class="ma-o ma-invented" title="The no-memory control answered this correctly, so this question did not require the store in this run.">leaked</span>' : ""}
             <div class="ma-q">${esc((any && any.question) || (fx && fx.question) || p)}</div>
             <div class="ma-facts-meta">${fx ? (fx.expect_refusal
                 ? "must decline" : "wants: " + esc((fx.expect_any||[]).join(" / "))) : ""}${
@@ -657,9 +661,11 @@ function memoryArenaView(){
   const picks = maPicks();
   const chips = maBackends().map(k => {
     const on = maPickedSet().has(k);
-    return `<label class="cmp-pick ${on?"on":""}" ${MA_SLOW[k]?`title="${esc(MA_SLOW[k])}"`:""}>
+    const tip = MA_SLOW[k] || MA_NOTE[k];
+    return `<label class="cmp-pick ${on?"on":""}" ${tip?`title="${esc(tip)}"`:""}>
       <input type="checkbox" ${on?"checked":""} onchange="maTogglePick('${esc(k)}')"> ${esc(k)}${
-      MA_SLOW[k] ? ' <span class="meta">slow</span>' : ""}</label>`;
+      MA_SLOW[k] ? ' <span class="meta">slow</span>' : ""}${
+      k === "control" ? ' <span class="meta">no memory</span>' : ""}</label>`;
   }).join("");
   // ONE dropdown. A file is a container, not a choice — picking "which file"
   // and then "which track inside it" made you answer one question twice, and
