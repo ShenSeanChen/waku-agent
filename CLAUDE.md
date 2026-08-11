@@ -69,3 +69,5 @@ for its own sake is not.
 
 `make run` · `make voice` · `make dashboard` (7777) · `make trace` (6006) ·
 `make eval` · `make gate` · `make lint` · tests live under `evals/`, not `tests/`
+
+"demo for push"
