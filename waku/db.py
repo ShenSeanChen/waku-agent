@@ -73,6 +73,32 @@ CREATE TABLE IF NOT EXISTS chat_log (
     session_id TEXT DEFAULT 'default',
     created_at TEXT DEFAULT (datetime('now'))
 );
+
+-- Daily investment P&L, one row per report. Append-only: fixes go through
+-- the dashboard's SQL console, not a chat-driven edit/delete tool.
+CREATE TABLE IF NOT EXISTS finance_entries (
+    id INTEGER PRIMARY KEY,
+    date TEXT NOT NULL,            -- ISO 8601 date
+    account TEXT NOT NULL,         -- one of the fixed account enum (see log_pnl)
+    currency TEXT NOT NULL,        -- CNY | USD, derived from account
+    pnl_amount REAL NOT NULL,      -- signed: positive = profit, negative = loss
+    note TEXT DEFAULT '',
+    created_at TEXT DEFAULT (datetime('now'))
+);
+
+-- Interview tracking. Mutable: one row per interview PROCESS (company+role),
+-- updated in place as it moves through rounds so the log doesn't fragment.
+CREATE TABLE IF NOT EXISTS interview_entries (
+    id INTEGER PRIMARY KEY,
+    company TEXT NOT NULL,
+    role TEXT NOT NULL,
+    round TEXT DEFAULT '',
+    date TEXT NOT NULL,            -- ISO 8601 date of the most recent update
+    status TEXT NOT NULL,          -- 进行中 | 通过 | 失败 | 待跟进
+    notes TEXT DEFAULT '',
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now'))
+);
 """
 
 
