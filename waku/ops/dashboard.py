@@ -415,7 +415,9 @@ def collect() -> dict:
     db_info = {
         "path": str(db_path.resolve()),
         "size": db_path.stat().st_size if db_path.exists() else 0,
-        "tables": [table_info(n) for n in ("calendar_events", "facts", "episodes", "chat_log")],
+        "tables": [table_info(n) for n in
+                   ("calendar_events", "facts", "episodes", "chat_log",
+                    "finance_entries", "interview_entries")],
         "fts": [t for t in all_tables if t.endswith("_fts")],
         "all_tables": all_tables,
     }
@@ -477,6 +479,14 @@ def collect() -> dict:
         "current_session": (live.session.session_id if live is not None else dash_session()),
         "consolidate_every": settings.consolidate_every,
         "calendar": rows('SELECT title, start, "end", attendees, created_at FROM calendar_events ORDER BY start'),
+        "finance": rows(
+            "SELECT id, date, account, currency, pnl_amount, note, created_at "
+            "FROM finance_entries ORDER BY date DESC, id DESC"
+        ),
+        "interviews": rows(
+            "SELECT id, company, role, round, date, status, notes, created_at, updated_at "
+            "FROM interview_entries ORDER BY updated_at DESC"
+        ),
         "outbox": outbox,
         "skills": skills,
         "eval_report": eval_report,
