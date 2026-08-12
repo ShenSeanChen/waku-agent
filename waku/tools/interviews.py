@@ -20,31 +20,33 @@ def make_tool(conn: sqlite3.Connection) -> Tool:
         company: str,
         role: str,
         status: str,
-        round: str = "",
-        date: str = "",
-        notes: str = "",
+        round: str | None = None,
+        date: str | None = None,
+        notes: str | None = None,
     ) -> str:
         if status not in VALID_STATUSES:
             return f"Error: unknown status '{status}'. Valid statuses: {', '.join(VALID_STATUSES)}"
         entry_date = date or date_cls.today().isoformat()
         placeholders = ",".join("?" * len(OPEN_STATUSES))
         existing = conn.execute(
-            f"SELECT id FROM interview_entries WHERE lower(company)=lower(?) AND lower(role)=lower(?) "
+            f"SELECT id, round, notes FROM interview_entries WHERE lower(company)=lower(?) AND lower(role)=lower(?) "
             f"AND status IN ({placeholders}) ORDER BY id DESC LIMIT 1",
             (company, role, *OPEN_STATUSES),
         ).fetchone()
         if existing:
+            new_round = round if round is not None else existing["round"]
+            new_notes = notes if notes is not None else existing["notes"]
             conn.execute(
                 "UPDATE interview_entries SET round=?, date=?, status=?, notes=?, "
                 "updated_at=datetime('now') WHERE id=?",
-                (round, entry_date, status, notes, existing["id"]),
+                (new_round, entry_date, status, new_notes, existing["id"]),
             )
             verb = "Updated"
         else:
             conn.execute(
                 "INSERT INTO interview_entries (company, role, round, date, status, notes) "
                 "VALUES (?,?,?,?,?,?)",
-                (company, role, round, entry_date, status, notes),
+                (company, role, round or "", entry_date, status, notes or ""),
             )
             verb = "Logged"
         conn.commit()

@@ -42,3 +42,18 @@ def test_log_interview_starts_fresh_row_after_closed(tmp_path):
 
     rows = conn.execute("SELECT status FROM interview_entries ORDER BY id").fetchall()
     assert [r["status"] for r in rows] == ["失败", "进行中"]
+
+
+def test_log_interview_matches_case_insensitively_and_preserves_omitted_fields(tmp_path):
+    conn = connect(tmp_path)
+    tool = make_tool(conn)
+    tool.fn(company="ByteDance", role="Backend Engineer", round="一面", status="进行中",
+             notes="first round notes")
+    # different capitalization on the second call, and notes omitted entirely
+    tool.fn(company="bytedance", role="backend engineer", round="二面", status="待跟进")
+
+    rows = conn.execute("SELECT company, round, status, notes FROM interview_entries").fetchall()
+    assert len(rows) == 1  # matched despite the capitalization difference
+    assert rows[0]["round"] == "二面"
+    assert rows[0]["status"] == "待跟进"
+    assert rows[0]["notes"] == "first round notes"  # preserved, not blanked, because omitted
