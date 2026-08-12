@@ -4,9 +4,11 @@
     export MEM0_API_KEY=...
     python examples/memory-native/mem0_native.py
 
-SDK: mem0ai 2.0.17. Written 2026-08-12, NOT YET RUN LIVE -- it writes to a
-hosted account, so it waits for a deliberate go-ahead. Update this line the
-first time it runs clean.
+SDK: mem0ai 2.0.17. Verified live 2026-08-12.
+
+Note the reads below pass `filters={"user_id": ...}, version="v2"`. Passing
+`user_id=` top-level works for add() and raises on get_all() -- the SDK is
+explicit about it, but only once you run it.
 
 WHY THIS FILE EXISTS
 
@@ -64,21 +66,21 @@ def main() -> None:
     #    above. The wording will not match, and the count usually will not
     #    either -- mem0 merges, rewrites, and drops what it judges disposable.
     print("\n-- what it actually kept --------------------------------------")
-    for row in _rows(client.get_all(user_id=USER)):
+    for row in _rows(client.get_all(filters={"user_id": USER}, version="v2")):
         print(f"  kept : {row.get('memory')}")
 
     # 3. SEARCH, three ways. The paraphrase and the Chinese question are the
     #    ones a keyword index (like waku's FTS5) struggles with.
     print("\n-- asking ------------------------------------------------------")
     for label, question in QUESTIONS:
-        hits = _rows(client.search(question, user_id=USER))
+        hits = _rows(client.search(question, filters={"user_id": USER}, version="v2"))
         top = hits[0].get("memory") if hits else "(nothing found)"
         print(f"  {label} : {question}\n              -> {top}")
 
     # 4. THE CONTRADICTION. Two facts went in about the launch, one replacing
     #    the other. Did the old one survive? A row store usually keeps both and
     #    lets ranking decide; watch whether "May" is still in there anywhere.
-    stale = [r for r in _rows(client.get_all(user_id=USER))
+    stale = [r for r in _rows(client.get_all(filters={"user_id": USER}, version="v2"))
              if "may" in str(r.get("memory", "")).lower()]
     print("\n-- the superseded fact ----------------------------------------")
     print(f"  rows still mentioning May: {len(stale)}")

@@ -4,9 +4,7 @@
     export ZEP_API_KEY=...
     python examples/memory-native/zep_native.py
 
-SDK: zep-cloud 3.27.0. Written 2026-08-12, NOT YET RUN LIVE -- it writes to a
-hosted account, so it waits for a deliberate go-ahead. Update this line the
-first time it runs clean.
+SDK: zep-cloud 3.27.0. Verified live 2026-08-12.
 
 WHY THIS FILE EXISTS
 
@@ -76,7 +74,7 @@ def main() -> None:
         episode = client.graph.add(user_id=USER, type="text", data=fact)
         print(f"  said : {fact}")
         print(f"         (accepted, processed={getattr(episode, 'processed', None)})")
-        _wait_until_processed(client, episode)
+        _wait_until_processed(client)
 
     # 2. READ BACK RAW -- as nodes, because that is what Zep made of you.
     #    Compare these against the three sentences. They are not a subset of
@@ -113,25 +111,28 @@ def main() -> None:
     print("  The graph view is the thing worth putting on screen.")
 
 
-def _wait_until_processed(client, episode) -> None:
-    """Poll until Zep says it has filed what we just sent.
+def _wait_until_processed(client) -> None:
+    """Poll until Zep says it has filed everything we have sent so far.
 
     Without this the next read is a coin flip, and a fast machine loses it
     more often than a slow one.
+
+    The first version of this waited on the uuid that graph.add() returned,
+    which never matched anything episode.get_by_user_id() came back with, so
+    it burned the full timeout on every call and then read the graph early.
+    The result looked exactly like Zep having forgotten the third sentence --
+    the precise failure this file's docstring warns about, reproduced by the
+    file itself. Waiting on "are all recent episodes processed" needs no id
+    and cannot silently miss.
     """
-    uuid = getattr(episode, "uuid_", None) or getattr(episode, "uuid", None)
-    if not uuid:
-        time.sleep(3)
-        return
-    deadline = time.time() + MAX_WAIT_SECONDS
-    while time.time() < deadline:
+    started = time.time()
+    while time.time() - started < MAX_WAIT_SECONDS:
         try:
             found = client.graph.episode.get_by_user_id(user_id=USER, lastn=20)
-            for ep in getattr(found, "episodes", found) or []:
-                same = (getattr(ep, "uuid_", None) or getattr(ep, "uuid", None)) == uuid
-                if same and getattr(ep, "processed", False):
-                    print(f"         (processed after {int(time.time() - deadline + MAX_WAIT_SECONDS)}s)")
-                    return
+            episodes = getattr(found, "episodes", found) or []
+            if episodes and all(getattr(e, "processed", False) for e in episodes):
+                print(f"         (processed after {int(time.time() - started)}s)")
+                return
         except Exception:
             pass
         time.sleep(2)

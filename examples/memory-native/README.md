@@ -70,6 +70,64 @@ to the `waku` partition your real assistant uses.
   nothing in it ever decides a fact stopped being true, so both launch dates
   sit there as neighbours forever. That gap is the argument for the other three.
 
+## What actually happened when we ran them (2026-08-12)
+
+Same three sentences, same three questions, three different stores. None of
+this is from the docs.
+
+**mem0** kept the contradiction as two separate rows and never resolved it:
+
+```
+kept : User's product launch is scheduled for May 2026
+kept : User's product launch is scheduled for June 2026
+```
+
+It also inferred a year we never said. And the same question in three languages
+did not get the same answer — English returned June, **中文 returned the
+superseded May**:
+
+```
+exact      : When is the product launch?   -> ...scheduled for June 2026
+chinese    : 发布会是什么时候?              -> ...scheduled for May 2026
+```
+
+**LangMem** resolved the contradiction before storing anything — three
+sentences in, two memories out:
+
+```
+kept : User's product launch is scheduled for June (updated from May - date was moved).
+```
+
+**Zep** did the thing it is built for, and marked the old fact invalid at a
+timestamp rather than out-ranking it:
+
+```
+The product launch is scheduled for May.  ->  INVALID from 2026-08-12T21:24:47Z
+The launch moved to June.                 ->  still valid
+```
+
+Worth noting: a plain `graph.search` still returned the May fact for "When is
+the product launch?". The invalidity lives on the edge, so you have to read the
+interval — retrieval alone will hand you a superseded fact with a straight face.
+
+### Two open questions, stated as open
+
+- **A fresh Zep `user_id` does not appear to give you a fresh graph.** Two
+  brand-new users, told only the three sentences above, both came back with
+  nodes like `brand deal`, `contract`, `rough cut`, `CTR` and `retention rate`
+  — entities from an entirely different dataset on the same project. Whether
+  that is cross-user entity resolution, a project-level graph, or a quirk of
+  how `node.get_by_user_id` scopes its listing, we do not know yet. It matters,
+  because it means partitioning the Arena by `ZEP_USER_ID` would not actually
+  isolate a run.
+- **A third user, given one unrelated sentence, reported zero episodes** even
+  after several minutes, while its `graph.add()` returned without error. Not
+  explained yet either.
+
+Neither is a criticism of Zep — both could as easily be our misreading of the
+API. They are written down here because an unexplained result you keep quiet
+about is how a benchmark ends up lying.
+
 ## Adding another one
 
 Keep the five beats and the same three sentences, or it stops being

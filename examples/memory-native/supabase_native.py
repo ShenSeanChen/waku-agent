@@ -4,8 +4,11 @@
     export SUPABASE_URL=... SUPABASE_KEY=... OPENAI_API_KEY=...
     python examples/memory-native/supabase_native.py
 
-SDK: supabase-py 2.x + openai 2.51.0. Written 2026-08-12, NOT YET RUN LIVE --
-needs a Supabase project and the table below. Update this line once it runs.
+SDK: supabase-py 2.x + openai 2.51.0. NOT RUN BY US, and deliberately so: the
+only Supabase project on this account is a production database, and a demo
+table does not belong in one. Kept because plenty of readers already have a
+spare project, and this is the honest baseline the other three are measured
+against. Run it yourself and the header should say so.
 
 WHY THIS FILE EXISTS
 
