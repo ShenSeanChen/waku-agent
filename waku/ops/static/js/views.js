@@ -615,6 +615,38 @@ const VIEWS = {
       <div class="meta" style="margin-top:8px">all ${db.all_tables.length} tables: ${db.all_tables.map(t=>`<code>${esc(t)}</code>`).join(" ")}</div></div>`;
     return h;
   },
+  finance(d){
+    const entries = d.finance || [];
+    const interviews = d.interviews || [];
+
+    // Per-currency totals — CNY and USD are never summed together.
+    const totals = {};
+    for (const e of entries) totals[e.currency] = (totals[e.currency]||0) + e.pnl_amount;
+    const totalTiles = Object.entries(totals).map(([cur, amt]) =>
+      `<div class="tile"><b class="${amt>=0?"":"neg"}">${amt.toFixed(2)} ${esc(cur)}</b><span>total P&amp;L</span></div>`
+    ).join("");
+
+    const pnlRows = entries.length
+      ? entries.map(e => `<tr>
+          <td>${esc(e.date)}</td><td>${esc(e.account)}</td>
+          <td class="${e.pnl_amount>=0?"":"neg"}">${e.pnl_amount>=0?"+":""}${e.pnl_amount} ${esc(e.currency)}</td>
+          <td>${esc(e.note||"")}</td></tr>`).join("")
+      : `<tr><td colspan="4" class="meta">No entries yet — tell Waku how an account did today.</td></tr>`;
+
+    const interviewRows = interviews.length
+      ? interviews.map(i => `<tr>
+          <td>${esc(i.company)}</td><td>${esc(i.role)}</td><td>${esc(i.round||"")}</td>
+          <td>${esc(i.status)}</td><td>${esc(i.notes||"")}</td></tr>`).join("")
+      : `<tr><td colspan="5" class="meta">No interviews logged yet.</td></tr>`;
+
+    return `<div class="tiles">${totalTiles || '<div class="meta">No P&amp;L logged yet.</div>'}</div>
+      <h3 style="margin-top:20px">Daily P&amp;L</h3>
+      <table class="datatable"><thead><tr><th>Date</th><th>Account</th><th>P&amp;L</th><th>Note</th></tr></thead>
+      <tbody>${pnlRows}</tbody></table>
+      <h3 style="margin-top:20px">Interviews</h3>
+      <table class="datatable"><thead><tr><th>Company</th><th>Role</th><th>Round</th><th>Status</th><th>Notes</th></tr></thead>
+      <tbody>${interviewRows}</tbody></table>`;
+  },
   ops(d){
     const s = d.stats;
     const u = d.usage || {calls:0,total_in:0,total_out:0,total_cost:0,by_day:[],by_provider:[]};
