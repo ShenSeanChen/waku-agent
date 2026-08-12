@@ -34,14 +34,15 @@ def make_tool(conn: sqlite3.Connection) -> Tool:
             (company, role, *OPEN_STATUSES),
         ).fetchone()
         if existing:
-            new_round = round if round is not None else existing["round"]
-            new_notes = notes if notes is not None else existing["notes"]
+            new_round = round if round else existing["round"]
+            new_notes = notes if notes else existing["notes"]
             conn.execute(
                 "UPDATE interview_entries SET round=?, date=?, status=?, notes=?, "
                 "updated_at=datetime('now') WHERE id=?",
                 (new_round, entry_date, status, new_notes, existing["id"]),
             )
             verb = "Updated"
+            final_round = new_round
         else:
             conn.execute(
                 "INSERT INTO interview_entries (company, role, round, date, status, notes) "
@@ -49,8 +50,9 @@ def make_tool(conn: sqlite3.Connection) -> Tool:
                 (company, role, round or "", entry_date, status, notes or ""),
             )
             verb = "Logged"
+            final_round = round or ""
         conn.commit()
-        return f"{verb} {company} — {role} ({round or 'no round given'}): {status} (state.db, interview_entries)"
+        return f"{verb} {company} — {role} ({final_round or 'no round given'}): {status} (state.db, interview_entries)"
 
     return Tool(
         name="log_interview",

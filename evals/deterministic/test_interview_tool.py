@@ -57,3 +57,15 @@ def test_log_interview_matches_case_insensitively_and_preserves_omitted_fields(t
     assert rows[0]["round"] == "二面"
     assert rows[0]["status"] == "待跟进"
     assert rows[0]["notes"] == "first round notes"  # preserved, not blanked, because omitted
+
+
+def test_log_interview_treats_empty_string_as_omitted(tmp_path):
+    conn = connect(tmp_path)
+    tool = make_tool(conn)
+    tool.fn(company="Acme", role="PM", round="一面", status="进行中", notes="asked about roadmap")
+    result = tool.fn(company="Acme", role="PM", round="", status="通过", notes="")
+
+    row = conn.execute("SELECT round, notes FROM interview_entries").fetchone()
+    assert row["round"] == "一面"  # NOT blanked, even though "" was explicitly passed
+    assert row["notes"] == "asked about roadmap"
+    assert "一面" in result  # the return string reports the round that's actually in the row, not "no round given"
