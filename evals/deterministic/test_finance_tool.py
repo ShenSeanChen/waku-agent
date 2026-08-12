@@ -53,3 +53,34 @@ def test_log_pnl_refuses_duplicate_same_day_same_account(tmp_path):
     ).fetchall()
     assert len(rows) == 1
     assert rows[0]["pnl_amount"] == 200  # original value untouched
+
+
+def test_log_pnl_overwrite_corrects_the_existing_entry(tmp_path):
+    from waku.db import connect
+    from waku.tools.finance import make_tool
+
+    conn = connect(tmp_path)
+    tool = make_tool(conn)
+    tool.fn(account="A股", pnl_amount=-10, date="2026-08-12")
+    result = tool.fn(account="A股", pnl_amount=-39, date="2026-08-12", overwrite=True)
+
+    assert "-39" in result
+    rows = conn.execute(
+        "SELECT pnl_amount FROM finance_entries WHERE account='A股' AND date='2026-08-12'"
+    ).fetchall()
+    assert len(rows) == 1  # corrected in place, not a second row
+    assert rows[0]["pnl_amount"] == -39
+
+
+def test_log_pnl_overwrite_with_no_existing_entry_just_logs_it(tmp_path):
+    from waku.db import connect
+    from waku.tools.finance import make_tool
+
+    conn = connect(tmp_path)
+    tool = make_tool(conn)
+    result = tool.fn(account="A股", pnl_amount=-39, date="2026-08-12", overwrite=True)
+
+    assert "logged" in result.lower()
+    rows = conn.execute("SELECT pnl_amount FROM finance_entries WHERE account='A股'").fetchall()
+    assert len(rows) == 1
+    assert rows[0]["pnl_amount"] == -39
