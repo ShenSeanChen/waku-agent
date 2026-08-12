@@ -22,6 +22,7 @@ for its own sake is not.
 - `waku/ops/` — tracing (JSONL + OTel), dashboard (localhost:7777), release_gate,
   `compare_history.py` (the Compare arena's own JSONL scoreboard — never state.db)
 - `evals/deterministic/` (0/1, pytest) vs `evals/judge/` (DeepEval, scored) — never mix
+- `examples/` — teaching material, not product (see the rule below); one folder per topic
 - Runtime state lives in `.waku/` (state.db, calendar.ics, outbox/, traces/) — gitignored
 
 ## Rules
@@ -58,6 +59,24 @@ for its own sake is not.
   a tool behind an extra → a gateway (one file, text in/out only) →
   **a new core tool, last resort**. Full version, with the "declined even when
   well-built" list, in `CONTRIBUTING.md`.
+- **`examples/` is teaching material, not product.** Video companions, minimal agents,
+  and other people's tools shown on their own terms all live here — one self-contained
+  folder or file per TOPIC, named for the topic (`memory-native/`), never for the video
+  or its date. Four rules keep it from rotting the core:
+  1. **Nothing under `waku/` may import from `examples/`.** One-way, always. This is
+     the load-bearing rule; the other three are hygiene.
+  2. **No new default dependencies.** Use stdlib, or an extra that already exists, or
+     state the `pip install` in the file's own header.
+  3. **`make gate` must never depend on an example.** A third-party SDK shipping a
+     breaking release is their problem, not red CI.
+  4. **Anything using someone else's SDK carries a dated header** naming the version it
+     was verified against. mem0/zep/langmem move fast, and a silently rotted example is
+     worse than no example.
+  Whether it imports waku is NOT the test. `tiny_memory_agent.py` imports plenty of it
+  (that's the point — the loop's three steps with nothing else in frame);
+  `memory-native/` imports none of it (also the point — mem0, Zep, LangMem and pgvector
+  the way you'd actually start with them, before any comparison is drawn). The test is
+  whether a stranger can run it in one command and learn exactly one thing.
 - **Scope**: scheduling is the flagship teaching task, but the project is growing toward a
   full assistant. New capabilities (providers, tools, gateways, integrations) are welcome
   when they're self-contained, tested, and keep the core legible. Reject only complexity
