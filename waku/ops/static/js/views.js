@@ -617,7 +617,6 @@ const VIEWS = {
   },
   finance(d){
     const entries = d.finance || [];
-    const interviews = d.interviews || [];
 
     // Per-currency totals — CNY and USD are never summed together.
     const totals = {};
@@ -649,32 +648,32 @@ const VIEWS = {
           <td>${esc(e.note||"")}</td></tr>`).join("")
       : `<tr><td colspan="4" class="meta">No entries yet — tell Waku how an account did today.</td></tr>`;
 
-    // Interviews grouped by status, in a fixed pipeline order; empty groups
-    // are skipped rather than rendered with a "no interviews" placeholder.
-    const STATUS_ORDER = ["进行中", "待跟进", "通过", "失败"];
-    const interviewGroups = STATUS_ORDER.map(status => {
-      const rows = interviews.filter(i => i.status === status);
-      if (!rows.length) return "";
-      const body = rows.map(i => `<tr>
-          <td>${esc(i.company)}</td><td>${esc(i.role)}</td><td>${esc(i.round||"")}</td>
-          <td>${esc(i.notes||"")}</td></tr>`).join("");
-      return `<h4 style="margin-top:14px">${esc(status)} (${rows.length})</h4>
-        <table class="datatable"><thead><tr><th>Company</th><th>Role</th><th>Round</th><th>Notes</th></tr></thead>
-        <tbody>${body}</tbody></table>`;
-    }).join("");
-    const interviewBody = interviews.length
-      ? interviewGroups
-      : `<div class="meta">No interviews logged yet.</div>`;
-
     return `<div class="tiles">${totalTiles || '<div class="meta">No P&amp;L logged yet.</div>'}</div>
       <h3 style="margin-top:20px">By account</h3>
       <table class="datatable"><thead><tr><th>Account</th><th>Total P&amp;L</th></tr></thead>
       <tbody>${accountRows}</tbody></table>
       <h3 style="margin-top:20px">Daily P&amp;L</h3>
       <table class="datatable"><thead><tr><th>Date</th><th>Account</th><th>P&amp;L</th><th>Note</th></tr></thead>
-      <tbody>${pnlRows}</tbody></table>
-      <h3 style="margin-top:20px">Interviews</h3>
-      ${interviewBody}`;
+      <tbody>${pnlRows}</tbody></table>`;
+  },
+  interviews(d){
+    const interviews = d.interviews || [];
+
+    // Grouped by status, in a fixed pipeline order; empty groups are
+    // skipped rather than rendered with a "no interviews" placeholder.
+    const STATUS_ORDER = ["进行中", "待跟进", "通过", "失败"];
+    const groups = STATUS_ORDER.map(status => {
+      const rows = interviews.filter(i => i.status === status);
+      if (!rows.length) return "";
+      const body = rows.map(i => `<tr>
+          <td>${esc(i.company)}</td><td>${esc(i.role)}</td><td>${esc(i.round||"")}</td>
+          <td>${esc(i.notes||"")}</td></tr>`).join("");
+      return `<h3 style="margin-top:20px">${esc(status)} (${rows.length})</h3>
+        <table class="datatable"><thead><tr><th>Company</th><th>Role</th><th>Round</th><th>Notes</th></tr></thead>
+        <tbody>${body}</tbody></table>`;
+    }).join("");
+
+    return interviews.length ? groups : `<div class="card empty">No interviews logged yet.</div>`;
   },
   ops(d){
     const s = d.stats;

@@ -17,7 +17,8 @@ const TITLES = {chat:"Chat & watch", ops:"LLM Ops",
                 compare:"Arena — race models and memory through the same loop",
                 settings:"Behaviour — how a turn runs",
                 database:"Database — everything Waku stores (state.db)",
-                finance:"Finance — daily P&L and interview log"};
+                finance:"Finance — daily P&L by account",
+                interviews:"Interviews — tracked by status"};
 function render(){
   if (!D) return;
   const [v, subRaw] = (location.hash||"#overview").slice(1).split("/");
