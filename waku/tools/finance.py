@@ -29,6 +29,16 @@ def make_tool(conn: sqlite3.Connection) -> Tool:
             return f"Error: unknown account '{account}'. Valid accounts: {valid}"
         currency = ACCOUNTS[account]
         entry_date = date or date_cls.today().isoformat()
+        existing = conn.execute(
+            "SELECT pnl_amount, currency FROM finance_entries WHERE account=? AND date=?",
+            (account, entry_date),
+        ).fetchone()
+        if existing:
+            sign = "+" if existing["pnl_amount"] >= 0 else ""
+            return (
+                f"Already logged {account} for {entry_date}: {sign}{existing['pnl_amount']} {existing['currency']}. "
+                f"Tell me if you want to correct that entry and I'll ask before overwriting it."
+            )
         conn.execute(
             "INSERT INTO finance_entries (date, account, currency, pnl_amount, note) VALUES (?,?,?,?,?)",
             (entry_date, account, currency, pnl_amount, note),

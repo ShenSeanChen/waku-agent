@@ -36,3 +36,20 @@ def test_log_pnl_rejects_unknown_account(tmp_path):
 
     assert "unknown account" in result.lower()
     assert conn.execute("SELECT COUNT(*) FROM finance_entries").fetchone()[0] == 0
+
+
+def test_log_pnl_refuses_duplicate_same_day_same_account(tmp_path):
+    from waku.db import connect
+    from waku.tools.finance import make_tool
+
+    conn = connect(tmp_path)
+    tool = make_tool(conn)
+    tool.fn(account="IBKR", pnl_amount=200, date="2026-08-12")
+    result = tool.fn(account="IBKR", pnl_amount=999, date="2026-08-12")
+
+    assert "already logged" in result.lower()
+    rows = conn.execute(
+        "SELECT pnl_amount FROM finance_entries WHERE account='IBKR' AND date='2026-08-12'"
+    ).fetchall()
+    assert len(rows) == 1
+    assert rows[0]["pnl_amount"] == 200  # original value untouched
