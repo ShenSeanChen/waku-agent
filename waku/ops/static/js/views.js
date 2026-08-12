@@ -629,7 +629,7 @@ const VIEWS = {
     const pnlRows = entries.length
       ? entries.map(e => `<tr>
           <td>${esc(e.date)}</td><td>${esc(e.account)}</td>
-          <td class="${e.pnl_amount>=0?"":"neg"}">${e.pnl_amount>=0?"+":""}${e.pnl_amount} ${esc(e.currency)}</td>
+          <td class="${e.pnl_amount>=0?"":"neg"}">${e.pnl_amount>=0?"+":""}${esc(e.pnl_amount)} ${esc(e.currency)}</td>
           <td>${esc(e.note||"")}</td></tr>`).join("")
       : `<tr><td colspan="4" class="meta">No entries yet — tell Waku how an account did today.</td></tr>`;
 
