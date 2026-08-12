@@ -9,3 +9,4 @@
 {"id": "exact-count-sessions", "input": "Block three 25-minute focus sessions tomorrow morning", "expect_tool": "create_event", "expect_min_tool_calls": 3}
 {"id": "remember-and-book", "input": "Remember that I'm vegetarian, then book dinner with Sam this Thursday at 7pm", "expect_tool": "create_event", "expect_in_args": {"title": "sam"}, "expect_min_tool_calls": 2}
 {"id": "read-before-write", "input": "Check my calendar for a free 30 minutes this afternoon and schedule a short walk", "expect_tool": "create_event", "expect_min_tool_calls": 2}
+{"id": "log-pnl-basic", "input": "Log today's IBKR profit: +200 dollars, tech rally", "expect_tool": "log_pnl", "expect_in_args": {"account": "IBKR", "pnl_amount": 200}}

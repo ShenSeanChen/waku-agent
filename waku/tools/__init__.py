@@ -7,7 +7,7 @@ from __future__ import annotations
 import sqlite3
 
 from waku.config import Settings
-from waku.tools import calendar, memory_admin, messages, notes, search
+from waku.tools import calendar, finance, memory_admin, messages, notes, search
 from waku.tools.registry import ToolRegistry
 
 
@@ -27,6 +27,7 @@ def build_registry(conn: sqlite3.Connection, settings: Settings, memory=None) ->
     # to guess which calendar the user meant.
     registry.register(calendar.make_list_tool(conn, settings.home))
     registry.register(notes.make_tool(conn))
+    registry.register(finance.make_tool(conn))
     registry.register(messages.make_tool(settings.home))
     # Web search — pairs with create_event for the multi-tool loop demo
     # ("find the World Cup games left and add them to my calendar").
