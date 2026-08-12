@@ -1,5 +1,14 @@
-"""log_interview — records/updates one interview process (company + role) as
-it moves through rounds, so one process stays one row instead of fragmenting.
+"""log_interview — records/updates one interview process at a company as it
+moves through rounds, so one process stays one row instead of fragmenting.
+
+Matching is by company alone (not company+role): role is treated as a
+correctable field of the process, not part of its identity. Regression:
+matching on company+role meant fixing a wrong/placeholder role (e.g. the
+model logging "未指定职位" before it knew the real title) silently created a
+second row instead of correcting the first — see
+test_log_interview_correcting_role_updates_same_row. Trade-off: two
+simultaneously open interviews for different roles at the same company are
+treated as one process (out of scope for v1, see the design spec).
 
 See docs/superpowers/specs/2026-08-12-finance-and-interview-log-design.md.
 """
@@ -29,17 +38,17 @@ def make_tool(conn: sqlite3.Connection) -> Tool:
         entry_date = date or date_cls.today().isoformat()
         placeholders = ",".join("?" * len(OPEN_STATUSES))
         existing = conn.execute(
-            f"SELECT id, round, notes FROM interview_entries WHERE lower(company)=lower(?) AND lower(role)=lower(?) "
+            f"SELECT id, round, notes FROM interview_entries WHERE lower(company)=lower(?) "
             f"AND status IN ({placeholders}) ORDER BY id DESC LIMIT 1",
-            (company, role, *OPEN_STATUSES),
+            (company, *OPEN_STATUSES),
         ).fetchone()
         if existing:
             new_round = round if round else existing["round"]
             new_notes = notes if notes else existing["notes"]
             conn.execute(
-                "UPDATE interview_entries SET round=?, date=?, status=?, notes=?, "
+                "UPDATE interview_entries SET role=?, round=?, date=?, status=?, notes=?, "
                 "updated_at=datetime('now') WHERE id=?",
-                (new_round, entry_date, status, new_notes, existing["id"]),
+                (role, new_round, entry_date, status, new_notes, existing["id"]),
             )
             verb = "Updated"
             final_round = new_round
@@ -57,11 +66,12 @@ def make_tool(conn: sqlite3.Connection) -> Tool:
     return Tool(
         name="log_interview",
         description=(
-            "Record or update an interview. If the same company+role already has an "
-            "open entry (进行中 or 待跟进), this UPDATES it in place with the new round/"
-            "status/notes instead of creating a duplicate — call it again for each new "
-            "round of the same process. Use when the user reports an interview happened, "
-            "a result came in, or gives a recap/notes to remember."
+            "Record or update an interview. If the same company already has an open "
+            "entry (进行中 or 待跟进), this UPDATES it in place with the new round/status/"
+            "role/notes instead of creating a duplicate — call it again for each new "
+            "round of the same process, or to correct a wrong/placeholder role. Use "
+            "when the user reports an interview happened, a result came in, or gives a "
+            "recap/notes to remember."
         ),
         input_schema={
             "type": "object",

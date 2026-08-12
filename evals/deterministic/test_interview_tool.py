@@ -69,3 +69,21 @@ def test_log_interview_treats_empty_string_as_omitted(tmp_path):
     assert row["round"] == "一面"  # NOT blanked, even though "" was explicitly passed
     assert row["notes"] == "asked about roadmap"
     assert "一面" in result  # the return string reports the round that's actually in the row, not "no round given"
+
+
+def test_log_interview_correcting_role_updates_same_row(tmp_path):
+    """Regression: matching used to require company AND role to match, so
+    calling log_interview with a corrected role (fixing a typo/placeholder)
+    silently created a second row instead of fixing the existing one — the
+    old wrong-role row stayed in place, unaffected. Matching on company alone
+    (still gated to open statuses) means a role correction lands on the same
+    interview process."""
+    conn = connect(tmp_path)
+    tool = make_tool(conn)
+    tool.fn(company="兴业证券", role="未指定职位", round="终面", status="进行中")
+    result = tool.fn(company="兴业证券", role="AI 应用", round="终面", status="进行中")
+
+    rows = conn.execute("SELECT company, role FROM interview_entries").fetchall()
+    assert len(rows) == 1  # corrected in place, not a second row
+    assert rows[0]["role"] == "AI 应用"
+    assert "AI 应用" in result
