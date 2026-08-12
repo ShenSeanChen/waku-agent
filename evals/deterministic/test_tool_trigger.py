@@ -122,7 +122,7 @@ def test_dataset_case(case, tmp_path):
         assert case["expect_tool"] in fired, f"expected {case['expect_tool']}, model called {fired}"
         args = next(c["args"] for c in result.tool_calls if c["tool"] == case["expect_tool"])
         for key, needle in case.get("expect_in_args", {}).items():
-            assert needle.lower() in str(args.get(key, "")).lower(), (
+            assert str(needle).lower() in str(args.get(key, "")).lower(), (
                 f"expected '{needle}' in args[{key}], got: {args.get(key)}"
             )
         # multi-tool cases (pokemon-team, worldcup-final): the loop must have
