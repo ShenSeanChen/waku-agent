@@ -39,7 +39,7 @@ USER = os.environ.get("MEM0_QUICKSTART_USER", "quickstart-mem0")
 # The same three sentences in all four quickstarts, so the files are
 # comparable. The third one CONTRADICTS the second -- that is the whole test.
 FACTS = [
-    "I met Yuki at the Lisbon AI meetup in March. She runs a robotics startup.",
+    "I met Alex at the Lisbon AI meetup in March. He runs a robotics startup.",
     "Our product launch is scheduled for May.",
     "Actually, the launch moved to June.",
 ]
@@ -66,31 +66,67 @@ def main() -> None:
     #    above. The wording will not match, and the count usually will not
     #    either -- mem0 merges, rewrites, and drops what it judges disposable.
     print("\n-- what it actually kept --------------------------------------")
-    for row in _rows(client.get_all(filters={"user_id": USER}, version="v2")):
-        print(f"  kept : {row.get('memory')}")
+    rows = _rows(client.get_all(filters={"user_id": USER}, version="v2"))
+    for row in rows:
+        print(f"  kept : {row.get('memory')}  [{_state(client, row)}]")
 
-    # 3. SEARCH, three ways. The paraphrase and the Chinese question are the
-    #    ones a keyword index (like waku's FTS5) struggles with.
+    # 3. SEARCH, three ways -- and watch the scores, not just the winner.
     print("\n-- asking ------------------------------------------------------")
     for label, question in QUESTIONS:
         hits = _rows(client.search(question, filters={"user_id": USER}, version="v2"))
-        top = hits[0].get("memory") if hits else "(nothing found)"
-        print(f"  {label} : {question}\n              -> {top}")
+        print(f"  {label} : {question}")
+        for i, hit in enumerate(hits[:2]):
+            arrow = "->" if i == 0 else "  "
+            print(f"           {arrow} {hit.get('score'):.4f}  [{_state(client, hit):10}]"
+                  f"  {hit.get('memory')}")
 
-    # 4. THE CONTRADICTION. Two facts went in about the launch, one replacing
-    #    the other. Did the old one survive? A row store usually keeps both and
-    #    lets ranking decide; watch whether "May" is still in there anywhere.
-    stale = [r for r in _rows(client.get_all(filters={"user_id": USER}, version="v2"))
-             if "may" in str(r.get("memory", "")).lower()]
+    # 4. THE CONTRADICTION -- and the trap.
+    #
+    #    mem0 DOES resolve this. The May row gets lifecycle_state="superseded"
+    #    and replaced_by=<the June row's id>. But get_all() returns NEITHER
+    #    field, so reading the list above tells you nothing is wrong. You only
+    #    see it by fetching a row on its own, which is what _state() does.
+    #
+    #    Worse: search() returns the superseded row anyway, and on a real run
+    #    it scored HIGHER than the live one (0.3338 vs 0.3307). Which answer
+    #    you get is scoring noise. Ask twice, get two answers, same language.
     print("\n-- the superseded fact ----------------------------------------")
-    print(f"  rows still mentioning May: {len(stale)}")
-    for row in stale:
-        print(f"    {row.get('memory')}")
+    for row in rows:
+        state = _state(client, row)
+        if state == "superseded":
+            print(f"  {row.get('memory')}")
+            print(f"      -> superseded, replaced by {_full(client, row).get('replaced_by')}")
+    print("  A plain search still returns it. If you do not read lifecycle_state,")
+    print("  a store that resolved the contradiction correctly will still hand")
+    print("  you the dead fact with a straight face.")
 
     # 5. WHERE TO LOOK.
     print("\n-- see it yourself --------------------------------------------")
     print(f"  https://app.mem0.ai -> Memories -> filter user = {USER}")
     print("  Compare 'said' against 'kept' there. The diff is the whole product.")
+
+
+_FULL: dict[str, dict] = {}
+
+
+def _full(client, row: dict) -> dict:
+    """Fetch a row on its own, because the list view is not the whole row.
+
+    get_all() and search() both omit `lifecycle_state` and `replaced_by`.
+    get(memory_id) returns them. Cached so a demo does not make one HTTP call
+    per row per print.
+    """
+    mid = str(row.get("id", ""))
+    if mid not in _FULL:
+        try:
+            _FULL[mid] = client.get(mid) or {}
+        except Exception:
+            _FULL[mid] = {}
+    return _FULL[mid]
+
+
+def _state(client, row: dict) -> str:
+    return str(_full(client, row).get("lifecycle_state") or "active")
 
 
 def _rows(payload) -> list[dict]:
