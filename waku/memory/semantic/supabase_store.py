@@ -159,3 +159,9 @@ class SupabaseFactStore:
             .execute()
         )
         return bool(result.data)
+
+    def settle(self, timeout: float = 120.0) -> bool:
+        """Already settled. The embedding is computed before the INSERT, so the
+        row is searchable as soon as Postgres commits it. Nothing is inferred
+        here and nothing happens later — that is the trade this backend makes."""
+        return True

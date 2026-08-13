@@ -247,6 +247,7 @@ class _FakeWaku:
     same usage.jsonl the real app does — so token accounting is exercised too."""
 
     built: ClassVar[list] = []   # every instance a run created, so a test can inspect it
+    settles: ClassVar[bool] = True   # what facts.settle() reports back
 
     def __init__(self, settings=None, **kw):
         from types import SimpleNamespace
@@ -260,7 +261,13 @@ class _FakeWaku:
         # probing, so a seeded fact can only be reached through the store. A
         # fake that cannot do that would let the real thing regress silently —
         # which is the whole reason the bypass survived until a live race.
-        self.memory = SimpleNamespace(conn=object(), facts=object(), episodes=object())
+        # A store that reports readiness, and records WHEN it was asked. The
+        # runner must ask after the last seed and before the first probe;
+        # anywhere else and it is timing the network instead of the memory.
+        self.settled_after: list[int] = []
+        facts = SimpleNamespace(settle=lambda timeout=120.0: (
+            self.settled_after.append(len(self.seen)) or _FakeWaku.settles))
+        self.memory = SimpleNamespace(conn=object(), facts=facts, episodes=object())
         self.cleared_after: list[int] = []
         self.session = SimpleNamespace(
             start_new=lambda sid: self.cleared_after.append(len(self.seen)))
@@ -503,3 +510,78 @@ def test_probes_designed_to_need_no_memory_are_not_called_leaks(monkeypatch, tmp
         "only the probe that asserts recalled content is a leak; the arithmetic "
         f"and refusal probes are designed to pass without memory — got {done['leaked']}"
     )
+
+
+def test_store_is_asked_to_settle_between_seeding_and_probing(tmp_path, monkeypatch):
+    """The runner must wait for the store to become searchable, and must do it
+    AFTER the last seed and BEFORE the first probe.
+
+    Both hosted backends are eventually consistent and both understate it:
+    mem0 offers no readiness signal at all (measured 14s from add() to
+    queryable), and Zep's per-add `processed` flag went green while the graph
+    derived from those episodes still held zero matching nodes. Probe in that
+    window and the store answers a question about a fact it is still filing —
+    which scores as MISS. The benchmark then reports amnesia and is measuring
+    the network.
+
+    Ordering is the whole assertion. Settling before the seeds finish waits for
+    nothing; settling after the probes is decoration.
+    """
+    import waku.app
+
+    fx = _arena_fixture(tmp_path)          # 2 seed lines, 2 probes
+    _FakeWaku.script = {"q1?": "alpha", "q2?": "new"}
+    _FakeWaku.gate = True
+    _FakeWaku.built = []
+    _FakeWaku.settles = True
+    monkeypatch.setattr(waku.app, "Waku", _FakeWaku)
+    _offline(monkeypatch)
+    arena.run_arena(["sqlite"], "t", lambda k, e: None, fixture=fx)
+
+    app = _FakeWaku.built[0]
+    assert app.settled_after == [2], (
+        "settle() must be called exactly once, after both seed lines and before "
+        f"the first probe — got {app.settled_after} (2 seeds, 2 probes)"
+    )
+
+
+def test_a_store_that_never_settles_says_so_instead_of_scoring_silently(tmp_path, monkeypatch):
+    """A timeout must reach the screen.
+
+    If settle() gives up, every MISS after it is suspect — the contestant may
+    know the answer perfectly well and simply not be queryable yet. Scoring
+    that as memory failure, with nothing in the output to say the store never
+    confirmed readiness, is the confident-silence bug this whole benchmark
+    keeps rediscovering. Cheaper to say "I could not confirm" than to publish
+    a number that looks like a verdict.
+    """
+    import waku.app
+
+    fx = _arena_fixture(tmp_path)
+    _FakeWaku.script = {"q1?": "alpha", "q2?": "new"}
+    _FakeWaku.gate = True
+    _FakeWaku.built = []
+    _FakeWaku.settles = False            # the store never confirms
+    monkeypatch.setattr(waku.app, "Waku", _FakeWaku)
+    _offline(monkeypatch)
+    events = []
+    arena.run_arena(["sqlite"], "t", lambda k, e: events.append((k, e)), fixture=fx)
+    _FakeWaku.settles = True             # do not leak the flag into other tests
+
+    warnings = [e for k, e in events if k == "warn"]
+    assert warnings, "a store that never confirmed readiness must emit a warning"
+    assert "readiness" in warnings[0]["message"], warnings[0]
+
+
+def test_local_stores_settle_instantly(tmp_path):
+    """sqlite writes the row and its FTS5 index in one transaction, so there is
+    nothing to wait for. This exists so nobody 'helpfully' adds a sleep to the
+    local path to match the hosted ones — the difference is the point, and it
+    is one of the few places where the simplest backend genuinely wins."""
+    from waku.db import connect
+    from waku.memory.semantic.store import SqliteFactStore
+
+    store = SqliteFactStore(connect(tmp_path))
+    store.add("alex", "runs a robotics startup")
+    assert store.settle() is True
+    assert store.search("robotics"), "settled means searchable, not merely written"

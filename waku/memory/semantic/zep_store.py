@@ -118,6 +118,39 @@ class ZepFactStore:
             time.sleep(_POLL_EVERY)
         return False
 
+    def settle(self, timeout: float = 120.0) -> bool:
+        """Wait until the GRAPH has stopped growing, not until the episodes say
+        they are done.
+
+        `_wait_processed` above already blocks per add(), and it is not enough.
+        A live run on a clean project had every episode reporting
+        processed=True while the launch facts had produced no nodes at all, so
+        asking "when is the launch?" returned an unrelated fact about a meetup.
+        `processed` describes the EPISODE; the nodes and edges derived from it
+        arrive afterwards, and nothing announces them.
+
+        A benchmark that seeds and immediately probes needs the second event,
+        so: every episode processed AND a node count that has held still.
+        """
+        started, last, stable = time.monotonic(), -1, 0
+        while time.monotonic() - started < timeout:
+            try:
+                found = self.client.graph.episode.get_by_user_id(
+                    user_id=self.user_id, lastn=50)
+                episodes = getattr(found, "episodes", None) or []
+                done = bool(episodes) and all(
+                    getattr(ep, "processed", False) for ep in episodes)
+                nodes = len(self.client.graph.node.get_by_user_id(
+                    user_id=self.user_id, limit=200) or [])
+            except Exception:  # noqa: S110 — transient; the deadline is the real bound
+                nodes, done = -1, False
+            stable = stable + 1 if done and nodes == last and nodes > 0 else 0
+            last = nodes
+            if stable >= 3:
+                return True
+            time.sleep(_POLL_EVERY)
+        return False
+
     def search(self, query: str, top_k: int = 4) -> list[str]:
         return [row["content"] for row in self._search_rows(query, top_k)]
 

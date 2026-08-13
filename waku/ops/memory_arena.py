@@ -401,6 +401,21 @@ def run_arena(backends: list[str], track: str, emit, fixture: dict | None = None
             consolidation.consolidate_if_due(app.memory.conn, app.client,
                                              app.settings.small_model, 1,
                                              app.memory.facts, app.memory.episodes)
+
+            # 3. WAIT FOR THE STORE TO BECOME SEARCHABLE. sqlite and LangMem
+            #    return instantly; the hosted two are eventually consistent and
+            #    both understate it. mem0 has no readiness signal and measured
+            #    14s to queryable; Zep's per-add `processed` wait was passing
+            #    while the graph still held zero matching nodes. Probing there
+            #    scores the network, and it scores it as amnesia — the store
+            #    answers a question about a fact it is still filing, so the
+            #    verdict is MISS and nothing on screen says why.
+            settled = app.memory.facts.settle()
+            if not settled:
+                emit("warn", {"contestant": backend,
+                              "message": "store did not confirm readiness before probing; "
+                                         "results for this contestant may understate it"})
+
             app.session.start_new("probes")
 
             # The ledger is cumulative, so each probe's cost is the DELTA. Storing
