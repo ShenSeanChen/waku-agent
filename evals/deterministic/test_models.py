@@ -24,6 +24,57 @@ def test_xai_grok_provider_uses_expected_key_endpoint_and_models(monkeypatch, tm
     assert settings.model == "grok-4"
 
 
+def test_opencode_provider_sends_client_identification_headers(monkeypatch, tmp_path):
+    """Regression: bare opencode.ai/zen requests (no identifying headers) land in
+    the anonymous per-IP fallback pool and die with FreeUsageLimitError 429 while
+    the TUI works. The opencode providers must identify as an opencode client via
+    a User-Agent containing 'opencode' plus x-opencode-* ids, and non-opencode
+    providers must NOT receive them."""
+    captured = []
+
+    class StubOpenAICompatClient:
+        def __init__(self, **kwargs):
+            captured.append(kwargs)
+
+    monkeypatch.setenv("OPENCODE_ZEN_API_KEY", "test-zen-key")
+    monkeypatch.setattr(models, "OpenAICompatClient", StubOpenAICompatClient)
+    settings = Settings(provider="opencode_zen", api_key="", base_url=None, model="",
+                        small_model="", home=tmp_path)
+
+    models.get_client(settings)
+    kwargs = captured[0]
+
+    assert "default_headers" in kwargs
+    headers = kwargs["default_headers"]
+    assert "opencode" in headers["User-Agent"]
+    assert headers["x-opencode-client"] == "tui"
+    assert headers["x-opencode-session"].startswith("ses_")
+    assert headers["x-opencode-request"].startswith("usr_")
+    assert headers["x-opencode-project"].startswith("prj_")
+
+    # one stable session id per process, fresh request/project ids per client
+    models.get_client(settings)
+    assert captured[1]["default_headers"]["x-opencode-session"] == headers["x-opencode-session"]
+    assert captured[1]["default_headers"]["x-opencode-request"] != headers["x-opencode-request"]
+
+
+def test_non_opencode_provider_gets_no_identification_headers(monkeypatch, tmp_path):
+    captured = {}
+
+    class StubOpenAICompatClient:
+        def __init__(self, *, api_key, base_url, timeout):
+            captured.update(api_key=api_key, base_url=base_url, timeout=timeout)
+
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "test-deepseek-key")
+    monkeypatch.setattr(models, "OpenAICompatClient", StubOpenAICompatClient)
+    settings = Settings(provider="deepseek", api_key="", base_url=None, model="",
+                        small_model="", home=tmp_path)
+
+    models.get_client(settings)
+
+    assert "default_headers" not in captured
+
+
 def test_openai_default_is_tool_capable(tmp_path):
     """Regression: bare 'gpt-5.6' isn't callable, and the gpt-5.6 REASONING
     variants (luna/sol/terra) can't use function tools on /v1/chat/completions
