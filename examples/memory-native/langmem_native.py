@@ -33,7 +33,7 @@ load_dotenv()  # your .env at the repo root, same keys waku uses
 # The same three sentences in all four quickstarts. The third CONTRADICTS the
 # second -- that is the whole test.
 FACTS = [
-    "I met Yuki at the Lisbon AI meetup in March. She runs a robotics startup.",
+    "I met Alex at the Lisbon AI meetup in March. He runs a robotics startup.",
     "Our product launch is scheduled for May.",
     "Actually, the launch moved to June.",
 ]

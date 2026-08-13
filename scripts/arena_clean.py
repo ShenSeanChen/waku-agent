@@ -74,9 +74,25 @@ def zep_users() -> tuple[object, list[str]]:
     return client, sorted(users)
 
 
-def classify(user: str, playground: bool, include_waku: bool) -> tuple[bool, str]:
+def hosted_stores() -> set[str]:
+    """Which hosted backends is the REAL assistant configured to write to?
+
+    Without this the `waku` partition looks precious and gets spared forever.
+    On an install that runs sqlite -- the default -- a `waku` partition on
+    mem0 or Zep cannot contain anything but leftovers from past races, and
+    protecting it just means the contamination never actually goes away.
+    """
+    return {os.getenv("WAKU_SEMANTIC_STORE", "sqlite").strip().strip("'\"").lower(),
+            os.getenv("WAKU_EPISODIC_STORE", "sqlite").strip().strip("'\"").lower()}
+
+
+def classify(user: str, playground: bool, include_waku: bool,
+             service_is_live: bool = True) -> tuple[bool, str]:
     """(delete?, why) -- said out loud so a dry run is readable."""
     if user == REAL:
+        if not service_is_live:
+            return (True, ("arena leftovers -- your assistant is configured for "
+                           "sqlite, so nothing here is its memory"))
         return (include_waku, "your real assistant's partition"
                 + ("" if include_waku else " -- kept, pass --include-waku to remove"))
     if user.startswith(ARENA_PREFIXES):
@@ -90,6 +106,8 @@ def classify(user: str, playground: bool, include_waku: bool) -> tuple[bool, str
 
 def main(apply: bool, include_waku: bool) -> None:
     plan: list[tuple[str, str, str, str]] = []  # (service, user, verdict, why)
+    live = hosted_stores()
+    print(f"assistant is configured for: {', '.join(sorted(live))}\n")
 
     for name, fetch in (("mem0", mem0_users), ("zep", zep_users)):
         try:
@@ -98,7 +116,7 @@ def main(apply: bool, include_waku: bool) -> None:
             print(f"{name}: skipped -- {type(ex).__name__}: {ex}")
             continue
         for user, playground in users:
-            do, why = classify(user, playground, include_waku)
+            do, why = classify(user, playground, include_waku, service_is_live=name in live)
             plan.append((name, user, "DELETE" if do else "keep", why))
         globals()[f"_{name}_client"] = client
 

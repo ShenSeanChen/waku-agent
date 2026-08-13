@@ -27,6 +27,7 @@ Nothing here imports waku.
 from __future__ import annotations
 
 import os
+import time
 
 from dotenv import load_dotenv
 from mem0 import MemoryClient
@@ -61,6 +62,7 @@ def main() -> None:
     for fact in FACTS:
         client.add(messages=[{"role": "user", "content": fact}], user_id=USER)
         print(f"  said : {fact}")
+    _settle(client, len(FACTS))
 
     # 2. READ BACK RAW. The money shot: compare this list against the list
     #    above. The wording will not match, and the count usually will not
@@ -104,6 +106,28 @@ def main() -> None:
     print("\n-- see it yourself --------------------------------------------")
     print(f"  https://app.mem0.ai -> Memories -> filter user = {USER}")
     print("  Compare 'said' against 'kept' there. The diff is the whole product.")
+
+
+def _settle(client, expected: int, max_wait: int = 60) -> None:
+    """Wait for extraction to finish before reading.
+
+    add() returns before the memory exists. Against an account that already
+    had rows this is invisible -- you read the OLD ones and everything looks
+    fine. Against a freshly wiped account it is brutal: every read comes back
+    empty and the store looks broken.
+
+    Zep documents this loudly. mem0 does not, which makes it the more
+    dangerous of the two, because the failure only shows up on a clean run --
+    exactly the run a benchmark does.
+    """
+    started = time.time()
+    while time.time() - started < max_wait:
+        found = len(_rows(client.get_all(filters={"user_id": USER}, version="v2")))
+        if found >= expected:
+            print(f"  (settled: {found} memories after {int(time.time() - started)}s)")
+            return
+        time.sleep(2)
+    print(f"  (gave up after {max_wait}s -- results below may be incomplete)")
 
 
 _FULL: dict[str, dict] = {}
