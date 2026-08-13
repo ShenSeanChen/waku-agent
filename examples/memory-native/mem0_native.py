@@ -62,7 +62,7 @@ def main() -> None:
     for fact in FACTS:
         client.add(messages=[{"role": "user", "content": fact}], user_id=USER)
         print(f"  said : {fact}")
-    _settle(client, len(FACTS))
+    _settle(client)
 
     # 2. READ BACK RAW. The money shot: compare this list against the list
     #    above. The wording will not match, and the count usually will not
@@ -108,23 +108,35 @@ def main() -> None:
     print("  Compare 'said' against 'kept' there. The diff is the whole product.")
 
 
-def _settle(client, expected: int, max_wait: int = 60) -> None:
-    """Wait for extraction to finish before reading.
+def _settle(client, quiet_for: int = 3, max_wait: int = 120) -> None:
+    """Wait for extraction to go QUIET, not for a count.
 
     add() returns before the memory exists. Against an account that already
     had rows this is invisible -- you read the OLD ones and everything looks
     fine. Against a freshly wiped account it is brutal: every read comes back
-    empty and the store looks broken.
+    empty and the store looks broken. Zep documents this loudly; mem0 does
+    not, and has no processed flag, which makes it the more dangerous of the
+    two -- the failure only appears on a clean run, which is exactly the run
+    a benchmark starts from.
 
-    Zep documents this loudly. mem0 does not, which makes it the more
-    dangerous of the two, because the failure only shows up on a clean run --
-    exactly the run a benchmark does.
+    The obvious fix is to wait for len(FACTS) rows. That is wrong, and it
+    cost a whole run to learn why: an inferring store decides for itself how
+    many memories your sentences become. Three sentences here became four,
+    and waiting for three returned the instant BEFORE "moved to June" landed
+    -- so the read showed May as active with no June anywhere, while a search
+    seconds later happily returned June. A benchmark that stopped there would
+    have published "mem0 lost the correction".
+
+    You cannot predict the count. So wait for the count to stop CHANGING.
     """
-    started = time.time()
+    started, last, stable = time.time(), -1, 0
     while time.time() - started < max_wait:
         found = len(_rows(client.get_all(filters={"user_id": USER}, version="v2")))
-        if found >= expected:
-            print(f"  (settled: {found} memories after {int(time.time() - started)}s)")
+        stable = stable + 1 if found == last and found > 0 else 0
+        last = found
+        if stable >= quiet_for:
+            print(f"  (settled: {found} memories, stable for {quiet_for} checks, "
+                  f"{int(time.time() - started)}s)")
             return
         time.sleep(2)
     print(f"  (gave up after {max_wait}s -- results below may be incomplete)")

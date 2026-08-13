@@ -117,21 +117,39 @@ def _wait_until_processed(client) -> None:
     Without this the next read is a coin flip, and a fast machine loses it
     more often than a slow one.
 
-    The first version of this waited on the uuid that graph.add() returned,
-    which never matched anything episode.get_by_user_id() came back with, so
-    it burned the full timeout on every call and then read the graph early.
-    The result looked exactly like Zep having forgotten the third sentence --
-    the precise failure this file's docstring warns about, reproduced by the
-    file itself. Waiting on "are all recent episodes processed" needs no id
-    and cannot silently miss.
+    Two wrong versions preceded this one, and both produced the same lie.
+
+    The first waited on the uuid that graph.add() returned, which never
+    matches anything episode.get_by_user_id() comes back with, so it burned
+    the full timeout every call and then read the graph early.
+
+    The second waited for every episode to report processed=True. That looked
+    obviously correct and is still not enough: on a clean project the episodes
+    all said processed while the launch facts had produced NO nodes at all, so
+    the graph answered "when is the launch?" with the Lisbon meetup and a
+    benchmark would have scored Zep as having forgotten a fact it was
+    mid-way through filing. `processed` describes the EPISODE, not the graph
+    derived from it.
+
+    So: processed on every episode, AND a node count that has stopped moving.
+    mem0 needs the same treatment for the same reason and offers no flag at
+    all. The lesson generalises past both of them -- on any store that infers,
+    "ingested" and "queryable" are different events, and only one of them is
+    reported to you.
     """
-    started = time.time()
+    started, last, stable = time.time(), -1, 0
     while time.time() - started < MAX_WAIT_SECONDS:
         try:
             found = client.graph.episode.get_by_user_id(user_id=USER, lastn=20)
             episodes = getattr(found, "episodes", found) or []
-            if episodes and all(getattr(e, "processed", False) for e in episodes):
-                print(f"         (processed after {int(time.time() - started)}s)")
+            done = bool(episodes) and all(getattr(e, "processed", False) for e in episodes)
+            # processed=True is necessary and NOT sufficient -- see docstring.
+            nodes = len(client.graph.node.get_by_user_id(user_id=USER, limit=100) or [])
+            stable = stable + 1 if done and nodes == last and nodes > 0 else 0
+            last = nodes
+            if stable >= 3:
+                print(f"         (processed, {nodes} nodes, settled after "
+                      f"{int(time.time() - started)}s)")
                 return
         except Exception:
             pass

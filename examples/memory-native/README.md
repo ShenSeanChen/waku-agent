@@ -110,23 +110,67 @@ Worth noting: a plain `graph.search` still returned the May fact for "When is
 the product launch?". The invalidity lives on the edge, so you have to read the
 interval — retrieval alone will hand you a superseded fact with a straight face.
 
-### Two open questions, stated as open
+### Solved: the "foreign entities" were never a leak
 
-- **A fresh Zep `user_id` does not appear to give you a fresh graph.** Two
-  brand-new users, told only the three sentences above, both came back with
-  nodes like `brand deal`, `contract`, `rough cut`, `CTR` and `retention rate`
-  — entities from an entirely different dataset on the same project. Whether
-  that is cross-user entity resolution, a project-level graph, or a quirk of
-  how `node.get_by_user_id` scopes its listing, we do not know yet. It matters,
-  because it means partitioning the Arena by `ZEP_USER_ID` would not actually
-  isolate a run.
-- **A third user, given one unrelated sentence, reported zero episodes** even
-  after several minutes, while its `graph.add()` returned without error. Not
-  explained yet either.
+Earlier runs kept producing entities nobody had mentioned — `CTR`, `brand
+deal`, `contract`, `rough cut`, `retention rate` — in brand-new Zep users told
+nothing but the three sentences above. The first guess was cross-user bleed.
+Then the vendor's onboarding sandbox looked like the source. Both were wrong.
 
-Neither is a criticism of Zep — both could as easily be our misreading of the
-API. They are written down here because an unexplained result you keep quiet
-about is how a benchmark ends up lying.
+We deleted **every user in the project** and verified zero remained. A fresh
+user, on a verifiably empty project, came back with:
+
+```
+node : CTR
+node : brand deal -- A brand deal has a priority associated with May.
+node : retention rate -- Retention rate is the percentage of viewers watching until...
+node : rough cut -- A rough cut is an unpolished initial video edit.
+```
+
+Nothing was left to leak from. **It is the project-wide ontology.** Zep's
+onboarding wizard sets one — visible on the project page under *Project Wide
+Customization*, and ticked off as "Set your ontology" in Getting Started — and
+every user in that project inherits those entity definitions forever.
+
+This is not a bug and not a leak. It is a configured schema doing exactly what
+it says. But three consequences matter if you are benchmarking:
+
+- **Deleting users does not clean a Zep project.** The ontology outlives them.
+- A clean comparison needs the ontology reset, or a **fresh project**.
+- The ontology **shapes what the graph is willing to learn.** In the run above,
+  `Our product launch is scheduled for May` and `Actually, the launch moved to
+  June` produced a `May` node and no `June` node at all — and every question
+  about the launch still answered "May", with the superseded edge never marked.
+  Whether that is the ontology constraining extraction or ingestion still
+  settling, we have not yet separated.
+
+The general lesson is the one worth filming: **a schema you agreed to once, in
+a setup wizard, quietly decides what your agent is capable of remembering.**
+
+### One open question, stated as open
+
+- **A user given one unrelated sentence reported zero episodes** several
+  minutes after a `graph.add()` that returned without error. Not explained.
+
+### "Ingested" and "queryable" are different events
+
+Both hosted stores made us learn this the hard way, and neither reports the
+event you actually care about.
+
+- **Zep** exposes `processed` on an episode. It is necessary and not
+  sufficient: on a clean project every episode reported processed while the
+  launch facts had produced no nodes at all, so the graph answered *"when is
+  the launch?"* with the Lisbon meetup. A benchmark stopping there publishes
+  "Zep forgot a fact" about a fact it was mid-way through filing.
+- **mem0** has no flag at all, and `add()` returns early. The obvious fix —
+  wait for `len(FACTS)` rows — is also wrong, because an inferring store
+  decides for itself how many memories your sentences become. Three sentences
+  became four here, and waiting for three returned the instant *before* "moved
+  to June" landed.
+
+Both scripts now wait for the count to **stop changing** rather than for a
+signal or a target. If you benchmark any store that infers, do the same, or
+you are timing your own race conditions and calling it recall.
 
 ## Adding another one
 
