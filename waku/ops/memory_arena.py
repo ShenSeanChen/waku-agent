@@ -550,9 +550,13 @@ def store_contents(limit: int = 8, only: str = "") -> list[dict]:
         # only ever received what the arena wrote to it. Side by side without
         # saying so, "53 vs 17" reads as "waku remembers more", when it only
         # means waku has been used and the others were connected yesterday.
+        # Three kinds, not two. "connected account" is a lie about the control
+        # — it has no account, no service and no rows, and printing that line
+        # above a note that says "told nothing by design" makes the card argue
+        # with itself.
+        kind = "live" if key == "sqlite" else "control" if key == CONTROL else "connected"
         row = {"store": key, "count": 0, "facts": [], "error": "", "span": "",
-               "kind": "live" if key == "sqlite" else "connected",
-               "note": _store_note(key)}
+               "kind": kind, "note": _store_note(key)}
         if row["note"]:
             out.append(row)   # nothing meaningful to read — say why, don't report 0
             continue

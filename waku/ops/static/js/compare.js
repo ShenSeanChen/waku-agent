@@ -603,7 +603,10 @@ function maResultsHtml(){
     if (!maRun.running) return `<td class="meta">—</td>`;
     const seeded = (maRun.seeded || {})[n];
     if (seeded === undefined) return `<td class="meta">queued</td>`;
-    if (seeded < seedTotal) return `<td class="meta">seeding ${seeded}/${seedTotal}<span class="caret"></span></td>`;
+    // "seeding 4/8" reads like a progress bar for something the viewer has not
+    // been shown. "told 4 of 8" names the actual event: this store has now been
+    // told four of the eight facts it is about to be questioned on.
+    if (seeded < seedTotal) return `<td class="meta">told ${seeded} of ${seedTotal}<span class="caret"></span></td>`;
     return `<td class="meta">asking<span class="caret"></span></td>`;
   };
   const board = maRun.board ? `<div class="card" style="padding:4px 8px"><div class="tablescroll"><table>
@@ -695,7 +698,16 @@ function memoryArenaView(){
            Every store runs in its own throwaway copy — your real memory is never touched.`}</span>
     </div>
     <div class="cmp-picks">${chips}</div></div>`;
-  return race + maResultsHtml() + maStoresHtml() + maAsksHtml(track);
+  // ORDER MATTERS, and it used to be wrong: race, results, stores, asks. The
+  // questions were dead last, so you could start a race — and film one —
+  // without ever having seen what the stores get told or asked. A benchmark
+  // whose questions arrive after its verdict is asking you to take the verdict
+  // on trust, which is the one thing this page exists not to do.
+  //
+  // Pick, then see what they'll be told and asked, then the verdict, then the
+  // contents. Store cards go last on purpose: they are the slowest to read and
+  // the only part that needs a button press.
+  return race + maAsksHtml(track) + maResultsHtml() + maStoresHtml();
 }
 
 // --- what each store is holding, right now ----------------------------------
@@ -726,6 +738,8 @@ function maStoresHtml(){
                   : `<span class="meta">${s.count} fact${s.count===1?"":"s"}</span>`}</div>
       <div class="ma-prov">${s.kind === "live"
         ? `your live agent &middot; <code>.waku/state.db</code>`
+        : s.kind === "control"
+        ? `not a store &middot; the integrity check`
         : `connected account &middot; only what waku wrote`}${
         s.span ? ` &middot; ${esc(s.span)}` : ""}</div>
       ${s.error ? `<div class="ma-ans">${esc(s.error)}</div>`
