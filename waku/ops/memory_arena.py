@@ -589,6 +589,17 @@ def _store_note(key: str) -> str:
     false statement about an empty store rather than a true one about an
     unreadable one, and the difference is the whole point of this page.
     """
+    if key == CONTROL:
+        # The control is a contestant, not a backend. It is told nothing and
+        # asked everything, so there is no store behind it to read — and
+        # _conn_for returns None for anything that is not sqlite, which the
+        # sqlite path then calls .execute() on. That surfaced on the page as
+        # "AttributeError: 'NoneType' object has no attribute 'execute'", which
+        # reads as "your control contestant is broken" when the truth is that
+        # holding nothing is the entire job.
+        return ("told nothing, by design — there is no store behind this one. "
+                "It exists so a probe it still passes can be flagged as a "
+                "question that never needed memory.")
     if key == "langmem" and not os.getenv("WAKU_LANGMEM_POSTGRES", "").strip():
         return ("in-memory store — contents live inside the process that wrote them "
                 "and cannot be read back here. Set WAKU_LANGMEM_POSTGRES to persist.")

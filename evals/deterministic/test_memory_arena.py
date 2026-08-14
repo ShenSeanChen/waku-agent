@@ -585,3 +585,26 @@ def test_local_stores_settle_instantly(tmp_path):
     store.add("alex", "runs a robotics startup")
     assert store.settle() is True
     assert store.search("robotics"), "settled means searchable, not merely written"
+
+
+def test_the_control_reports_why_it_is_empty_instead_of_crashing():
+    """The control is a contestant, not a backend, and the read-stores page has
+    to say so.
+
+    It has no store behind it — that is the entire job. But _available_backends
+    lists it (correct for a race) and store_contents iterates the same list, so
+    it built a Settings(semantic_store="control"), got None from _conn_for, and
+    the sqlite path called .execute() on it. The card rendered
+    "AttributeError: 'NoneType' object has no attribute 'execute'", which reads
+    as a broken control contestant when holding nothing is the point.
+
+    A note, not an error, and not a bare "0 facts" either — this page exists
+    precisely because those three mean different things.
+    """
+    rows = arena.store_contents()
+    control = [r for r in rows if r["store"] == arena.CONTROL]
+    assert control, "the control must still appear — its emptiness is the lesson"
+    assert not control[0]["error"], (
+        f"the control must not report an error: {control[0]['error']}"
+    )
+    assert "by design" in control[0]["note"], control[0]["note"]
