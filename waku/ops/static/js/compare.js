@@ -494,7 +494,9 @@ function probeRow(p){
 // --- running it -------------------------------------------------------------
 let maRun = {running:false, rows:[], board:null, log:"", error:null};
 
-async function runMemoryArena(){
+async function seedMemoryArena(){ return runMemoryArena(true); }
+
+async function runMemoryArena(seedOnly){
   if (maRun.running) return;
   const fx = memoryArenaFixture;
   const track = (maTrack && fx.tracks[maTrack]) ? maTrack : Object.keys(fx.tracks)[0];
@@ -503,15 +505,15 @@ async function runMemoryArena(){
   // landed renders an empty header for that whole first minute, which reads as
   // broken rather than busy. Columns and rows are both known before we start;
   // only the cells are pending.
-  maRun = {running:true, rows:[], board:null, log:"seeding…", error:null,
+  maRun = {running:true, rows:[], board:null, log:"telling…", error:null,
            backends: maPicks(), probes: fx.tracks[track].probes.map(p=>p.id),
-           seeded: {}};
+           seeded: {}, seedOnly: !!seedOnly};
   editing = false; render();
   try {
     const res = await fetch("/api/memory-arena/stream", {
       method:"POST", headers:{"Content-Type":"application/json"},
       body: JSON.stringify({backends: maPicks(), track, probes: maFile || "",
-                            model: maModelSpec()})});
+                            model: maModelSpec(), seed_only: !!seedOnly})});
     const reader = res.body.getReader(), dec = new TextDecoder();
     let buf = "";
     for(;;){
@@ -522,8 +524,12 @@ async function runMemoryArena(){
       for (const c of chunks){
         if (!c.startsWith("data: ")) continue;
         const ev = JSON.parse(c.slice(6));
-        if (ev.kind === "start"){ maRun.log = `${ev.contestant}: seeding…`;
+        if (ev.kind === "start"){ maRun.log = `${ev.contestant}: telling…`;
                                   maRun.seeded[ev.contestant] = 0; }
+        // A store told earlier is not re-told; the run reports it as reused so
+        // "instant" reads as cached rather than as skipped.
+        if (ev.kind === "seed-done"){ maRun.log = `${ev.contestant}: ${
+                                        ev.reused ? "already told" : "told"} ${ev.facts}`; }
         if (ev.kind === "seeded"){ maRun.log = `${ev.contestant}: ${ev.line}`;
                                    maRun.seeded[ev.contestant] = (maRun.seeded[ev.contestant]||0) + 1; }
         if (ev.kind === "probe"){ maRun.rows.push(ev); maRun.log = `${ev.contestant}: ${ev.probe}`; }
@@ -691,11 +697,16 @@ function memoryArenaView(){
   const race = `<div class="card">
     ${picker}
     <div class="ma-race">
+      <button onclick="seedMemoryArena()" ${maRun.running||!picks.length?"disabled":""}>
+        ${maRun.running && maRun.seedOnly ? "Telling…"
+          : `Tell ${picks.length} store${picks.length===1?"":"s"}`}</button>
       <button class="save" onclick="runMemoryArena()" ${maRun.running||!picks.length?"disabled":""}>
-        ${maRun.running ? "Racing…" : `Race ${picks.length} store${picks.length===1?"":"s"}`}</button>
+        ${maRun.running && !maRun.seedOnly ? "Asking…"
+          : `Ask ${picks.length} store${picks.length===1?"":"s"}`}</button>
       <span class="meta">${maRun.running ? esc(maRun.log)
-        : `Tells each store the same facts, asks the same questions, scores the answers.
-           Every store runs in its own throwaway copy — your real memory is never touched.`}</span>
+        : `Telling is half a race and never changes, so it is its own button — do it
+           once and ask as many times as you like. Ask tells anything not yet told.
+           Every store runs in its own copy; your real memory is never touched.`}</span>
     </div>
     <div class="cmp-picks">${chips}</div></div>`;
   // ORDER MATTERS, and it used to be wrong: race, results, stores, asks. The

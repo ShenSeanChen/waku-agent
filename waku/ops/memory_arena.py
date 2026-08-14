@@ -311,8 +311,49 @@ def render(rows: list[dict]) -> str:
 # through the thing that actually calls it — the gate decides whether to search
 # at all, and that decision is half of what separates these systems.
 
+def arena_home(backend: str, track: str, seed: list[str], model: str) -> Path:
+    """A home NAMED for what it holds, so seeding once can serve many races.
+
+    This replaced tempfile.mkdtemp, which was wrong twice over.
+
+    It leaked: nothing ever removed the directories, and 656 of them had piled
+    up by the time anyone counted. And it made seeding unrepeatable — a fresh
+    random path every run meant every race re-seeded from empty, which is 53%
+    of a race spent re-telling a store facts it was told a minute ago.
+
+    The name is a hash of everything the seeded state depends on: the track,
+    the model, and the seed lines themselves. That is the staleness guard, for
+    free and by construction. Change the probe set, the track or the model and
+    you address a different directory — so a race can never quietly probe a
+    store that was seeded for a different question.
+
+    Lives under `.waku-arena/`, which `.gitignore` already covers via `.waku-*/`
+    — the glob that exists because a second agent home's SOUL.md and usage
+    ledger are the files you least want pushed.
+    """
+    import hashlib
+
+    from waku.config import load_settings
+
+    key = hashlib.sha256("\n".join([track, model, *seed]).encode()).hexdigest()[:12]
+    home = load_settings().home.parent / ".waku-arena" / f"{backend}-{key}"
+    home.mkdir(parents=True, exist_ok=True)
+    return home
+
+
+def _is_seeded(home: Path) -> bool:
+    """Written only after seeding AND settle() both finished.
+
+    The marker goes last on purpose. A home that was half-filled when the
+    process died must look unseeded, because the alternative is racing against
+    a store holding four of eight facts and reporting the gaps as memory
+    failure.
+    """
+    return (home / ".seeded").exists()
+
+
 def run_arena(backends: list[str], track: str, emit, fixture: dict | None = None,
-              model: str = "") -> None:
+              model: str = "", seed_only: bool = False) -> None:
     """Seed the same conversation into each backend, ask the same probes, score.
 
     One agent, one model, one loop. The ONLY variable is `WAKU_SEMANTIC_STORE`.
@@ -331,9 +372,7 @@ def run_arena(backends: list[str], track: str, emit, fixture: dict | None = None
     stored, that is a finding about the harness, and it is the same harness for
     every contestant.
     """
-    import tempfile
     import time
-    from pathlib import Path
 
     from waku.app import Waku
     from waku.config import Settings
@@ -367,13 +406,23 @@ def run_arena(backends: list[str], track: str, emit, fixture: dict | None = None
         # questions require the thing under test is decoration.
         seeding = [] if backend == CONTROL else spec["seed"]
         store = "sqlite" if backend == CONTROL else backend
-        home = Path(tempfile.mkdtemp(prefix=f"memarena-{backend}-"))
+        home = arena_home(backend, track, seeding, model)
+        already = _is_seeded(home)
         try:
             opts = {"provider": prov, "model": mod} if prov and mod else {}
             app = Waku(settings=Settings(home=home, semantic_store=store,
                                          apple_calendar=False, google_calendar=False,
                                          apple_tools=False, graph_workflows=False, **opts))
-            for line in seeding:
+            # Seeding is 53% of a race and perfectly deterministic, so a home
+            # that already holds this exact seed is not re-told. Racing is now
+            # the cheap half: seed once, ask many times.
+            if already:
+                emit("seeded", {"contestant": backend,
+                                "line": f"already told {len(seeding)} — reusing",
+                                "cached": True})
+                for _ in seeding[1:]:
+                    emit("seeded", {"contestant": backend, "line": "", "cached": True})
+            for line in [] if already else seeding:
                 app.respond(line, source="memory-arena")
                 emit("seeded", {"contestant": backend, "line": line})
 
@@ -415,6 +464,19 @@ def run_arena(backends: list[str], track: str, emit, fixture: dict | None = None
                 emit("warn", {"contestant": backend,
                               "message": "store did not confirm readiness before probing; "
                                          "results for this contestant may understate it"})
+
+            # The marker goes here and nowhere earlier: after the seed lines,
+            # after the consolidation flush, after the store confirms it is
+            # searchable. A home marked ready before settle() would be reused
+            # by the next race and probed while still filing.
+            if settled and not already:
+                (home / ".seeded").write_text(f"{track}\n{model}\n{len(seeding)} lines\n",
+                                              encoding="utf-8")
+
+            if seed_only:
+                emit("seed-done", {"contestant": backend, "home": str(home),
+                                   "facts": len(seeding), "reused": already})
+                continue
 
             app.session.start_new("probes")
 

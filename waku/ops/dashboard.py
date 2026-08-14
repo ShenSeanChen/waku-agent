@@ -1054,7 +1054,8 @@ class Handler(BaseHTTPRequestHandler):
                 track = hit["track"] if hit else (payload.get("track") or "example")
                 memory_arena.run_arena(payload.get("backends") or ["sqlite"],
                                        track, emit_mem, fixture=fixture,
-                                       model=(payload.get("model") or "").strip())
+                                       model=(payload.get("model") or "").strip(),
+                                       seed_only=bool(payload.get("seed_only")))
             except Exception as exc:
                 emit_mem("done", {"error": f"{type(exc).__name__}: {exc}"})
             return

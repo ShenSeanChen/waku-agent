@@ -300,10 +300,22 @@ def _offline(monkeypatch, declined=None):
     """No network. The consolidation flush and the referee are both real calls
     in run_arena now; `declined=None` is the adjudicator's own "judge
     unreachable" answer, which must leave the heuristic verdict untouched."""
+    import tempfile
+    from pathlib import Path
+
     from waku.memory import consolidation
 
     monkeypatch.setattr(consolidation, "consolidate_if_due", lambda *a, **k: 0)
     monkeypatch.setattr(arena, "adjudicate_refusal", lambda *a, **k: declined)
+    # Arena homes are now NAMED for their seed, so a real run reuses one and
+    # skips re-telling. That is the point of them — and it would make these
+    # tests depend on whether an earlier run left a `.seeded` marker behind,
+    # which is a suite that passes only on a machine that has never raced.
+    # A fresh directory per call restores isolation; the reuse behaviour gets
+    # its own test below, where the home is pinned deliberately.
+    monkeypatch.setattr(arena, "arena_home",
+                        lambda backend, track, seed, model:
+                        Path(tempfile.mkdtemp(prefix=f"arena-test-{backend}-")))
 
 
 def _run(monkeypatch, tmp_path, script, gate=False, backends=("sqlite",)):
@@ -608,3 +620,62 @@ def test_the_control_reports_why_it_is_empty_instead_of_crashing():
         f"the control must not report an error: {control[0]['error']}"
     )
     assert "by design" in control[0]["note"], control[0]["note"]
+
+
+def test_a_store_already_told_is_not_told_again(tmp_path, monkeypatch):
+    """Telling is 53% of a race and perfectly deterministic. Doing it twice is
+    the single biggest waste in the arena, and on camera it is the difference
+    between a 40-second take and a 90-second one.
+
+    Homes are now NAMED for what they hold — a hash of the track, the model and
+    the seed lines — so the second run addresses the same directory and finds a
+    `.seeded` marker. That naming is also the staleness guard, for free: change
+    the probe set, the track or the model and you address a DIFFERENT directory,
+    so a race can never quietly probe a store seeded for another question.
+    """
+    import waku.app
+
+    fx = _arena_fixture(tmp_path)          # 2 seed lines, 2 probes
+    home = tmp_path / "pinned"
+    _FakeWaku.script = {"q1?": "alpha", "q2?": "new"}
+    _FakeWaku.gate = True
+    _FakeWaku.settles = True
+    monkeypatch.setattr(waku.app, "Waku", _FakeWaku)
+    _offline(monkeypatch)
+    monkeypatch.setattr(arena, "arena_home", lambda *a, **k: home)
+
+    _FakeWaku.built = []
+    arena.run_arena(["sqlite"], "t", lambda k, e: None, fixture=fx)
+    first = list(_FakeWaku.built[0].seen)
+    assert first[:2] == ["fact one", "fact two"], f"first run must seed: {first}"
+    assert (home / ".seeded").exists(), "a settled home must record that it is ready"
+
+    _FakeWaku.built = []
+    arena.run_arena(["sqlite"], "t", lambda k, e: None, fixture=fx)
+    second = list(_FakeWaku.built[0].seen)
+    assert "fact one" not in second, f"already told — must not re-tell: {second}"
+    assert "q1?" in second, "it must still ask, it just should not re-tell"
+
+
+def test_a_home_is_only_marked_ready_once_the_store_confirms_it_is_searchable(
+        tmp_path, monkeypatch):
+    """The marker goes last, after settle(). A home marked ready while the store
+    was still filing would be reused by the NEXT race and probed mid-ingest —
+    turning one race condition into a permanent, cached one."""
+    import waku.app
+
+    fx = _arena_fixture(tmp_path)
+    home = tmp_path / "never-settles"
+    _FakeWaku.script = {"q1?": "alpha", "q2?": "new"}
+    _FakeWaku.gate = True
+    _FakeWaku.built = []
+    _FakeWaku.settles = False            # the store never confirms
+    monkeypatch.setattr(waku.app, "Waku", _FakeWaku)
+    _offline(monkeypatch)
+    monkeypatch.setattr(arena, "arena_home", lambda *a, **k: home)
+    arena.run_arena(["sqlite"], "t", lambda k, e: None, fixture=fx)
+    _FakeWaku.settles = True
+
+    assert not (home / ".seeded").exists(), (
+        "a store that never confirmed readiness must not be cached as ready"
+    )
