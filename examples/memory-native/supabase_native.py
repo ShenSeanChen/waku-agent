@@ -1,5 +1,12 @@
 """Supabase pgvector on its own terms: roll your own, and see what you get.
 
+    ON THE CHART (26.08.15 Memory System Anatomy)
+    ─────────────────────────────────────────────
+    THE STORE · Q2 RETRIEVAL (vector)  —  and NO MANAGER AT ALL
+    This is the baseline that makes the manager visible by its absence: real
+    embeddings, good retrieval, and nothing that ever decides a fact died.
+
+
     pip install supabase openai   # or, from the repo root: uv pip install -e '.[arena]'
     export SUPABASE_URL=... SUPABASE_KEY=... OPENAI_API_KEY=...
     python examples/memory-native/supabase_native.py

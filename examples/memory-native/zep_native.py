@@ -1,4 +1,11 @@
-"""Zep on its own terms: not rows, a temporal knowledge graph.
+"""Zep on its own terms: a temporal knowledge graph.
+
+    ON THE CHART (26.08.15 Memory System Anatomy)
+    ─────────────────────────────────────────────
+    THE STORE · Q1 SHAPE (graph)  +  THE MANAGER · Job 2 RETIRE
+    The only backend here that answers Q1 with something other than rows or
+    files — and the only one that retires a fact by stamping a time on it.
+
 
     pip install zep-cloud        # or, from the repo root: uv pip install -e '.[arena]'
     export ZEP_API_KEY=...

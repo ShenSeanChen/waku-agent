@@ -1,5 +1,12 @@
 """LangMem on its own terms: a library, not a service. There is no console.
 
+    ON THE CHART (26.08.15 Memory System Anatomy)
+    ─────────────────────────────────────────────
+    THE MANAGER · Job 1 DECIDE
+    The store here is a dict. The MANAGER is the entire product: it reads the
+    whole conversation and decides three sentences are worth two memories.
+
+
     pip install langmem langgraph   # or: uv pip install -e '.[arena]'
     export ANTHROPIC_API_KEY=...    # the extractor is an LLM call
     python examples/memory-native/langmem_native.py

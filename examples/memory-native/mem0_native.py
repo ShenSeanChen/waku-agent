@@ -1,5 +1,12 @@
 """mem0 on its own terms: the store that decides what is worth remembering.
 
+    ON THE CHART (26.08.15 Memory System Anatomy)
+    ─────────────────────────────────────────────
+    THE MANAGER · Job 1 DECIDE  +  Job 2 RETIRE
+    add / update / delete / noop, chosen per fact — then the superseded row
+    keeps a lifecycle_state and a pointer to the row that replaced it.
+
+
     pip install mem0ai          # or, from the repo root: uv pip install -e '.[arena]'
     export MEM0_API_KEY=...
     python examples/memory-native/mem0_native.py

@@ -125,7 +125,7 @@ build-backend = "hatchling.build"
 # where people actually read it; none of it belongs in a package download.
 [tool.hatch.build.targets.sdist]
 exclude = [
-    "docs", "examples", "pi-pokedex",
+    "docs", "examples",
     ".claude", ".agents", ".pi", ".deepeval", ".github",
 ]
 

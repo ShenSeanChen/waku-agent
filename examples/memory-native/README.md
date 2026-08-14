@@ -57,8 +57,15 @@ to the `waku` partition your real assistant uses.
 
 - **mem0** — decides what is worth remembering. You say a sentence, it stores a
   different one. Step 3 is the whole product.
-- **Zep** — not rows, a temporal knowledge graph with validity intervals. When
-  you contradict yourself the old edge is marked invalid *at a point in time*
+
+  **Say this accurately:** mem0 also offers **graph memory** — there is a Graph
+  page and an Entities page in its console. It is not a per-call flag in
+  `mem0ai 2.0.17` (`AddMemoryOptions` has no graph field), so we never enabled
+  it. What this file measures is **mem0's default**, which is what you get when
+  you start. Calling mem0 "a row store" as though that were a product-level
+  fact is wrong, and the first viewer who has used its graph mode will say so.
+- **Zep** — a temporal knowledge graph with validity intervals. When you
+  contradict yourself the old edge is marked invalid *at a point in time*
   rather than out-ranked. Ingestion is async; the script waits, and explains
   why skipping that wait makes Zep look like it forgot.
 - **LangMem** — a library, not a service. No dashboard, no account, and by
