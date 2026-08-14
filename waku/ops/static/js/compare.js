@@ -697,7 +697,8 @@ function memoryArenaView(){
   const race = `<div class="card">
     ${picker}
     <div class="ma-race">
-      <button onclick="seedMemoryArena()" ${maRun.running||!picks.length?"disabled":""}>
+      <button class="save ghost" onclick="seedMemoryArena()"
+              ${maRun.running||!picks.length?"disabled":""}>
         ${maRun.running && maRun.seedOnly ? "Telling…"
           : `Tell ${picks.length} store${picks.length===1?"":"s"}`}</button>
       <button class="save" onclick="runMemoryArena()" ${maRun.running||!picks.length?"disabled":""}>
