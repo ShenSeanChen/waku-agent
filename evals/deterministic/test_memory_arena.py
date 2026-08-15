@@ -861,3 +861,31 @@ def test_the_partition_is_restored_after_a_parallel_race(tmp_path, monkeypatch):
     monkeypatch.setenv("MEM0_USER_ID", "the-live-one")
     arena.run_arena(["sqlite", "mem0"], "t", lambda k, e: None, fixture=fx)
     assert os.environ["MEM0_USER_ID"] == "the-live-one"
+
+
+def test_an_already_told_store_emits_one_cached_event_not_a_fake_count(tmp_path, monkeypatch):
+    """Faking len(seed) 'seeded' events made a store that needed no telling
+    animate through a telling phase it was not doing."""
+    import waku.app
+
+    fx = _arena_fixture(tmp_path)          # 2 seed lines
+    home = tmp_path / "pinned"
+    _FakeWaku.script = {"q1?": "alpha", "q2?": "new"}
+    _FakeWaku.gate = True
+    _FakeWaku.settles = True
+    monkeypatch.setattr(waku.app, "Waku", _FakeWaku)
+    _offline(monkeypatch)
+    monkeypatch.setattr(arena, "arena_home", lambda *a, **k: home)
+
+    _FakeWaku.built = []
+    arena.run_arena(["sqlite"], "t", lambda k, e: None, fixture=fx)   # first: seeds
+
+    events = []
+    _FakeWaku.built = []
+    arena.run_arena(["sqlite"], "t", lambda k, e: events.append((k, e)), fixture=fx)
+
+    seeded = [e for k, e in events if k == "seeded"]
+    cached = [e for k, e in events if k == "cached"]
+    assert not seeded, f"an already-told store must not re-emit seeded events: {seeded}"
+    assert len(cached) == 1, f"exactly one cached event, got {cached}"
+    assert cached[0]["facts"] == 2, cached[0]

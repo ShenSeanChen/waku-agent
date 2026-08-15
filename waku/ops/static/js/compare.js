@@ -508,6 +508,7 @@ async function runMemoryArena(seedOnly){
   // only the cells are pending.
   maRun = {running:true, rows:[], board:null, log:"telling…", error:null,
            backends: maPicks(), probes: fx.tracks[track].probes.map(p=>p.id),
+           seedTotal: (fx.tracks[track].seed || []).length,
            seeded: {}, seedOnly: !!seedOnly};
   editing = false; render();
   try {
@@ -527,8 +528,10 @@ async function runMemoryArena(seedOnly){
         const ev = JSON.parse(c.slice(6));
         if (ev.kind === "start"){ maRun.log = `${ev.contestant}: telling…`;
                                   maRun.seeded[ev.contestant] = 0; }
-        // A store told earlier is not re-told; the run reports it as reused so
-        // "instant" reads as cached rather than as skipped.
+        // Told in an earlier race — nothing to re-tell, so jump straight to
+        // asking rather than animating a telling phase that is not happening.
+        if (ev.kind === "cached"){ maRun.seeded[ev.contestant] = maRun.seedTotal;
+                                   maRun.log = `${ev.contestant}: already told ${ev.facts}`; }
         if (ev.kind === "seed-done"){ maRun.log = `${ev.contestant}: ${
                                         ev.reused ? "already told" : "told"} ${ev.facts}`; }
         if (ev.kind === "seeded"){ maRun.log = `${ev.contestant}: ${ev.line}`;
@@ -596,8 +599,11 @@ function maResultsHtml(){
   // column and row is on screen from the first second, and each cell says
   // whether it is seeding, queued, or done. An empty table under a "running"
   // heading is indistinguishable from a broken one.
-  const seedTotal = (memoryArenaFixture && memoryArenaFixture.tracks
-    ? (Object.values(memoryArenaFixture.tracks)[0].seed || []).length : 0);
+  // From the track being RACED, recorded when the race started. It used to read
+  // Object.values(tracks)[0] — always the first track in the file, whichever one
+  // you picked. Racing the 6-fact business track against the 8-fact dinner
+  // track's total stuck the cell at "told 6 of 8" and it never reached "asking".
+  const seedTotal = maRun.seedTotal || 0;
   const names = maRun.backends || [...new Set(maRun.rows.map(r => r.contestant))];
   const probes = maRun.probes || [...new Set(maRun.rows.map(r => r.probe))];
   // `first` because telling is per CONTESTANT, not per question. Repeating

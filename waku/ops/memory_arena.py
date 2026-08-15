@@ -476,11 +476,10 @@ def run_arena(backends: list[str], track: str, emit, fixture: dict | None = None
             # that already holds this exact seed is not re-told. Racing is now
             # the cheap half: seed once, ask many times.
             if already:
-                emit("seeded", {"contestant": backend,
-                                "line": f"already told {len(seeding)} — reusing",
-                                "cached": True})
-                for _ in seeding[1:]:
-                    emit("seeded", {"contestant": backend, "line": "", "cached": True})
+                # One event, not len(seeding) phantom "seeded" ones. Faking the
+                # count made a store that needed no telling still animate
+                # through a telling phase it was not doing.
+                emit("cached", {"contestant": backend, "facts": len(seeding)})
             for line in [] if already else seeding:
                 app.respond(line, source="memory-arena")
                 emit("seeded", {"contestant": backend, "line": line})
