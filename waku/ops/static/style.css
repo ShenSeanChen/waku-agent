@@ -604,6 +604,16 @@ details.subterm > summary.subterm-h::-webkit-details-marker{ display:none; }
 .ma-source{margin-top:10px;padding:8px 10px;border-radius:6px;background:var(--accent-soft);
            color:var(--ink2);font-size:12px;line-height:1.6}
 .ma-race{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-top:12px}
+/* Questions and Model are ONE setup decision, so they belong on one line. They
+   were wrapping to a line each: a bare <select> sizes itself to its longest
+   option, and these carry text like "Example — a working week — 5 facts, 4
+   questions", which is wider than half the card. flex-basis lets them share the
+   row and min-width:0 is what actually permits the shrink — a flex item refuses
+   to go below its content width without it, which is the whole reason the
+   wrapping looked like a gap problem rather than a width one. */
+.ma-pickers .fld{margin-bottom:0;flex:1 1 260px;min-width:0}
+.ma-pickers .fld select{width:100%}
+.ma-pickers .meta{flex:1 1 100%}
 .ma-ans{font-size:11px;color:var(--ink3);margin-top:4px;max-width:280px;line-height:1.45}
 /* Equal-height cards. `align-items:stretch` is the grid default, so every card
    already spans its row — the cards were ragged because each one sized to its

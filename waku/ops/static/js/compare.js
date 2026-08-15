@@ -681,7 +681,7 @@ function memoryArenaView(){
   // the filename told you less than the track label already did.
   const sets = (memoryArenaFixture.sets || []);
   const chosen = maFile || memoryArenaFixture.chosen || (sets[0] && sets[0].id);
-  const picker = `<div class="ma-race" style="margin-bottom:10px">
+  const picker = `<div class="ma-race ma-pickers" style="margin-bottom:10px">
       <label class="fld" style="margin:0">Questions
         <select onchange="pickProbeFile(this.value)">
           ${sets.map(s=>`<option value="${esc(s.id)}" ${s.id===chosen?"selected":""}>${
