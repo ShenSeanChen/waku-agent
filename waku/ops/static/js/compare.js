@@ -681,9 +681,14 @@ function memoryArenaView(){
   // the filename told you less than the track label already did.
   const sets = (memoryArenaFixture.sets || []);
   const chosen = maFile || memoryArenaFixture.chosen || (sets[0] && sets[0].id);
+  // Three rows, no prose. Every sentence that used to sit here has moved into
+  // a title= on the control it was describing: the reader who needs it hovers,
+  // and the reader who does not gets the vertical space back for store cards.
+  // On this page that space is the scarcest thing there is.
   const picker = `<div class="ma-race ma-pickers" style="margin-bottom:10px">
       <label class="fld" style="margin:0">Questions
-        <select onchange="pickProbeFile(this.value)">
+        <select onchange="pickProbeFile(this.value)"
+                title="Drop a JSON file in .waku/probes/ to add your own question sets.">
           ${sets.map(s=>`<option value="${esc(s.id)}" ${s.id===chosen?"selected":""}>${
             esc(s.label)} — ${s.facts} facts, ${s.probes} questions</option>`).join("")}
         </select></label>
@@ -692,24 +697,23 @@ function memoryArenaView(){
           ${maModels().map(m=>`<option value="${esc(m.spec)}" ${
             m.spec===maModelSpec()?"selected":""}>${esc(m.spec)} — $${m.price_in}/$${m.price_out} per M</option>`).join("")}
         </select></label>` : ""}
-      <span class="meta">Drop a JSON file in <code>.waku/probes/</code> to add more.</span>
     </div>`;
   const race = `<div class="card">
     ${picker}
+    <div class="cmp-picks" style="margin-bottom:10px">${chips}</div>
     <div class="ma-race">
       <button class="save ghost" onclick="seedMemoryArena()"
+              title="Telling never changes, so it is its own button — do it once and ask as many times as you like."
               ${maRun.running||!picks.length?"disabled":""}>
         ${maRun.running && maRun.seedOnly ? "Telling…"
           : `Tell ${picks.length} store${picks.length===1?"":"s"}`}</button>
-      <button class="save" onclick="runMemoryArena()" ${maRun.running||!picks.length?"disabled":""}>
+      <button class="save" onclick="runMemoryArena()"
+              title="Asks the same questions of every store and scores the answers. Tells anything not yet told. Each store runs in its own copy; your real memory is never touched."
+              ${maRun.running||!picks.length?"disabled":""}>
         ${maRun.running && !maRun.seedOnly ? "Asking…"
           : `Ask ${picks.length} store${picks.length===1?"":"s"}`}</button>
-      <span class="meta">${maRun.running ? esc(maRun.log)
-        : `Telling is half a race and never changes, so it is its own button — do it
-           once and ask as many times as you like. Ask tells anything not yet told.
-           Every store runs in its own copy; your real memory is never touched.`}</span>
-    </div>
-    <div class="cmp-picks">${chips}</div></div>`;
+      ${maRun.running ? `<span class="meta">${esc(maRun.log)}</span>` : ""}
+    </div></div>`;
   // ORDER MATTERS, and it used to be wrong: race, results, stores, asks. The
   // questions were dead last, so you could start a race — and film one —
   // without ever having seen what the stores get told or asked. A benchmark
