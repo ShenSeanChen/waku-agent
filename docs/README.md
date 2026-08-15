@@ -23,7 +23,9 @@ Twelve files with no order is a folder nobody reads. Three groups.
 
 ## notes/ — working material, not reference
 
-Filming checklists and prompts. Useful, dated, and **not** the place to learn
+Filming checklists, rundowns and prompts — including
+[memory-video-rundown.md](notes/memory-video-rundown.md), the shot-by-shot for
+the memory-layer comparison. Useful, dated, and **not** the place to learn
 how anything works — they assume you already do.
 
 ## Whiteboards
