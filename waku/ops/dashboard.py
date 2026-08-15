@@ -913,8 +913,21 @@ class Handler(BaseHTTPRequestHandler):
                 # it under mem0 showed you waku's local facts and said nothing.
                 only = (q.get("store", [""])[0] or "").strip()
                 limit = 500 if only else 8
-                self._send(json.dumps(memory_arena.store_contents(limit, only)).encode(),
-                           "application/json")
+                # Track and model identify WHICH arena home to read for sqlite,
+                # so the cards compare the same seeding rather than putting the
+                # live agent's months of real use next to a benchmark run.
+                # Same path-safety rule as the race: only a probe set this
+                # server offered, never a browser-supplied path.
+                from pathlib import Path as _P
+
+                wanted = (q.get("probes", [""])[0] or "").strip()
+                hit = next((s for s in memory_arena.probe_sets() if s["id"] == wanted), None)
+                fixture = memory_arena.load_fixture(_P(hit["path"])) if hit else None
+                track = hit["track"] if hit else (q.get("track", [""])[0] or "").strip()
+                model = (q.get("model", [""])[0] or "").strip()
+                self._send(json.dumps(memory_arena.store_contents(
+                    limit, only, track=track, model=model, fixture=fixture)).encode(),
+                    "application/json")
             except Exception as exc:
                 self._send(json.dumps([{"store": "?", "error": f"{type(exc).__name__}: {exc}"}]).encode(),
                            "application/json")

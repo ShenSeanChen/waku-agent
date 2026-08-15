@@ -592,39 +592,66 @@ def _ledger(home) -> tuple[int, int]:
 # paid service, and a dashboard that quietly bills you for sitting on a tab is
 # not one anyone should ship.
 
-def store_contents(limit: int = 8, only: str = "") -> list[dict]:
+def store_contents(limit: int = 8, only: str = "", track: str = "",
+                   model: str = "", fixture: dict | None = None) -> list[dict]:
     """Per-backend: how many facts it holds and a sample of them.
 
     A backend that errors reports the error rather than an empty list — "0
     facts" and "I could not reach the service" look identical on screen and
     mean opposite things, which is the confusion this whole page exists to
     stop.
+
+    WHICH sqlite. Given a track and model, this reads the ARENA's own copy —
+    the same `.waku-arena/` home the race seeded — and not the live agent's
+    `.waku/state.db`.
+
+    It used to read the live one, with a paragraph above the cards explaining
+    that "53 vs 0" was not a comparison. That paragraph was the tell. The panel
+    sits under a benchmark whose entire promise is that every store was told
+    the same thing, and the first card was a store that had been told something
+    else entirely, for weeks. Apologising for a comparison in prose is worse
+    than not making it.
+
+    Two things fall out for free. The cards become genuinely comparable, so the
+    explanatory banner can go. And the page stops putting the operator's home
+    address, colleagues and work email on screen — which mattered, because this
+    tab gets filmed.
+
+    The live store is not hidden; it has its own page. It is just not a
+    contestant.
     """
     from waku.config import Settings, load_settings
     from waku.memory import Memory
+
+    spec = ((fixture or load_fixture()).get("tracks") or {}).get(track) or {}
+    seed = spec.get("seed") or []
 
     out = []
     for key in _available_backends():
         if only and key != only:
             continue
-        # `kind` is the label that stops this page misleading. sqlite here is the
-        # LIVE agent's store — months of real use — while a hosted backend has
-        # only ever received what the arena wrote to it. Side by side without
-        # saying so, "53 vs 17" reads as "waku remembers more", when it only
-        # means waku has been used and the others were connected yesterday.
         # Three kinds, not two. "connected account" is a lie about the control
         # — it has no account, no service and no rows, and printing that line
         # above a note that says "told nothing by design" makes the card argue
         # with itself.
-        kind = "live" if key == "sqlite" else "control" if key == CONTROL else "connected"
+        arena_copy = bool(seed) and key in ("sqlite", CONTROL)
+        kind = ("arena" if arena_copy else
+                "live" if key == "sqlite" else
+                "control" if key == CONTROL else "connected")
         row = {"store": key, "count": 0, "facts": [], "error": "", "span": "",
                "kind": kind, "note": _store_note(key)}
         if row["note"]:
             out.append(row)   # nothing meaningful to read — say why, don't report 0
             continue
         try:
-            settings = Settings(home=load_settings().home, semantic_store=key)
-            facts = Memory._make_fact_store(_conn_for(key, settings), settings)
+            # The control has no store of its own; the race gives it a sqlite
+            # in its own home and tells it nothing, so reading that home is
+            # what proves it really is empty rather than merely claimed to be.
+            home = (arena_home(key, track, seed, model) if arena_copy
+                    else load_settings().home)
+            store = "sqlite" if key == CONTROL else key
+            settings = Settings(home=home, semantic_store=store)
+            facts = Memory._make_fact_store(_conn_for(store, settings), settings)
             rows = facts.list(200)
             row["count"] = len(rows)
             row["span"] = _span(rows)

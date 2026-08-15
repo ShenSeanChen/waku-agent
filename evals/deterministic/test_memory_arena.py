@@ -679,3 +679,38 @@ def test_a_home_is_only_marked_ready_once_the_store_confirms_it_is_searchable(
     assert not (home / ".seeded").exists(), (
         "a store that never confirmed readiness must not be cached as ready"
     )
+
+
+def test_the_stores_panel_reads_the_races_own_sqlite_not_the_live_agent(monkeypatch):
+    """The panel sits under a benchmark that promises every store was told the
+    same thing. Reading the LIVE .waku/state.db for sqlite broke that promise:
+    the first card held months of real use next to stores that had seen one run,
+    which is why it needed a paragraph above it saying the counts were not a
+    comparison. Apologising for a comparison in prose is worse than not making
+    it — so sqlite now reads the arena's own copy.
+
+    It also stopped putting the operator's address, colleagues and work email
+    on a tab that gets filmed.
+    """
+    seen = {}
+
+    def fake_home(backend, track, seed, model):
+        seen["called"] = (backend, track, model)
+        return __import__("pathlib").Path(__import__("tempfile").mkdtemp())
+
+    monkeypatch.setattr(arena, "arena_home", fake_home)
+    rows = arena.store_contents(track="example", model="test:model")
+    sqlite = next(r for r in rows if r["store"] == "sqlite")
+    assert sqlite["kind"] == "arena", (
+        f"with a track and model, sqlite must be the race's copy — got {sqlite['kind']}"
+    )
+    assert seen.get("called"), "it must actually resolve an arena home, not just relabel"
+
+
+def test_without_a_track_the_panel_still_falls_back_to_the_live_store():
+    """No track means no seed, which means no home can be named. Falling back to
+    the live store is right — a blank panel would be a worse answer than an
+    honest one — but it must SAY 'live' so the card is not read as this race's."""
+    rows = arena.store_contents()
+    sqlite = next(r for r in rows if r["store"] == "sqlite")
+    assert sqlite["kind"] == "live", sqlite["kind"]

@@ -649,7 +649,7 @@ async function maSeeAll(store){
   if (i < 0) return;
   cards[i] = Object.assign({}, cards[i], {loading: true}); render();
   try {
-    const r = await fetch(`/api/memory-arena/stores?store=${encodeURIComponent(store)}`);
+    const r = await fetch(`/api/memory-arena/stores?store=${encodeURIComponent(store)}&${maStoreQuery()}`);
     const full = (await r.json())[0];
     if (full) cards[i] = full;
   } catch (e){ cards[i].error = String(e); }
@@ -728,10 +728,26 @@ function memoryArenaView(){
 // Fetched on demand, never on the 5s poll.
 let maStores;   // undefined = not fetched, [] = fetched and empty
 
+// Which seeding the cards should describe. Without this the server has no way
+// to know which .waku-arena home to open, and falls back to the live agent's
+// store — which is exactly the incomparable card this panel used to apologise
+// for in a paragraph above itself.
+function maStoreQuery(){
+  // Same fallback chain the picker uses. maFile is empty until you CHANGE the
+  // dropdown, so reading it raw would send "" for the default set — and the
+  // server, given no probe set, cannot name a home and quietly falls back to
+  // the live store. The bug would only appear for people who never touched
+  // the dropdown, which is most of them.
+  const fx = memoryArenaFixture || {};
+  const sets = fx.sets || [];
+  const chosen = maFile || fx.chosen || (sets[0] && sets[0].id) || "";
+  return `probes=${encodeURIComponent(chosen)}&model=${encodeURIComponent(maModelSpec())}`;
+}
+
 async function loadMemoryStores(){
   maStores = "loading";
   editing = false; render();
-  try { maStores = await (await fetch("/api/memory-arena/stores")).json(); }
+  try { maStores = await (await fetch(`/api/memory-arena/stores?${maStoreQuery()}`)).json(); }
   catch(e){ maStores = [{store:"?", error:String(e)}]; }
   editing = false; render();
 }
@@ -748,7 +764,9 @@ function maStoresHtml(){
       <div class="ma-store-h"><code>${esc(s.store)}</code>
         ${s.error ? `<span class="ma-o ma-invented">error</span>`
                   : `<span class="meta">${s.count} fact${s.count===1?"":"s"}</span>`}</div>
-      <div class="ma-prov">${s.kind === "live"
+      <div class="ma-prov">${s.kind === "arena"
+        ? `this race's own copy &middot; <code>.waku-arena/</code>`
+        : s.kind === "live"
         ? `your live agent &middot; <code>.waku/state.db</code>`
         : s.kind === "control"
         ? `not a store &middot; the integrity check`
@@ -765,15 +783,20 @@ function maStoresHtml(){
                 : ""}`
           : `<div class="meta">empty</div>`}
     </div>`).join("");
-  // The warning matters more than the cards. A count next to a count invites
-  // "waku remembers more", when the only thing it shows is that one store has
-  // been lived in and the others were connected yesterday.
+  // This used to carry a warning that the counts were NOT a comparison —
+  // because sqlite was the live agent, with weeks of real use, sitting beside
+  // stores that had only ever seen one benchmark run. The warning was correct
+  // and the design was wrong: a panel under a benchmark should not need a
+  // paragraph explaining why its first card does not count.
+  //
+  // sqlite now reads the race's OWN copy, so every card describes the same
+  // seeding and the comparison is real. What is left to say is the one thing
+  // still worth saying — this is a live read, and it costs a round trip.
   return `<h2>What each store is holding</h2>
     <div class="card"><div class="ma-race">${btn}
-      <span class="meta">Live contents, read-only.</span></div>
-      <div class="ma-warn">These counts are <b>not</b> a comparison. sqlite is your real agent
-        with weeks of use behind it; the connected stores have only ever received what this
-        arena wrote to them. Read the dates, not the totals.</div></div>
+      <span class="meta">What each store made of the SAME facts — read-only, and a live
+        call per store, so it only runs when you ask. Your own agent's memory lives on the
+        Memory page; it is not a contestant.</span></div></div>
     <div class="ma-stores">${cards}</div>`;
 }
 
