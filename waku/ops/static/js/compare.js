@@ -341,9 +341,10 @@ function compareCol(res){
 // (once as a race, once as configuration) — the same reason Memory keeps
 // semantic / episodic / skills behind tabs instead of four sidebar entries.
 VIEWS.compare = function(d, sub){
+  // No sub-tab bar any more: the sidebar names both races directly, and a row
+  // of tabs repeating what the highlighted nav entry already says is furniture.
   sub = sub === "memory" ? "memory" : "models";
-  const bar = subtabBar("compare", [["models","Models"],["memory","Memory"]], sub);
-  return bar + (sub === "memory" ? memoryArenaView() : modelArenaView(d));
+  return sub === "memory" ? memoryArenaView() : modelArenaView(d);
 };
 
 function modelArenaView(d){
