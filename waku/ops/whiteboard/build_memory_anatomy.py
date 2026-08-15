@@ -136,10 +136,51 @@ def build() -> list:
                 "from a plain search. mem0 scored the superseded row 0.3474 against\n"
                 "0.3429 for the live one. Read the lifecycle field, or ship the wrong date.")
 
+    # Q2 listed its options and never said when you would pick one. That is the
+    # question the audience actually has, and "keyword vs RAG vs graph" is
+    # unanswerable as a ranking — it only resolves against how much you have
+    # and what kind of question you ask of it.
+    e += S.pill_header(1680, 1290, 980, "SO WHEN DO YOU ACTUALLY NEED EMBEDDINGS?",
+                       color="plain")
+
+    e += S.card(1680, 1360, 980, "the honest ladder — climb only when you have to",
+                "A FEW DOZEN facts, one user\n"
+                "     no retrieval at all. MEMORY.md fits in the prompt, and a\n"
+                "     search costs more than it saves.\n"
+                "\n"
+                "HUNDREDS, and you know the words that will be used\n"
+                "     keyword (FTS5). No embeddings, no vector bill, no extra\n"
+                "     service — and exact terms beat similarity.\n"
+                "\n"
+                "THOUSANDS — or the question arrives paraphrased, or in 中文\n"
+                "     vector = RAG. This is the rung where embeddings start\n"
+                "     paying for themselves. Not before.\n"
+                "\n"
+                "facts that RELATE to each other\n"
+                "     graph. \"who else was at that meeting\" is a traversal,\n"
+                "     not a search.\n"
+                "\n"
+                "facts that CHANGE\n"
+                "     graph + validity intervals. Superseded is not deleted.")
+
+    e += S.card(1680, 1810, 980, "and \"graph RAG\" is not a fourth thing",
+                "It is both rungs at once: vector search to find the entry nodes,\n"
+                "then traversal to expand from them. Anyone selling it as a\n"
+                "separate category is selling you the combination.")
+
+    e += S.card(1680, 1950, 980, "why waku and Hermes both skipped embeddings",
+                "Deliberate, not an omission — and it has a visible consequence.\n"
+                "FTS5 cannot match 发布会 to \"product launch\", so waku bolts on a\n"
+                "RETRIEVAL GATE that rewrites the question into keywords before\n"
+                "searching. The gate exists BECAUSE there are no embeddings.\n"
+                "That is the trade: one small model call per turn, instead of an\n"
+                "embedding service, a vector store, and a bill.",
+                color="red")
+
     e.append(S.source_label(60, 1360,
                             "measured 2026-08-13 against mem0ai 2.0.17 · zep-cloud 3.27.0 · "
                             "langmem 0.0.30 · langgraph 1.2.10"))
-    e.append(S.watermark(2400, 1360))
+    e.append(S.watermark(2440, 2150))
     return e
 
 
@@ -150,7 +191,7 @@ if __name__ == "__main__":
     S.validate(els)
     OUT.parent.mkdir(parents=True, exist_ok=True)
     OUT.write_text(json.dumps(S.document(els), indent=2), encoding="utf-8")
-    write_svg_proxy(els, pathlib.Path("/tmp/memory-anatomy.svg"), w=2760, h=1420)
+    write_svg_proxy(els, pathlib.Path("/tmp/memory-anatomy.svg"), w=2760, h=2200)
     print("svg proxy /tmp/memory-anatomy.svg")
     shapes = [x for x in els if x["type"] in ("rectangle", "ellipse", "diamond")]
     arrows = [x for x in els if x["type"] == "arrow"]
