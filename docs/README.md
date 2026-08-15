@@ -11,6 +11,7 @@ Twelve files with no order is a folder nobody reads. Three groups.
 | [agent-graphs-design.md](agent-graphs-design.md) | the graph engine's design and its fail-open rule |
 | [memory-backends-playbook.md](memory-backends-playbook.md) | seeing your memories in each provider's own console |
 | [benchmarks.md](benchmarks.md) | what has been measured, and how |
+| [integrations.md](integrations.md) | voice, Telegram, Apple, Google Calendar, MCP — all opt-in |
 
 ## Write-ups — one topic, explained
 
