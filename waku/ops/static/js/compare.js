@@ -755,11 +755,13 @@ async function loadMemoryStores(){
 function maStoresHtml(){
   const btn = `<button class="save ghost" onclick="loadMemoryStores()"
     ${maStores === "loading" ? "disabled" : ""}>${maStores === "loading" ? "reading…" : "Read stores"}</button>`;
-  if (!Array.isArray(maStores)){
-    return `<div class="card"><div class="ma-race">${btn}
-      <span class="meta">Show what every connected memory store is holding right now.
-        Each one is a live call, so it only runs when you ask.</span></div></div>`;
-  }
+  // The heading carries the button. This used to be a whole card wrapping one
+  // control and a paragraph — a card's worth of vertical space to say "press
+  // this". On a page where the useful content is five store cards further
+  // down, that is the most expensive furniture on screen.
+  const head = `<h2 class="ma-head">What each store is holding ${btn}
+    <span class="meta">what each made of the SAME facts &middot; live call, on demand</span></h2>`;
+  if (!Array.isArray(maStores)) return head;
   const cards = maStores.map(s => `<div class="card ma-store">
       <div class="ma-store-h"><code>${esc(s.store)}</code>
         ${s.error ? `<span class="ma-o ma-invented">error</span>`
@@ -792,12 +794,7 @@ function maStoresHtml(){
   // sqlite now reads the race's OWN copy, so every card describes the same
   // seeding and the comparison is real. What is left to say is the one thing
   // still worth saying — this is a live read, and it costs a round trip.
-  return `<h2>What each store is holding</h2>
-    <div class="card"><div class="ma-race">${btn}
-      <span class="meta">What each store made of the SAME facts — read-only, and a live
-        call per store, so it only runs when you ask. Your own agent's memory lives on the
-        Memory page; it is not a contestant.</span></div></div>
-    <div class="ma-stores">${cards}</div>`;
+  return head + `<div class="ma-stores">${cards}</div>`;
 }
 
 // --- what they get asked ----------------------------------------------------

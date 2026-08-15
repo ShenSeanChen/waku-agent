@@ -611,6 +611,12 @@ details.subterm > summary.subterm-h::-webkit-details-marker{ display:none; }
    row and min-width:0 is what actually permits the shrink — a flex item refuses
    to go below its content width without it, which is the whole reason the
    wrapping looked like a gap problem rather than a width one. */
+/* Heading, its button and its one-line note on a single baseline. Vertical
+   space on this page belongs to the store cards, not to the furniture that
+   introduces them. */
+.ma-head{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.ma-head .save{font-size:12px;padding:5px 12px}
+.ma-head .meta{font-weight:400}
 .ma-pickers .fld{margin-bottom:0;flex:1 1 260px;min-width:0}
 .ma-pickers .fld select{width:100%}
 .ma-pickers .meta{flex:1 1 100%}
