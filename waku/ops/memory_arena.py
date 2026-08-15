@@ -38,6 +38,7 @@ costs money, and it is deliberately thin.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 from pathlib import Path
@@ -331,14 +332,60 @@ def arena_home(backend: str, track: str, seed: list[str], model: str) -> Path:
     — the glob that exists because a second agent home's SOUL.md and usage
     ledger are the files you least want pushed.
     """
-    import hashlib
-
     from waku.config import load_settings
 
-    key = hashlib.sha256("\n".join([track, model, *seed]).encode()).hexdigest()[:12]
-    home = load_settings().home.parent / ".waku-arena" / f"{backend}-{key}"
+    home = (load_settings().home.parent / ".waku-arena"
+            / f"{backend}-{arena_key(track, seed, model)}")
     home.mkdir(parents=True, exist_ok=True)
     return home
+
+
+def arena_key(track: str, seed: list[str], model: str) -> str:
+    """The one hash. Names the local home AND the hosted partition."""
+    import hashlib
+
+    return hashlib.sha256("\n".join([track, model, *seed]).encode()).hexdigest()[:12]
+
+
+def arena_partition(track: str, seed: list[str], model: str) -> str:
+    """The user id the hosted stores write under during a race.
+
+    Local isolation was solved by naming the home. The hosted half had no
+    equivalent, and the consequence was concrete: mem0 and Zep read
+    MEM0_USER_ID / ZEP_USER_ID with a default of "waku" — the SAME partition
+    the live agent uses. So every race wrote its benchmark seed into the
+    operator's real memory, and every probe set wrote into the same place as
+    every other one. A working-week race read back `wedding party ballroom` and
+    `guest in room 402` from the business track, because there was only ever
+    one drawer.
+
+    Same key as the home, so a race is isolated on both sides by construction
+    and "clean up after this race" can name exactly what it means.
+    """
+    return f"waku-arena-{arena_key(track, seed, model)}"
+
+
+@contextlib.contextmanager
+def arena_partition_env(track: str, seed: list[str], model: str):
+    """Point the hosted stores at this race's partition, then put it back.
+
+    The stores read their user id from the environment at construction, so this
+    has to wrap the Waku() call rather than be passed as a setting. Restoring
+    matters more than setting: leaking MEM0_USER_ID into the process would move
+    the LIVE agent's memory to a benchmark partition, which is the one failure
+    worse than the bug this fixes.
+    """
+    partition = arena_partition(track, seed, model)
+    before = {k: os.environ.get(k) for k in ("MEM0_USER_ID", "ZEP_USER_ID")}
+    os.environ["MEM0_USER_ID"] = os.environ["ZEP_USER_ID"] = partition
+    try:
+        yield partition
+    finally:
+        for k, v in before.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
 
 
 def _is_seeded(home: Path) -> bool:
@@ -410,9 +457,14 @@ def run_arena(backends: list[str], track: str, emit, fixture: dict | None = None
         already = _is_seeded(home)
         try:
             opts = {"provider": prov, "model": mod} if prov and mod else {}
-            app = Waku(settings=Settings(home=home, semantic_store=store,
-                                         apple_calendar=False, google_calendar=False,
-                                         apple_tools=False, graph_workflows=False, **opts))
+            # The hosted stores read their partition from the environment at
+            # construction, so this wraps the whole contestant rather than
+            # being passed as a setting.
+            with arena_partition_env(track, seeding, model):
+                app = Waku(settings=Settings(home=home, semantic_store=store,
+                                             apple_calendar=False, google_calendar=False,
+                                             apple_tools=False, graph_workflows=False,
+                                             **opts))
             # Seeding is 53% of a race and perfectly deterministic, so a home
             # that already holds this exact seed is not re-told. Racing is now
             # the cheap half: seed once, ask many times.
@@ -661,6 +713,89 @@ def store_contents(limit: int = 8, only: str = "", track: str = "",
             row["error"] = f"{type(exc).__name__}: {exc}"[:160]
         out.append(row)
     return out
+
+
+def clean_stores(track: str = "", model: str = "", fixture: dict | None = None) -> dict:
+    """Delete everything THIS race wrote, and nothing else.
+
+    Safe only because of arena_partition. Before that, the arena wrote its seed
+    into MEM0_USER_ID / ZEP_USER_ID's default of "waku" — the live agent's own
+    partition — so "clean the stores" would have deleted the operator's real
+    memory. A cleanup button is exactly as safe as the isolation underneath it,
+    and there was none.
+
+    Now every race owns a partition named for its own key, so this can name
+    precisely what it means: the `.waku-arena/` homes for this seed, and the
+    hosted partition with the matching name. It never touches `.waku/state.db`
+    and never touches the `waku` partition, because it does not know their
+    names — it only ever asks for `waku-arena-<key>`.
+
+    Reports per store rather than raising: a cleanup that half-worked and said
+    nothing is how you end up racing against data you believe is gone.
+    """
+    import shutil
+
+    from waku.config import load_settings
+
+    spec = ((fixture or load_fixture()).get("tracks") or {}).get(track) or {}
+    seed = spec.get("seed") or []
+    if not seed:
+        return {"error": "no track chosen — nothing can be named, so nothing is deleted"}
+
+    key, partition = arena_key(track, seed, model), arena_partition(track, seed, model)
+    out: dict = {"partition": partition, "removed": [], "errors": []}
+
+    base = load_settings().home.parent / ".waku-arena"
+    for home in sorted(base.glob(f"*-{key}")) if base.exists() else []:
+        try:
+            shutil.rmtree(home)
+            out["removed"].append(home.name)
+        except Exception as exc:
+            out["errors"].append(f"{home.name}: {type(exc).__name__}: {exc}")
+
+    for store, wipe in (("mem0", _wipe_mem0), ("zep", _wipe_zep)):
+        try:
+            if wipe(partition):
+                out["removed"].append(f"{store}:{partition}")
+        except Exception as exc:
+            out["errors"].append(f"{store}: {type(exc).__name__}: {exc}")
+    return out
+
+
+def _absent(exc: Exception) -> bool:
+    """Did this delete fail because the thing was already gone?
+
+    Zep 404s when the partition does not exist, which is the NORMAL case:
+    cleaning twice, or cleaning a race that only ever ran locally. Reporting
+    that as an error trains you to ignore the error line, and the day it says
+    something real you will ignore that too.
+    """
+    text = f"{getattr(exc, 'status_code', '')} {exc}".lower()
+    return "404" in text or "not found" in text or "not_found" in text
+
+
+def _wipe_mem0(partition: str) -> bool:
+    from mem0 import MemoryClient
+
+    try:
+        MemoryClient().delete_all(user_id=partition)
+    except Exception as exc:
+        if not _absent(exc):
+            raise
+        return False
+    return True
+
+
+def _wipe_zep(partition: str) -> bool:
+    from zep_cloud import Zep
+
+    try:
+        Zep(api_key=os.environ["ZEP_API_KEY"]).user.delete(user_id=partition)
+    except Exception as exc:
+        if not _absent(exc):
+            raise
+        return False
+    return True
 
 
 def _span(rows: list[dict]) -> str:

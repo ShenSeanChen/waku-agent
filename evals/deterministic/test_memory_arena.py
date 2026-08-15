@@ -18,6 +18,7 @@ a legal probe where the deadline was never given.
 from __future__ import annotations
 
 import json
+import os
 from typing import ClassVar
 
 import pytest
@@ -714,3 +715,62 @@ def test_without_a_track_the_panel_still_falls_back_to_the_live_store():
     rows = arena.store_contents()
     sqlite = next(r for r in rows if r["store"] == "sqlite")
     assert sqlite["kind"] == "live", sqlite["kind"]
+
+
+def test_a_race_writes_to_its_own_hosted_partition_not_the_live_one(monkeypatch):
+    """The hosted half had no isolation, and the consequence was concrete.
+
+    mem0 and Zep read MEM0_USER_ID / ZEP_USER_ID with a default of "waku" — the
+    SAME partition the live agent uses — so every race wrote its benchmark seed
+    into the operator's real memory, and every probe set wrote into the same
+    place as every other one. A working-week race read back `wedding party
+    ballroom` and `guest in room 402` from the business track, because there
+    was only ever one drawer.
+    """
+    monkeypatch.delenv("MEM0_USER_ID", raising=False)
+    monkeypatch.delenv("ZEP_USER_ID", raising=False)
+    with arena.arena_partition_env("t", ["fact one"], "m:1") as partition:
+        assert partition.startswith("waku-arena-"), partition
+        assert os.environ["MEM0_USER_ID"] == partition
+        assert os.environ["ZEP_USER_ID"] == partition
+    # Leaking this would move the LIVE agent's memory to a benchmark partition
+    # — worse than the bug it fixes.
+    assert "MEM0_USER_ID" not in os.environ
+    assert "ZEP_USER_ID" not in os.environ
+
+
+def test_a_different_track_gets_a_different_partition():
+    """This is the whole point: one drawer per question set, so a race cannot
+    read back facts it was never told."""
+    a = arena.arena_partition("dinner", ["fact one"], "m:1")
+    b = arena.arena_partition("business", ["fact one"], "m:1")
+    c = arena.arena_partition("dinner", ["fact one"], "m:2")
+    assert a != b, "different tracks must not share a partition"
+    assert a != c, "a different model reseeds, so it must not share either"
+
+
+def test_clean_refuses_when_it_cannot_name_what_it_would_delete():
+    """No track means no seed, no key, and therefore no partition name. A
+    cleanup that cannot name its target must do nothing at all — the failure
+    mode of guessing here is deleting the live agent's memory."""
+    out = arena.clean_stores(track="", model="m:1")
+    assert out.get("error"), out
+    assert "nothing is deleted" in out["error"]
+
+
+def test_a_partition_that_was_already_gone_is_not_an_error():
+    """Zep 404s when the partition does not exist, which is the NORMAL case:
+    cleaning twice, or cleaning a race that only ever ran locally. The first
+    live run of Clean reported a wall of Cloudflare headers as an error for
+    exactly this.
+
+    Reporting "already gone" as failure trains you to ignore the error line —
+    and the day it says something real, you ignore that too."""
+    class _Gone(Exception):
+        status_code = 404
+
+    assert arena._absent(_Gone("message='not found'"))
+    assert arena._absent(Exception("status_code: 404, body: not found"))
+    assert not arena._absent(Exception("401 unauthorized — check your API key")), (
+        "an auth failure is not 'already deleted' and must still surface"
+    )

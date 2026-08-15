@@ -1040,6 +1040,28 @@ class Handler(BaseHTTPRequestHandler):
         # /api/memory-arena/stream — same shape as the model race above, one dial
         # over: every contestant is the same agent on the same model, and only
         # the semantic store changes.
+        if self.path == "/api/memory-arena/clean":
+            # Deletes only what a race wrote: the .waku-arena homes for this
+            # seed and the waku-arena-<key> partition. It cannot reach the live
+            # store or the `waku` partition because it never asks for them by
+            # name. Same probe-set validation as the race — a browser-supplied
+            # path must never reach the filesystem.
+            from pathlib import Path as _P
+
+            from waku.ops import memory_arena
+
+            payload = json.loads(self.rfile.read(length) or "{}")
+            wanted = (payload.get("probes") or "").strip()
+            hit = next((s for s in memory_arena.probe_sets() if s["id"] == wanted), None)
+            fixture = memory_arena.load_fixture(_P(hit["path"])) if hit else None
+            track = hit["track"] if hit else (payload.get("track") or "")
+            try:
+                out = memory_arena.clean_stores(
+                    track=track, model=(payload.get("model") or "").strip(), fixture=fixture)
+            except Exception as exc:
+                out = {"error": f"{type(exc).__name__}: {exc}"}
+            self._send(json.dumps(out).encode(), "application/json")
+            return
         if self.path == "/api/memory-arena/stream":
             payload = json.loads(self.rfile.read(length) or "{}")
             self.send_response(200)

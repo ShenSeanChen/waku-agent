@@ -736,16 +736,39 @@ let maStores;   // undefined = not fetched, [] = fetched and empty
 // to know which .waku-arena home to open, and falls back to the live agent's
 // store — which is exactly the incomparable card this panel used to apologise
 // for in a paragraph above itself.
-function maStoreQuery(){
-  // Same fallback chain the picker uses. maFile is empty until you CHANGE the
-  // dropdown, so reading it raw would send "" for the default set — and the
-  // server, given no probe set, cannot name a home and quietly falls back to
-  // the live store. The bug would only appear for people who never touched
-  // the dropdown, which is most of them.
+// Same fallback chain the picker uses. maFile is empty until you CHANGE the
+// dropdown, so reading it raw sends "" for the default set — and the server,
+// given no probe set, can name neither a home nor a partition. Reads would
+// quietly fall back to the live store and Clean would refuse. The bug would
+// only appear for people who never touched the dropdown, which is most of them.
+function maChosenSet(){
   const fx = memoryArenaFixture || {};
   const sets = fx.sets || [];
-  const chosen = maFile || fx.chosen || (sets[0] && sets[0].id) || "";
-  return `probes=${encodeURIComponent(chosen)}&model=${encodeURIComponent(maModelSpec())}`;
+  return maFile || fx.chosen || (sets[0] && sets[0].id) || "";
+}
+
+function maStoreQuery(){
+  return `probes=${encodeURIComponent(maChosenSet())}&model=${encodeURIComponent(maModelSpec())}`;
+}
+
+let maClean = "";   // what the last clean did, shown where the hint normally sits
+
+// Deliberately NOT behind a confirm dialog: it can only reach this race's own
+// scratch. The dangerous version of this button was the one that existed
+// before per-race partitions, when "the stores" included the live agent's.
+async function cleanMemoryStores(){
+  maClean = "cleaning…"; editing = false; render();
+  try {
+    const r = await fetch("/api/memory-arena/clean", {
+      method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({probes: maChosenSet(), model: maModelSpec()})});
+    const out = await r.json();
+    maClean = out.error ? `clean failed — ${out.error}`
+      : `cleaned ${(out.removed||[]).length} — ${(out.removed||[]).join(", ") || "nothing to remove"}`
+        + ((out.errors||[]).length ? ` &middot; ${out.errors.length} failed` : "");
+    maStores = undefined;              // the cards on screen now describe deleted data
+  } catch(e){ maClean = `clean failed — ${e}`; }
+  editing = false; render();
 }
 
 async function loadMemoryStores(){
@@ -764,7 +787,9 @@ function maStoresHtml(){
   // this". On a page where the useful content is five store cards further
   // down, that is the most expensive furniture on screen.
   const head = `<h2 class="ma-head">What each store is holding ${btn}
-    <span class="meta">what each made of the SAME facts &middot; live call, on demand</span></h2>`;
+    <button class="save ghost" onclick="cleanMemoryStores()"
+      title="Deletes only what this race wrote: its .waku-arena copies and its waku-arena partition. Your own memory and the waku partition are never named, so they cannot be reached.">Clean</button>
+    <span class="meta">${maClean || "what each made of the SAME facts &middot; live call, on demand"}</span></h2>`;
   if (!Array.isArray(maStores)) return head;
   const cards = maStores.map(s => `<div class="card ma-store">
       <div class="ma-store-h"><code>${esc(s.store)}</code>
@@ -808,12 +833,16 @@ function maStoresHtml(){
 function maAsksHtml(track){
   return `<h2 style="margin-top:22px">What they get asked
       <span class="meta" style="font-weight:400">— ${track.seed.length} facts in, ${track.probes.length} questions</span></h2>
+    ${/* ONE table, two sections. They were two cards, which read as two
+          unrelated lists — and they are the opposite of unrelated: the second
+          only means anything BECAUSE of the first. A section row inside a
+          single table says "same subject, two halves" in a way two cards with
+          a gap between them cannot, and it saves a card's worth of height on
+          a page where that is the scarce resource. */""}
     <div class="card" style="padding:4px 8px"><div class="tablescroll"><table>
-      <tr><th>told</th></tr>
-      ${track.seed.map(s=>`<tr><td class="meta">${esc(s)}</td></tr>`).join("")}
-    </table></div></div>
-    <div class="card" style="padding:4px 8px"><div class="tablescroll"><table>
-      <tr><th>asked</th><th>right answer</th><th>wrong answer</th></tr>
+      <tr><th>told</th><th></th><th></th></tr>
+      ${track.seed.map(s=>`<tr><td class="meta" colspan="3">${esc(s)}</td></tr>`).join("")}
+      <tr><th>then asked</th><th>right answer</th><th>wrong answer</th></tr>
       ${track.probes.map(p=>`<tr title="${esc(p.note||"")}">
         <td>${esc(p.question)}</td>
         <td><span class="ma-expect">${p.expect_refusal ? "must decline"
