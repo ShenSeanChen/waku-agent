@@ -41,6 +41,8 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 # The shipped fixture is four dull probes whose only job is to document the
@@ -438,8 +440,17 @@ def run_arena(backends: list[str], track: str, emit, fixture: dict | None = None
         return
     spec = fixture["tracks"][track]
     results: list[dict] = []
+    lock = threading.Lock()
+    raw_emit = emit
 
-    for backend in backends:
+    def emit(kind, ev):
+        # One SSE stream, several threads. Concurrent writes interleave mid-line
+        # and corrupt the framing, which shows up as a UI that silently stops
+        # updating rather than as an error.
+        with lock:
+            raw_emit(kind, ev)
+
+    def one(backend):
         emit("start", {"contestant": backend})
         # THE CONTROL. A contestant that is told nothing, then asked everything.
         # It should fail every probe — and any probe it PASSES is not a memory
@@ -457,14 +468,10 @@ def run_arena(backends: list[str], track: str, emit, fixture: dict | None = None
         already = _is_seeded(home)
         try:
             opts = {"provider": prov, "model": mod} if prov and mod else {}
-            # The hosted stores read their partition from the environment at
-            # construction, so this wraps the whole contestant rather than
-            # being passed as a setting.
-            with arena_partition_env(track, seeding, model):
-                app = Waku(settings=Settings(home=home, semantic_store=store,
-                                             apple_calendar=False, google_calendar=False,
-                                             apple_tools=False, graph_workflows=False,
-                                             **opts))
+            # Partition env is set once around the whole race, below.
+            app = Waku(settings=Settings(home=home, semantic_store=store,
+                                         apple_calendar=False, google_calendar=False,
+                                         apple_tools=False, graph_workflows=False, **opts))
             # Seeding is 53% of a race and perfectly deterministic, so a home
             # that already holds this exact seed is not re-told. Racing is now
             # the cheap half: seed once, ask many times.
@@ -528,7 +535,7 @@ def run_arena(backends: list[str], track: str, emit, fixture: dict | None = None
             if seed_only:
                 emit("seed-done", {"contestant": backend, "home": str(home),
                                    "facts": len(seeding), "reused": already})
-                continue
+                return
 
             app.session.start_new("probes")
 
@@ -582,13 +589,29 @@ def run_arena(backends: list[str], track: str, emit, fixture: dict | None = None
                        "calls": calls_now - calls_at,
                        "ms": int((time.perf_counter() - t0) * 1000)}
                 spent, calls_at = after, calls_now
-                results.append(row)
+                with lock:
+                    results.append(row)
                 emit("probe", row)
         except Exception as exc:
             # One backend failing must not lose the other's results — a missing
             # key or a service outage is a fact about that contestant, not a
             # reason to abandon the run.
             emit("failed", {"contestant": backend, "error": f"{type(exc).__name__}: {exc}"})
+
+    # Contestants are independent: separate homes, separate partitions, and the
+    # only shared state is the emit stream and `results`, both locked above.
+    # Sequential meant the race took the SUM of every contestant, and Zep alone
+    # waits minutes for graph ingestion. In parallel it takes the slowest one.
+    #
+    # The partition env is set ONCE around the whole race rather than per
+    # contestant. It is process-global, every contestant in a race shares the
+    # same partition anyway, and per-contestant scoping would have the first
+    # thread to finish restore the old value while the others were still
+    # writing — sending them at the live agent's memory.
+    seed_lines = [] if not backends else (spec.get("seed") or [])
+    with (arena_partition_env(track, seed_lines, model),
+          ThreadPoolExecutor(max_workers=min(len(backends) or 1, 6)) as pool):
+        list(pool.map(one, backends))
 
     # Name the leaks explicitly rather than leaving them to be noticed. A probe
     # the control passed did not test memory in THIS run, whatever the other

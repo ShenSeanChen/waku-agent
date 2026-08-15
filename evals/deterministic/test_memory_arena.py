@@ -806,3 +806,58 @@ def test_the_panel_reads_the_races_hosted_partition_too(monkeypatch):
     assert rows[0]["kind"] == "arena", rows[0]["kind"]
     # And it must not leak: the live agent has to keep its own partition.
     assert "MEM0_USER_ID" not in os.environ
+
+
+def test_contestants_run_in_parallel(tmp_path, monkeypatch):
+    """Sequential meant a race took the SUM of every contestant, and Zep alone
+    waits minutes for graph ingestion. Contestants share nothing but the emit
+    stream and the results list, both locked."""
+    import threading
+    import time as _t
+
+    import waku.app
+
+    fx = _arena_fixture(tmp_path)
+    overlap = {"max": 0, "live": 0}
+    guard = threading.Lock()
+    original = _FakeWaku.respond
+
+    def slow(self, message, source="cli", observer=None, **kw):
+        with guard:
+            overlap["live"] += 1
+            overlap["max"] = max(overlap["max"], overlap["live"])
+        _t.sleep(0.05)
+        with guard:
+            overlap["live"] -= 1
+        return original(self, message, source=source, observer=observer, **kw)
+
+    monkeypatch.setattr(_FakeWaku, "respond", slow)
+    _FakeWaku.script = {"q1?": "alpha", "q2?": "new"}
+    _FakeWaku.gate = True
+    _FakeWaku.built = []
+    _FakeWaku.settles = True
+    monkeypatch.setattr(waku.app, "Waku", _FakeWaku)
+    _offline(monkeypatch)
+    arena.run_arena(["sqlite", "mem0", "langmem"], "t", lambda k, e: None, fixture=fx)
+
+    assert overlap["max"] > 1, (
+        f"contestants must overlap in time; peak concurrency was {overlap['max']}"
+    )
+
+
+def test_the_partition_is_restored_after_a_parallel_race(tmp_path, monkeypatch):
+    """Set once around the whole race, not per contestant. Per-contestant
+    scoping would have the first thread to finish restore the old value while
+    the others were still writing — pointing them at the live agent's memory."""
+    import waku.app
+
+    fx = _arena_fixture(tmp_path)
+    _FakeWaku.script = {"q1?": "alpha", "q2?": "new"}
+    _FakeWaku.gate = True
+    _FakeWaku.built = []
+    _FakeWaku.settles = True
+    monkeypatch.setattr(waku.app, "Waku", _FakeWaku)
+    _offline(monkeypatch)
+    monkeypatch.setenv("MEM0_USER_ID", "the-live-one")
+    arena.run_arena(["sqlite", "mem0"], "t", lambda k, e: None, fixture=fx)
+    assert os.environ["MEM0_USER_ID"] == "the-live-one"

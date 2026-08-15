@@ -600,7 +600,11 @@ function maResultsHtml(){
     ? (Object.values(memoryArenaFixture.tracks)[0].seed || []).length : 0);
   const names = maRun.backends || [...new Set(maRun.rows.map(r => r.contestant))];
   const probes = maRun.probes || [...new Set(maRun.rows.map(r => r.probe))];
-  const cell = (p, n) => {
+  // `first` because telling is per CONTESTANT, not per question. Repeating
+  // "told 2 of 8" down every probe row made it look like all four questions
+  // were already being asked in parallel — they are not; the contestant has
+  // not been asked anything yet.
+  const cell = (p, n, first) => {
     const r = maRun.rows.find(x => x.probe === p && x.contestant === n);
     if (r) return `<td>${OUTCOME_CELL(r)}
       <div class="ma-facts-meta">${(r.ms/1000).toFixed(1)}s &middot; ${r.tokens} tok${
@@ -613,8 +617,11 @@ function maResultsHtml(){
     // "seeding 4/8" reads like a progress bar for something the viewer has not
     // been shown. "told 4 of 8" names the actual event: this store has now been
     // told four of the eight facts it is about to be questioned on.
-    if (seeded < seedTotal) return `<td class="meta">told ${seeded} of ${seedTotal}<span class="caret"></span></td>`;
-    return `<td class="meta">asking<span class="caret"></span></td>`;
+    if (seeded < seedTotal) return first
+      ? `<td class="meta">being told ${seeded} of ${seedTotal}<span class="caret"></span></td>`
+      : `<td class="meta"></td>`;
+    return first ? `<td class="meta">asking<span class="caret"></span></td>`
+                 : `<td class="meta">waiting</td>`;
   };
   const board = maRun.board ? `<div class="card" style="padding:4px 8px"><div class="tablescroll"><table>
       <tr><th>store</th><th>pass</th><th>stale</th><th>invented</th><th>miss</th><th>tokens</th></tr>
@@ -627,7 +634,7 @@ function maResultsHtml(){
     ${board}
     <div class="card" style="padding:4px 8px"><div class="tablescroll"><table>
       <tr><th>probe</th>${names.map(n=>`<th>${esc(n)}</th>`).join("")}</tr>
-      ${probes.map(p=>{
+      ${probes.map((p, i)=>{
         const any = maRun.rows.find(x => x.probe === p);
         const fx = maProbe(p);
         const leaked = (maRun.leaked || []).includes(p);
@@ -638,7 +645,7 @@ function maResultsHtml(){
             <div class="ma-facts-meta">${fx ? (fx.expect_refusal
                 ? "must decline" : "wants: " + esc((fx.expect_any||[]).join(" / "))) : ""}${
               fx && (fx.stale_any||[]).length ? " &middot; not: " + esc(fx.stale_any.join(" / ")) : ""}</div>
-          </td>${names.map(n=>cell(p,n)).join("")}</tr>`;}).join("")}
+          </td>${names.map(n=>cell(p, n, i === 0)).join("")}</tr>`;}).join("")}
     </table></div></div>`;
 }
 

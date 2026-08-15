@@ -35,9 +35,14 @@ for its own sake is not.
   *immediately before each run*. Permission never carries over from a previous run.
   The script backs up first, but restoring is a hassle — ask, wait for a clear yes,
   then run. It refuses to do anything without the `--yes` flag for this reason.
+- **Commit messages are about the CODE, not the conversation.** Subject = what
+  changed, under ~70 chars. Body = why, in a few tight lines. Then stop.
+  No narrating who asked for it, no "Sean caught", no story of what I tried
+  first, no re-deriving the reasoning. This is a public repo — a stranger
+  reading `git log` wants the change, not a diary. If the reasoning is worth
+  keeping, it belongs in a code comment next to the code it explains.
 - **Version control — commit AND ship every milestone, same turn.** The moment a change
-  works (tests pass / verified live), commit it with a detailed message (subject = what,
-  body = WHY + what it survived) and get it onto GitHub before moving on. Never end a
+  works (tests pass / verified live), commit it and get it onto GitHub before moving on. Never end a
   turn or session with working changes left uncommitted — the repo must always be traceable
   from GitHub, and uncommitted work has been lost to branch switches before. Use the `/ship`
   skill. If several milestones land in one session, commit each as its own logical commit.
