@@ -686,10 +686,17 @@ def store_contents(limit: int = 8, only: str = "", track: str = "",
         # — it has no account, no service and no rows, and printing that line
         # above a note that says "told nothing by design" makes the card argue
         # with itself.
-        arena_copy = bool(seed) and key in ("sqlite", CONTROL)
-        kind = ("arena" if arena_copy else
-                "live" if key == "sqlite" else
-                "control" if key == CONTROL else "connected")
+        # Scoped to a race means ALL of it, not just the local half. The first
+        # version scoped sqlite and left the hosted stores reading their
+        # default partition — which is `waku`, the live agent's. So the race
+        # wrote to waku-arena-<key>, the panel read `waku`, and Clean deleted
+        # waku-arena-<key>: three different drawers, and the cards never
+        # changed no matter what you cleaned. Worse, the panel was showing the
+        # operator's REAL hosted memory the whole time.
+        arena_copy = bool(seed)
+        kind = ("control" if key == CONTROL else
+                "arena" if arena_copy else
+                "live" if key == "sqlite" else "connected")
         row = {"store": key, "count": 0, "facts": [], "error": "", "span": "",
                "kind": kind, "note": _store_note(key)}
         if row["note"]:
@@ -703,8 +710,13 @@ def store_contents(limit: int = 8, only: str = "", track: str = "",
                     else load_settings().home)
             store = "sqlite" if key == CONTROL else key
             settings = Settings(home=home, semantic_store=store)
-            facts = Memory._make_fact_store(_conn_for(store, settings), settings)
-            rows = facts.list(200)
+            # The hosted stores read their partition from the environment at
+            # construction, exactly as they do during a race — so the read has
+            # to be wrapped the same way the write was.
+            with (arena_partition_env(track, seed, model) if arena_copy
+                  else contextlib.nullcontext()):
+                facts = Memory._make_fact_store(_conn_for(store, settings), settings)
+                rows = facts.list(200)
             row["count"] = len(rows)
             row["span"] = _span(rows)
             row["facts"] = [{"subject": r.get("subject", ""), "content": r.get("content", "")}

@@ -774,3 +774,35 @@ def test_a_partition_that_was_already_gone_is_not_an_error():
     assert not arena._absent(Exception("401 unauthorized — check your API key")), (
         "an auth failure is not 'already deleted' and must still surface"
     )
+
+
+def test_the_panel_reads_the_races_hosted_partition_too(monkeypatch):
+    """Scoping the panel to a race has to mean ALL of it, not just the local half.
+
+    The first version scoped sqlite and left mem0/Zep reading their default
+    partition — which is `waku`, the LIVE agent's. Three different drawers were
+    then in play: the race wrote to waku-arena-<key>, the panel read `waku`, and
+    Clean deleted waku-arena-<key>. Clean reported success, the cards never
+    changed, and the panel had been showing the operator's real hosted memory
+    the whole time.
+    """
+    seen = {}
+
+    class _Store:
+        def list(self, limit=200):
+            seen["partition"] = os.environ.get("MEM0_USER_ID")
+            return []
+
+    monkeypatch.setattr(arena, "_available_backends", lambda: ["mem0"])
+    monkeypatch.setattr("waku.memory.Memory._make_fact_store",
+                        staticmethod(lambda conn, settings: _Store()))
+    monkeypatch.delenv("MEM0_USER_ID", raising=False)
+
+    rows = arena.store_contents(track="example", model="test:model")
+    assert seen.get("partition", "").startswith("waku-arena-"), (
+        f"the panel must read this race's partition, not the default — got "
+        f"{seen.get('partition')!r}"
+    )
+    assert rows[0]["kind"] == "arena", rows[0]["kind"]
+    # And it must not leak: the live agent has to keep its own partition.
+    assert "MEM0_USER_ID" not in os.environ
