@@ -35,7 +35,15 @@ def make_manage_memory_tool(memory) -> Tool:
                 if query:
                     rows = [r for r in rows if query.lower() in r["summary"].lower()]
                 return "\n".join(f"#{r['id']} ({r['happened_at']}) {r['summary']}" for r in rows[:8]) or "no episodes"
-            rows = facts.search_with_ids(query, 8) if hasattr(facts, "search_with_ids") else []
+            # No hasattr guard. It used to read
+            #   facts.search_with_ids(...) if hasattr(...) else []
+            # which looked defensive and was the opposite: on a backend missing
+            # the method, the agent got [] and told the user "no matching
+            # facts" while the facts sat in the database. Every FactStore now
+            # has to declare this method (semantic/base.py) and prove it
+            # (test_fact_store_conformance.py), so a real absence should be a
+            # loud AttributeError, not a confident wrong answer.
+            rows = facts.search_with_ids(query, 8)
             return "\n".join(f"#{r['id']} [{r['subject']}] {r['content']}" for r in rows) or "no matching facts"
         if action == "update":
             if kind != "fact":

@@ -27,6 +27,7 @@ import time
 from pathlib import Path
 
 from waku.loop.models import PROVIDERS
+from waku.tools._env import delegate_env
 
 _CODING = Path(__file__).resolve().parents[2] / "evals" / "coding.jsonl"
 
@@ -93,7 +94,7 @@ def run_coding_stream(provider: str, model: str, task: str, files: dict | None,
              "-p", task, "-a", "--no-session"],
             cwd=workdir, stdin=subprocess.DEVNULL,   # no TTY under the server: pi
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT,  # must not block on stdin
-            text=True, bufsize=1, env=os.environ.copy())
+            text=True, bufsize=1, env=delegate_env())
     except OSError as exc:
         return (False, f"couldn't launch pi: {exc}", round(time.perf_counter() - t0, 1))
 
@@ -112,7 +113,7 @@ def run_coding_stream(provider: str, model: str, task: str, files: dict | None,
         return (None, "ran (no test)", secs)
     try:
         v = subprocess.run(verify, shell=True, cwd=workdir, capture_output=True,
-                           text=True, timeout=120, check=False)
+                           text=True, timeout=120, check=False, env=delegate_env())
     except subprocess.TimeoutExpired:
         on_line("[verify timed out]")
         return (False, "verify timed out", secs)
@@ -160,7 +161,7 @@ def run_coding_case(provider: str, model: str, case: dict,
             [pi_bin, "--provider", pi_prov, "--model", model, "--api-key", key,
              "-p", case["input"], "-a", "--no-session"],
             cwd=workdir, stdin=subprocess.DEVNULL, capture_output=True,
-            text=True, timeout=timeout, check=False)
+            text=True, timeout=timeout, check=False, env=delegate_env())
     except subprocess.TimeoutExpired:
         return (False, f"pi timed out after {timeout}s", round(time.perf_counter() - t0, 1))
     except OSError as exc:
@@ -173,7 +174,7 @@ def run_coding_case(provider: str, model: str, case: dict,
         return (True, "no verify (ran clean)", round(time.perf_counter() - t0, 1))
     try:
         v = subprocess.run(verify, shell=True, cwd=workdir, capture_output=True,
-                           text=True, timeout=120, check=False)
+                           text=True, timeout=120, check=False, env=delegate_env())
     except subprocess.TimeoutExpired:
         return (False, "verify timed out", round(time.perf_counter() - t0, 1))
     secs = round(time.perf_counter() - t0, 1)

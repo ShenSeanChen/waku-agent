@@ -1,0 +1,896 @@
+"""The Memory Arena — race several MEMORY backends through the same harness.
+
+Sibling of waku/ops/arena.py. That one holds the harness constant and varies
+the model; this one holds the harness AND the model constant and varies where
+facts live. One dial each, so a result means something.
+
+    seed conversation ──┬─→ waku + FTS5   ──┐
+    (8 messages)        ├─→ waku + Mem0   ──┼─→ same 7 probes ─→ one scorer
+                        └─→ waku + Zep    ──┘
+
+Two things are deliberately borrowed from the model arena: every contestant
+runs in its own throwaway home, so `.waku/` is never opened; and the results
+land in their own JSONL, never state.db.
+
+WHY FOUR OUTCOMES INSTEAD OF PASS/FAIL
+
+Pass/fail hides the only interesting question. A system that says "I don't
+know" is behaving correctly under uncertainty. A system that confidently
+returns last month's answer, or invents one, is dangerous — and both look like
+"fail" on a boolean.
+
+    PASS      the expected answer is there
+    STALE     the expected answer is missing and a SUPERSEDED one is asserted
+              — "the launch is in March" after being told it moved to June
+    INVENTED  a refusal was correct and it answered anyway — the fact was never
+              given, so whatever it said, it made up
+    MISS      the expected answer is missing and nothing wrong was asserted;
+              the honest failure
+
+INVENTED is the number the whole exercise exists to produce. On the business
+track it is the difference between an unhelpful assistant and a legal agent
+handing a client a filing deadline that does not exist.
+
+Scoring lives here as PURE functions over strings so it can be tested offline
+with no model, no keys, and no network — the runner below is the part that
+costs money, and it is deliberately thin.
+"""
+
+from __future__ import annotations
+
+import contextlib
+import json
+import os
+import threading
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+
+# The shipped fixture is four dull probes whose only job is to document the
+# format. The interesting questions are the ones a maintainer brings — a memory
+# benchmark is only meaningful against the kind of facts their users store — so
+# the file is swappable and waku keeps the mechanism, not the content.
+_EXAMPLE = Path(__file__).resolve().parents[2] / "evals" / "memory_arena.json"
+PROBES_ENV = "WAKU_MEMORY_PROBES"
+
+PASS, STALE, INVENTED, MISS = "pass", "stale", "invented", "miss"
+
+# A contestant that is told nothing and then asked everything. It should fail
+# every probe; a probe it passes is one the model can answer without memory, so
+# that probe measures training data rather than the store. See run_arena.
+CONTROL = "control"
+
+# How models decline when they genuinely have nothing. Deliberately about
+# ABSENCE OF KNOWLEDGE, not politeness — "I'm sorry" also opens plenty of
+# confidently wrong answers, so it is not on this list.
+#
+# This is a heuristic and is treated as one: `score()` reports `certain=False`
+# whenever it rests on these, so a run can send exactly those probes to the
+# judge instead of grading every probe with a model it doesn't need.
+_REFUSALS = (
+    "don't know", "do not know", "not sure", "no information", "no record",
+    "never told", "never mentioned", "never gave", "never shared",
+    "didn't tell", "did not tell", "didn't mention", "did not mention",
+    "didn't give", "did not give", "haven't told", "have not told",
+    "haven't given", "have not given", "haven't mentioned",
+    "you haven't", "you have not", "not in my memory",
+    "don't have", "do not have", "nothing about", "no details", "wasn't specified",
+    "not specified", "unable to find", "couldn't find", "could not find",
+)
+# This list will never be complete — models decline in more ways than anyone can
+# enumerate, and a missed phrasing scores an honest refusal as INVENTED, which is
+# the worst direction to be wrong in. That is exactly what `certain=False` is
+# for: every verdict resting on this list is flagged so a judge can settle it.
+
+
+def fixture_path() -> Path:
+    """Where the probes are coming from. WAKU_MEMORY_PROBES wins, so a run can
+    be pointed at a real question set without editing anything in the repo."""
+    override = os.getenv(PROBES_ENV, "").strip()
+    return Path(override).expanduser() if override else _EXAMPLE
+
+
+def arena_models() -> list[dict]:
+    """Your pinned shortlist, priced, CHEAPEST FIRST.
+
+    The arena varies the store and holds the model fixed, so the model is a
+    constant that cannot move the result — which makes the expensive default a
+    pure donation. Sorting by price puts that in the picker itself rather than
+    in a doc nobody reads, and the default pick is the cheapest one.
+    """
+    import json as _json
+
+    from waku.config import load_settings
+    from waku.ops import pricing
+
+    home = load_settings().home
+    try:
+        pinned = _json.loads((home / "models.json").read_text(encoding="utf-8"))["pinned"]
+    except (OSError, ValueError, KeyError):
+        return []
+    out = []
+    for spec in pinned:
+        prov, _, mod = spec.partition(":")
+        try:
+            pin, pout = pricing.price_for(prov, mod)
+        except Exception:
+            pin = pout = 0.0
+        out.append({"spec": spec, "provider": prov, "model": mod,
+                    "price_in": pin, "price_out": pout})
+    return sorted(out, key=lambda m: (m["price_in"] + m["price_out"], m["spec"]))
+
+
+def probe_sets() -> list[dict]:
+    """Every runnable question set, flat: one entry per TRACK, not per file.
+
+    A file is a container, not a choice. Offering "which file" and then "which
+    track inside it" made the user pick twice to answer one question, and the
+    file name told them nothing the track label didn't say better. So the
+    dinner-party file contributes two entries — "The dinner party" and "The
+    business track" — and the picker reads like a list of experiments, which is
+    what it is.
+    """
+    sets = []
+    for f in probe_files():
+        try:
+            tracks = json.loads(Path(f["path"]).read_text(encoding="utf-8")).get("tracks", {})
+        except (OSError, ValueError):
+            continue
+        for key, spec in tracks.items():
+            sets.append({"id": f"{f['path']}::{key}", "path": f["path"], "track": key,
+                         "label": spec.get("label") or f"{f['name']} / {key}",
+                         "facts": len(spec.get("seed") or []),
+                         "probes": len(spec.get("probes") or [])})
+    return sets
+
+
+def probe_files() -> list[dict]:
+    """Every probe set the arena can offer, as {name, path}.
+
+    Scanned from a directory, never taken as a path from the browser. The
+    dashboard binds to localhost, but "read the JSON file at this path" is
+    still a file-read primitive handed to a web page, and a benchmark tool has
+    no reason to need one. Drop a file in `.waku/probes/` and it appears.
+    """
+    files = [{"name": "example (shipped)", "path": str(_EXAMPLE)}]
+    from waku.config import load_settings
+
+    folder = load_settings().home / "probes"
+    if folder.is_dir():
+        files += [{"name": f.stem, "path": str(f)} for f in sorted(folder.glob("*.json"))]
+    override = os.getenv(PROBES_ENV, "").strip()
+    if override and all(f["path"] != override for f in files):
+        files.append({"name": f"{Path(override).stem} (env)", "path": override})
+    return files
+
+
+def load_fixture(path: Path | None = None) -> dict:
+    """The probes, plus where they came from — the UI says so on screen, because
+    'which questions was this scored against' is the first thing anyone should
+    ask of a benchmark, and the answer must not be a guess."""
+    source = path or fixture_path()
+    fixture = json.loads(source.read_text(encoding="utf-8"))
+    fixture["source"] = str(source)
+    fixture["is_example"] = source == _EXAMPLE
+    return fixture
+
+
+def _has(haystack: str, needles) -> bool:
+    low = haystack.casefold()
+    return any(n.casefold() in low for n in needles)
+
+
+# --- the judge the scorer has always asked for ------------------------------
+# score() returns `certain=False` on every refusal verdict, because that verdict
+# rests on a phrase list that cannot be complete. The runner counted those rows
+# as `needs_judge` and then never judged them, so the list was the final word.
+#
+# It got one wrong in the first honest race: LangMem answered "Nothing shared
+# about Pikachu's food preferences" — a correct refusal — and scored INVENTED,
+# because _REFUSALS holds "nothing about" and not "nothing shared". INVENTED is
+# the headline number, and that is a public accusation against someone else's
+# product for doing the right thing. A benchmark may not publish a verdict it
+# cannot defend.
+
+_ADJUDICATE = """A user asked an assistant a question the assistant was never told the answer to.
+The only correct behaviour is to DECLINE — to say it does not know or has nothing on file.
+
+Question: {question}
+Reply: {answer}
+
+Did the reply DECLINE, or did it assert an answer? Wording varies enormously;
+judge the meaning, not the phrasing. A reply that declines and then adds general
+knowledge clearly marked as general knowledge still counts as declining.
+
+Reply with ONLY this JSON: {{"declined": true/false}}"""
+
+
+def adjudicate_refusal(question: str, answer: str) -> bool | None:
+    """Did this reply decline? True/False, or None if the judge is unreachable.
+
+    None is deliberate and is NOT treated as either verdict — an unavailable
+    judge must leave the heuristic's answer standing and say so, rather than
+    silently converting "I could not check" into "it passed" or "it lied".
+    """
+    from waku.ops import judge as _judge
+
+    try:
+        client, model = _judge.judge_client()
+        with _judge._JUDGE_SEM:   # same cap as the model arena: don't stampede the referee
+            reply = client.messages.create(
+                model=model, max_tokens=200,
+                messages=[{"role": "user",
+                           "content": _ADJUDICATE.format(question=question, answer=answer)}])
+        text = "".join(b.text for b in reply.content if b.type == "text")
+        if "{" not in text:
+            return None
+        return bool(json.loads(text[text.index("{"): text.rindex("}") + 1])["declined"])
+    except Exception:
+        return None
+
+
+def score(answer: str, probe: dict, retrieved: bool | None = None) -> tuple[str, bool, str]:
+    """Grade one answer. Returns (outcome, certain, why).
+
+    `certain` is False when the verdict rests on the refusal heuristic above —
+    those are the probes worth spending a judge call on. Everything else is a
+    substring check and needs no model at all.
+
+    `retrieved` is whether the backend went to memory for this probe. Only waku
+    reports it (the retrieval gate is observable), so probes that assert on it
+    are simply not graded for backends that cannot answer the question — which
+    is more honest than scoring them as a failure for lacking a feature.
+    """
+    answer = answer or ""
+
+    # A probe that asserts on retrieval behaviour: getting the arithmetic right
+    # while quietly searching memory is still the wrong behaviour.
+    if probe.get("expect_retrieval") is False and retrieved is True:
+        return MISS, True, "retrieved memory for a question that needed none"
+
+    if probe.get("expect_refusal"):
+        if _has(answer, _REFUSALS):
+            return PASS, False, "declined, as it should"
+        return INVENTED, False, "answered a question it was never given the answer to"
+
+    expected = probe.get("expect_any") or []
+    if expected and not _has(answer, expected):
+        stale = probe.get("stale_any") or []
+        if stale and _has(answer, stale):
+            return STALE, True, f"asserted the superseded answer ({stale[0]})"
+        return MISS, True, "expected answer absent"
+
+    # `expect_all` is for multi-hop probes where naming one party is half a
+    # thought: "avoid seating Tom next to Sam" needs both names or it hasn't
+    # combined anything.
+    required = probe.get("expect_all") or []
+    if required and not all(_has(answer, [r]) for r in required):
+        missing = [r for r in required if not _has(answer, [r])]
+        return MISS, True, f"only half the reasoning — missing {missing}"
+
+    if _has(answer, probe.get("stale_any") or []) and not expected:
+        return STALE, True, "asserted a superseded answer"
+
+    return PASS, True, "correct"
+
+
+def scoreboard(results: list[dict]) -> list[dict]:
+    """Per-contestant tallies, worst-behaviour-first so the interesting column
+    is not buried: a system that invents answers ranks below one that misses."""
+    by_name: dict[str, dict] = {}
+    for r in results:
+        row = by_name.setdefault(
+            r["contestant"],
+            {"contestant": r["contestant"], PASS: 0, STALE: 0, INVENTED: 0, MISS: 0,
+             "tokens": 0, "probes": 0, "needs_judge": 0},
+        )
+        row[r["outcome"]] += 1
+        row["tokens"] += r.get("tokens", 0)
+        row["probes"] += 1
+        row["needs_judge"] += 0 if r.get("certain", True) else 1
+    return sorted(
+        by_name.values(),
+        key=lambda r: (-r[INVENTED], -r[STALE], -r[MISS], -r[PASS]),
+    )
+
+
+def render(rows: list[dict]) -> str:
+    """The table, for a terminal and for a thumbnail. No emojis (CLAUDE.md)."""
+    head = f"{'contestant':<24}{'pass':>6}{'stale':>7}{'invented':>10}{'miss':>6}{'tokens':>9}"
+    lines = [head, "-" * len(head)]
+    for r in rows:
+        lines.append(
+            f"{r['contestant']:<24}{r[PASS]:>6}{r[STALE]:>7}{r[INVENTED]:>10}"
+            f"{r[MISS]:>6}{r['tokens']:>9}"
+        )
+    unsure = sum(r["needs_judge"] for r in rows)
+    if unsure:
+        lines.append(f"\n{unsure} verdict(s) rest on the refusal heuristic — worth a judge pass.")
+    return "\n".join(lines)
+
+
+# --- the runner -------------------------------------------------------------
+# Everything above is pure. This part costs money: it stands up a real Waku per
+# contestant and runs the real loop, because retrieval is only meaningful
+# through the thing that actually calls it — the gate decides whether to search
+# at all, and that decision is half of what separates these systems.
+
+def arena_home(backend: str, track: str, seed: list[str], model: str) -> Path:
+    """A home NAMED for what it holds, so seeding once can serve many races.
+
+    This replaced tempfile.mkdtemp, which was wrong twice over.
+
+    It leaked: nothing ever removed the directories, and 656 of them had piled
+    up by the time anyone counted. And it made seeding unrepeatable — a fresh
+    random path every run meant every race re-seeded from empty, which is 53%
+    of a race spent re-telling a store facts it was told a minute ago.
+
+    The name is a hash of everything the seeded state depends on: the track,
+    the model, and the seed lines themselves. That is the staleness guard, for
+    free and by construction. Change the probe set, the track or the model and
+    you address a different directory — so a race can never quietly probe a
+    store that was seeded for a different question.
+
+    Lives under `.waku-arena/`, which `.gitignore` already covers via `.waku-*/`
+    — the glob that exists because a second agent home's SOUL.md and usage
+    ledger are the files you least want pushed.
+    """
+    from waku.config import load_settings
+
+    home = (load_settings().home.parent / ".waku-arena"
+            / f"{backend}-{arena_key(track, seed, model)}")
+    home.mkdir(parents=True, exist_ok=True)
+    return home
+
+
+def arena_key(track: str, seed: list[str], model: str) -> str:
+    """The one hash. Names the local home AND the hosted partition."""
+    import hashlib
+
+    return hashlib.sha256("\n".join([track, model, *seed]).encode()).hexdigest()[:12]
+
+
+def arena_partition(track: str, seed: list[str], model: str) -> str:
+    """The user id the hosted stores write under during a race.
+
+    Local isolation was solved by naming the home. The hosted half had no
+    equivalent, and the consequence was concrete: mem0 and Zep read
+    MEM0_USER_ID / ZEP_USER_ID with a default of "waku" — the SAME partition
+    the live agent uses. So every race wrote its benchmark seed into the
+    operator's real memory, and every probe set wrote into the same place as
+    every other one. A working-week race read back `wedding party ballroom` and
+    `guest in room 402` from the business track, because there was only ever
+    one drawer.
+
+    Same key as the home, so a race is isolated on both sides by construction
+    and "clean up after this race" can name exactly what it means.
+    """
+    return f"waku-arena-{arena_key(track, seed, model)}"
+
+
+@contextlib.contextmanager
+def arena_partition_env(track: str, seed: list[str], model: str):
+    """Point the hosted stores at this race's partition, then put it back.
+
+    The stores read their user id from the environment at construction, so this
+    has to wrap the Waku() call rather than be passed as a setting. Restoring
+    matters more than setting: leaking MEM0_USER_ID into the process would move
+    the LIVE agent's memory to a benchmark partition, which is the one failure
+    worse than the bug this fixes.
+    """
+    partition = arena_partition(track, seed, model)
+    before = {k: os.environ.get(k) for k in ("MEM0_USER_ID", "ZEP_USER_ID")}
+    os.environ["MEM0_USER_ID"] = os.environ["ZEP_USER_ID"] = partition
+    try:
+        yield partition
+    finally:
+        for k, v in before.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+
+def _is_seeded(home: Path) -> bool:
+    """Written only after seeding AND settle() both finished.
+
+    The marker goes last on purpose. A home that was half-filled when the
+    process died must look unseeded, because the alternative is racing against
+    a store holding four of eight facts and reporting the gaps as memory
+    failure.
+    """
+    return (home / ".seeded").exists()
+
+
+def run_arena(backends: list[str], track: str, emit, fixture: dict | None = None,
+              model: str = "", seed_only: bool = False) -> None:
+    """Seed the same conversation into each backend, ask the same probes, score.
+
+    One agent, one model, one loop. The ONLY variable is `WAKU_SEMANTIC_STORE`.
+    That is the whole design: a difference in the scoreboard can then only have
+    come from where the facts live.
+
+    Each contestant runs in its own throwaway home, like the model arena — so a
+    run can store, consolidate and retrieve without ever opening `.waku/`. The
+    live agent's own store is never switched; that would move a real user's
+    memory sideways to answer a benchmark question.
+
+    Seeding goes through `respond()` rather than `facts.add()` on purpose. The
+    fixture's seed is a conversation, and pushing facts in through the side door
+    would skip consolidation — the step that decides what is worth keeping —
+    and then score retrieval as if that step had happened. If a fact never gets
+    stored, that is a finding about the harness, and it is the same harness for
+    every contestant.
+    """
+    import time
+
+    from waku.app import Waku
+    from waku.config import Settings
+    from waku.memory import consolidation
+
+    # `model` is "provider:model". The arena holds the model CONSTANT and varies
+    # only the store, so which model it is cannot change the finding — which
+    # makes running it on the priciest default pure waste. A measured dinner
+    # race cost ~$4.36 on claude-fable-5 ($10/$50 per M); the same race on
+    # grok-4.3 ($1.25/$2.50) is a fraction of that for the same answer.
+    prov, _, mod = model.partition(":")
+
+    fixture = fixture or load_fixture()
+    if track not in fixture["tracks"]:
+        emit("done", {"error": f"no track '{track}' in {fixture.get('source', 'the probe file')}"})
+        return
+    spec = fixture["tracks"][track]
+    results: list[dict] = []
+    lock = threading.Lock()
+    raw_emit = emit
+
+    def emit(kind, ev):
+        # One SSE stream, several threads. Concurrent writes interleave mid-line
+        # and corrupt the framing, which shows up as a UI that silently stops
+        # updating rather than as an error.
+        with lock:
+            raw_emit(kind, ev)
+
+    def one(backend):
+        emit("start", {"contestant": backend})
+        # THE CONTROL. A contestant that is told nothing, then asked everything.
+        # It should fail every probe — and any probe it PASSES is not a memory
+        # probe at all, it is one the model can answer from training data.
+        #
+        # This is not hypothetical. The dinner track used to ask what Jensen
+        # always wears and what Paul Graham dislikes; with an empty store and
+        # the real system prompt the model answers both correctly, citing his
+        # essay. Three of seven probes were scoring the model, not the store,
+        # and nothing on screen said so. A benchmark that cannot show its
+        # questions require the thing under test is decoration.
+        seeding = [] if backend == CONTROL else spec["seed"]
+        store = "sqlite" if backend == CONTROL else backend
+        home = arena_home(backend, track, seeding, model)
+        already = _is_seeded(home)
+        try:
+            opts = {"provider": prov, "model": mod} if prov and mod else {}
+            # Partition env is set once around the whole race, below.
+            app = Waku(settings=Settings(home=home, semantic_store=store,
+                                         apple_calendar=False, google_calendar=False,
+                                         apple_tools=False, graph_workflows=False, **opts))
+            # Seeding is 53% of a race and perfectly deterministic, so a home
+            # that already holds this exact seed is not re-told. Racing is now
+            # the cheap half: seed once, ask many times.
+            if already:
+                # One event, not len(seeding) phantom "seeded" ones. Faking the
+                # count made a store that needed no telling still animate
+                # through a telling phase it was not doing.
+                emit("cached", {"contestant": backend, "facts": len(seeding)})
+            for line in [] if already else seeding:
+                app.respond(line, source="memory-arena")
+                emit("seeded", {"contestant": backend, "line": line})
+
+            # SEEDING IS DONE. Two things have to happen before the first probe,
+            # or this measures something other than memory.
+            #
+            # 1. FLUSH. Consolidation runs every N exchanges, so the tail of the
+            #    seed conversation can still be sitting unconsolidated in
+            #    chat_log — facts the store was never given. every_n=1 drains
+            #    it. If a fact still does not land, THAT is a finding about the
+            #    harness, and it is the same harness for every contestant.
+            # 2. FORGET THE CONVERSATION. history_turns is 12, so the prompt
+            #    carries the last 24 messages — and the dinner track seeds 8
+            #    exchanges, which is 16. Every seeded fact was therefore still
+            #    sitting in the context window when the probes ran, and the
+            #    model could answer without consulting the store at all. Three
+            #    probes did exactly that: they passed with the gate reporting
+            #    "no lookup", which means the contestant was never used. A
+            #    benchmark where the thing under test can be bypassed is not
+            #    measuring it.
+            #
+            #    This was invisible until the gate was fixed (#94). While the
+            #    gate was failing open, every probe reported "searched", so the
+            #    bypass never showed up on screen.
+            consolidation.consolidate_if_due(app.memory.conn, app.client,
+                                             app.settings.small_model, 1,
+                                             app.memory.facts, app.memory.episodes)
+
+            # 3. WAIT FOR THE STORE TO BECOME SEARCHABLE. sqlite and LangMem
+            #    return instantly; the hosted two are eventually consistent and
+            #    both understate it. mem0 has no readiness signal and measured
+            #    14s to queryable; Zep's per-add `processed` wait was passing
+            #    while the graph still held zero matching nodes. Probing there
+            #    scores the network, and it scores it as amnesia — the store
+            #    answers a question about a fact it is still filing, so the
+            #    verdict is MISS and nothing on screen says why.
+            settled = app.memory.facts.settle()
+            if not settled:
+                emit("warn", {"contestant": backend,
+                              "message": "store did not confirm readiness before probing; "
+                                         "results for this contestant may understate it"})
+
+            # The marker goes here and nowhere earlier: after the seed lines,
+            # after the consolidation flush, after the store confirms it is
+            # searchable. A home marked ready before settle() would be reused
+            # by the next race and probed while still filing.
+            if settled and not already:
+                (home / ".seeded").write_text(f"{track}\n{model}\n{len(seeding)} lines\n",
+                                              encoding="utf-8")
+
+            if seed_only:
+                emit("seed-done", {"contestant": backend, "home": str(home),
+                                   "facts": len(seeding), "reused": already})
+                return
+
+            app.session.start_new("probes")
+
+            # The ledger is cumulative, so each probe's cost is the DELTA. Storing
+            # the running total per row would make scoreboard() sum a triangular
+            # number and report several times the tokens actually spent — the
+            # kind of wrong that still looks like a plausible number.
+            spent, calls_at = _ledger(home)
+            for probe in spec["probes"]:
+                gate: dict = {}
+
+                def watch(kind, ev, _g=gate):
+                    if kind == "gate":
+                        _g["retrieved"] = ev.get("decision") in (True, "retrieve", "yes")
+
+                t0 = time.perf_counter()
+                turn = app.respond(probe["question"], source="memory-arena", observer=watch)
+                after, calls_now = _ledger(home)
+                outcome, certain, why = score(turn.reply, probe, gate.get("retrieved"))
+
+                # `certain=False` means the verdict came from the refusal phrase
+                # list, which cannot be complete. Ask the referee rather than let
+                # a missing phrase publish a false INVENTED. A judge that cannot
+                # be reached returns None and changes nothing — the heuristic
+                # stands, still flagged uncertain, which is the honest state.
+                if not certain:
+                    declined = adjudicate_refusal(probe["question"], turn.reply)
+                    if declined is True and outcome == INVENTED:
+                        outcome, certain, why = PASS, True, "declined — judge overruled the phrase list"
+                    elif declined is False and outcome == PASS:
+                        outcome, certain, why = (INVENTED, True,
+                                                 "asserted an answer — judge overruled the phrase list")
+                    elif declined is not None:
+                        certain, why = True, why + " (judge agreed)"
+
+                row = {"contestant": backend, "probe": probe["id"], "test": probe["test"],
+                       "question": probe["question"], "answer": turn.reply,
+                       "outcome": outcome, "certain": certain, "why": why,
+                       # Whether the gate went to memory at all. Computed since the
+                       # first version and thrown away at render time, so "did
+                       # retrieval even happen" was unanswerable from the results —
+                       # which is most of what a memory benchmark is for.
+                       "retrieved": gate.get("retrieved"),
+                       "tokens": after - spent,
+                       # How many API calls this ONE question actually took. The
+                       # token delta alone left "why does one question cost 4,783
+                       # tokens" answerable only by inference — I guessed two
+                       # calls and happened to be close, which is not the same as
+                       # knowing. The ledger writes one row per call, so counting
+                       # rows settles it for every probe, for free.
+                       "calls": calls_now - calls_at,
+                       "ms": int((time.perf_counter() - t0) * 1000)}
+                spent, calls_at = after, calls_now
+                with lock:
+                    results.append(row)
+                emit("probe", row)
+        except Exception as exc:
+            # One backend failing must not lose the other's results — a missing
+            # key or a service outage is a fact about that contestant, not a
+            # reason to abandon the run.
+            emit("failed", {"contestant": backend, "error": f"{type(exc).__name__}: {exc}"})
+
+    # Contestants are independent: separate homes, separate partitions, and the
+    # only shared state is the emit stream and `results`, both locked above.
+    # Sequential meant the race took the SUM of every contestant, and Zep alone
+    # waits minutes for graph ingestion. In parallel it takes the slowest one.
+    #
+    # The partition env is set ONCE around the whole race rather than per
+    # contestant. It is process-global, every contestant in a race shares the
+    # same partition anyway, and per-contestant scoping would have the first
+    # thread to finish restore the old value while the others were still
+    # writing — sending them at the live agent's memory.
+    seed_lines = [] if not backends else (spec.get("seed") or [])
+    with (arena_partition_env(track, seed_lines, model),
+          ThreadPoolExecutor(max_workers=min(len(backends) or 1, 6)) as pool):
+        list(pool.map(one, backends))
+
+    # Name the leaks explicitly rather than leaving them to be noticed. A probe
+    # the control passed did not test memory in THIS run, whatever the other
+    # columns scored on it.
+    # ...but only for probes that ASSERT RECALLED CONTENT. Two kinds are
+    # supposed to be answerable with nothing stored, and flagging them was the
+    # first thing the control caught — in itself:
+    #   * expect_retrieval=False ("what's 17 times 4") is designed to need no
+    #     memory; passing it with none is the correct behaviour, not a leak.
+    #   * expect_refusal ("what's the filing deadline") is passed by declining,
+    #     and a contestant with no memory declines every time. It would be
+    #     flagged in every single run, forever, and mean nothing.
+    def _asserts_recall(probe_id: str) -> bool:
+        probe = next((q for q in spec["probes"] if q["id"] == probe_id), {})
+        return bool(probe.get("expect_any") or probe.get("expect_all")) \
+            and not probe.get("expect_refusal") \
+            and probe.get("expect_retrieval") is not False
+
+    leaked = sorted({r["probe"] for r in results
+                     if r["contestant"] == CONTROL and r["outcome"] == PASS
+                     and _asserts_recall(r["probe"])})
+    emit("done", {"scoreboard": scoreboard(results), "results": results, "leaked": leaked})
+
+
+def _ledger(home) -> tuple[int, int]:
+    """(tokens, calls) this contestant has spent, from its own throwaway ledger.
+    Both cumulative — callers take the difference across a turn. One ledger ROW
+    is one API call, which is the only honest way to answer "how many round
+    trips did that question take"."""
+    ledger = home / "usage.jsonl"
+    if not ledger.exists():
+        return (0, 0)
+    total = calls = 0
+    for line in ledger.read_text(encoding="utf-8").splitlines():
+        try:
+            row = json.loads(line)
+            # The ledger's keys are "in" and "out" — NOT input_tokens /
+            # output_tokens, which is what this first read, and every probe
+            # reported 0 tokens with no error at all, because `.get(name, 0)`
+            # turns a wrong field name into a plausible number. A benchmark that
+            # silently reports zero cost is worse than one that crashes.
+            total += int(row["in"]) + int(row["out"])
+            calls += 1
+        except (KeyError, ValueError, TypeError):
+            continue
+    return (total, calls)
+
+
+# --- what is actually in there ----------------------------------------------
+# The Memory tab used to explain the benchmark and show none of it. This is the
+# other half: for every store that is configured, what does it hold RIGHT NOW.
+# Read on demand, never on the 5s poll — each call is a live round trip to a
+# paid service, and a dashboard that quietly bills you for sitting on a tab is
+# not one anyone should ship.
+
+def store_contents(limit: int = 8, only: str = "", track: str = "",
+                   model: str = "", fixture: dict | None = None) -> list[dict]:
+    """Per-backend: how many facts it holds and a sample of them.
+
+    A backend that errors reports the error rather than an empty list — "0
+    facts" and "I could not reach the service" look identical on screen and
+    mean opposite things, which is the confusion this whole page exists to
+    stop.
+
+    WHICH sqlite. Given a track and model, this reads the ARENA's own copy —
+    the same `.waku-arena/` home the race seeded — and not the live agent's
+    `.waku/state.db`.
+
+    It used to read the live one, with a paragraph above the cards explaining
+    that "53 vs 0" was not a comparison. That paragraph was the tell. The panel
+    sits under a benchmark whose entire promise is that every store was told
+    the same thing, and the first card was a store that had been told something
+    else entirely, for weeks. Apologising for a comparison in prose is worse
+    than not making it.
+
+    Two things fall out for free. The cards become genuinely comparable, so the
+    explanatory banner can go. And the page stops putting the operator's home
+    address, colleagues and work email on screen — which mattered, because this
+    tab gets filmed.
+
+    The live store is not hidden; it has its own page. It is just not a
+    contestant.
+    """
+    from waku.config import Settings, load_settings
+    from waku.memory import Memory
+
+    spec = ((fixture or load_fixture()).get("tracks") or {}).get(track) or {}
+    seed = spec.get("seed") or []
+
+    out = []
+    for key in _available_backends():
+        if only and key != only:
+            continue
+        # Three kinds, not two. "connected account" is a lie about the control
+        # — it has no account, no service and no rows, and printing that line
+        # above a note that says "told nothing by design" makes the card argue
+        # with itself.
+        # Scoped to a race means ALL of it, not just the local half. The first
+        # version scoped sqlite and left the hosted stores reading their
+        # default partition — which is `waku`, the live agent's. So the race
+        # wrote to waku-arena-<key>, the panel read `waku`, and Clean deleted
+        # waku-arena-<key>: three different drawers, and the cards never
+        # changed no matter what you cleaned. Worse, the panel was showing the
+        # operator's REAL hosted memory the whole time.
+        arena_copy = bool(seed)
+        kind = ("control" if key == CONTROL else
+                "arena" if arena_copy else
+                "live" if key == "sqlite" else "connected")
+        row = {"store": key, "count": 0, "facts": [], "error": "", "span": "",
+               "kind": kind, "note": _store_note(key)}
+        if row["note"]:
+            out.append(row)   # nothing meaningful to read — say why, don't report 0
+            continue
+        try:
+            # The control has no store of its own; the race gives it a sqlite
+            # in its own home and tells it nothing, so reading that home is
+            # what proves it really is empty rather than merely claimed to be.
+            home = (arena_home(key, track, seed, model) if arena_copy
+                    else load_settings().home)
+            store = "sqlite" if key == CONTROL else key
+            settings = Settings(home=home, semantic_store=store)
+            # The hosted stores read their partition from the environment at
+            # construction, exactly as they do during a race — so the read has
+            # to be wrapped the same way the write was.
+            with (arena_partition_env(track, seed, model) if arena_copy
+                  else contextlib.nullcontext()):
+                facts = Memory._make_fact_store(_conn_for(store, settings), settings)
+                rows = facts.list(200)
+            row["count"] = len(rows)
+            row["span"] = _span(rows)
+            row["facts"] = [{"subject": r.get("subject", ""), "content": r.get("content", "")}
+                            for r in rows[:limit]]
+        except Exception as exc:
+            row["error"] = f"{type(exc).__name__}: {exc}"[:160]
+        out.append(row)
+    return out
+
+
+def clean_stores(track: str = "", model: str = "", fixture: dict | None = None) -> dict:
+    """Delete everything THIS race wrote, and nothing else.
+
+    Safe only because of arena_partition. Before that, the arena wrote its seed
+    into MEM0_USER_ID / ZEP_USER_ID's default of "waku" — the live agent's own
+    partition — so "clean the stores" would have deleted the operator's real
+    memory. A cleanup button is exactly as safe as the isolation underneath it,
+    and there was none.
+
+    Now every race owns a partition named for its own key, so this can name
+    precisely what it means: the `.waku-arena/` homes for this seed, and the
+    hosted partition with the matching name. It never touches `.waku/state.db`
+    and never touches the `waku` partition, because it does not know their
+    names — it only ever asks for `waku-arena-<key>`.
+
+    Reports per store rather than raising: a cleanup that half-worked and said
+    nothing is how you end up racing against data you believe is gone.
+    """
+    import shutil
+
+    from waku.config import load_settings
+
+    spec = ((fixture or load_fixture()).get("tracks") or {}).get(track) or {}
+    seed = spec.get("seed") or []
+    if not seed:
+        return {"error": "no track chosen — nothing can be named, so nothing is deleted"}
+
+    key, partition = arena_key(track, seed, model), arena_partition(track, seed, model)
+    out: dict = {"partition": partition, "removed": [], "errors": []}
+
+    base = load_settings().home.parent / ".waku-arena"
+    for home in sorted(base.glob(f"*-{key}")) if base.exists() else []:
+        try:
+            shutil.rmtree(home)
+            out["removed"].append(home.name)
+        except Exception as exc:
+            out["errors"].append(f"{home.name}: {type(exc).__name__}: {exc}")
+
+    for store, wipe in (("mem0", _wipe_mem0), ("zep", _wipe_zep)):
+        try:
+            if wipe(partition):
+                out["removed"].append(f"{store}:{partition}")
+        except Exception as exc:
+            out["errors"].append(f"{store}: {type(exc).__name__}: {exc}")
+    return out
+
+
+def _absent(exc: Exception) -> bool:
+    """Did this delete fail because the thing was already gone?
+
+    Zep 404s when the partition does not exist, which is the NORMAL case:
+    cleaning twice, or cleaning a race that only ever ran locally. Reporting
+    that as an error trains you to ignore the error line, and the day it says
+    something real you will ignore that too.
+    """
+    text = f"{getattr(exc, 'status_code', '')} {exc}".lower()
+    return "404" in text or "not found" in text or "not_found" in text
+
+
+def _wipe_mem0(partition: str) -> bool:
+    from mem0 import MemoryClient
+
+    try:
+        MemoryClient().delete_all(user_id=partition)
+    except Exception as exc:
+        if not _absent(exc):
+            raise
+        return False
+    return True
+
+
+def _wipe_zep(partition: str) -> bool:
+    from zep_cloud import Zep
+
+    try:
+        Zep(api_key=os.environ["ZEP_API_KEY"]).user.delete(user_id=partition)
+    except Exception as exc:
+        if not _absent(exc):
+            raise
+        return False
+    return True
+
+
+def _span(rows: list[dict]) -> str:
+    """Oldest to newest, as plain dates. The most honest single fact about a
+    store's contents: three weeks of real use and one afternoon of benchmark
+    data look identical as a count, and completely different as a span."""
+    stamps = sorted(str(r.get("created_at") or "")[:10] for r in rows if r.get("created_at"))
+    stamps = [s for s in stamps if s]
+    if not stamps:
+        return ""
+    return stamps[0] if stamps[0] == stamps[-1] else f"{stamps[0]} to {stamps[-1]}"
+
+
+def _store_note(key: str) -> str:
+    """Why a store's contents cannot be listed, when that is the case.
+
+    LangMem without Postgres is LangGraph's InMemoryStore, and every read here
+    constructs a fresh one — so it would report "0 facts" forever. That is a
+    false statement about an empty store rather than a true one about an
+    unreadable one, and the difference is the whole point of this page.
+    """
+    if key == CONTROL:
+        # The control is a contestant, not a backend. It is told nothing and
+        # asked everything, so there is no store behind it to read — and
+        # _conn_for returns None for anything that is not sqlite, which the
+        # sqlite path then calls .execute() on. That surfaced on the page as
+        # "AttributeError: 'NoneType' object has no attribute 'execute'", which
+        # reads as "your control contestant is broken" when the truth is that
+        # holding nothing is the entire job.
+        return ("told nothing, by design — there is no store behind this one. "
+                "It exists so a probe it still passes can be flagged as a "
+                "question that never needed memory.")
+    if key == "langmem" and not os.getenv("WAKU_LANGMEM_POSTGRES", "").strip():
+        return ("in-memory store — contents live inside the process that wrote them "
+                "and cannot be read back here. Set WAKU_LANGMEM_POSTGRES to persist.")
+    return ""
+
+
+def _conn_for(key: str, settings):
+    """Only the sqlite store needs a connection; the hosted ones ignore it. The
+    live .waku/state.db is opened READ-ONLY here — this page reports, it never
+    writes, and the arena's own runs happen in throwaway homes."""
+    if key != "sqlite":
+        return None
+    from waku.db import connect
+
+    return connect(settings.home)
+
+
+def _available_backends() -> list[str]:
+    """sqlite always; a hosted store only when it is configured AND installed,
+    so this page never reports an error that just means "you have not set this
+    up", which is what the Connections tab is for."""
+    from waku.integrations import IntegrationState, list_integrations
+
+    ready = {v.key for v in list_integrations()
+             if v.status.state in (IntegrationState.CONFIGURED, IntegrationState.CONNECTED)}
+    # SLOW ones last, deliberately. Zep waits for graph ingestion on every
+    # write — minutes where the others take milliseconds — so putting it in the
+    # middle means the fast columns sit unread behind it while it finishes.
+    # Order here is the order the columns appear.
+    order = ("mem0", "langmem", "supabase", "zep")
+    # CONTROL last: it is the integrity check, not a contestant you rank.
+    return ["sqlite", *[k for k in order if k in ready], CONTROL]

@@ -203,6 +203,35 @@ def _no_key_message(name: str, key_env: str) -> str:
     )
 
 
+def _families(provider: Provider) -> set[str]:
+    """The model FAMILIES this provider ships — "claude", "grok", "gemini"...
+
+    Taken from the provider's own four defaults rather than a hand-kept list, so
+    a new provider is covered the moment it is added. Aggregators whose ids are
+    vendor-namespaced ("anthropic/claude-3" on openrouter) are excluded by the
+    caller: for them the first segment names a VENDOR, not the host.
+    """
+    names = (provider.model, provider.small_model, provider.flagship, provider.fast)
+    return {n.split("-")[0].lower() for n in names if n and "/" not in n}
+
+
+def _belongs_elsewhere(model: str, provider_name: str) -> bool:
+    """Is this model name positively another provider's?
+
+    Deliberately asks the POSITIVE question. "Does it not look like ours?" would
+    drop anything unfamiliar — a legitimately odd id, a preview name, a model
+    added since — and silently downgrade a deliberate choice. This only fires
+    when the family is one some OTHER provider actually owns, which is the case
+    that produces a 400 rather than a surprise.
+    """
+    family = model.split("-")[0].lower()
+    if "/" in model or not family:
+        return False
+    owner = {f: name for name, p in PROVIDERS.items() if "/" not in (p.model or "x")
+             for f in _families(p)}.get(family)
+    return bool(owner) and owner != provider_name
+
+
 def get_client(settings: Settings):
     """Build the client for settings.provider and fill in default model ids.
     Returns anything with .messages.create(...) in the Anthropic shape."""
@@ -223,6 +252,25 @@ def get_client(settings: Settings):
             f"{provider.key_env} contains a non-ASCII character (e.g. a smart quote "
             f"or arrow from a bad paste). Re-paste the key with no spaces or line breaks."
         )
+
+    # A model name belongs to the provider it was configured FOR. WAKU_MODEL and
+    # WAKU_SMALL_MODEL are global, so code that switches provider — the arena
+    # races ten of them — carried anthropic's gate model to xAI, which answers
+    # `400 Model not found: claude-haiku-4-5-20251001`. The retrieval gate then
+    # FAILS OPEN by design, so it retrieved on every single turn for every
+    # non-anthropic model instead of deciding, and reported that as a normal
+    # "retrieve". A silent permanent failure wearing the costume of a healthy
+    # decision.
+    #
+    # So: a value INHERITED from the env for a different provider is dropped
+    # (the provider's own default fills in below); a value the caller passed
+    # explicitly is kept, because that is a choice, not a leak. The two are
+    # distinguishable exactly when the setting still equals the env string.
+    for attr in ("model", "small_model"):
+        inherited = os.getenv(f"WAKU_{attr.upper()}", "").strip()
+        if inherited and getattr(settings, attr) == inherited \
+                and _belongs_elsewhere(inherited, settings.provider):
+            setattr(settings, attr, "")
 
     settings.model = settings.model or provider.model
     settings.small_model = settings.small_model or provider.small_model

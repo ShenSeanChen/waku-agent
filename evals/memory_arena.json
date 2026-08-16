@@ -1,0 +1,72 @@
+{
+  "_doc": [
+    "The example fixture for the memory bake-off: four probes, one per test.",
+    "",
+    "Deliberately dull. This file exists to document the FORMAT and to give the",
+    "scorer's tests something to grade — it is not the benchmark anyone should",
+    "care about. Bring your own:",
+    "",
+    "    WAKU_MEMORY_PROBES=/path/to/your/probes.json",
+    "",
+    "waku ships the mechanism (waku/ops/memory_arena.py scores it, the Arena's",
+    "Memory tab renders whatever is loaded). The questions are yours, and they",
+    "should be: a memory benchmark is only meaningful against the kind of facts",
+    "your users actually store.",
+    "",
+    "SEEDING IS CONVERSATIONAL, and that is a fairness decision. Some backends",
+    "sell their own extraction step — deciding for themselves what is worth",
+    "remembering. Handing every backend a pre-extracted fact list would skip the",
+    "feature half of them exist to provide, so each hears the same sentences a",
+    "user would type.",
+    "",
+    "Each probe declares what a right answer contains and — more usefully — what",
+    "a WRONG one contains. That is what separates 'I don't know' (honest) from a",
+    "confidently superseded answer. See waku/ops/memory_arena.py for how the four",
+    "outcomes are scored."
+  ],
+
+  "tracks": {
+    "example": {
+      "label": "Example — a working week",
+      "seed": [
+        "Let me tell you about this week so you can keep track.",
+        "Priya prefers morning meetings — she's heads-down after lunch.",
+        "The design review is on Tuesday.",
+        "Marcus is out of office on Thursday and Friday.",
+        "Correction: the design review moved to Wednesday."
+      ],
+      "probes": [
+        {
+          "id": "example-recall",
+          "test": "recall",
+          "question": "When does Priya like to meet?",
+          "expect_any": ["morning"],
+          "note": "The floor. A backend that misses this stored nothing."
+        },
+        {
+          "id": "example-update",
+          "test": "update",
+          "question": "When is the design review?",
+          "expect_any": ["Wednesday"],
+          "stale_any": ["Tuesday"],
+          "note": "Both days were stated; only the later one is true. Answering Tuesday is not a gap in knowledge, it is a confident wrong answer — which is why stale is scored apart from miss."
+        },
+        {
+          "id": "example-restraint",
+          "test": "restraint",
+          "question": "What is Priya's phone number?",
+          "expect_refusal": true,
+          "note": "Priya was introduced, but no number ever was. Knowing the person is what makes a system confident enough to fill the gap — inventing one here is the failure that matters outside a demo."
+        },
+        {
+          "id": "example-reasoning",
+          "test": "reasoning",
+          "question": "Can Marcus make the design review?",
+          "expect_any": ["yes", "can", "able"],
+          "expect_all": ["Wednesday"],
+          "note": "Neither fact answers this alone: the review moved to Wednesday AND Marcus is only away Thursday and Friday. Requires finding two and combining them."
+        }
+      ]
+    }
+  }
+}

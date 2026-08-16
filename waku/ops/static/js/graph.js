@@ -119,7 +119,7 @@ function graphPanel(d){
   if (!g.enabled && !last)
     return `<div class="card"><div class="meta">The per-message graph door is <b>off</b> — every chat turn
       runs the classic loop above. Switch on <b>graph workflows</b> in
-      <a class="reveal" onclick="location.hash='settings'">Settings</a> to triage each message first.
+      <a class="reveal" onclick="location.hash='settings'">Behaviour</a> to triage each message first.
       Workflows you run yourself, like <code>make gather</code>, do not need the flag —
       <a class="reveal" onclick="location.hash='graph'">see them here</a>.</div></div>`;
   const when = GRAPH_LIVE

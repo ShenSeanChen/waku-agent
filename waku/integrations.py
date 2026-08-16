@@ -25,9 +25,22 @@ from waku.memory.episodic.notion_store import normalize_database_id
 
 
 class IntegrationState(StrEnum):
-    NOT_CONFIGURED = "not_configured"
-    INSTALLED_BUT_UNCONFIGURED = "installed_but_unconfigured"
-    CONNECTED = "connected"
+    """Where an integration stands, from empty to proven working.
+
+    CONFIGURED exists because the other four could not tell two very different
+    situations apart. "Telegram is missing its token" and "Telegram has
+    everything and I simply have not probed it yet" both returned
+    INSTALLED_BUT_UNCONFIGURED, and the dashboard renders that as "needs
+    setup" — so a working Tavily key, a live Telegram gateway and a connected
+    Notion database all told the user they needed setting up. The health store
+    is empty on a fresh checkout, which means EVERY user saw that on their
+    first visit, about integrations that were already working.
+    """
+
+    NOT_CONFIGURED = "not_configured"                        # nothing filled in
+    INSTALLED_BUT_UNCONFIGURED = "installed_but_unconfigured"  # something REQUIRED is missing
+    CONFIGURED = "configured"                                # complete, never tested
+    CONNECTED = "connected"                                  # probed, and it worked
     ERROR = "error"
 
 
@@ -187,6 +200,45 @@ INTEGRATIONS: tuple[Integration, ...] = (
                  EnvField("NOTION_EPISODES_DATABASE_ID", "Episodes database ID", required=True)),
                 "notion", "notion_client", "https://www.notion.so/my-integrations", ReloadMode.AGENT,
                 lambda env: env.get("WAKU_EPISODIC_STORE") == "notion", None, _notion_normalize),
+    Integration("mem0", "Memory & Storage", "Mem0", "Stores semantic memory in the Mem0 service.",
+                (EnvField("WAKU_SEMANTIC_STORE", "Semantic store", FieldKind.CHOICE,
+                          default="sqlite", options=("sqlite", "mem0")),
+                 EnvField("MEM0_API_KEY", "API key", required=True, secret=True,
+                          help="From app.mem0.ai. The adapter sends infer=False so add() always "
+                               "stores — a bake-off against it measures retrieval, not Mem0's "
+                               "own extraction step."),
+                 EnvField("MEM0_USER_ID", "User id", help="Defaults to 'waku'. Change it only if "
+                                                          "several people share one Mem0 account.")),
+                "arena", "mem0", "", ReloadMode.AGENT,
+                lambda env: env.get("WAKU_SEMANTIC_STORE") == "mem0", None),
+    Integration("zep", "Memory & Storage", "Zep", "Stores semantic memory in a Zep temporal graph.",
+                (EnvField("WAKU_SEMANTIC_STORE", "Semantic store", FieldKind.CHOICE,
+                          default="sqlite", options=("sqlite", "zep")),
+                 EnvField("ZEP_API_KEY", "API key", required=True, secret=True,
+                          help="From getzep.com. Facts become graph edges with validity dates, so a "
+                               "correction supersedes the old value instead of ranking beside it — "
+                               "the one backend built for the update test."),
+                 EnvField("ZEP_USER_ID", "User id", help="Defaults to 'waku'. Zep scopes a graph per user."),
+                 EnvField("ZEP_MAX_WAIT_SECONDS", "Max wait (s)",
+                          help="Ingestion is asynchronous: graph.add returns in ~0.2s with the episode "
+                               "unprocessed, and the text is not searchable until Zep has turned it into "
+                               "nodes and edges. Waku polls until it has, up to this long. Default 120 — "
+                               "raise it if seeding times out, never lower it to make a benchmark finish.")),
+                "arena", "zep_cloud", "", ReloadMode.AGENT,
+                lambda env: env.get("WAKU_SEMANTIC_STORE") == "zep", None),
+    Integration("langmem", "Memory & Storage", "LangMem",
+                "Stores semantic memory in a LangGraph store via LangMem.",
+                (EnvField("WAKU_SEMANTIC_STORE", "Semantic store", FieldKind.CHOICE,
+                          default="sqlite", options=("sqlite", "langmem")),
+                 EnvField("WAKU_LANGMEM_POSTGRES", "Postgres URL",
+                          help="Optional. Without it LangGraph's InMemoryStore is used, which its own "
+                               "docs describe as a reference implementation whose data dies with the "
+                               "process — fine for a benchmark run, not a persistence story."),
+                 EnvField("OPENAI_API_KEY", "OpenAI key", required=True, secret=True,
+                          help="LangMem has no key of its own; it bills through embeddings. Semantic "
+                               "search needs this or the store is a plain key-value dict.")),
+                "arena", "langmem", "", ReloadMode.AGENT,
+                lambda env: env.get("WAKU_SEMANTIC_STORE") == "langmem", None),
     Integration("supabase", "Memory & Storage", "Supabase", "Stores semantic memory in Supabase pgvector.",
                 (EnvField("WAKU_SEMANTIC_STORE", "Semantic store", FieldKind.CHOICE,
                           default="sqlite", options=("sqlite", "supabase")),
@@ -323,8 +375,11 @@ def _status(integration: Integration, env: Mapping[str, str]) -> IntegrationStat
         status = _gateway_status_provider(integration.key)
         if status is not None:
             return status
-    return _health().get(integration.key, IntegrationStatus(IntegrationState.INSTALLED_BUT_UNCONFIGURED,
-                                                              "Configured, not tested"))
+    # Everything required is present and the extra is installed. Whether it
+    # actually WORKS is a separate question, answered only by a probe — so the
+    # honest answer when no probe has run is "configured", not "needs setup".
+    return _health().get(integration.key, IntegrationStatus(IntegrationState.CONFIGURED,
+                                                            "configured — not tested yet"))
 
 
 def list_integrations() -> tuple[IntegrationView, ...]:
@@ -622,10 +677,15 @@ def test_integration(key: str) -> IntegrationView:
     if not integration.enabled(values):
         view = _current_view(key)
         assert view is not None
+        # Switched off. The two "not ready" states survive as they are — turning
+        # a toggle off doesn't fill in a missing token. Anything that WAS ready
+        # (configured / connected / error) drops to CONFIGURED, because a
+        # disabled integration must never keep claiming it is connected.
         state = (
-            IntegrationState.NOT_CONFIGURED
-            if view.status.state is IntegrationState.NOT_CONFIGURED
-            else IntegrationState.INSTALLED_BUT_UNCONFIGURED
+            view.status.state
+            if view.status.state in (IntegrationState.NOT_CONFIGURED,
+                                     IntegrationState.INSTALLED_BUT_UNCONFIGURED)
+            else IntegrationState.CONFIGURED
         )
         status = IntegrationStatus(state, "integration is disabled", view.status.checked_at)
         return IntegrationView(view.key, view.group, view.name, view.what, status, view.fields,

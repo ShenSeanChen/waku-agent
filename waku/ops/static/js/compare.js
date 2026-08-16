@@ -334,7 +334,20 @@ function compareCol(res){
   </div>`;
 }
 
-VIEWS.compare = function(d){
+// The Arena runs two races, and they are the same machine with a different
+// dial: Models holds the harness constant and varies the brain; Memory holds
+// the harness AND the brain constant and varies where facts live. Sub-tabs
+// rather than two sidebar rows, so "Models" doesn't appear twice in the nav
+// (once as a race, once as configuration) — the same reason Memory keeps
+// semantic / episodic / skills behind tabs instead of four sidebar entries.
+VIEWS.compare = function(d, sub){
+  // No sub-tab bar any more: the sidebar names both races directly, and a row
+  // of tabs repeating what the highlighted nav entry already says is furniture.
+  sub = sub === "memory" ? "memory" : "models";
+  return sub === "memory" ? memoryArenaView() : modelArenaView(d);
+};
+
+function modelArenaView(d){
   const pinned = compareModels(d);
   const chips = pinned.length ? pinned.map(p => {
     const spec = `${p.provider}:${p.model}`, on = compareState.picked.has(spec);
@@ -401,8 +414,8 @@ VIEWS.compare = function(d){
   if (compareState.history === undefined){ compareState.history = []; setTimeout(loadCompareHistory, 0); }
 
   return `<div class="card">
-    <div style="display:flex;align-items:center;gap:12px;margin-bottom:6px">
-      <span class="meta">One message, every brain at once — same harness, isolated homes, real receipts (gate · latency · cost · tools). Compare, don't guess.</span>
+    <div class="cmp-controls">
+      <span class="meta cmp-blurb">One message, every brain at once — same harness, isolated homes, real receipts (gate · latency · cost · tools). Compare, don't guess.</span>
       <label class="cmp-judge ${compareState.apple?"on":""}" style="margin-left:auto" title="Write create_event results to your REAL Apple Calendar (the 'Waku' calendar). Off by default so a race doesn't spam duplicates — when on, EACH model writes its own event (use 1-2 models).">
         <input type="checkbox" ${compareState.apple?"checked":""} onchange="toggleApple()"> write to calendar</label>
       <label class="cmp-judge ${compareState.coding?"on":""}" title="Coding task: enables the delegate_task tool so the loop can hand real coding work to a pi sub-agent on this card's own model — the full harness runs (gate, tools), delegate_task is one of them">
@@ -419,7 +432,448 @@ VIEWS.compare = function(d){
       oninput="compareState.message=this.value">${esc(compareState.message)}</textarea>
     <div class="cmp-picks">${chips}</div>
   </div>${grid}${compareHistoryHtml()}`;
-};
+}
+
+// --- Memory arena -----------------------------------------------------------
+// Same four tests, two tracks. Until a runner exists this tab shows the
+// FIXTURE: what every contestant is told and what it is then asked. That is
+// deliberately not a placeholder — a benchmark whose questions you cannot read
+// is a benchmark you have to take on faith, and the whole point of this one is
+// that the numbers are checkable.
+let memoryArenaFixture;   // undefined = not fetched, null = unavailable here
+let maFile = null, maTrack = null;   // chosen probe set; null = whatever loaded
+let maModel = null;                  // "provider:model"; null = cheapest offered
+function pickArenaModel(spec){ maModel = spec; render(); }
+function maModels(){ return (memoryArenaFixture && memoryArenaFixture.models) || []; }
+// Cheapest FIRST from the server, so "no choice made" costs the least. The
+// arena holds the model constant and varies only the store, so the expensive
+// default was buying nothing: a measured dinner race cost ~$4.36 on fable-5
+// ($10/$50 per M) against ~$0.55 on grok-4.3 ($1.25/$2.50), same finding.
+function maModelSpec(){ const m = maModels(); return maModel || (m[0] && m[0].spec) || ""; }
+
+async function pickProbeFile(id){
+  maFile = id;
+  maTrack = (id.split("::")[1]) || null;   // the id carries its own track
+  maPicked = null;
+  memoryArenaFixture = undefined;   // refetch so the questions match the choice
+  maRun = {running:false, rows:[], board:null, log:"", error:null};
+  editing = false; render();
+}
+function pickTrack(name){ maTrack = name; editing = false; render(); }
+
+async function loadMemoryArena(){
+  try {
+    const r = await fetch("/api/memory-arena" + (maFile ? `?probes=${encodeURIComponent(maFile)}` : ""));
+    const j = await r.json();
+    memoryArenaFixture = j && j.available ? j : null;
+  } catch { memoryArenaFixture = null; }
+  render();
+}
+
+const OUTCOME_HELP = [
+  ["pass", "the expected answer is there"],
+  ["stale", "the expected answer is missing and a SUPERSEDED one is asserted"],
+  ["invented", "a refusal was correct and it answered anyway — the fact was never given"],
+  ["miss", "the expected answer is missing and nothing wrong was asserted"],
+];
+
+function probeRow(p){
+  const expect = p.expect_refusal
+    ? `<span class="ma-expect">must decline</span>`
+    : `<span class="ma-expect">${esc((p.expect_any||[]).join(" / "))}</span>`
+      + ((p.expect_all||[]).length ? ` <span class="meta">+ ${esc(p.expect_all.join(", "))}</span>` : "");
+  const forbid = (p.stale_any||[]).length
+    ? `<span class="ma-forbid">${esc(p.stale_any.join(" / "))}</span>` : '<span class="meta">—</span>';
+  return `<tr>
+    <td><code>${esc(p.test)}</code></td>
+    <td>${esc(p.question)}</td>
+    <td>${expect}</td>
+    <td>${forbid}</td>
+    <td class="meta">${esc(p.note||"")}</td></tr>`;
+}
+
+// --- running it -------------------------------------------------------------
+let maRun = {running:false, rows:[], board:null, log:"", error:null};
+
+async function seedMemoryArena(){ return runMemoryArena(true); }
+
+async function runMemoryArena(seedOnly){
+  if (maRun.running) return;
+  const fx = memoryArenaFixture;
+  const track = (maTrack && fx.tracks[maTrack]) ? maTrack : Object.keys(fx.tracks)[0];
+  // Record the grid UP FRONT. Seeding is five real turns per contestant, so the
+  // first result is ~40s away — and a table built only from rows that have
+  // landed renders an empty header for that whole first minute, which reads as
+  // broken rather than busy. Columns and rows are both known before we start;
+  // only the cells are pending.
+  maRun = {running:true, rows:[], board:null, log:"telling…", error:null,
+           backends: maPicks(), probes: fx.tracks[track].probes.map(p=>p.id),
+           seedTotal: (fx.tracks[track].seed || []).length,
+           seeded: {}, seedOnly: !!seedOnly};
+  editing = false; render();
+  try {
+    const res = await fetch("/api/memory-arena/stream", {
+      method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({backends: maPicks(), track, probes: maFile || "",
+                            model: maModelSpec(), seed_only: !!seedOnly})});
+    const reader = res.body.getReader(), dec = new TextDecoder();
+    let buf = "";
+    for(;;){
+      const {done, value} = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, {stream:true});
+      const chunks = buf.split("\n\n"); buf = chunks.pop();
+      for (const c of chunks){
+        if (!c.startsWith("data: ")) continue;
+        const ev = JSON.parse(c.slice(6));
+        if (ev.kind === "start"){ maRun.log = `${ev.contestant}: telling…`;
+                                  maRun.seeded[ev.contestant] = 0; }
+        // Told in an earlier race — nothing to re-tell, so jump straight to
+        // asking rather than animating a telling phase that is not happening.
+        if (ev.kind === "cached"){ maRun.seeded[ev.contestant] = maRun.seedTotal;
+                                   maRun.log = `${ev.contestant}: already told ${ev.facts}`; }
+        if (ev.kind === "seed-done"){ maRun.log = `${ev.contestant}: ${
+                                        ev.reused ? "already told" : "told"} ${ev.facts}`; }
+        if (ev.kind === "seeded"){ maRun.log = `${ev.contestant}: ${ev.line}`;
+                                   maRun.seeded[ev.contestant] = (maRun.seeded[ev.contestant]||0) + 1; }
+        if (ev.kind === "probe"){ maRun.rows.push(ev); maRun.log = `${ev.contestant}: ${ev.probe}`; }
+        if (ev.kind === "failed") maRun.error = `${ev.contestant} — ${ev.error}`;
+        if (ev.kind === "done"){ maRun.board = ev.scoreboard || null;
+                                 maRun.leaked = ev.leaked || [];
+                                 if (ev.error) maRun.error = ev.error; }
+        editing = false; render();
+      }
+    }
+  } catch(e){ maRun.error = String(e); }
+  maRun.running = false; maRun.log = ""; editing = false; render();
+}
+
+// Which stores to race — asked of the SERVER, not decided here.
+// This used to be a hardcoded ["mem0", "supabase"] filtered against the
+// connections list, written before Zep and LangMem existed. Both were
+// configured, both were silently dropped from every race, and the button
+// cheerfully said "Race 2 stores" as though that were the whole field. A list
+// of backends maintained in two languages drifts the moment one is added;
+// waku/ops/memory_arena.py::_available_backends is now the only one.
+function maBackends(){
+  return (memoryArenaFixture && memoryArenaFixture.backends) || ["sqlite"];
+}
+
+// Which of them actually race. Zep starts UNCHECKED: it waits for graph
+// ingestion on every write, which took 16 minutes for ten operations against a
+// live account. Racing it by default turned a four-minute experiment into a
+// forty-minute one and made the whole tab feel broken. It is one click away,
+// deliberately, rather than one click away from being avoided.
+const MA_NOTE = {control: "Told nothing, asked everything. It should fail every probe — one it passes is a probe the model can answer without memory."};
+const MA_SLOW = {zep: "waits for graph ingestion — minutes per fact"};
+let maPicked = null;
+
+function maPickedSet(){
+  if (maPicked === null) maPicked = new Set(maBackends().filter(k => !MA_SLOW[k]));
+  return maPicked;
+}
+function maTogglePick(key){
+  const s = maPickedSet();
+  s.has(key) ? s.delete(key) : s.add(key);
+  editing = false; render();
+}
+function maPicks(){
+  return maBackends().filter(k => maPickedSet().has(k));
+}
+
+
+function maProbe(id){
+  const tracks = (memoryArenaFixture && memoryArenaFixture.tracks) || {};
+  for (const t of Object.values(tracks)){
+    const hit = (t.probes || []).find(p => p.id === id);
+    if (hit) return hit;
+  }
+  return null;
+}
+
+const OUTCOME_CELL = (r) => `<span class="ma-o ma-${r.outcome}" title="${esc(r.why||"")}">${r.outcome}</span>`;
+
+function maResultsHtml(){
+  if (!maRun.rows.length && !maRun.running && !maRun.error) return "";
+  // The grid comes from what was ASKED, not from what has answered — so every
+  // column and row is on screen from the first second, and each cell says
+  // whether it is seeding, queued, or done. An empty table under a "running"
+  // heading is indistinguishable from a broken one.
+  // From the track being RACED, recorded when the race started. It used to read
+  // Object.values(tracks)[0] — always the first track in the file, whichever one
+  // you picked. Racing the 6-fact business track against the 8-fact dinner
+  // track's total stuck the cell at "told 6 of 8" and it never reached "asking".
+  const seedTotal = maRun.seedTotal || 0;
+  const names = maRun.backends || [...new Set(maRun.rows.map(r => r.contestant))];
+  const probes = maRun.probes || [...new Set(maRun.rows.map(r => r.probe))];
+  // `first` because telling is per CONTESTANT, not per question. Repeating
+  // "told 2 of 8" down every probe row made it look like all four questions
+  // were already being asked in parallel — they are not; the contestant has
+  // not been asked anything yet.
+  const cell = (p, n, first) => {
+    const r = maRun.rows.find(x => x.probe === p && x.contestant === n);
+    if (r) return `<td>${OUTCOME_CELL(r)}
+      <div class="ma-facts-meta">${(r.ms/1000).toFixed(1)}s &middot; ${r.tokens} tok${
+        r.calls ? " in " + r.calls + (r.calls === 1 ? " call" : " calls") : ""} &middot; ${
+        r.retrieved === true ? "searched memory" : r.retrieved === false ? "no lookup" : "gate unknown"}</div>
+      <div class="ma-ans">${esc((r.answer||"").slice(0,140))}</div></td>`;
+    if (!maRun.running) return `<td class="meta">—</td>`;
+    const seeded = (maRun.seeded || {})[n];
+    if (seeded === undefined) return `<td class="meta">queued</td>`;
+    // "seeding 4/8" reads like a progress bar for something the viewer has not
+    // been shown. "told 4 of 8" names the actual event: this store has now been
+    // told four of the eight facts it is about to be questioned on.
+    if (seeded < seedTotal) return first
+      ? `<td class="meta">being told ${seeded} of ${seedTotal}<span class="caret"></span></td>`
+      : `<td class="meta"></td>`;
+    return first ? `<td class="meta">asking<span class="caret"></span></td>`
+                 : `<td class="meta">waiting</td>`;
+  };
+  const board = maRun.board ? `<div class="card" style="padding:4px 8px"><div class="tablescroll"><table>
+      <tr><th>store</th><th>pass</th><th>stale</th><th>invented</th><th>miss</th><th>tokens</th></tr>
+      ${maRun.board.map(b=>`<tr><td><code>${esc(b.contestant)}</code></td>
+        <td>${b.pass}</td><td>${b.stale}</td><td>${b.invented}</td><td>${b.miss}</td>
+        <td class="meta">${b.tokens}</td></tr>`).join("")}
+    </table></div></div>` : "";
+  return `<h2 style="margin-top:22px">Results${maRun.running?' <span class="meta" style="font-weight:400">— running…</span>':""}</h2>
+    ${maRun.error?`<div class="card" style="color:var(--bad)">${esc(maRun.error)}</div>`:""}
+    ${board}
+    <div class="card" style="padding:4px 8px"><div class="tablescroll"><table>
+      <tr><th>probe</th>${names.map(n=>`<th>${esc(n)}</th>`).join("")}</tr>
+      ${probes.map((p, i)=>{
+        const any = maRun.rows.find(x => x.probe === p);
+        const fx = maProbe(p);
+        const leaked = (maRun.leaked || []).includes(p);
+        return `<tr>
+          <td><span class="ma-test">${esc((any && any.test) || (fx && fx.test) || "")}</span>${
+            leaked ? ' <span class="ma-o ma-invented" title="The no-memory control answered this correctly, so this question did not require the store in this run.">leaked</span>' : ""}
+            <div class="ma-q">${esc((any && any.question) || (fx && fx.question) || p)}</div>
+            <div class="ma-facts-meta">${fx ? (fx.expect_refusal
+                ? "must decline" : "wants: " + esc((fx.expect_any||[]).join(" / "))) : ""}${
+              fx && (fx.stale_any||[]).length ? " &middot; not: " + esc(fx.stale_any.join(" / ")) : ""}</div>
+          </td>${names.map(n=>cell(p, n, i === 0)).join("")}</tr>`;}).join("")}
+    </table></div></div>`;
+}
+
+async function maSeeAll(store){
+  // Expand THIS store in place. Never navigate — the Memory page is sqlite's
+  // and sending mem0's "see all" there showed the wrong store's facts.
+  const cards = Array.isArray(maStores) ? maStores : null;   // "loading" is a string
+  const i = cards ? cards.findIndex(c => c.store === store) : -1;
+  if (i < 0) return;
+  cards[i] = Object.assign({}, cards[i], {loading: true}); render();
+  try {
+    const r = await fetch(`/api/memory-arena/stores?store=${encodeURIComponent(store)}&${maStoreQuery()}`);
+    const full = (await r.json())[0];
+    if (full) cards[i] = full;
+  } catch (e){ cards[i].error = String(e); }
+  cards[i].loading = false; render();
+}
+
+function memoryArenaView(){
+  if (memoryArenaFixture === undefined){
+    setTimeout(loadMemoryArena, 0);
+    return `<div class="card empty">loading…</div>`;
+  }
+  if (memoryArenaFixture === null){
+    return `<div class="card empty">The probe file lives in <code>evals/memory_arena.json</code>,
+      which a packaged install does not ship. Run Waku from a clone to see it.</div>`;
+  }
+  const track = memoryArenaFixture.tracks[(maTrack && memoryArenaFixture.tracks[maTrack])
+    ? maTrack : Object.keys(memoryArenaFixture.tracks)[0]];
+  const picks = maPicks();
+  const chips = maBackends().map(k => {
+    const on = maPickedSet().has(k);
+    const tip = MA_SLOW[k] || MA_NOTE[k];
+    return `<label class="cmp-pick ${on?"on":""}" ${tip?`title="${esc(tip)}"`:""}>
+      <input type="checkbox" ${on?"checked":""} onchange="maTogglePick('${esc(k)}')"> ${esc(k)}${
+      MA_SLOW[k] ? ' <span class="meta">slow</span>' : ""}${
+      k === "control" ? ' <span class="meta">no memory</span>' : ""}</label>`;
+  }).join("");
+  // ONE dropdown. A file is a container, not a choice — picking "which file"
+  // and then "which track inside it" made you answer one question twice, and
+  // the filename told you less than the track label already did.
+  const sets = (memoryArenaFixture.sets || []);
+  const chosen = maFile || memoryArenaFixture.chosen || (sets[0] && sets[0].id);
+  // Three rows, no prose. Every sentence that used to sit here has moved into
+  // a title= on the control it was describing: the reader who needs it hovers,
+  // and the reader who does not gets the vertical space back for store cards.
+  // On this page that space is the scarcest thing there is.
+  const picker = `<div class="ma-race ma-pickers" style="margin-bottom:10px">
+      <label class="fld" style="margin:0">Questions
+        <select onchange="pickProbeFile(this.value)"
+                title="Drop a JSON file in .waku/probes/ to add your own question sets.">
+          ${sets.map(s=>`<option value="${esc(s.id)}" ${s.id===chosen?"selected":""}>${
+            esc(s.label)} — ${s.facts} facts, ${s.probes} questions</option>`).join("")}
+        </select></label>
+      ${maModels().length ? `<label class="fld" style="margin:0">Model
+        <select onchange="pickArenaModel(this.value)">
+          ${maModels().map(m=>`<option value="${esc(m.spec)}" ${
+            m.spec===maModelSpec()?"selected":""}>${esc(m.spec)} — $${m.price_in}/$${m.price_out} per M</option>`).join("")}
+        </select></label>` : ""}
+    </div>`;
+  const race = `<div class="card">
+    ${picker}
+    <div class="cmp-picks" style="margin-bottom:10px">${chips}</div>
+    <div class="ma-race">
+      <button class="save ghost" onclick="seedMemoryArena()"
+              title="Telling never changes, so it is its own button — do it once and ask as many times as you like."
+              ${maRun.running||!picks.length?"disabled":""}>
+        ${maRun.running && maRun.seedOnly ? "Telling…"
+          : `Tell ${picks.length} store${picks.length===1?"":"s"}`}</button>
+      <button class="save" onclick="runMemoryArena()"
+              title="Asks the same questions of every store and scores the answers. Tells anything not yet told. Each store runs in its own copy; your real memory is never touched."
+              ${maRun.running||!picks.length?"disabled":""}>
+        ${maRun.running && !maRun.seedOnly ? "Asking…"
+          : `Ask ${picks.length} store${picks.length===1?"":"s"}`}</button>
+      ${maRun.running ? `<span class="meta">${esc(maRun.log)}</span>` : ""}
+    </div></div>`;
+  // ORDER MATTERS, and it used to be wrong: race, results, stores, asks. The
+  // questions were dead last, so you could start a race — and film one —
+  // without ever having seen what the stores get told or asked. A benchmark
+  // whose questions arrive after its verdict is asking you to take the verdict
+  // on trust, which is the one thing this page exists not to do.
+  //
+  // Pick, then see what they'll be told and asked, then the verdict, then the
+  // contents. Store cards go last on purpose: they are the slowest to read and
+  // the only part that needs a button press.
+  return race + maAsksHtml(track) + maResultsHtml() + maStoresHtml();
+}
+
+// --- what each store is holding, right now ----------------------------------
+// This is the screen the tab should have opened with from the start: not an
+// essay about a benchmark, but the contents of every store you have connected.
+// Fetched on demand, never on the 5s poll.
+let maStores;   // undefined = not fetched, [] = fetched and empty
+
+// Which seeding the cards should describe. Without this the server has no way
+// to know which .waku-arena home to open, and falls back to the live agent's
+// store — which is exactly the incomparable card this panel used to apologise
+// for in a paragraph above itself.
+// Same fallback chain the picker uses. maFile is empty until you CHANGE the
+// dropdown, so reading it raw sends "" for the default set — and the server,
+// given no probe set, can name neither a home nor a partition. Reads would
+// quietly fall back to the live store and Clean would refuse. The bug would
+// only appear for people who never touched the dropdown, which is most of them.
+function maChosenSet(){
+  const fx = memoryArenaFixture || {};
+  const sets = fx.sets || [];
+  return maFile || fx.chosen || (sets[0] && sets[0].id) || "";
+}
+
+function maStoreQuery(){
+  return `probes=${encodeURIComponent(maChosenSet())}&model=${encodeURIComponent(maModelSpec())}`;
+}
+
+let maClean = "";   // what the last clean did, shown where the hint normally sits
+
+// Deliberately NOT behind a confirm dialog: it can only reach this race's own
+// scratch. The dangerous version of this button was the one that existed
+// before per-race partitions, when "the stores" included the live agent's.
+async function cleanMemoryStores(){
+  maClean = "cleaning…"; editing = false; render();
+  try {
+    const r = await fetch("/api/memory-arena/clean", {
+      method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({probes: maChosenSet(), model: maModelSpec()})});
+    const out = await r.json();
+    maClean = out.error ? `clean failed — ${out.error}`
+      : `cleaned ${(out.removed||[]).length} — ${(out.removed||[]).join(", ") || "nothing to remove"}`
+        + ((out.errors||[]).length ? ` &middot; ${out.errors.length} failed` : "");
+    maStores = undefined;              // the cards on screen now describe deleted data
+  } catch(e){ maClean = `clean failed — ${e}`; }
+  editing = false; render();
+}
+
+async function loadMemoryStores(){
+  maStores = "loading";
+  editing = false; render();
+  try { maStores = await (await fetch(`/api/memory-arena/stores?${maStoreQuery()}`)).json(); }
+  catch(e){ maStores = [{store:"?", error:String(e)}]; }
+  editing = false; render();
+}
+
+function maStoresHtml(){
+  const btn = `<button class="save ghost" onclick="loadMemoryStores()"
+    ${maStores === "loading" ? "disabled" : ""}>${maStores === "loading" ? "reading…" : "Read stores"}</button>`;
+  // The heading carries the button. This used to be a whole card wrapping one
+  // control and a paragraph — a card's worth of vertical space to say "press
+  // this". On a page where the useful content is five store cards further
+  // down, that is the most expensive furniture on screen.
+  const head = `<h2 class="ma-head">What each store is holding ${btn}
+    <button class="save ghost" onclick="cleanMemoryStores()"
+      title="Deletes only what this race wrote: its .waku-arena copies and its waku-arena partition. Your own memory and the waku partition are never named, so they cannot be reached.">Clean</button>
+    <span class="meta">${maClean || "what each made of the SAME facts &middot; live call, on demand"}</span></h2>`;
+  if (!Array.isArray(maStores)) return head;
+  const cards = maStores.map(s => `<div class="card ma-store">
+      <div class="ma-store-h"><code>${esc(s.store)}</code>
+        ${s.error ? `<span class="ma-o ma-invented">error</span>`
+                  : `<span class="meta">${s.count} fact${s.count===1?"":"s"}</span>`}</div>
+      <div class="ma-prov">${s.kind === "arena"
+        ? `this race's own copy &middot; <code>.waku-arena/</code>`
+        : s.kind === "live"
+        ? `your live agent &middot; <code>.waku/state.db</code>`
+        : s.kind === "control"
+        ? `not a store &middot; the integrity check`
+        : `connected account &middot; only what waku wrote`}${
+        s.span ? ` &middot; ${esc(s.span)}` : ""}</div>
+      ${s.error ? `<div class="ma-ans">${esc(s.error)}</div>`
+        : s.note ? `<div class="ma-ans">${esc(s.note)}</div>`
+        : (s.facts||[]).length
+          ? `<ul class="ma-facts">${s.facts.map(f=>`<li>${f.subject
+              ? `<b>${esc(f.subject)}</b> — ` : ""}${esc(f.content)}</li>`).join("")}</ul>${
+              s.count > s.facts.length
+                ? `<div class="meta" style="margin-top:6px">showing ${s.facts.length} of ${s.count}
+                     &middot; <a class="reveal" onclick="maSeeAll('${esc(s.store)}')">see all</a></div>`
+                : ""}`
+          : `<div class="meta">empty</div>`}
+    </div>`).join("");
+  // This used to carry a warning that the counts were NOT a comparison —
+  // because sqlite was the live agent, with weeks of real use, sitting beside
+  // stores that had only ever seen one benchmark run. The warning was correct
+  // and the design was wrong: a panel under a benchmark should not need a
+  // paragraph explaining why its first card does not count.
+  //
+  // sqlite now reads the race's OWN copy, so every card describes the same
+  // seeding and the comparison is real. What is left to say is the one thing
+  // still worth saying — this is a live read, and it costs a round trip.
+  return head + `<div class="ma-stores">${cards}</div>`;
+}
+
+// --- what they get asked ----------------------------------------------------
+// Trimmed hard. The full note on every probe was three lines of prose each and
+// buried the thing anyone actually wants: the question, and what counts as
+// right. Hover a row for the reasoning.
+function maAsksHtml(track){
+  return `<h2 style="margin-top:22px">What they get asked
+      <span class="meta" style="font-weight:400">— ${track.seed.length} facts in, ${track.probes.length} questions</span></h2>
+    ${/* ONE table, two sections. They were two cards, which read as two
+          unrelated lists — and they are the opposite of unrelated: the second
+          only means anything BECAUSE of the first. A section row inside a
+          single table says "same subject, two halves" in a way two cards with
+          a gap between them cannot, and it saves a card's worth of height on
+          a page where that is the scarce resource. */""}
+    <div class="card" style="padding:4px 8px"><div class="tablescroll"><table>
+      <tr><th>told</th><th></th><th></th></tr>
+      ${track.seed.map(s=>`<tr><td class="meta" colspan="3">${esc(s)}</td></tr>`).join("")}
+      <tr><th>then asked</th><th>right answer</th><th>wrong answer</th></tr>
+      ${track.probes.map(p=>`<tr title="${esc(p.note||"")}">
+        <td>${esc(p.question)}</td>
+        <td><span class="ma-expect">${p.expect_refusal ? "must decline"
+            : esc((p.expect_any||[]).join(" / "))}</span></td>
+        <td>${(p.stale_any||[]).length ? `<span class="ma-forbid">${esc(p.stale_any.join(" / "))}</span>`
+            : p.expect_refusal ? `<span class="ma-forbid">any specific answer</span>`
+            : '<span class="meta">—</span>'}</td></tr>`).join("")}
+    </table></div></div>
+    <div class="meta" style="margin-top:8px">${memoryArenaFixture.is_example
+      ? `Example probes. Point <code>WAKU_MEMORY_PROBES</code> at your own file.`
+      : `From <code>${esc(memoryArenaFixture.source)}</code>`}
+      &nbsp;·&nbsp; <span class="ma-o ma-pass">pass</span> right
+      <span class="ma-o ma-stale">stale</span> gave a superseded answer
+      <span class="ma-o ma-invented">invented</span> made it up
+      <span class="ma-o ma-miss">miss</span> said it did not know</div>`;
+}
+
 
 // The cumulative view under the current race: a per-model scoreboard averaged
 // across every logged race, then the list of recent races (click to reopen).
@@ -532,7 +986,7 @@ function compareHistoryHtml(){
       <span class="meta" style="font-weight:400">— totals across ${raceCount} race${raceCount===1?"":"s"}</span>
       <a class="reveal" style="margin-left:auto;font-size:12px" onclick="clearCompareHistory()">clear all</a></h2>
     ${costQualityScatter(agg)}
-    <div class="card" style="padding:4px 8px"><table>
+    <div class="card" style="padding:4px 8px"><div class="tablescroll"><table>
       <tr><th>model</th><th title="knowledge cutoff — when each model's world knowledge ends; it cannot know releases after this date">cutoff</th>${th("cases_passed","solved")}<th class="cmp-th ${bs.key==="quality_avg"?"on":""}" onclick="setBoardSort('quality_avg')" title="referee's mean 0-10 grade on the replies (correctness, honesty, concision) — referee is not a racing model">grade${arrow("quality_avg")}</th>${th("runs","races")}<th>ok</th>${th("total_latency_ms","total time")}${th("total_tokens_in","in tok")}${th("total_tokens_out","out tok")}${th("total_tokens","total tok")}<th title="list price per million tokens, input / output">rate $/M</th>${th("total_cost_usd","total cost")}</tr>
       ${rows.map(a=>`<tr>
         <td><span class="mm-prov">${esc(a.provider)}</span> <code>${esc(a.model)}</code></td>
@@ -545,7 +999,7 @@ function compareHistoryHtml(){
         <td class="meta">${a.total_tokens}</td>
         <td class="meta">${a.rate_in!=null?`$${a.rate_in}/$${a.rate_out}`:"—"}</td>
         <td class="meta" style="color:var(--good)">${money(a.total_cost_usd)}</td></tr>`).join("")}
-    </table></div>` : "";
+    </table></div></div>` : "";
   const recent = hist.length ? `
     <h2 style="margin-top:18px">Recent races <span class="meta" style="font-weight:400">— click to reopen</span></h2>
     <div class="card">${hist.map((run,i)=>`

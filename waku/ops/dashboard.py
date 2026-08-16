@@ -898,6 +898,61 @@ class Handler(BaseHTTPRequestHandler):
         elif self.path == "/api/compare/history":
             runs = compare_history.load_runs(load_settings().home)
             self._send(json.dumps(history_response(runs)).encode(), "application/json")
+        elif self.path.startswith("/api/memory-arena/stores"):
+            # What each configured store holds right now. On demand only —
+            # every hosted backend here is a live round trip, and a dashboard
+            # that bills you for leaving a tab open is not one to ship.
+            from urllib.parse import parse_qs, urlparse
+
+            from waku.ops import memory_arena
+
+            try:
+                q = parse_qs(urlparse(self.path).query)
+                # "see all" asks for ONE store in full. It used to be a link to
+                # the Memory page, which only ever renders sqlite — so clicking
+                # it under mem0 showed you waku's local facts and said nothing.
+                only = (q.get("store", [""])[0] or "").strip()
+                limit = 500 if only else 8
+                # Track and model identify WHICH arena home to read for sqlite,
+                # so the cards compare the same seeding rather than putting the
+                # live agent's months of real use next to a benchmark run.
+                # Same path-safety rule as the race: only a probe set this
+                # server offered, never a browser-supplied path.
+                from pathlib import Path as _P
+
+                wanted = (q.get("probes", [""])[0] or "").strip()
+                hit = next((s for s in memory_arena.probe_sets() if s["id"] == wanted), None)
+                fixture = memory_arena.load_fixture(_P(hit["path"])) if hit else None
+                track = hit["track"] if hit else (q.get("track", [""])[0] or "").strip()
+                model = (q.get("model", [""])[0] or "").strip()
+                self._send(json.dumps(memory_arena.store_contents(
+                    limit, only, track=track, model=model, fixture=fixture)).encode(),
+                    "application/json")
+            except Exception as exc:
+                self._send(json.dumps([{"store": "?", "error": f"{type(exc).__name__}: {exc}"}]).encode(),
+                           "application/json")
+        elif self.path.startswith("/api/memory-arena?") or self.path == "/api/memory-arena":
+            # The bake-off fixture, so the Arena's Memory tab can show WHAT is
+            # being asked before any of it has been run. It lives in evals/,
+            # which a wheel does not ship — a pip-installed Waku answers with
+            # `available: false` instead of 500ing on a file that was never
+            # meant to be there.
+            from waku.ops import memory_arena
+
+            try:
+                from pathlib import Path as _P
+                from urllib.parse import parse_qs, unquote, urlparse
+
+                wanted = unquote(parse_qs(urlparse(self.path).query).get("probes", [""])[0]).strip()
+                sets = memory_arena.probe_sets()
+                hit = next((s for s in sets if s["id"] == wanted), None)
+                payload = {"available": True, "backends": memory_arena._available_backends(),
+                           "sets": sets, "chosen": hit["id"] if hit else "",
+                           "models": memory_arena.arena_models(),
+                           **memory_arena.load_fixture(_P(hit["path"]) if hit else None)}
+                self._send(json.dumps(payload).encode(), "application/json")
+            except (OSError, ValueError):
+                self._send(json.dumps({"available": False}).encode(), "application/json")
         elif self.path.startswith("/api/models"):
             from urllib.parse import parse_qs, urlparse
 
@@ -981,6 +1036,63 @@ class Handler(BaseHTTPRequestHandler):
                                judge_spec=(payload.get("judge_model") or ""), apple=bool(payload.get("apple")))
             except Exception as exc:
                 emit("done", {"error": f"{type(exc).__name__}: {exc}"})
+            return
+        # /api/memory-arena/stream — same shape as the model race above, one dial
+        # over: every contestant is the same agent on the same model, and only
+        # the semantic store changes.
+        if self.path == "/api/memory-arena/clean":
+            # Deletes only what a race wrote: the .waku-arena homes for this
+            # seed and the waku-arena-<key> partition. It cannot reach the live
+            # store or the `waku` partition because it never asks for them by
+            # name. Same probe-set validation as the race — a browser-supplied
+            # path must never reach the filesystem.
+            from pathlib import Path as _P
+
+            from waku.ops import memory_arena
+
+            payload = json.loads(self.rfile.read(length) or "{}")
+            wanted = (payload.get("probes") or "").strip()
+            hit = next((s for s in memory_arena.probe_sets() if s["id"] == wanted), None)
+            fixture = memory_arena.load_fixture(_P(hit["path"])) if hit else None
+            track = hit["track"] if hit else (payload.get("track") or "")
+            try:
+                out = memory_arena.clean_stores(
+                    track=track, model=(payload.get("model") or "").strip(), fixture=fixture)
+            except Exception as exc:
+                out = {"error": f"{type(exc).__name__}: {exc}"}
+            self._send(json.dumps(out).encode(), "application/json")
+            return
+        if self.path == "/api/memory-arena/stream":
+            payload = json.loads(self.rfile.read(length) or "{}")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-cache")
+            self.end_headers()
+
+            def emit_mem(kind, ev):
+                try:
+                    self.wfile.write(f"data: {json.dumps({'kind': kind, **ev}, default=str)}\n\n".encode())
+                    self.wfile.flush()
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
+            try:
+                # The chosen file must be one this server offered. Echoing a
+                # browser-supplied path straight into read_text() would turn a
+                # benchmark page into an arbitrary local file reader.
+                from pathlib import Path as _P
+
+                from waku.ops import memory_arena
+
+                wanted = (payload.get("probes") or "").strip()
+                hit = next((s for s in memory_arena.probe_sets() if s["id"] == wanted), None)
+                fixture = memory_arena.load_fixture(_P(hit["path"])) if hit else None
+                track = hit["track"] if hit else (payload.get("track") or "example")
+                memory_arena.run_arena(payload.get("backends") or ["sqlite"],
+                                       track, emit_mem, fixture=fixture,
+                                       model=(payload.get("model") or "").strip(),
+                                       seed_only=bool(payload.get("seed_only")))
+            except Exception as exc:
+                emit_mem("done", {"error": f"{type(exc).__name__}: {exc}"})
             return
         if self.path == "/api/graph/stream":
             payload = json.loads(self.rfile.read(length) or "{}")

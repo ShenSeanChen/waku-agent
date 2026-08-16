@@ -277,11 +277,17 @@ async function saveProvider(provider){
 }
 function stProvider(){ return (D.settings || {}).provider || "anthropic"; }
 
-const CONNECTION_GROUPS = ["Channels", "Productivity", "Storage", "Tools"];
+const CONNECTION_GROUPS = ["Channels", "Productivity", "Memory", "Tools"];
+// "Memory", not "Storage". The registry already calls this group "Memory &
+// Storage"; the display map was dropping the half that says what these
+// actually are. Notion is the episodic store, Supabase the semantic one, and
+// every hosted memory service that joins them is semantic too — none of it is
+// generic storage, and Memory is one of the four pillars the rest of the
+// dashboard is organised around.
 const CONNECTION_GROUP_MAP = {
   "Channels": "Channels",
   "Calendar & Productivity": "Productivity",
-  "Memory & Storage": "Storage",
+  "Memory & Storage": "Memory",
   "Search & Observability": "Tools",
 };
 
@@ -294,6 +300,12 @@ function connectionStatusDisplay(status){
   const state = (status && status.state) || "not_configured";
   if (state === "connected") return {label:"connected", className:"connected"};
   if (state === "error") return {label:"error", className:"error"};
+  // "configured" means every required field is filled and the extra is
+  // installed — it just hasn't been probed. That is not a warning, so it must
+  // not wear the amber "needs setup" pill: this state covers most of a working
+  // setup on first visit, and colouring it like a problem told every new user
+  // their Telegram, Notion and Tavily needed fixing when they were fine.
+  if (state === "configured") return {label:"configured · not tested", className:"configured"};
   if (state === "installed_but_unconfigured") return {label:"needs setup", className:"needs-setup"};
   return {label:"not configured", className:"not-configured"};
 }
@@ -301,10 +313,19 @@ function connectionStatusDisplay(status){
 function connectionCard(item){
   const display = connectionStatusDisplay(item.status);
   const action = item.status && item.status.state !== "not_configured" ? "Edit" : "Configure";
+  // Say WHY on the card. "needs setup" covers two unrelated fixes — a missing
+  // value ("missing NOTION_TOKEN") and a missing package ("missing notion
+  // extra", which wants a pip install, not a key) — and the reason used to be
+  // hidden until you opened the modal. The message repeats the label for
+  // connected/configured, so only show it where it adds something.
+  const why = (item.status && item.status.message
+    && (item.status.state === "installed_but_unconfigured" || item.status.state === "error"))
+    ? `<div class="connwhy">${esc(item.status.message)}</div>` : "";
   return `<article class="provcard conncard" data-connection-card="${esc(item.key)}">
     <img class="provlogo connlogo" src="/static/logos/connections/${esc(item.key)}.svg" alt="">
     <div class="provname">${esc(item.name)}</div>
     <div class="connstatus ${display.className}"><span class="conndot"></span>${esc(display.label)}</div>
+    ${why}
     <div class="conndesc">${esc(item.what)}</div>
     <div class="provactions connactions">
       <button class="save ghost" onclick="openConnectionModal('${esc(item.key)}')">${action}</button>
@@ -442,7 +463,7 @@ const VIEWS = {
     if (!g.enabled)
       h += `<div class="card"><b>Off</b> — every turn currently runs the classic loop.
         <div class="meta" style="margin-top:6px">Switch on <b>graph workflows</b> in
-        <a class="reveal" onclick="location.hash='settings'">Settings</a>, or set
+        <a class="reveal" onclick="location.hash='settings'">Behaviour</a>, or set
         <code>WAKU_GRAPH_WORKFLOWS=1</code> in <code>.env</code>. Any failure anywhere fails open to the
         plain loop — this can never lose a reply, only save time and tokens.</div></div>`;
     // The two workflows are two different JOBS with different triggers, which is

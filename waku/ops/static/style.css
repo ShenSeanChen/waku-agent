@@ -1,4 +1,7 @@
 :root{
+    /* let native UI (scrollbars, form controls) follow the active scheme,
+       otherwise they stay light even in dark mode */
+    color-scheme:light dark;
     --bg:#fafaf9;--panel:#ffffff;--line:#e7e6e4;--line2:#d9d8d5;
     --ink:#21201d;--ink2:#6f6e69;--ink3:#a3a29d;
     --accent:#5e6ad2;--accent-soft:#eef0fb;
@@ -12,6 +15,13 @@
     --good:#4cc38a;--good-soft:#12291d;--bad:#e5655a;--bad-soft:#331714;
   }}
   *{box-sizing:border-box;margin:0}
+  /* thin theme-colored scrollbars (like the chat dock's), instead of the
+     chunky native ones */
+  *{scrollbar-width:thin;scrollbar-color:var(--line2) transparent}
+  *::-webkit-scrollbar{width:6px;height:6px}
+  *::-webkit-scrollbar-track{background:transparent}
+  *::-webkit-scrollbar-thumb{background:var(--line2);border-radius:3px}
+  *::-webkit-scrollbar-thumb:hover{background:var(--ink3)}
   /* three fixed-height columns, each scrolling independently: the main
      content's scrollbar sits at its own right edge (the "middle"), never over
      the chat dock. */
@@ -32,13 +42,26 @@
   body.nav-hidden #nav-reopen{display:block}
   .brand{font-weight:650;font-size:15px;padding:0 10px 4px}
   .brand small{display:block;color:var(--ink3);font-weight:400;font-size:11px;margin-top:2px}
+  /* Links are indented past their group header, which is what makes the header
+     read as a PARENT instead of a line of text dropped between rows. Header and
+     links used to share the same 10px left edge, so the sidebar looked like one
+     flat list with two captions randomly inserted into it. */
   nav a{display:flex;justify-content:space-between;align-items:center;color:var(--ink2);
-        text-decoration:none;padding:6px 10px;border-radius:6px;font-size:13.5px;margin-top:2px}
+        text-decoration:none;padding:6px 10px 6px 20px;border-radius:6px;font-size:13.5px;margin-top:2px}
   nav a:hover{background:var(--panel);color:var(--ink)}
   nav a.on{background:var(--accent-soft);color:var(--accent);font-weight:550}
   nav .n{font-size:11px;color:var(--ink3);font-variant-numeric:tabular-nums}
+  /* Proximity does the rest: a big gap ABOVE the header, a small one below it,
+     so each header sits with its own children rather than floating between two
+     groups. The rule separates sections without adding another colour. */
   nav .grp{font-size:10.5px;text-transform:uppercase;letter-spacing:.09em;color:var(--ink3);
-           padding:16px 10px 4px}
+           font-weight:600;padding:8px 10px 5px;margin-top:14px;border-top:1px solid var(--line)}
+  /* NOT :first-of-type — that is type-based, and `.brand` is the first div in
+     the nav, so the selector silently matched nothing and the top header kept a
+     stray rule under the brand. The adjacent-sibling form says what is meant:
+     the header that comes straight after the brand opens the list, so it has
+     nothing to be separated from. */
+  nav .brand + .grp{margin-top:6px;border-top:none;padding-top:2px}
   main{flex:1;min-width:0;height:100vh;overflow-y:auto;padding:0 40px 32px}
   .pagehead{position:sticky;top:0;z-index:6;background:var(--bg);padding:28px 0 10px;
             border-bottom:1px solid var(--line);margin-bottom:18px}
@@ -223,9 +246,13 @@
   .sqlbox:focus{border-color:var(--accent)}
   .qexample{font-family:var(--mono);font-size:11.5px;color:var(--accent);cursor:pointer;border-bottom:1px dashed var(--accent)}
   /* session picker in the chat surfaces */
-  .sesshead{display:flex;align-items:center;gap:8px;margin-bottom:10px}
+  /* wrap, don't overflow: the dock is ~230px wide when the window is narrow, and
+     a nowrap row pushed the model chip and Send button clean off the screen.
+     min-width:0 is the other half — without it a flex child refuses to shrink
+     below its content and the row overflows even when it IS allowed to wrap. */
+  .sesshead{display:flex;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap;min-width:0}
   .sessbtn{background:var(--panel);border:1px solid var(--line2);border-radius:7px;color:var(--ink2);
-           padding:5px 11px;font-size:12.5px;cursor:pointer}
+           padding:5px 11px;font-size:12.5px;cursor:pointer;white-space:nowrap}
   .sessbtn:hover{border-color:var(--accent);color:var(--accent)}
   .teletoggle.on{border-color:var(--accent);color:var(--accent);background:var(--accent-soft)}
   /* per-turn stats (gate/seconds/iters/tools) hide together when toggled off */
@@ -233,7 +260,9 @@
   .sessmenu{position:absolute;z-index:30;background:var(--panel);border:1px solid var(--line2);border-radius:10px;
             box-shadow:0 8px 30px rgba(0,0,0,.28);width:300px;max-height:340px;overflow-y:auto;padding:6px}
   /* mini model switcher: a pill in the chat header + its dropdown */
-  .modelchip{margin-left:auto;display:inline-flex;align-items:center;gap:6px;max-width:150px;
+  /* margin-left:auto parks the chip on the right — which, in a row too narrow to
+     hold it, parked it past the right edge of the window. It may shrink now. */
+  .modelchip{margin-left:auto;display:inline-flex;align-items:center;gap:6px;max-width:150px;min-width:0;
              background:var(--accent-soft);border:1px solid var(--line2);border-radius:99px;
              color:var(--ink);padding:4px 9px;font-size:12px;cursor:pointer;line-height:1.2}
   .modelchip:hover{border-color:var(--accent)}
@@ -291,7 +320,7 @@
   .bubble{align-self:flex-end;background:var(--accent);color:#fff;padding:8px 13px;
           border-radius:14px 14px 3px 14px;max-width:75%;font-size:13.5px}
   .chatbar{display:flex;gap:10px;padding:12px 0;border-top:1px solid var(--line);
-           background:var(--bg);position:sticky;bottom:0}
+           background:var(--bg);position:sticky;bottom:0;min-width:0}
   /* the chat side-dock: chat from any tab, watch the harness in main */
   #dock{width:var(--dock-w,380px);flex-shrink:0;border-left:1px solid var(--line);
         height:100vh;display:flex;flex-direction:column;background:var(--bg);padding:0 14px}
@@ -321,11 +350,16 @@
                box-shadow:0 2px 10px rgba(0,0,0,.25)}
   body.dock-closed #dock,body.dock-closed #dock-resizer{display:none}
   body.dock-closed #dock-reopen{display:block}
-  .chatbar input{flex:1;background:var(--panel);border:1px solid var(--line2);border-radius:8px;
+  /* min-width:0 is what actually makes `flex:1` shrink. flex:1 sets the basis
+     to 0, but a flex item's default min-width is `auto` — its intrinsic content
+     width — so the input refused to go below that and pushed Send off the edge
+     of the dock. The buttons then get flex-shrink:0 so the input absorbs the
+     squeeze instead of the controls turning into slivers. */
+  .chatbar input{flex:1;min-width:0;background:var(--panel);border:1px solid var(--line2);border-radius:8px;
                  padding:10px 14px;color:var(--ink);font-size:14px;outline:none}
   .chatbar input:focus{border-color:var(--accent)}
   .chatbar button{background:var(--accent);color:#fff;border:none;border-radius:8px;
-                  padding:0 18px;font-weight:600;font-size:13.5px;cursor:pointer}
+                  padding:0 18px;font-weight:600;font-size:13.5px;cursor:pointer;flex-shrink:0}
   .chatbar button:disabled{opacity:.5;cursor:default}
   .stages{display:flex;gap:6px;margin:2px 0 4px}
   .stage{font-size:11px;padding:2px 9px;border-radius:99px;border:1px solid var(--line2);color:var(--ink3)}
@@ -345,6 +379,18 @@
        padding:10px 12px;color:var(--ink);font-size:13.5px;font-family:inherit;outline:none;resize:vertical}
   .cmp-input:focus{border-color:var(--accent)}
   .cmp-picks{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px;align-items:center}
+  /* The arena's control row: blurb, three toggles, and the Race button. It was
+     a nowrap flex row, so on a narrow window the blurb squeezed to one word per
+     line AND the Race button still ended up outside the card. Wrapping fixes
+     both: the blurb takes a line of its own below ~260px of room, and the
+     controls flow onto the next line instead of escaping. */
+  .cmp-controls{display:flex;align-items:center;gap:12px;margin-bottom:6px;flex-wrap:wrap}
+  .cmp-controls .cmp-blurb{flex:1 1 260px;min-width:0}
+  /* Wide tables scroll inside their own box rather than out of it. The
+     scoreboard is 885px of columns in a 655px card; without this the last
+     columns (total tok, rate, total cost) render past the card's right edge and
+     over the page. Any table that can outgrow its card belongs in one of these. */
+  .tablescroll{overflow-x:auto;max-width:100%}
   .cmp-pick{display:inline-flex;align-items:center;gap:5px;font-size:12px;color:var(--ink2);
        border:1px solid var(--line2);border-radius:99px;padding:4px 10px;cursor:pointer}
   .cmp-pick.on{border-color:var(--accent);color:var(--accent);background:var(--accent-soft)}
@@ -490,7 +536,14 @@ details.subterm > summary.subterm-h::-webkit-details-marker{ display:none; }
 .connstatus.error .conndot{background:var(--bad)}
 .connstatus.needs-setup{color:#a87312}
 .connstatus.needs-setup .conndot{background:#c8951f}
+/* Configured but unproven: deliberately calm. Amber here would read as a
+   warning about something that is merely untested, which is the whole bug
+   this state exists to fix. Accent, not alarm. */
+.connstatus.configured{color:var(--accent)}
+.connstatus.configured .conndot{background:var(--accent)}
 .connstatus.not-configured .conndot{background:var(--ink3)}
+/* The one-line reason under the pill: what to actually do about it. */
+.connwhy{font-size:11px;color:var(--ink3);margin-top:2px;font-family:var(--mono)}
 .conndesc{color:var(--ink2);font-size:12px;line-height:1.5}
 .conncard .conndesc{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;
   overflow:hidden;min-height:36px}
@@ -544,3 +597,66 @@ details.subterm > summary.subterm-h::-webkit-details-marker{ display:none; }
   .connmodal-actions .save{flex:1}
   .connmodal-message{flex-basis:100%}
 }
+
+/* --- Memory arena: the fixture, readable before any of it has been run --- */
+.ma-seed{margin:0;padding-left:20px;font-size:13px;color:var(--ink2);line-height:1.7}
+.ma-seed li{margin:1px 0}
+.ma-legend{display:flex;flex-wrap:wrap;gap:6px 18px;margin-top:10px;font-size:12px}
+.ma-o{font-family:var(--mono);font-size:11px;padding:1px 7px;border-radius:99px;border:1px solid var(--line2)}
+.ma-pass{color:var(--good);border-color:var(--good)}
+.ma-stale{color:#a87312;border-color:#c8951f}
+/* invented is the headline failure — a confident answer to something it was
+   never told. It gets the alarm colour; miss, an honest gap, deliberately does not. */
+.ma-invented{color:var(--bad);border-color:var(--bad)}
+.ma-miss{color:var(--ink3)}
+.ma-expect{color:var(--good);font-family:var(--mono);font-size:12px}
+.ma-forbid{color:var(--bad);font-family:var(--mono);font-size:12px}
+.ma-source{margin-top:10px;padding:8px 10px;border-radius:6px;background:var(--accent-soft);
+           color:var(--ink2);font-size:12px;line-height:1.6}
+.ma-race{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-top:12px}
+/* Questions and Model are ONE setup decision, so they belong on one line. They
+   were wrapping to a line each: a bare <select> sizes itself to its longest
+   option, and these carry text like "Example — a working week — 5 facts, 4
+   questions", which is wider than half the card. flex-basis lets them share the
+   row and min-width:0 is what actually permits the shrink — a flex item refuses
+   to go below its content width without it, which is the whole reason the
+   wrapping looked like a gap problem rather than a width one. */
+/* Heading, its button and its one-line note on a single baseline. Vertical
+   space on this page belongs to the store cards, not to the furniture that
+   introduces them. */
+.ma-head{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.ma-head .save{font-size:12px;padding:5px 12px}
+.ma-head .meta{font-weight:400}
+.ma-pickers .fld{margin-bottom:0;flex:1 1 260px;min-width:0}
+.ma-pickers .fld select{width:100%}
+.ma-pickers .meta{flex:1 1 100%}
+.ma-ans{font-size:11px;color:var(--ink3);margin-top:4px;max-width:280px;line-height:1.45}
+/* Equal-height cards. `align-items:stretch` is the grid default, so every card
+   already spans its row — the cards were ragged because each one sized to its
+   own content. Fixing the ROW height and scrolling only the facts keeps the
+   header and provenance line readable while you compare stores side by side:
+   the thing you scan across (name, count, date span) never moves. */
+.ma-stores{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));
+  gap:10px;align-items:stretch}
+.ma-store{margin-bottom:0;display:flex;flex-direction:column;max-height:340px;min-height:0}
+.ma-store-h{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px;
+  flex:0 0 auto}
+/* The scroll region. `min-height:0` is load-bearing: a flex child defaults to
+   min-height:auto (its intrinsic content height), so without it the list
+   refuses to shrink and pushes the card taller instead of scrolling. */
+.ma-facts{margin:0;padding-left:16px;font-size:12px;color:var(--ink2);line-height:1.65;
+  flex:1 1 auto;min-height:0;overflow-y:auto;overscroll-behavior:contain}
+/* An error or an "unreadable, and here's why" note fills the same space. */
+.ma-store > .ma-ans{flex:1 1 auto;min-height:0;overflow-y:auto}
+/* "showing 8 of 53 - see all" stays pinned under the scroll region. */
+.ma-store > .meta{flex:0 0 auto}
+.ma-facts li{margin:2px 0}
+.ma-prov{font-size:10.5px;color:var(--ink3);margin:-2px 0 8px;font-family:var(--mono);line-height:1.5;
+  flex:0 0 auto}
+.ma-warn{margin-top:10px;padding:8px 10px;border-radius:6px;background:var(--accent-soft);
+         color:var(--ink2);font-size:12px;line-height:1.6}
+.ma-facts-meta{font-size:10.5px;color:var(--ink3);font-family:var(--mono);margin:4px 0 2px}
+.ma-test{display:inline-block;font-family:var(--mono);font-size:10px;text-transform:uppercase;
+         letter-spacing:.05em;color:var(--accent);background:var(--accent-soft);
+         padding:2px 7px;border-radius:99px}
+.ma-q{font-size:12.5px;color:var(--ink);margin-top:5px;line-height:1.45;max-width:210px}
