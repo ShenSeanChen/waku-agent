@@ -168,14 +168,19 @@ def _svg_text(el: dict) -> str:
     )
 
 
-def write_svg_proxy(elements: list[dict], path: Path) -> None:
-    """Render a layout-faithful SVG used only for visual QA and PNG export."""
+def write_svg_proxy(elements: list[dict], path: Path, w: int = 2520,
+                    h: int = 1390) -> None:
+    """Render a layout-faithful SVG used only for visual QA and PNG export.
+
+    w/h default to this board's canvas; other builders pass their own so a
+    wider board is not silently cropped, which looks like a layout bug.
+    """
     parts = [
         (
-            '<svg xmlns="http://www.w3.org/2000/svg" width="2520" height="1390" '
-            'viewBox="0 0 2520 1390">'
+            f'<svg xmlns="http://www.w3.org/2000/svg" width="{w}" height="{h}" '
+            f'viewBox="0 0 {w} {h}">'
         ),
-        '<rect width="2520" height="1390" fill="white"/>',
+        f'<rect width="{w}" height="{h}" fill="white"/>',
         (
             '<defs><marker id="arrow" markerWidth="10" markerHeight="8" refX="9" refY="4" '
             'orient="auto"><path d="M0,0 L10,4 L0,8 z" fill="context-stroke"/></marker></defs>'

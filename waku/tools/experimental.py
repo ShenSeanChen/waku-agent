@@ -41,6 +41,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from waku.config import Settings
+from waku.tools._env import delegate_env as _delegate_env
 from waku.tools.registry import Tool
 
 PI_INSTALL_HINT = "npm install -g --ignore-scripts @earendil-works/pi-coding-agent"
@@ -106,7 +107,8 @@ def _run_pi_json(cmd: list, workdir: Path, timeout: int, notify):
     mid-line (a blocking readline can't be interrupted; a queue.get(timeout)
     can)."""
     proc = subprocess.Popen(cmd, cwd=workdir, stdin=subprocess.DEVNULL,
-                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                            env=_delegate_env())
     lines: queue.Queue = queue.Queue()
     stderr_parts: list[str] = []
 
@@ -247,7 +249,8 @@ def make_delegate_tool(settings: Settings) -> Tool:
         else:
             try:
                 result = subprocess.run(cmd, cwd=workdir, stdin=subprocess.DEVNULL,
-                                        capture_output=True, text=True, timeout=timeout, check=False)
+                                        capture_output=True, text=True, timeout=timeout,
+                                        check=False, env=_delegate_env())
             except subprocess.TimeoutExpired:
                 return (f"pi was still working after {timeout}s so I stopped it — try a smaller "
                         f"task, or raise WAKU_DELEGATE_TIMEOUT.")

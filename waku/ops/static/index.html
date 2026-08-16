@@ -14,13 +14,17 @@
   <a href="#tools" data-v="tools">Tools <span class="n" id="n-tools"></span></a>
   <a href="#database" data-v="database">Database <span class="n" id="n-db"></span></a>
   <a href="#ops" data-v="ops">Ops <span class="n" id="n-ops"></span></a>
-  <!-- Arena belongs to System: like every row above it, it is a place you WATCH
-       something run — models racing through the real loop rather than one turn.
-       It gets no header of its own because a header over a single row reads as
-       broken navigation, and because its Models / Memory split belongs in
-       sub-tabs inside the page, the way Memory holds semantic / episodic /
-       skills / soul. -->
-  <a href="#compare" data-v="compare">Arena</a>
+  <!-- Arena gets its own section. It was one row under System with the two
+       races behind sub-tabs, on the reasoning that "Models" must not appear
+       twice in the nav. It appears twice now, on purpose, because the two
+       things are not the same word: SETUP > Models picks the model your agent
+       USES, and ARENA > Model race puts ten of them through the loop and
+       scores them. "race" carries that difference in one syllable, and hiding
+       a whole half of the page behind a sub-tab cost more than the repetition
+       ever did. -->
+  <div class="grp">Arena</div>
+  <a href="#compare/models" data-v="compare" data-sub="models">Model race</a>
+  <a href="#compare/memory" data-v="compare" data-sub="memory">Memory race</a>
   <div class="grp">Setup</div>
   <a href="#models" data-v="models">Models</a>
   <a href="#connections" data-v="connections">Connections</a>

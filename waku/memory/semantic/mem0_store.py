@@ -97,6 +97,35 @@ class Mem0FactStore:
             return False   # unknown id — False, never an exception (base.py)
         return True
 
+    def settle(self, timeout: float = 120.0) -> bool:
+        """Wait for extraction to go quiet. mem0 gives you no signal at all.
+
+        add() returns in under a second and the row is not queryable yet — a
+        live run measured 14s. There is no `processed` flag to poll and no
+        count to wait for either: infer=True means mem0 decides how many
+        memories your sentences become, so "wait for N rows" stops one row
+        early and reads a half-written store. Three seeded sentences became
+        four memories in testing, and waiting for three returned the instant
+        before the correction landed.
+
+        So: poll until the count stops moving. Cheap when already settled.
+        """
+        import time
+
+        started, last, stable = time.monotonic(), -1, 0
+        while time.monotonic() - started < timeout:
+            try:
+                found = len(self._rows(self.client.get_all(
+                    filters={"user_id": self.user_id}, version="v2")))
+            except Exception:
+                return False
+            stable = stable + 1 if found == last and found > 0 else 0
+            last = found
+            if stable >= 3:
+                return True
+            time.sleep(2)
+        return False
+
     def delete(self, fact_id: int | str) -> bool:
         try:
             self.client.delete(memory_id=str(fact_id))
