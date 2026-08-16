@@ -135,5 +135,5 @@ keep it legible.
 
 ## Community
 
-Questions, show-and-tell, pair-debugging: [Discord](https://discord.gg/7Ntxzm3eJ). By
+Questions, show-and-tell, pair-debugging: [Discord](https://discord.gg/ebbdvSCXqu). By
 contributing you agree your work is licensed under the repo's MIT license.

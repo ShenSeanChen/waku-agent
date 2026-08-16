@@ -248,7 +248,7 @@ set -a; source .env; set +a
 | 0 | Route 1, barehanded | **ANY CLI** | nothing — bash runs it |
 | 1 | Prof. Oak's Pokedex | **SKILL** | `.agents/skills/pokedex/` |
 | 2 | Moves + gym rules | **EXTENSION** | `.pi/extensions/pokemon-battle.ts` |
-| 3 | Earning the Badge | **PACKAGE** | `pi-pokedex/` |
+| 3 | Earning the Badge | **PACKAGE** | `examples/pi-pokedex/` |
 | 4 | The League | **waku × pi** | `delegate_task` |
 
 ### Stage 0 — bash is already a tool
@@ -287,11 +287,11 @@ pi -e .pi/extensions/pokemon-battle.ts … -p "Run: rm -rf .waku"
 ```bash
 # -ne disables auto-discovery: this repo also has loose copies in .pi/ and
 # .agents/, and loading both registers type_matchup twice → hard error.
-pi -ne -e ./pi-pokedex --provider anthropic --model claude-haiku-4-5 -a --no-session \
+pi -ne -e ./examples/pi-pokedex --provider anthropic --model claude-haiku-4-5 -a --no-session \
    -p "What single type beats Charizard? Use the pokedex, then type_matchup. One word."
 #  → Rock   (pokedex: Fire/Flying → type_matchup → Rock beats both)
 
-pi install ./pi-pokedex   &&   pi list   &&   pi remove ./pi-pokedex
+pi install ./examples/pi-pokedex   &&   pi list   &&   pi remove ./examples/pi-pokedex
 ```
 Skill + extension **compose**. The collision is itself the lesson: skills warn and
 keep the first; extension tools **hard-error** — two copies of a verb is ambiguous,

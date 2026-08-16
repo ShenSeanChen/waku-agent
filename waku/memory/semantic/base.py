@@ -107,3 +107,33 @@ class FactStore(Protocol):
         """Forget a fact. True if a row went away, False if `fact_id` is
         unknown."""
         ...
+
+    def settle(self, timeout: float = 120.0) -> bool:
+        """Block until everything already written is actually SEARCHABLE.
+
+        A local store returns True immediately — for sqlite the write and the
+        index are the same transaction. The hosted ones are eventually
+        consistent, and both of them mislead you about it:
+
+          - mem0 has no readiness signal at all. add() returns in under a
+            second; a live measurement put the row 14s away from being
+            queryable.
+          - Zep exposes Episode.processed, which is necessary and NOT
+            sufficient. Every episode reported processed while the graph
+            derived from them still had zero matching nodes, so a search for
+            a just-written fact returned an unrelated one.
+
+        Nothing in either API tells you the thing you need to know, so both
+        implementations wait for the row/node count to STOP CHANGING rather
+        than for a flag or a target count. A target is wrong too: a store that
+        infers decides for itself how many memories your sentences become.
+
+        Who needs this: bulk writers who read straight back — the arena seeds
+        a conversation and immediately probes it. The live agent does not call
+        this; a user's next turn is seconds away and pays no such penalty.
+
+        Returns True if it settled, False on timeout. Never raises: a backend
+        that cannot confirm readiness should degrade to a slower answer, not
+        take the caller down.
+        """
+        ...
