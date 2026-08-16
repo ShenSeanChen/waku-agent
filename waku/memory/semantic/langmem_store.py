@@ -98,6 +98,12 @@ class LangMemFactStore:
         self.store.delete(_NAMESPACE, str(fact_id))
         return True
 
+    def settle(self, timeout: float = 120.0) -> bool:
+        """Already settled. The store is in this process — InMemoryStore is a
+        dict, PostgresStore is a synchronous write. There is no queue to drain
+        because there is no server."""
+        return True
+
     @staticmethod
     def _row(item) -> dict:
         value = getattr(item, "value", None) or {}

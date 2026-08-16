@@ -121,3 +121,9 @@ class SqliteFactStore:
         cur = self.conn.execute("DELETE FROM facts WHERE id=?", (fact_id,))
         self.conn.commit()
         return cur.rowcount > 0
+
+    def settle(self, timeout: float = 120.0) -> bool:
+        """Already settled. The row and its FTS5 index land in one transaction,
+        so a fact is searchable the instant add() returns. The hosted backends
+        have to work for this."""
+        return True

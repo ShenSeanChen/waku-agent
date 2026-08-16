@@ -10,11 +10,13 @@ let activeView = null, activeSub = null;
 // which is a behaviour, not a setting.
 const TITLES = {chat:"Chat & watch", ops:"LLM Ops",
                 graph:"Graph workflows — structure around the loop",
-                // Covers both sub-tabs. TITLES is keyed by view, not by view+sub,
-                // so a models-only title sat above the Memory race and read as a
-                // mislabel; one honest sentence beats teaching the router about
-                // sub-tabs for a single page.
+                // Keyed by view AND sub for the Arena, now that the sidebar
+                // names the two races separately. A single title covering both
+                // was right while they hid behind sub-tabs; with two nav rows
+                // it reads as a page that does not know which one you clicked.
                 compare:"Arena — race models and memory through the same loop",
+                "compare/models":"Model race — ten brains, one harness",
+                "compare/memory":"Memory race — one brain, five places to put facts",
                 settings:"Behaviour — how a turn runs",
                 database:"Database — everything Waku stores (state.db)"};
 function render(){
@@ -23,8 +25,14 @@ function render(){
   const sub = subRaw || null;
   const view = VIEWS[v] ? v : "overview";
   const subChanged = sub !== activeSub || view !== activeView;
-  document.querySelectorAll("nav a").forEach(a=>a.classList.toggle("on", a.dataset.v===view));
-  document.getElementById("title").textContent = TITLES[view] || view[0].toUpperCase()+view.slice(1);
+  // Two nav rows can share a view, so a row that names a sub only lights up
+  // for that sub. Without the fallback, landing on bare #compare would light
+  // NEITHER race and the sidebar would show no current page at all.
+  const effSub = sub || (view === "compare" ? "models" : null);
+  document.querySelectorAll("nav a").forEach(a=>a.classList.toggle("on",
+    a.dataset.v === view && (!a.dataset.sub || a.dataset.sub === effSub)));
+  document.getElementById("title").textContent =
+    TITLES[`${view}/${effSub}`] || TITLES[view] || view[0].toUpperCase()+view.slice(1);
   if (view === "overview" || view === "graph"){
     // don't rebuild mid-animation or the glowing SVG gets wiped
     if (activeView !== view || !animating){ document.getElementById("view").innerHTML = VIEWS[view](D); }

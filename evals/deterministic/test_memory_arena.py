@@ -18,6 +18,8 @@ a legal probe where the deadline was never given.
 from __future__ import annotations
 
 import json
+import os
+from typing import ClassVar
 
 import pytest
 
@@ -245,12 +247,32 @@ class _FakeWaku:
     """Records what it was told, answers what the script says, and writes the
     same usage.jsonl the real app does — so token accounting is exercised too."""
 
+    built: ClassVar[list] = []   # every instance a run created, so a test can inspect it
+    settles: ClassVar[bool] = True   # what facts.settle() reports back
+
     def __init__(self, settings=None, **kw):
+        from types import SimpleNamespace
         self.settings = settings
         self.seen: list[str] = []
         self.home = settings.home
         self.home.mkdir(parents=True, exist_ok=True)
         self._answers = dict(_FakeWaku.script)
+        self.client = object()
+        # The runner flushes consolidation and then CLEARS the session before
+        # probing, so a seeded fact can only be reached through the store. A
+        # fake that cannot do that would let the real thing regress silently —
+        # which is the whole reason the bypass survived until a live race.
+        # A store that reports readiness, and records WHEN it was asked. The
+        # runner must ask after the last seed and before the first probe;
+        # anywhere else and it is timing the network instead of the memory.
+        self.settled_after: list[int] = []
+        facts = SimpleNamespace(settle=lambda timeout=120.0: (
+            self.settled_after.append(len(self.seen)) or _FakeWaku.settles))
+        self.memory = SimpleNamespace(conn=object(), facts=facts, episodes=object())
+        self.cleared_after: list[int] = []
+        self.session = SimpleNamespace(
+            start_new=lambda sid: self.cleared_after.append(len(self.seen)))
+        _FakeWaku.built.append(self)
 
     def respond(self, message, source="cli", observer=None, **kw):
         from types import SimpleNamespace
@@ -275,11 +297,36 @@ def _arena_fixture(tmp_path):
     return fx
 
 
+def _offline(monkeypatch, declined=None):
+    """No network. The consolidation flush and the referee are both real calls
+    in run_arena now; `declined=None` is the adjudicator's own "judge
+    unreachable" answer, which must leave the heuristic verdict untouched."""
+    import tempfile
+    from pathlib import Path
+
+    from waku.memory import consolidation
+
+    monkeypatch.setattr(consolidation, "consolidate_if_due", lambda *a, **k: 0)
+    monkeypatch.setattr(arena, "adjudicate_refusal", lambda *a, **k: declined)
+    # Arena homes are now NAMED for their seed, so a real run reuses one and
+    # skips re-telling. That is the point of them — and it would make these
+    # tests depend on whether an earlier run left a `.seeded` marker behind,
+    # which is a suite that passes only on a machine that has never raced.
+    # A fresh directory per call restores isolation; the reuse behaviour gets
+    # its own test below, where the home is pinned deliberately.
+    monkeypatch.setattr(arena, "arena_home",
+                        lambda backend, track, seed, model:
+                        Path(tempfile.mkdtemp(prefix=f"arena-test-{backend}-")))
+
+
 def _run(monkeypatch, tmp_path, script, gate=False, backends=("sqlite",)):
     import waku.app
+
     _FakeWaku.script = script
     _FakeWaku.gate = gate
+    _FakeWaku.built = []
     monkeypatch.setattr(waku.app, "Waku", _FakeWaku)
+    _offline(monkeypatch)
     events = []
     arena.run_arena(list(backends), "t", lambda k, e: events.append((k, e)),
                     fixture=_arena_fixture(tmp_path))
@@ -324,6 +371,7 @@ def test_a_backend_that_blows_up_does_not_take_the_others_with_it(monkeypatch, t
 
     monkeypatch.setattr(_FakeWaku, "__init__", explode)
     monkeypatch.setattr(waku.app, "Waku", _FakeWaku)
+    _offline(monkeypatch)
     events = []
     arena.run_arena(["boom", "sqlite"], "t", lambda k, e: events.append((k, e)),
                     fixture=_arena_fixture(tmp_path))
@@ -344,6 +392,7 @@ def test_the_gate_decision_reaches_the_scorer(monkeypatch, tmp_path):
     _FakeWaku.script = {"q1?": "68"}
     _FakeWaku.gate = True          # it retrieved when it should not have
     monkeypatch.setattr(waku.app, "Waku", _FakeWaku)
+    _offline(monkeypatch)
     events = []
     arena.run_arena(["sqlite"], "t", lambda k, e: events.append((k, e)), fixture=fx)
 
@@ -360,3 +409,483 @@ def test_the_live_store_is_never_switched(monkeypatch, tmp_path):
     assert homes == {"sqlite", "mem0"}
     from waku.config import load_settings
     assert load_settings().semantic_store == "sqlite", "the real config must be untouched"
+
+
+# --- the two fixes this file exists to hold in place -------------------------
+
+def test_the_conversation_is_cleared_before_any_probe_is_asked(monkeypatch, tmp_path):
+    """history_turns is 12 (24 messages), and a track seeds far fewer than that,
+    so every seeded fact was still in the context window when the probes ran.
+    Three probes in the first honest race passed while the gate reported "no
+    lookup" — the store was never consulted. A benchmark whose subject can be
+    bypassed is not measuring it."""
+    events = _run(monkeypatch, tmp_path, {"q1?": "alpha", "q2?": "the new one"})
+    assert [e for k, e in events if k == "probe"], "the run must have happened"
+    app = _FakeWaku.built[0]
+    assert app.cleared_after == [2], (
+        "the session must be cleared exactly once, after the 2 seed lines and "
+        f"before any probe — got {app.cleared_after}"
+    )
+
+
+def test_an_unreachable_judge_leaves_the_heuristic_verdict_alone(monkeypatch, tmp_path):
+    """adjudicate_refusal returns None when the referee cannot be reached. That
+    must not be read as either verdict — an unavailable judge cannot turn "I
+    could not check" into "it passed" or "it lied"."""
+    fx = {"tracks": {"t": {"label": "T", "seed": ["s"], "probes": [
+        {"id": "p", "test": "restraint", "question": "q?", "expect_refusal": True, "note": "n"}]}}}
+    import waku.app
+
+    _FakeWaku.script = {"q?": "Pikachu loves ketchup."}
+    _FakeWaku.gate = False
+    monkeypatch.setattr(waku.app, "Waku", _FakeWaku)
+    _offline(monkeypatch)
+    events = []
+    arena.run_arena(["sqlite"], "t", lambda k, e: events.append((k, e)), fixture=fx)
+    row = next(e for k, e in events if k == "probe")
+    assert row["outcome"] == INVENTED
+    assert row["certain"] is False, "an unchecked verdict must still say it is unchecked"
+
+
+def test_the_judge_overrules_a_phrase_the_list_never_had(monkeypatch, tmp_path):
+    """The live miss: LangMem replied "Nothing shared about Pikachu's food
+    preferences" — a correct refusal — and scored INVENTED, because _REFUSALS
+    holds "nothing about" and not "nothing shared"."""
+    fx = {"tracks": {"t": {"label": "T", "seed": ["s"], "probes": [
+        {"id": "p", "test": "restraint", "question": "q?", "expect_refusal": True, "note": "n"}]}}}
+    import waku.app
+
+    _FakeWaku.script = {"q?": "Nothing shared about Pikachu's food preferences."}
+    _FakeWaku.gate = False
+    monkeypatch.setattr(waku.app, "Waku", _FakeWaku)
+    _offline(monkeypatch, declined=True)
+    events = []
+    arena.run_arena(["sqlite"], "t", lambda k, e: events.append((k, e)), fixture=fx)
+    row = next(e for k, e in events if k == "probe")
+    assert row["outcome"] == PASS, "a correct refusal must not be published as INVENTED"
+    assert row["certain"] is True
+
+
+def test_the_control_contestant_is_never_seeded(monkeypatch, tmp_path):
+    """The control is told nothing and asked everything. If it is ever handed
+    the seed, it stops being a control and silently agrees with whatever the
+    other columns say."""
+    events = _run(monkeypatch, tmp_path, {"q1?": "alpha", "q2?": "the new one"},
+                  backends=(arena.CONTROL,))
+    assert [e["line"] for k, e in events if k == "seeded"] == [], (
+        "the control must receive no facts at all"
+    )
+    assert [e["probe"] for k, e in events if k == "probe"] == ["p-recall", "p-update"], (
+        "but it must still be asked every probe"
+    )
+
+
+def test_a_probe_the_control_passes_is_reported_as_leaked(monkeypatch, tmp_path):
+    """A probe the model can answer with no memory measures training data, not
+    the store. Three of the dinner track's seven did exactly that, and nothing
+    on screen said so — which is the whole reason this contestant exists."""
+    events = _run(monkeypatch, tmp_path, {"q1?": "alpha", "q2?": "nothing useful"},
+                  backends=(arena.CONTROL,))
+    done = next(e for k, e in events if k == "done")
+    assert done["leaked"] == ["p-recall"], (
+        "p-recall was answered without any memory, so it must be named a leak; "
+        f"got {done['leaked']}"
+    )
+
+
+def test_probes_designed_to_need_no_memory_are_not_called_leaks(monkeypatch, tmp_path):
+    """The control caught this in itself on its first live run. Two probe kinds
+    are SUPPOSED to be answerable with an empty store: expect_retrieval=False
+    ("what's 17 times 4") and expect_refusal ("what's the filing deadline",
+    which is passed BY declining, and a contestant with nothing stored declines
+    every time). Flagging those would fire in every run forever and mean
+    nothing — the badge has to stay rare enough to be worth reading."""
+    fx = {"tracks": {"t": {"label": "T", "seed": ["s"], "probes": [
+        {"id": "p-arith", "test": "restraint", "question": "q1?",
+         "expect_any": ["68"], "expect_retrieval": False, "note": "n"},
+        {"id": "p-decline", "test": "restraint", "question": "q2?",
+         "expect_refusal": True, "note": "n"},
+        {"id": "p-real", "test": "recall", "question": "q3?",
+         "expect_any": ["alpha"], "note": "n"},
+    ]}}}
+    import waku.app
+
+    _FakeWaku.script = {"q1?": "68", "q2?": "I don't have that saved.", "q3?": "alpha"}
+    _FakeWaku.gate = False
+    _FakeWaku.built = []
+    monkeypatch.setattr(waku.app, "Waku", _FakeWaku)
+    _offline(monkeypatch)
+    events = []
+    arena.run_arena([arena.CONTROL], "t", lambda k, e: events.append((k, e)), fixture=fx)
+
+    done = next(e for k, e in events if k == "done")
+    assert done["leaked"] == ["p-real"], (
+        "only the probe that asserts recalled content is a leak; the arithmetic "
+        f"and refusal probes are designed to pass without memory — got {done['leaked']}"
+    )
+
+
+def test_store_is_asked_to_settle_between_seeding_and_probing(tmp_path, monkeypatch):
+    """The runner must wait for the store to become searchable, and must do it
+    AFTER the last seed and BEFORE the first probe.
+
+    Both hosted backends are eventually consistent and both understate it:
+    mem0 offers no readiness signal at all (measured 14s from add() to
+    queryable), and Zep's per-add `processed` flag went green while the graph
+    derived from those episodes still held zero matching nodes. Probe in that
+    window and the store answers a question about a fact it is still filing —
+    which scores as MISS. The benchmark then reports amnesia and is measuring
+    the network.
+
+    Ordering is the whole assertion. Settling before the seeds finish waits for
+    nothing; settling after the probes is decoration.
+    """
+    import waku.app
+
+    fx = _arena_fixture(tmp_path)          # 2 seed lines, 2 probes
+    _FakeWaku.script = {"q1?": "alpha", "q2?": "new"}
+    _FakeWaku.gate = True
+    _FakeWaku.built = []
+    _FakeWaku.settles = True
+    monkeypatch.setattr(waku.app, "Waku", _FakeWaku)
+    _offline(monkeypatch)
+    arena.run_arena(["sqlite"], "t", lambda k, e: None, fixture=fx)
+
+    app = _FakeWaku.built[0]
+    assert app.settled_after == [2], (
+        "settle() must be called exactly once, after both seed lines and before "
+        f"the first probe — got {app.settled_after} (2 seeds, 2 probes)"
+    )
+
+
+def test_a_store_that_never_settles_says_so_instead_of_scoring_silently(tmp_path, monkeypatch):
+    """A timeout must reach the screen.
+
+    If settle() gives up, every MISS after it is suspect — the contestant may
+    know the answer perfectly well and simply not be queryable yet. Scoring
+    that as memory failure, with nothing in the output to say the store never
+    confirmed readiness, is the confident-silence bug this whole benchmark
+    keeps rediscovering. Cheaper to say "I could not confirm" than to publish
+    a number that looks like a verdict.
+    """
+    import waku.app
+
+    fx = _arena_fixture(tmp_path)
+    _FakeWaku.script = {"q1?": "alpha", "q2?": "new"}
+    _FakeWaku.gate = True
+    _FakeWaku.built = []
+    _FakeWaku.settles = False            # the store never confirms
+    monkeypatch.setattr(waku.app, "Waku", _FakeWaku)
+    _offline(monkeypatch)
+    events = []
+    arena.run_arena(["sqlite"], "t", lambda k, e: events.append((k, e)), fixture=fx)
+    _FakeWaku.settles = True             # do not leak the flag into other tests
+
+    warnings = [e for k, e in events if k == "warn"]
+    assert warnings, "a store that never confirmed readiness must emit a warning"
+    assert "readiness" in warnings[0]["message"], warnings[0]
+
+
+def test_local_stores_settle_instantly(tmp_path):
+    """sqlite writes the row and its FTS5 index in one transaction, so there is
+    nothing to wait for. This exists so nobody 'helpfully' adds a sleep to the
+    local path to match the hosted ones — the difference is the point, and it
+    is one of the few places where the simplest backend genuinely wins."""
+    from waku.db import connect
+    from waku.memory.semantic.store import SqliteFactStore
+
+    store = SqliteFactStore(connect(tmp_path))
+    store.add("alex", "runs a robotics startup")
+    assert store.settle() is True
+    assert store.search("robotics"), "settled means searchable, not merely written"
+
+
+def test_the_control_reports_why_it_is_empty_instead_of_crashing():
+    """The control is a contestant, not a backend, and the read-stores page has
+    to say so.
+
+    It has no store behind it — that is the entire job. But _available_backends
+    lists it (correct for a race) and store_contents iterates the same list, so
+    it built a Settings(semantic_store="control"), got None from _conn_for, and
+    the sqlite path called .execute() on it. The card rendered
+    "AttributeError: 'NoneType' object has no attribute 'execute'", which reads
+    as a broken control contestant when holding nothing is the point.
+
+    A note, not an error, and not a bare "0 facts" either — this page exists
+    precisely because those three mean different things.
+    """
+    rows = arena.store_contents()
+    control = [r for r in rows if r["store"] == arena.CONTROL]
+    assert control, "the control must still appear — its emptiness is the lesson"
+    assert not control[0]["error"], (
+        f"the control must not report an error: {control[0]['error']}"
+    )
+    assert "by design" in control[0]["note"], control[0]["note"]
+
+
+def test_a_store_already_told_is_not_told_again(tmp_path, monkeypatch):
+    """Telling is 53% of a race and perfectly deterministic. Doing it twice is
+    the single biggest waste in the arena, and on camera it is the difference
+    between a 40-second take and a 90-second one.
+
+    Homes are now NAMED for what they hold — a hash of the track, the model and
+    the seed lines — so the second run addresses the same directory and finds a
+    `.seeded` marker. That naming is also the staleness guard, for free: change
+    the probe set, the track or the model and you address a DIFFERENT directory,
+    so a race can never quietly probe a store seeded for another question.
+    """
+    import waku.app
+
+    fx = _arena_fixture(tmp_path)          # 2 seed lines, 2 probes
+    home = tmp_path / "pinned"
+    _FakeWaku.script = {"q1?": "alpha", "q2?": "new"}
+    _FakeWaku.gate = True
+    _FakeWaku.settles = True
+    monkeypatch.setattr(waku.app, "Waku", _FakeWaku)
+    _offline(monkeypatch)
+    monkeypatch.setattr(arena, "arena_home", lambda *a, **k: home)
+
+    _FakeWaku.built = []
+    arena.run_arena(["sqlite"], "t", lambda k, e: None, fixture=fx)
+    first = list(_FakeWaku.built[0].seen)
+    assert first[:2] == ["fact one", "fact two"], f"first run must seed: {first}"
+    assert (home / ".seeded").exists(), "a settled home must record that it is ready"
+
+    _FakeWaku.built = []
+    arena.run_arena(["sqlite"], "t", lambda k, e: None, fixture=fx)
+    second = list(_FakeWaku.built[0].seen)
+    assert "fact one" not in second, f"already told — must not re-tell: {second}"
+    assert "q1?" in second, "it must still ask, it just should not re-tell"
+
+
+def test_a_home_is_only_marked_ready_once_the_store_confirms_it_is_searchable(
+        tmp_path, monkeypatch):
+    """The marker goes last, after settle(). A home marked ready while the store
+    was still filing would be reused by the NEXT race and probed mid-ingest —
+    turning one race condition into a permanent, cached one."""
+    import waku.app
+
+    fx = _arena_fixture(tmp_path)
+    home = tmp_path / "never-settles"
+    _FakeWaku.script = {"q1?": "alpha", "q2?": "new"}
+    _FakeWaku.gate = True
+    _FakeWaku.built = []
+    _FakeWaku.settles = False            # the store never confirms
+    monkeypatch.setattr(waku.app, "Waku", _FakeWaku)
+    _offline(monkeypatch)
+    monkeypatch.setattr(arena, "arena_home", lambda *a, **k: home)
+    arena.run_arena(["sqlite"], "t", lambda k, e: None, fixture=fx)
+    _FakeWaku.settles = True
+
+    assert not (home / ".seeded").exists(), (
+        "a store that never confirmed readiness must not be cached as ready"
+    )
+
+
+def test_the_stores_panel_reads_the_races_own_sqlite_not_the_live_agent(monkeypatch):
+    """The panel sits under a benchmark that promises every store was told the
+    same thing. Reading the LIVE .waku/state.db for sqlite broke that promise:
+    the first card held months of real use next to stores that had seen one run,
+    which is why it needed a paragraph above it saying the counts were not a
+    comparison. Apologising for a comparison in prose is worse than not making
+    it — so sqlite now reads the arena's own copy.
+
+    It also stopped putting the operator's address, colleagues and work email
+    on a tab that gets filmed.
+    """
+    seen = {}
+
+    def fake_home(backend, track, seed, model):
+        seen["called"] = (backend, track, model)
+        return __import__("pathlib").Path(__import__("tempfile").mkdtemp())
+
+    monkeypatch.setattr(arena, "arena_home", fake_home)
+    rows = arena.store_contents(track="example", model="test:model")
+    sqlite = next(r for r in rows if r["store"] == "sqlite")
+    assert sqlite["kind"] == "arena", (
+        f"with a track and model, sqlite must be the race's copy — got {sqlite['kind']}"
+    )
+    assert seen.get("called"), "it must actually resolve an arena home, not just relabel"
+
+
+def test_without_a_track_the_panel_still_falls_back_to_the_live_store():
+    """No track means no seed, which means no home can be named. Falling back to
+    the live store is right — a blank panel would be a worse answer than an
+    honest one — but it must SAY 'live' so the card is not read as this race's."""
+    rows = arena.store_contents()
+    sqlite = next(r for r in rows if r["store"] == "sqlite")
+    assert sqlite["kind"] == "live", sqlite["kind"]
+
+
+def test_a_race_writes_to_its_own_hosted_partition_not_the_live_one(monkeypatch):
+    """The hosted half had no isolation, and the consequence was concrete.
+
+    mem0 and Zep read MEM0_USER_ID / ZEP_USER_ID with a default of "waku" — the
+    SAME partition the live agent uses — so every race wrote its benchmark seed
+    into the operator's real memory, and every probe set wrote into the same
+    place as every other one. A working-week race read back `wedding party
+    ballroom` and `guest in room 402` from the business track, because there
+    was only ever one drawer.
+    """
+    monkeypatch.delenv("MEM0_USER_ID", raising=False)
+    monkeypatch.delenv("ZEP_USER_ID", raising=False)
+    with arena.arena_partition_env("t", ["fact one"], "m:1") as partition:
+        assert partition.startswith("waku-arena-"), partition
+        assert os.environ["MEM0_USER_ID"] == partition
+        assert os.environ["ZEP_USER_ID"] == partition
+    # Leaking this would move the LIVE agent's memory to a benchmark partition
+    # — worse than the bug it fixes.
+    assert "MEM0_USER_ID" not in os.environ
+    assert "ZEP_USER_ID" not in os.environ
+
+
+def test_a_different_track_gets_a_different_partition():
+    """This is the whole point: one drawer per question set, so a race cannot
+    read back facts it was never told."""
+    a = arena.arena_partition("dinner", ["fact one"], "m:1")
+    b = arena.arena_partition("business", ["fact one"], "m:1")
+    c = arena.arena_partition("dinner", ["fact one"], "m:2")
+    assert a != b, "different tracks must not share a partition"
+    assert a != c, "a different model reseeds, so it must not share either"
+
+
+def test_clean_refuses_when_it_cannot_name_what_it_would_delete():
+    """No track means no seed, no key, and therefore no partition name. A
+    cleanup that cannot name its target must do nothing at all — the failure
+    mode of guessing here is deleting the live agent's memory."""
+    out = arena.clean_stores(track="", model="m:1")
+    assert out.get("error"), out
+    assert "nothing is deleted" in out["error"]
+
+
+def test_a_partition_that_was_already_gone_is_not_an_error():
+    """Zep 404s when the partition does not exist, which is the NORMAL case:
+    cleaning twice, or cleaning a race that only ever ran locally. The first
+    live run of Clean reported a wall of Cloudflare headers as an error for
+    exactly this.
+
+    Reporting "already gone" as failure trains you to ignore the error line —
+    and the day it says something real, you ignore that too."""
+    class _Gone(Exception):
+        status_code = 404
+
+    assert arena._absent(_Gone("message='not found'"))
+    assert arena._absent(Exception("status_code: 404, body: not found"))
+    assert not arena._absent(Exception("401 unauthorized — check your API key")), (
+        "an auth failure is not 'already deleted' and must still surface"
+    )
+
+
+def test_the_panel_reads_the_races_hosted_partition_too(monkeypatch):
+    """Scoping the panel to a race has to mean ALL of it, not just the local half.
+
+    The first version scoped sqlite and left mem0/Zep reading their default
+    partition — which is `waku`, the LIVE agent's. Three different drawers were
+    then in play: the race wrote to waku-arena-<key>, the panel read `waku`, and
+    Clean deleted waku-arena-<key>. Clean reported success, the cards never
+    changed, and the panel had been showing the operator's real hosted memory
+    the whole time.
+    """
+    seen = {}
+
+    class _Store:
+        def list(self, limit=200):
+            seen["partition"] = os.environ.get("MEM0_USER_ID")
+            return []
+
+    monkeypatch.setattr(arena, "_available_backends", lambda: ["mem0"])
+    monkeypatch.setattr("waku.memory.Memory._make_fact_store",
+                        staticmethod(lambda conn, settings: _Store()))
+    monkeypatch.delenv("MEM0_USER_ID", raising=False)
+
+    rows = arena.store_contents(track="example", model="test:model")
+    assert seen.get("partition", "").startswith("waku-arena-"), (
+        f"the panel must read this race's partition, not the default — got "
+        f"{seen.get('partition')!r}"
+    )
+    assert rows[0]["kind"] == "arena", rows[0]["kind"]
+    # And it must not leak: the live agent has to keep its own partition.
+    assert "MEM0_USER_ID" not in os.environ
+
+
+def test_contestants_run_in_parallel(tmp_path, monkeypatch):
+    """Sequential meant a race took the SUM of every contestant, and Zep alone
+    waits minutes for graph ingestion. Contestants share nothing but the emit
+    stream and the results list, both locked."""
+    import threading
+    import time as _t
+
+    import waku.app
+
+    fx = _arena_fixture(tmp_path)
+    overlap = {"max": 0, "live": 0}
+    guard = threading.Lock()
+    original = _FakeWaku.respond
+
+    def slow(self, message, source="cli", observer=None, **kw):
+        with guard:
+            overlap["live"] += 1
+            overlap["max"] = max(overlap["max"], overlap["live"])
+        _t.sleep(0.05)
+        with guard:
+            overlap["live"] -= 1
+        return original(self, message, source=source, observer=observer, **kw)
+
+    monkeypatch.setattr(_FakeWaku, "respond", slow)
+    _FakeWaku.script = {"q1?": "alpha", "q2?": "new"}
+    _FakeWaku.gate = True
+    _FakeWaku.built = []
+    _FakeWaku.settles = True
+    monkeypatch.setattr(waku.app, "Waku", _FakeWaku)
+    _offline(monkeypatch)
+    arena.run_arena(["sqlite", "mem0", "langmem"], "t", lambda k, e: None, fixture=fx)
+
+    assert overlap["max"] > 1, (
+        f"contestants must overlap in time; peak concurrency was {overlap['max']}"
+    )
+
+
+def test_the_partition_is_restored_after_a_parallel_race(tmp_path, monkeypatch):
+    """Set once around the whole race, not per contestant. Per-contestant
+    scoping would have the first thread to finish restore the old value while
+    the others were still writing — pointing them at the live agent's memory."""
+    import waku.app
+
+    fx = _arena_fixture(tmp_path)
+    _FakeWaku.script = {"q1?": "alpha", "q2?": "new"}
+    _FakeWaku.gate = True
+    _FakeWaku.built = []
+    _FakeWaku.settles = True
+    monkeypatch.setattr(waku.app, "Waku", _FakeWaku)
+    _offline(monkeypatch)
+    monkeypatch.setenv("MEM0_USER_ID", "the-live-one")
+    arena.run_arena(["sqlite", "mem0"], "t", lambda k, e: None, fixture=fx)
+    assert os.environ["MEM0_USER_ID"] == "the-live-one"
+
+
+def test_an_already_told_store_emits_one_cached_event_not_a_fake_count(tmp_path, monkeypatch):
+    """Faking len(seed) 'seeded' events made a store that needed no telling
+    animate through a telling phase it was not doing."""
+    import waku.app
+
+    fx = _arena_fixture(tmp_path)          # 2 seed lines
+    home = tmp_path / "pinned"
+    _FakeWaku.script = {"q1?": "alpha", "q2?": "new"}
+    _FakeWaku.gate = True
+    _FakeWaku.settles = True
+    monkeypatch.setattr(waku.app, "Waku", _FakeWaku)
+    _offline(monkeypatch)
+    monkeypatch.setattr(arena, "arena_home", lambda *a, **k: home)
+
+    _FakeWaku.built = []
+    arena.run_arena(["sqlite"], "t", lambda k, e: None, fixture=fx)   # first: seeds
+
+    events = []
+    _FakeWaku.built = []
+    arena.run_arena(["sqlite"], "t", lambda k, e: events.append((k, e)), fixture=fx)
+
+    seeded = [e for k, e in events if k == "seeded"]
+    cached = [e for k, e in events if k == "cached"]
+    assert not seeded, f"an already-told store must not re-emit seeded events: {seeded}"
+    assert len(cached) == 1, f"exactly one cached event, got {cached}"
+    assert cached[0]["facts"] == 2, cached[0]
