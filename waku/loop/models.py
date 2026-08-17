@@ -85,12 +85,16 @@ PROVIDERS: dict[str, Provider] = {
                           flagship="claude-opus-4-8", fast="claude-sonnet-5"),
     # The gpt-5.6 REASONING models (luna/sol/terra) can't use function tools on
     # /v1/chat/completions (they need /v1/responses), so every Waku turn 400s on
-    # them. The non-reasoning "chat" line DOES call tools fine; gpt-5.3-chat-latest
-    # is the newest concrete one (preferred over the gpt-5-chat-latest alias so a
-    # benchmark is reproducible). gpt-4.1-mini is a cheap tool-capable gate.
-    # base_url is None (SDK default) so point the picker at OpenAI's catalog.
+    # them. That constraint still holds — what changed is where the escape hatch
+    # is: the whole `-chat-latest` line (5.3, 5.2, 5.1 and the bare gpt-5 alias)
+    # is now 404 deprecated, so "fall back to the previous -chat-latest" is not
+    # an option any more. gpt-5.5 is the newest plain model that returns a
+    # tool_call on /v1/chat/completions; gpt-4.1-mini is a cheap tool-capable
+    # gate. A `-latest` alias is deliberately NOT used — it silently changes
+    # under a pinned benchmark, and test_openai_default_is_tool_capable rejects
+    # one. base_url is None (SDK default) so point the picker at the catalog.
     "openai":    Provider("openai", "OPENAI_API_KEY", None,
-                          "gpt-5.3-chat-latest", "gpt-4.1-mini",
+                          "gpt-5.5", "gpt-4.1-mini",
                           catalog_url="https://api.openai.com/v1/models"),
     # one key, every lab's models, and a $0 tier: the default models below are
     # free ids (":free" suffix). Rate-limited (~50 req/day without credits).
