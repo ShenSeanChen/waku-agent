@@ -33,6 +33,7 @@ PRICING = {
     "xai": (3.0, 15.0),   # Grok — rough est; keyed users get exact from the catalog
     "opencode_zen": (0.435, 0.87),   # rough est (matching deepseek — same underlying model)
     "opencode_go": (0.435, 0.87),    # rough est
+    "ollama": (0.0, 0.0),            # local inference ($0)
     # openrouter fallback for paid models when the live catalog is unreachable
     # (rough mid-catalog guess). ":free" ids and catalog-priced models never
     # hit this: see price_for().
