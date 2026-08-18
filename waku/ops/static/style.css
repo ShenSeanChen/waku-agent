@@ -1,19 +1,26 @@
+/* THE THEME SWITCH. `js/theme.js` resolves the user's choice (System /
+   Light / Dark) before the first paint and writes data-theme="light|dark" on
+   <html>, so every rule below keys off that one attribute. There are
+   deliberately NO prefers-color-scheme queries in this file: the OS preference
+   is read in one place, and a manual pick has nothing to fight with. */
 :root{
-    /* let native UI (scrollbars, form controls) follow the active scheme,
-       otherwise they stay light even in dark mode */
-    color-scheme:light dark;
+    /* explicit, not `light dark`: native UI (scrollbars, form controls) must
+       follow the PICKED theme, not the OS one, or Dark-on-a-light-desktop
+       ships light scrollbars */
+    color-scheme:light;
     --bg:#fafaf9;--panel:#ffffff;--line:#e7e6e4;--line2:#d9d8d5;
     --ink:#21201d;--ink2:#6f6e69;--ink3:#a3a29d;
     --accent:#5e6ad2;--accent-soft:#eef0fb;
     --good:#1f7a4d;--good-soft:#e8f4ee;--bad:#c0392b;--bad-soft:#faeceb;
     --mono:ui-monospace,'SF Mono',Menlo,monospace;
   }
-  @media (prefers-color-scheme:dark){:root{
+  :root[data-theme="dark"]{
+    color-scheme:dark;
     --bg:#101012;--panel:#18181b;--line:#26262a;--line2:#333338;
     --ink:#ececea;--ink2:#96959f;--ink3:#5f5e66;
     --accent:#7c8aec;--accent-soft:#20223a;
     --good:#4cc38a;--good-soft:#12291d;--bad:#e5655a;--bad-soft:#331714;
-  }}
+  }
   *{box-sizing:border-box;margin:0}
   /* thin theme-colored scrollbars (like the chat dock's), instead of the
      chunky native ones */
@@ -36,6 +43,13 @@
   body.resizing{cursor:col-resize;user-select:none}
   #nav-toggle{float:right;background:none;border:none;color:var(--ink3);cursor:pointer;font-size:12px;padding:2px 4px;line-height:1}
   #nav-toggle:hover{color:var(--ink)}
+  /* Floated rather than flexed: .pagehead is a plain block that several views
+     write into, and float keeps the button out of their way. */
+  #theme-toggle{float:right;margin-top:2px;background:var(--panel);border:1px solid var(--line2);
+    border-radius:6px;color:var(--ink2);cursor:pointer;font:inherit;font-size:11.5px;
+    padding:4px 10px;min-width:64px}
+  #theme-toggle:hover{color:var(--ink);border-color:var(--ink3)}
+  #theme-toggle:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
   #nav-reopen{display:none;position:fixed;top:12px;left:12px;z-index:25;background:var(--panel);
     border:1px solid var(--line2);border-radius:8px;color:var(--ink2);width:34px;height:30px;cursor:pointer;font-size:14px}
   body.nav-hidden #nav,body.nav-hidden #nav-resizer{display:none}
@@ -124,10 +138,10 @@
   /* fenced code blocks */
   .mdcode{border:1px solid var(--line);border-radius:var(--radius);overflow:hidden;margin:10px 0;
           background:rgba(0,0,0,0.035)}
-  @media(prefers-color-scheme:dark){.mdcode{background:rgba(0,0,0,0.40)}}
+  :root[data-theme="dark"] .mdcode{background:rgba(0,0,0,0.40)}
   .mdcode-head{display:flex;align-items:center;justify-content:space-between;padding:5px 12px;
                border-bottom:1px solid var(--line);background:rgba(0,0,0,0.025)}
-  @media(prefers-color-scheme:dark){.mdcode-head{background:rgba(255,255,255,0.04)}}
+  :root[data-theme="dark"] .mdcode-head{background:rgba(255,255,255,0.04)}
   .mdcode-lang{font-family:var(--mono);font-size:10.5px;text-transform:uppercase;
                letter-spacing:.08em;color:var(--ink3);font-weight:600}
   .mdcode-copy{background:none;border:1px solid var(--line2);border-radius:6px;color:var(--ink3);
@@ -240,9 +254,11 @@
   .srcpill.mcp{background:var(--good-soft);color:var(--good)}
   .srcpill.apple{background:#0000;border:1px solid var(--line2);color:var(--ink2)}
   /* read-only SQL console (the Supabase-editor idea, scoped down) */
-  .sqlbox{width:100%;min-height:70px;background:#0b0b0d;color:#d6d7de;border:1px solid var(--line2);
+  /* Stays a dark console in both themes (it is a terminal, not a panel), but
+     lifts one shade on a light page so it does not read as a hole. */
+  .sqlbox{width:100%;min-height:70px;background:#1c1c20;color:#e6e6ea;border:1px solid var(--line2);
           border-radius:8px;padding:11px 13px;font:12.5px/1.5 var(--mono);resize:vertical;outline:none}
-  @media (prefers-color-scheme:light){.sqlbox{background:#1c1c20;color:#e6e6ea}}
+  :root[data-theme="dark"] .sqlbox{background:#0b0b0d;color:#d6d7de}
   .sqlbox:focus{border-color:var(--accent)}
   .qexample{font-family:var(--mono);font-size:11.5px;color:var(--accent);cursor:pointer;border-bottom:1px dashed var(--accent)}
   /* session picker in the chat surfaces */
@@ -585,10 +601,8 @@ details.subterm > summary.subterm-h::-webkit-details-marker{ display:none; }
 .connmodal-message{flex:1;min-width:160px;color:var(--ink3);font-size:11.5px}
 .conn-force{margin-left:6px}
 .connmodal :focus-visible{outline:2px solid var(--accent);outline-offset:2px}
-@media (prefers-color-scheme:dark){
-  .conncard:hover{box-shadow:0 5px 18px rgba(0,0,0,.25)}
-  .connstatus.needs-setup{color:#d9a441}
-}
+:root[data-theme="dark"] .conncard:hover{box-shadow:0 5px 18px rgba(0,0,0,.25)}
+:root[data-theme="dark"] .connstatus.needs-setup{color:#d9a441}
 @media (max-width:720px){
   .conngrid{grid-template-columns:1fr}
   .connmodal-back{padding:10px}

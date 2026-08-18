@@ -6,7 +6,8 @@ files to change the UI; edit `dashboard.py` to change the server/API.
 
 - `index.html` — the shell (sidebar nav, `<main>`, chat dock) + the ordered
   `<script>` tags.
-- `style.css` — one flat file, `:root` design tokens at the top, light + dark.
+- `style.css` — one flat file, `:root` design tokens at the top, light + dark
+  (dark keys off `:root[data-theme="dark"]`).
 - `js/` — the app, split by concern (below).
 
 ## The files (`js/`), in load order
@@ -17,6 +18,7 @@ runs the bootstrap and must load last**.
 
 | file | what lives here |
 |------|-----------------|
+| `theme.js`   | System / Light / Dark picker — **the one file loaded in `<head>`**, see below |
 | `util.js`    | `esc`, markdown renderer, core globals (`D`, `editing`), `postJSON`, `reveal` |
 | `memory.js`  | inline Memory / SOUL / skill editing actions |
 | `models.js`  | `applyModel` (the one `/api/settings` writer), model picker / catalog / pins |
@@ -34,6 +36,12 @@ Data flows one way: `refresh()` (main.js) fetches `/api/data` into the global
 
 ## Rules that bite (read before editing)
 
+- **`theme.js` loads in `<head>`, everything else at the end of `<body>`.**
+  It writes `data-theme="light|dark"` on `<html>` before the first paint; move it
+  down with the others and a Dark user gets a white flash on every reload.
+  It also resolves the System choice itself, which is why `style.css` has **no
+  `prefers-color-scheme` queries** — the palette reads one attribute, not two
+  sources that have to agree. `test_theme_toggle.py` pins that.
 - **Inline handlers need global names.** Buttons use `onclick="fn()"` in the
   HTML strings the JS generates. `fn` must stay a top-level name in some `js/`
   file. Rename/move a handler and forget its call sites → the button silently

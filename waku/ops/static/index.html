@@ -1,7 +1,12 @@
 <!doctype html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Waku わく</title>
-<link rel="stylesheet" href="/static/style.css"></head><body>
+<link rel="stylesheet" href="/static/style.css">
+<!-- The one script that loads in <head>: it stamps the resolved theme on
+     <html> before the first paint, so picking Dark on a light desktop does
+     not flash white on every reload. Everything else loads at the end of
+     the body. -->
+<script src="/static/js/theme.js"></script></head><body>
 <nav id="nav">
   <div class="brand">Waku わく<small id="model" style="cursor:pointer" title="click to change the model" onclick="location.hash='#models'"></small>
     <button id="nav-toggle" title="Hide sidebar">&#10094;</button></div>
@@ -33,6 +38,7 @@
 <div class="resizer" id="nav-resizer" title="Drag to resize sidebar"></div>
 <main>
   <header class="pagehead">
+    <button id="theme-toggle" onclick="cycleTheme()">System</button>
     <h1 id="title">Overview</h1>
     <div class="sub" id="sub"></div>
   </header>
