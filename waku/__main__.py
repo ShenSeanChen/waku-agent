@@ -18,7 +18,20 @@ from __future__ import annotations
 import sys
 
 
+def _tolerant_stdio() -> None:
+    """Windows consoles default to a legacy codepage (cp1252) that cannot
+    encode the arrows and middots in our output — printing the dashboard
+    banner would crash with UnicodeEncodeError before the server even
+    started. Keep the console's encoding but replace what it can't show."""
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(errors="replace")
+        except (AttributeError, ValueError):
+            pass  # not a real console stream (tests, pipes) — leave it alone
+
+
 def main() -> None:
+    _tolerant_stdio()
     args = sys.argv[1:]
     if not args:
         from waku.gateway.cli import main as cli_main
