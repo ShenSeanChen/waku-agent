@@ -21,7 +21,7 @@ def test_usage_text_survives_a_cp1252_console():
     # parent's own stdio encoding would make this test depend on the host.
     result = subprocess.run(
         [sys.executable, "-m", "waku", "definitely-not-a-command"],
-        capture_output=True, env=env, timeout=60,
+        capture_output=True, env=env, timeout=60, check=False,
     )
     assert b"UnicodeEncodeError" not in result.stderr
     assert result.returncode == 1  # the usage path's normal exit
