@@ -1,7 +1,7 @@
 blank_issues_enabled: true
 contact_links:
   - name: Question or show-and-tell
-    url: https://discord.gg/7Ntxzm3eJ
+    url: https://discord.gg/ebbdvSCXqu
     about: Fastest place to ask something or share what you built.
   - name: Good first issues
     url: https://github.com/ShenSeanChen/waku-agent/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22

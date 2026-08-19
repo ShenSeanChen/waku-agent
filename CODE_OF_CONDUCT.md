@@ -18,7 +18,7 @@ answer them.
 - **No harassment, personal attacks, or demeaning comments** about anyone's
   experience level, background, identity, or English. Plenty of contributors
   here aren't writing in their first language.
-- **Don't derail.** Issues are for the work; the [Discord](https://discord.gg/7Ntxzm3eJ)
+- **Don't derail.** Issues are for the work; the [Discord](https://discord.gg/ebbdvSCXqu)
   is for everything else.
 - **Credit people.** If someone's idea shaped a change, say so in the PR.
 

@@ -16,12 +16,13 @@ for its own sake is not.
 - `waku/graph/` — engine + node factories + `workflows/` (triage) — opt-in structure
   AROUND the loop (the loop never changes; a graph node can BE a loop turn); every
   failure fails open to the plain loop
-- `waku/tools/` — create_event / save_note / send_message (flagship task only)
+- `waku/tools/` — create_event / update_event / save_note / send_message (flagship task only)
 - `waku/memory/` — semantic (FTS5) / episodic / procedural (SKILL.md) +
   `retrieval_gate.py` (hero 1) + `consolidation.py` (every N exchanges)
 - `waku/ops/` — tracing (JSONL + OTel), dashboard (localhost:7777), release_gate,
   `compare_history.py` (the Compare arena's own JSONL scoreboard — never state.db)
 - `evals/deterministic/` (0/1, pytest) vs `evals/judge/` (DeepEval, scored) — never mix
+- `examples/` — teaching material, not product (see the rule below); one folder per topic
 - Runtime state lives in `.waku/` (state.db, calendar.ics, outbox/, traces/) — gitignored
 
 ## Rules
@@ -34,9 +35,14 @@ for its own sake is not.
   *immediately before each run*. Permission never carries over from a previous run.
   The script backs up first, but restoring is a hassle — ask, wait for a clear yes,
   then run. It refuses to do anything without the `--yes` flag for this reason.
+- **Commit messages are about the CODE, not the conversation.** Subject = what
+  changed, under ~70 chars. Body = why, in a few tight lines. Then stop.
+  No narrating who asked for it, no "Sean caught", no story of what I tried
+  first, no re-deriving the reasoning. This is a public repo — a stranger
+  reading `git log` wants the change, not a diary. If the reasoning is worth
+  keeping, it belongs in a code comment next to the code it explains.
 - **Version control — commit AND ship every milestone, same turn.** The moment a change
-  works (tests pass / verified live), commit it with a detailed message (subject = what,
-  body = WHY + what it survived) and get it onto GitHub before moving on. Never end a
+  works (tests pass / verified live), commit it and get it onto GitHub before moving on. Never end a
   turn or session with working changes left uncommitted — the repo must always be traceable
   from GitHub, and uncommitted work has been lost to branch switches before. Use the `/ship`
   skill. If several milestones land in one session, commit each as its own logical commit.
@@ -58,6 +64,24 @@ for its own sake is not.
   a tool behind an extra → a gateway (one file, text in/out only) →
   **a new core tool, last resort**. Full version, with the "declined even when
   well-built" list, in `CONTRIBUTING.md`.
+- **`examples/` is teaching material, not product.** Video companions, minimal agents,
+  and other people's tools shown on their own terms all live here — one self-contained
+  folder or file per TOPIC, named for the topic (`memory-native/`), never for the video
+  or its date. Four rules keep it from rotting the core:
+  1. **Nothing under `waku/` may import from `examples/`.** One-way, always. This is
+     the load-bearing rule; the other three are hygiene.
+  2. **No new default dependencies.** Use stdlib, or an extra that already exists, or
+     state the `pip install` in the file's own header.
+  3. **`make gate` must never depend on an example.** A third-party SDK shipping a
+     breaking release is their problem, not red CI.
+  4. **Anything using someone else's SDK carries a dated header** naming the version it
+     was verified against. mem0/zep/langmem move fast, and a silently rotted example is
+     worse than no example.
+  Whether it imports waku is NOT the test. `tiny_memory_agent.py` imports plenty of it
+  (that's the point — the loop's three steps with nothing else in frame);
+  `memory-native/` imports none of it (also the point — mem0, Zep, LangMem and pgvector
+  the way you'd actually start with them, before any comparison is drawn). The test is
+  whether a stranger can run it in one command and learn exactly one thing.
 - **Scope**: scheduling is the flagship teaching task, but the project is growing toward a
   full assistant. New capabilities (providers, tools, gateways, integrations) are welcome
   when they're self-contained, tested, and keep the core legible. Reject only complexity

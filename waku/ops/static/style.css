@@ -1,4 +1,7 @@
 :root{
+    /* let native UI (scrollbars, form controls) follow the active scheme,
+       otherwise they stay light even in dark mode */
+    color-scheme:light dark;
     --bg:#fafaf9;--panel:#ffffff;--line:#e7e6e4;--line2:#d9d8d5;
     --ink:#21201d;--ink2:#6f6e69;--ink3:#a3a29d;
     --accent:#5e6ad2;--accent-soft:#eef0fb;
@@ -12,6 +15,13 @@
     --good:#4cc38a;--good-soft:#12291d;--bad:#e5655a;--bad-soft:#331714;
   }}
   *{box-sizing:border-box;margin:0}
+  /* thin theme-colored scrollbars (like the chat dock's), instead of the
+     chunky native ones */
+  *{scrollbar-width:thin;scrollbar-color:var(--line2) transparent}
+  *::-webkit-scrollbar{width:6px;height:6px}
+  *::-webkit-scrollbar-track{background:transparent}
+  *::-webkit-scrollbar-thumb{background:var(--line2);border-radius:3px}
+  *::-webkit-scrollbar-thumb:hover{background:var(--ink3)}
   /* three fixed-height columns, each scrolling independently: the main
      content's scrollbar sits at its own right edge (the "middle"), never over
      the chat dock. */
@@ -607,6 +617,22 @@ details.subterm > summary.subterm-h::-webkit-details-marker{ display:none; }
 .ma-source{margin-top:10px;padding:8px 10px;border-radius:6px;background:var(--accent-soft);
            color:var(--ink2);font-size:12px;line-height:1.6}
 .ma-race{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-top:12px}
+/* Questions and Model are ONE setup decision, so they belong on one line. They
+   were wrapping to a line each: a bare <select> sizes itself to its longest
+   option, and these carry text like "Example — a working week — 5 facts, 4
+   questions", which is wider than half the card. flex-basis lets them share the
+   row and min-width:0 is what actually permits the shrink — a flex item refuses
+   to go below its content width without it, which is the whole reason the
+   wrapping looked like a gap problem rather than a width one. */
+/* Heading, its button and its one-line note on a single baseline. Vertical
+   space on this page belongs to the store cards, not to the furniture that
+   introduces them. */
+.ma-head{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.ma-head .save{font-size:12px;padding:5px 12px}
+.ma-head .meta{font-weight:400}
+.ma-pickers .fld{margin-bottom:0;flex:1 1 260px;min-width:0}
+.ma-pickers .fld select{width:100%}
+.ma-pickers .meta{flex:1 1 100%}
 .ma-ans{font-size:11px;color:var(--ink3);margin-top:4px;max-width:280px;line-height:1.45}
 /* Equal-height cards. `align-items:stretch` is the grid default, so every card
    already spans its row — the cards were ragged because each one sized to its

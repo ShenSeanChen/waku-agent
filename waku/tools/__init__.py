@@ -26,6 +26,10 @@ def build_registry(conn: sqlite3.Connection, settings: Settings, memory=None) ->
     # source (Google when signed in, plus waku's own), so the model never has
     # to guess which calendar the user meant.
     registry.register(calendar.make_list_tool(conn, settings.home))
+    # Reschedule/rename an existing local event in place — the counterpart to
+    # create_event, so "it got moved to Tuesday" edits the row instead of
+    # leaving the stale original next to a new one.
+    registry.register(calendar.make_update_tool(conn, settings.home))
     registry.register(notes.make_tool(conn))
     registry.register(finance.make_tool(conn))
     registry.register(interviews.make_tool(conn))

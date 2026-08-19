@@ -29,6 +29,8 @@ import time
 from datetime import datetime
 from pathlib import Path
 
+from waku.tools._env import delegate_env as _delegate_env
+
 WORKSPACE_ENV = "WAKU_WORKSPACE"          # root dir; default ./waku_workspace
 AUTORUN_ENV = "WAKU_DELEGATE_AUTORUN"     # "0"/"false"/"no" to disable auto-run
 RUN_TIMEOUT = int(os.getenv("WAKU_AUTORUN_TIMEOUT", "30"))
@@ -90,7 +92,7 @@ def autorun(folder: Path) -> tuple | None:
     try:
         r = subprocess.run([sys.executable, entry.name], cwd=folder,
                            stdin=subprocess.DEVNULL, capture_output=True, text=True,
-                           timeout=RUN_TIMEOUT, check=False)
+                           timeout=RUN_TIMEOUT, check=False, env=_delegate_env())
         out = (r.stdout + r.stderr).strip()
         result = (entry.name, r.returncode, out, round(time.perf_counter() - t0, 1))
     except subprocess.TimeoutExpired:

@@ -1,7 +1,13 @@
+import os
 from types import SimpleNamespace
 
+import pytest
+
+from evals.helpers import HAS_KEY
 from waku.config import Settings
 from waku.loop import models
+
+RUN_LIVE_EVALS = os.getenv("WAKU_RUN_LIVE_EVALS") == "1"
 
 
 def test_xai_grok_provider_uses_expected_key_endpoint_and_models(monkeypatch, tmp_path):
@@ -29,8 +35,57 @@ def test_openai_default_is_tool_capable(tmp_path):
     variants (luna/sol/terra) can't use function tools on /v1/chat/completions
     (they 400). The default must be a NON-reasoning, tool-capable chat model."""
     from waku.loop.models import PROVIDERS
-    assert PROVIDERS["openai"].model == "gpt-5.3-chat-latest"
-    assert PROVIDERS["openai"].default_pair() == ["gpt-5.3-chat-latest", "gpt-4.1-mini"]
+    assert PROVIDERS["openai"].model == "gpt-5.5"
+    assert PROVIDERS["openai"].default_pair() == ["gpt-5.5", "gpt-4.1-mini"]
+
+
+def test_no_default_model_is_a_moving_alias():
+    """The whole gpt-5.x-chat-latest line went 404 at once (issue #132), and
+    waku shipped a default pointing into it. An alias is what made that a silent
+    break rather than a caught one: the id in the repo never changed, so nothing
+    local could tell it had stopped resolving.
+
+    Pinning concrete ids does not stop a provider deprecating a model — nothing
+    offline can. It stops the OTHER half of the failure, where a benchmark drifts
+    under you because the name quietly started meaning something else. Catching
+    an actual deprecation needs the live probe below.
+    """
+    from waku.loop.models import PROVIDERS
+
+    offenders = [f"{name}: {m}"
+                 for name, prov in PROVIDERS.items()
+                 for m in prov.default_pair()
+                 if m.endswith("-latest")]
+    assert not offenders, (
+        "default models must be concrete ids, not moving aliases — "
+        f"{', '.join(offenders)}. See issue #132.")
+
+
+@pytest.mark.skipif(not (HAS_KEY and RUN_LIVE_EVALS),
+                    reason="set WAKU_RUN_LIVE_EVALS=1 and configure an API key to run live evals")
+def test_openai_defaults_still_resolve_live():
+    """The only check that can catch a deprecation, because only the provider
+    knows. Calls both defaults in the exact shape OpenAICompatClient._to_openai
+    sends — chat.completions WITH a function tool attached — because that is the
+    combination gpt-5.6-luna passes as a bare call and 400s on.
+
+    Off by default; `make gate` with WAKU_RUN_LIVE_EVALS=1 is where this bites.
+    """
+    import openai
+
+    from waku.loop.models import PROVIDERS
+
+    key = os.getenv("OPENAI_API_KEY")
+    if not key:
+        pytest.skip("no OPENAI_API_KEY")
+    client = openai.OpenAI(api_key=key, timeout=60)
+    tool = [{"type": "function",
+             "function": {"name": "ping", "description": "ping",
+                          "parameters": {"type": "object", "properties": {}}}}]
+    for model in PROVIDERS["openai"].default_pair():
+        client.chat.completions.create(
+            model=model, tools=tool, max_completion_tokens=32,
+            messages=[{"role": "user", "content": "call ping"}])
 
 
 def test_gemini_thought_signature_round_trips():

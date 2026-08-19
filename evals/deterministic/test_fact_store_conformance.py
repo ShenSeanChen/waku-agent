@@ -165,6 +165,33 @@ def test_non_ascii_round_trips_on_every_backend(store):
     assert store.search("Сергей") != [], "a Cyrillic fact stored but not findable"
 
 
+def test_settle_reports_readiness_and_never_raises(store):
+    """settle() answers "is what I wrote actually searchable yet".
+
+    Every backend in this suite is local, so all of them must return True
+    immediately — a sleep on the local path would be pure cost. The hosted two
+    are the reason the method exists: mem0 has no readiness signal at all and
+    measured 14s from add() to queryable, and Zep's per-add `processed` flag
+    reported done while the graph derived from those episodes still held zero
+    matching nodes.
+
+    The contract that matters is the pairing asserted below. settle() returning
+    True while a just-written fact is not findable would be worse than having
+    no method: the caller would have a green light and a wrong answer, and
+    would blame the store's memory rather than its clock.
+    """
+    store.add("alex", "runs a robotics startup")
+    assert store.settle() is True, "a local backend has nothing to wait for"
+    assert store.search("robotics") != [], "settled must mean searchable, not merely written"
+
+
+def test_settle_is_safe_to_call_on_an_empty_store(store):
+    """Called before anything is written — the arena's control contestant seeds
+    nothing at all. Waiting for a count to stabilise must not hang or throw on
+    a store where the count is legitimately zero forever."""
+    assert store.settle(timeout=5.0) is True
+
+
 # --- the suite keeps itself honest -------------------------------------------
 
 def _protocol_methods() -> list[str]:
