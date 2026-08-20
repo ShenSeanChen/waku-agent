@@ -484,7 +484,7 @@ def collect() -> dict:
             "FROM finance_entries ORDER BY date DESC, id DESC"
         ),
         "interviews": rows(
-            "SELECT id, company, role, round, date, status, notes, created_at, updated_at "
+            "SELECT id, company, role, round, date, status, notes, channel, created_at, updated_at "
             "FROM interview_entries ORDER BY updated_at DESC"
         ),
         "outbox": outbox,

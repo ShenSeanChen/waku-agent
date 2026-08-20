@@ -94,8 +94,9 @@ CREATE TABLE IF NOT EXISTS interview_entries (
     role TEXT NOT NULL,
     round TEXT DEFAULT '',
     date TEXT NOT NULL,            -- ISO 8601 date of the most recent update
-    status TEXT NOT NULL,          -- 进行中 | 通过 | 失败 | 待跟进
+    status TEXT NOT NULL,          -- 已投递 | 进行中 | 通过 | 失败 | 待跟进
     notes TEXT DEFAULT '',
+    channel TEXT DEFAULT '',       -- how the application was submitted, e.g. 官网/猎聘/内推
     created_at TEXT DEFAULT (datetime('now')),
     updated_at TEXT DEFAULT (datetime('now'))
 );
@@ -118,6 +119,11 @@ def _migrate(conn: sqlite3.Connection) -> None:
         # latency, iterations, tools) — so reopening a thread still shows how
         # each answer was produced, not just the plain text.
         conn.execute("ALTER TABLE chat_log ADD COLUMN meta TEXT")
+        conn.commit()
+
+    interview_cols = {r[1] for r in conn.execute("PRAGMA table_info(interview_entries)").fetchall()}
+    if "channel" not in interview_cols:
+        conn.execute("ALTER TABLE interview_entries ADD COLUMN channel TEXT DEFAULT ''")
         conn.commit()
 
 

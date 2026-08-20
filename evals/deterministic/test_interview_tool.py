@@ -87,3 +87,38 @@ def test_log_interview_correcting_role_updates_same_row(tmp_path):
     assert len(rows) == 1  # corrected in place, not a second row
     assert rows[0]["role"] == "AI 应用"
     assert "AI 应用" in result
+
+
+def test_log_interview_applied_status_stores_channel(tmp_path):
+    conn = connect(tmp_path)
+    tool = make_tool(conn)
+    tool.fn(company="Acme", role="PM", status="已投递", channel="猎聘")
+
+    row = conn.execute("SELECT status, channel FROM interview_entries").fetchone()
+    assert row["status"] == "已投递"
+    assert row["channel"] == "猎聘"
+
+
+def test_log_interview_applied_row_updates_to_in_progress_same_row(tmp_path):
+    """已投递 is an open status, so once an interview round is scheduled the
+    same row upgrades in place instead of fragmenting into a second row."""
+    conn = connect(tmp_path)
+    tool = make_tool(conn)
+    tool.fn(company="Acme", role="PM", status="已投递", channel="官网")
+    tool.fn(company="Acme", role="PM", round="一面", status="进行中")
+
+    rows = conn.execute("SELECT status, round, channel FROM interview_entries").fetchall()
+    assert len(rows) == 1  # updated in place, not a second row
+    assert rows[0]["status"] == "进行中"
+    assert rows[0]["round"] == "一面"
+    assert rows[0]["channel"] == "官网"  # preserved, not blanked, because omitted
+
+
+def test_log_interview_omitted_channel_preserves_existing_value(tmp_path):
+    conn = connect(tmp_path)
+    tool = make_tool(conn)
+    tool.fn(company="Acme", role="PM", status="已投递", channel="内推")
+    tool.fn(company="Acme", role="PM", status="已投递", channel="")
+
+    row = conn.execute("SELECT channel FROM interview_entries").fetchone()
+    assert row["channel"] == "内推"  # NOT blanked, even though "" was explicitly passed

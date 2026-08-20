@@ -661,15 +661,15 @@ const VIEWS = {
 
     // Grouped by status, in a fixed pipeline order; empty groups are
     // skipped rather than rendered with a "no interviews" placeholder.
-    const STATUS_ORDER = ["进行中", "待跟进", "通过", "失败"];
+    const STATUS_ORDER = ["已投递", "进行中", "待跟进", "通过", "失败"];
     const groups = STATUS_ORDER.map(status => {
       const rows = interviews.filter(i => i.status === status);
       if (!rows.length) return "";
       const body = rows.map(i => `<tr>
           <td>${esc(i.company)}</td><td>${esc(i.role)}</td><td>${esc(i.round||"")}</td>
-          <td>${esc(i.notes||"")}</td></tr>`).join("");
+          <td>${esc(i.channel||"")}</td><td>${esc(i.notes||"")}</td></tr>`).join("");
       return `<h3 style="margin-top:20px">${esc(status)} (${rows.length})</h3>
-        <table class="datatable"><thead><tr><th>Company</th><th>Role</th><th>Round</th><th>Notes</th></tr></thead>
+        <table class="datatable"><thead><tr><th>Company</th><th>Role</th><th>Round</th><th>Channel</th><th>Notes</th></tr></thead>
         <tbody>${body}</tbody></table>`;
     }).join("");
 

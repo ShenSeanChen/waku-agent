@@ -15,5 +15,5 @@ def test_interview_entries_table_has_expected_columns(tmp_path):
     conn = connect(tmp_path)
     cols = {r[1] for r in conn.execute("PRAGMA table_info(interview_entries)").fetchall()}
     assert cols == {
-        "id", "company", "role", "round", "date", "status", "notes", "created_at", "updated_at",
+        "id", "company", "role", "round", "date", "status", "notes", "channel", "created_at", "updated_at",
     }
