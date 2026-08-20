@@ -83,16 +83,14 @@ PROVIDERS: dict[str, Provider] = {
                           "claude-sonnet-5", "claude-haiku-4-5-20251001",
                           catalog_url="https://api.anthropic.com/v1/models",
                           flagship="claude-opus-4-8", fast="claude-sonnet-5"),
-    # The gpt-5.6 REASONING models (luna/sol/terra) can't use function tools on
-    # /v1/chat/completions (they need /v1/responses), so every Waku turn 400s on
-    # them. That constraint still holds — what changed is where the escape hatch
-    # is: the whole `-chat-latest` line (5.3, 5.2, 5.1 and the bare gpt-5 alias)
-    # is now 404 deprecated, so "fall back to the previous -chat-latest" is not
-    # an option any more. gpt-5.5 is the newest plain model that returns a
-    # tool_call on /v1/chat/completions; gpt-4.1-mini is a cheap tool-capable
-    # gate. A `-latest` alias is deliberately NOT used — it silently changes
-    # under a pinned benchmark, and test_openai_default_is_tool_capable rejects
-    # one. base_url is None (SDK default) so point the picker at the catalog.
+    # GPT-5.6 sol/terra/luna default to reasoning.effort=medium, which 400s on
+    # function tools on /v1/chat/completions. Do not make them the default —
+    # gpt-5.5 is the newest plain model that returns a tool_call with no extra
+    # flags. Opt-in (WAKU_MODEL=gpt-5.6-*) is handled in OpenAICompatClient:
+    # tool turns send reasoning_effort=none, the Completions escape hatch.
+    # Responses would keep reasoning; this loop does not speak it. The old
+    # `-chat-latest` line is 404, so we do not pin a moving alias — see
+    # test_openai_default_is_tool_capable. gpt-4.1-mini is the cheap gate.
     "openai":    Provider("openai", "OPENAI_API_KEY", None,
                           "gpt-5.5", "gpt-4.1-mini",
                           catalog_url="https://api.openai.com/v1/models"),
@@ -349,6 +347,14 @@ class OpenAICompatClient:
                               "parameters": t["input_schema"]}}
                 for t in tools
             ]
+            # GPT-5.6 (sol/terra/luna) defaults to reasoning.effort=medium.
+            # Chat Completions rejects function tools unless effort is none
+            # (otherwise: use /v1/responses). Waku's loop is chat.completions,
+            # so pin none whenever tools are on the request. Gate/summarizer
+            # calls have tools=None and keep the model's default reasoning.
+            # Default stays gpt-5.5 (#136); this only unlocks WAKU_MODEL=gpt-5.6-*.
+            if (model or "").lower().startswith("gpt-5.6"):
+                kwargs["reasoning_effort"] = "none"
         return kwargs
 
     def _call(self, kwargs: dict, **extra):

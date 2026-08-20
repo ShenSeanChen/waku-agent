@@ -39,6 +39,29 @@ def test_openai_default_is_tool_capable(tmp_path):
     assert PROVIDERS["openai"].default_pair() == ["gpt-5.5", "gpt-4.1-mini"]
 
 
+def test_gpt56_tool_calls_force_reasoning_effort_none():
+    """Opt-in GPT-5.6 on Completions: function tools 400 unless effort is none."""
+    from waku.loop.models import OpenAICompatClient
+
+    client = OpenAICompatClient.__new__(OpenAICompatClient)
+    tools = [{"name": "save_note", "description": "remember a fact",
+              "input_schema": {"type": "object"}}]
+    with_tools = client._to_openai(
+        model="gpt-5.6-sol", messages=[{"role": "user", "content": "hi"}],
+        max_tokens=10, tools=tools)
+    assert with_tools["reasoning_effort"] == "none"
+
+    gate = client._to_openai(
+        model="gpt-5.6-luna", messages=[{"role": "user", "content": "hi"}],
+        max_tokens=10)
+    assert "reasoning_effort" not in gate
+
+    old = client._to_openai(
+        model="gpt-5.5", messages=[{"role": "user", "content": "hi"}],
+        max_tokens=10, tools=tools)
+    assert "reasoning_effort" not in old
+
+
 def test_no_default_model_is_a_moving_alias():
     """The whole gpt-5.x-chat-latest line went 404 at once (issue #132), and
     waku shipped a default pointing into it. An alias is what made that a silent
