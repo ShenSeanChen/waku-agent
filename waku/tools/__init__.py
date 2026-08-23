@@ -7,7 +7,7 @@ from __future__ import annotations
 import sqlite3
 
 from waku.config import Settings
-from waku.tools import calendar, memory_admin, messages, notes, search
+from waku.tools import calendar, financial_reports, memory_admin, messages, notes, search, stocks
 from waku.tools.registry import ToolRegistry
 
 
@@ -31,6 +31,20 @@ def build_registry(conn: sqlite3.Connection, settings: Settings, memory=None) ->
     # Web search — pairs with create_event for the multi-tool loop demo
     # ("find the World Cup games left and add them to my calendar").
     registry.register(search.make_tool())
+
+    # Quarterly report analysis — reads docs/financial-reports/{symbol}/, a
+    # demo stand-in for a real document store. No key needed (local files),
+    # so it's always registered, unlike the Finnhub-backed tools below.
+    registry.register(financial_reports.make_tool())
+
+    # Stock quotes — only registered when a key is set (no keyless fallback
+    # exists, so a tool that can never succeed shouldn't ship to the model).
+    if settings.finnhub_api_key:
+        registry.register(stocks.make_tool(settings.finnhub_api_key))
+        registry.register(stocks.make_portfolio_tool(conn, settings.finnhub_api_key))
+    else:
+        print("FINNHUB_API_KEY not set — get_stock_price/get_portfolio_performance tools "
+              "disabled. Get a free key at https://finnhub.io and add it to .env to enable them.")
 
     # Memory self-management — the agent can correct/forget memory, learn rules,
     # and author its own skills (feels like a personal agent, not a black box).

@@ -73,7 +73,39 @@ CREATE TABLE IF NOT EXISTS chat_log (
     session_id TEXT DEFAULT 'default',
     created_at TEXT DEFAULT (datetime('now'))
 );
+
+-- Portfolio demo: a small, hand-seeded set of holdings the
+-- get_portfolio_performance tool reads. Read-only (no write tool yet) —
+-- price_yesterday/average_price are fixed baselines, not refreshed daily,
+-- so this is teaching/demo data, not a real brokerage account.
+CREATE TABLE IF NOT EXISTS portfolio_positions (
+    id INTEGER PRIMARY KEY,
+    ticker TEXT NOT NULL UNIQUE,
+    shares REAL NOT NULL,
+    price_yesterday REAL NOT NULL,
+    average_price REAL NOT NULL
+);
 """
+
+_DEMO_PORTFOLIO = [
+    # ticker, shares, price_yesterday, average_price — all fake/demo numbers
+    ("NVDA", 10, 170.00, 120.00),
+    ("AAPL", 15, 225.00, 180.00),
+    ("MSFT", 5, 410.00, 350.00),
+]
+
+
+def _seed_portfolio(conn: sqlite3.Connection) -> None:
+    """Seed the demo portfolio once, only if the table is empty — so a user
+    who deletes rows by hand (e.g. via sqlite3 CLI) doesn't get them back."""
+    (count,) = conn.execute("SELECT COUNT(*) FROM portfolio_positions").fetchone()
+    if count == 0:
+        conn.executemany(
+            "INSERT INTO portfolio_positions (ticker, shares, price_yesterday, average_price) "
+            "VALUES (?,?,?,?)",
+            _DEMO_PORTFOLIO,
+        )
+        conn.commit()
 
 
 def _migrate(conn: sqlite3.Connection) -> None:
@@ -104,4 +136,5 @@ def connect(home: Path, check_same_thread: bool = True) -> sqlite3.Connection:
     conn.execute("PRAGMA busy_timeout=3000")
     conn.executescript(SCHEMA)
     _migrate(conn)
+    _seed_portfolio(conn)
     return conn

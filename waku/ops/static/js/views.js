@@ -554,6 +554,7 @@ const VIEWS = {
       ${t.apple_on?"":"Apple tools are off (set <code>WAKU_APPLE_TOOLS=1</code>). "}Connect more via
       <a class="reveal" onclick="location.hash='tools/mcp'">MCP</a>.</div>`;
     const SRC = [["flagship","Flagship task — scheduling"],["web","Web search"],
+      ["finance","Finance — stock quotes"],
       ["self-management","Self-management — it edits its own memory"],
       ["apple","Apple ecosystem"],["mcp","MCP servers"],["other","Other"]];
     SRC.forEach(([key,label]) => {

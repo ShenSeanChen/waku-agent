@@ -117,6 +117,10 @@ class Settings:
     # owner/name to assume when a call omits it — for when Waku runs outside a
     # checkout, where `gh` has no remote to infer from.
     gh_repo: str = field(default_factory=lambda: os.getenv("WAKU_GH_REPO", ""))
+    # get_stock_price (Finnhub quotes). Unlike search_web there's no keyless
+    # fallback, so the key itself is the opt-in switch: no key, no tool — never
+    # register something the model could call and always fail.
+    finnhub_api_key: str = field(default_factory=lambda: os.getenv("FINNHUB_API_KEY", ""))
     # Register the experimental tools (delegate_task -> pi sub-agent, ...). Env is
     # the global switch; the arena sets this per-race so a coding race can hand
     # work to pi WITHOUT flipping it on for the whole process.

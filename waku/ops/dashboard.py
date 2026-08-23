@@ -546,6 +546,7 @@ _FLAGSHIP = {"create_event", "list_events", "save_note", "send_message"}
 _SELFMGMT = {"manage_memory", "update_soul", "create_skill"}
 _APPLE = {"read_apple_calendar", "read_apple_mail", "create_reminder", "create_note"}
 _WEB = {"search_web"}
+_FINANCE = {"get_stock_price", "get_portfolio_performance", "analyze_quarterly_report"}
 
 
 def _tool_source(name: str, mcp_servers: list[str]) -> str:
@@ -553,6 +554,8 @@ def _tool_source(name: str, mcp_servers: list[str]) -> str:
         return "flagship"
     if name in _WEB:
         return "web"
+    if name in _FINANCE:
+        return "finance"
     if name in _SELFMGMT:
         return "self-management"
     if name in _APPLE:
@@ -587,7 +590,15 @@ def tools_info() -> dict:
         # Display-only: same tools minus MCP (building the real registry would
         # start MCP servers, which we don't want on a 5-second poll).
         from waku.memory import Memory
-        from waku.tools import calendar, memory_admin, messages, notes, search
+        from waku.tools import (
+            calendar,
+            financial_reports,
+            memory_admin,
+            messages,
+            notes,
+            search,
+            stocks,
+        )
 
         conn = connect(settings.home)
         try:
@@ -612,11 +623,16 @@ def tools_info() -> dict:
                  ),
                  calendar.make_list_tool(conn),
                  notes.make_tool(conn), messages.make_tool(settings.home),
-                 search.make_tool(),
+                 search.make_tool(), financial_reports.make_tool(),
                  memory_admin.make_update_soul_tool(settings)]
         if mem is not None:
             tools += [memory_admin.make_manage_memory_tool(mem),
                       memory_admin.make_create_skill_tool(settings, mem)]
+        if settings.finnhub_api_key:
+            # Mirror build_registry: no key, no tool — a catalog entry the
+            # model could never actually call would lie about a capability.
+            tools.append(stocks.make_tool(settings.finnhub_api_key))
+            tools.append(stocks.make_portfolio_tool(conn, settings.finnhub_api_key))
         if settings.apple_tools:
             from waku.tools import apple
 

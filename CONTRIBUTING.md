@@ -1,4 +1,4 @@
-# Contributing to Waku
+<!-- # Contributing to Waku
 
 Waku started as a teaching repo you could read in an afternoon, and it's growing toward a
 full local-first assistant — the next Hermes / OpenClaw, with 1/100th the code. Contributions
@@ -136,4 +136,4 @@ keep it legible.
 ## Community
 
 Questions, show-and-tell, pair-debugging: [Discord](https://discord.gg/ebbdvSCXqu). By
-contributing you agree your work is licensed under the repo's MIT license.
+contributing you agree your work is licensed under the repo's MIT license. -->

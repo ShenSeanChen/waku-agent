@@ -20,6 +20,7 @@ dependencies = [
     "openai>=1.50",      # openai wire format: OpenAI, Gemini, DeepSeek (and embeddings)
     "python-dotenv>=1.0",
     "rich>=13.0",
+    "pypdf>=5.0",        # analyze_quarterly_report: PDF text extraction, provider-agnostic
 ]
 
 [project.urls]
