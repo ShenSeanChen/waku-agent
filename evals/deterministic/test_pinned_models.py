@@ -169,7 +169,7 @@ def test_known_catalog_providers_can_list(home):
     from waku.loop.models import PROVIDERS
 
     CAN_LIST = {"anthropic", "openai", "openrouter", "gemini", "deepseek", "minimax",
-                "kimi", "xai", "opencode_zen", "opencode_go"}
+                "kimi", "xai", "opencode_zen", "opencode_go", "siliconflow"}
     for name in CAN_LIST:
         prov = PROVIDERS[name]
         can_list = bool(prov.catalog_url) or (prov.kind == "openai" and bool(prov.base_url))

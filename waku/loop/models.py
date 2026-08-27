@@ -6,7 +6,7 @@ in, content blocks out). Providers plug in two ways:
   anthropic wire format (native)     → Anthropic, Kimi/Moonshot, GLM/Z.ai, MiniMax
   openai wire format (thin adapter)  → OpenAI, Google Gemini, DeepSeek, OpenRouter
 
-Pick with WAKU_PROVIDER=anthropic|openai|gemini|deepseek|minimax|kimi|glm|openrouter
+Pick with WAKU_PROVIDER=anthropic|openai|gemini|deepseek|minimax|kimi|glm|openrouter|siliconflow
 and set that provider's API key in .env. Override the model ids with WAKU_MODEL /
 WAKU_SMALL_MODEL if the defaults below age out — they're just strings. This
 matters most for openrouter: it's a single key in front of hundreds of models,
@@ -157,6 +157,22 @@ PROVIDERS: dict[str, Provider] = {
     "opencode_go":  Provider("openai", "OPENCODE_GO_API_KEY",
                                "https://opencode.ai/zen/go/v1",
                                "deepseek-v4-flash", "deepseek-v4-flash"),
+    # SiliconFlow — OpenAI-compatible aggregator. China (.cn) and Global (.com)
+    # share the same key shape and model ids (vendor/name). Default China, like
+    # MiniMax; switch SILICONFLOW_BASE_URL for the other region. The picker
+    # lists GET {base}/models; defaults are starting points.
+    "siliconflow": Provider("openai", "SILICONFLOW_API_KEY",
+                            "https://api.siliconflow.cn/v1",
+                            "deepseek-ai/DeepSeek-V4-Flash",
+                            "deepseek-ai/DeepSeek-V4-Flash",
+                            catalog_url="https://api.siliconflow.cn/v1/models",
+                            base_url_env="SILICONFLOW_BASE_URL",
+                            endpoints=(
+                                ProviderEndpoint("China", "https://api.siliconflow.cn/v1",
+                                                 "https://api.siliconflow.cn/v1/models"),
+                                ProviderEndpoint("Global", "https://api.siliconflow.com/v1",
+                                                 "https://api.siliconflow.com/v1/models"),
+                            )),
 }
 
 
@@ -176,6 +192,7 @@ KEY_URLS = {
     "xai": "https://console.x.ai",
     "opencode_zen": "https://opencode.ai/zen",
     "opencode_go": "https://opencode.ai/zen",
+    "siliconflow": "https://cloud.siliconflow.cn/account/ak",
 }
 
 
@@ -185,7 +202,7 @@ def _no_key_message(name: str, key_env: str) -> str:
     The old message named one env var and pointed at a file that does not exist
     off a git checkout. Three things were missing and each one cost a search:
     the URL to get a key, the absolute path of the .env actually in play, and
-    the fact that Waku speaks to eleven providers, not one.
+    the fact that Waku speaks to every listed provider, not one.
     """
     from waku.config import DOTENV_PATH
 
