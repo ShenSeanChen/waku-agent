@@ -131,6 +131,29 @@ that file gets pasted into bug reports, and a bearer token in one is a leaked
 credential. If the variable is not exported, Waku says so by name rather than
 connecting anonymously and letting the server's 401 look like an outage.
 
+### Signing in instead of holding a key
+
+A server that speaks MCP's authorization spec needs no key at all. Say so, and
+Waku opens your browser on first use:
+
+```json
+{"servers": [{"name": "waku_memory",
+              "url": "https://your-host/mcp",
+              "oauth": true}]}
+```
+
+Nothing is issued out of band and nothing is pasted anywhere. Waku registers
+itself with the server, catches the redirect on `127.0.0.1:41765`, and keeps
+the result in `.waku/mcp-auth/<server>.json`, written `0600` — one file per
+server, so a corrupt one costs a single connection rather than all of them.
+Delete that file to sign out.
+
+`oauth` and `auth_env` are two answers to one question, so naming both is
+refused rather than resolved by precedence.
+
+Headless or over SSH there is no browser to open: the authorization URL is
+printed, and you can finish the sign-in from any machine that has one.
+
 Try it against the demo server, no remote host required:
 
 ```bash
