@@ -113,3 +113,31 @@ make dashboard                               # demo_word_count / demo_reverse_te
 
 Same pattern scales to any server, yours or a vendor's — no changes to Waku's code.
 
+### Remote servers (Streamable HTTP)
+
+A server that is already running somewhere else is named by `url` instead of
+`command`. This is the MCP spec's transport for remote servers; the older
+HTTP+SSE transport is deprecated and is not supported.
+
+```json
+{"servers": [{"name": "waku_memory",
+              "url": "https://your-host/mcp",
+              "auth_env": "WAKU_MEMORY_API_KEY"}]}
+```
+
+`auth_env` names an **environment variable**; its value is sent as
+`Authorization: Bearer <value>`. The credential never goes in `mcp.json` —
+that file gets pasted into bug reports, and a bearer token in one is a leaked
+credential. If the variable is not exported, Waku says so by name rather than
+connecting anonymously and letting the server's 401 look like an outage.
+
+Try it against the demo server, no remote host required:
+
+```bash
+python examples/mcp_demo_server.py --http --port 8931
+# .waku/mcp.json → {"servers": [{"name": "demo", "url": "http://127.0.0.1:8931/mcp"}]}
+```
+
+Requires `mcp>=2.1` (`pip install -e '.[mcp]'`). The 1.x SDK spelled this
+transport differently and the remote branch does not work on it.
+

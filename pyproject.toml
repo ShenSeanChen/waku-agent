@@ -103,8 +103,12 @@ notion = [
     "notion-client>=2.5",
 ]
 # Optional: connect MCP servers (.waku/mcp.json)
+# >=2.1: the Streamable HTTP transport is `streamable_http_client` and takes a
+# pre-built httpx client. 1.x spelled it `streamablehttp_client`, took headers
+# directly, and yielded a third element — so mcp_client.py's remote branch does
+# not work on 1.x at all, and an unpinned floor would fail at import time.
 mcp = [
-    "mcp>=1.0",
+    "mcp>=2.1",
 ]
 dev = [
     "pytest>=8.0",
