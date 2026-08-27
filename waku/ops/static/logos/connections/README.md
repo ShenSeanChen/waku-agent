@@ -11,5 +11,7 @@ a third-party CDN at runtime.
 - `tavily.svg` uses the `tavily-color` artwork from
   [Lobe Icons 1.90.0](https://github.com/lobehub/lobe-icons), licensed under MIT.
   Copyright (c) 2023 LobeHub.
+- `firecrawl.svg` uses the `firecrawl-color` artwork from the same Lobe Icons
+  set, MIT. Copyright (c) 2023 LobeHub.
 
 Brand names and marks remain the property of their respective owners.

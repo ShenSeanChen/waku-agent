@@ -250,6 +250,16 @@ INTEGRATIONS: tuple[Integration, ...] = (
     Integration("tavily", "Search & Observability", "Tavily", "Lets Waku search the web.",
                 (EnvField("TAVILY_API_KEY", "API key", secret=True),), None, None,
                 "https://tavily.com", ReloadMode.LIVE, lambda env: bool(env.get("TAVILY_API_KEY")), None),
+    Integration("firecrawl", "Search & Observability", "Firecrawl",
+                "Lets search_web use Firecrawl Search instead of Tavily or DuckDuckGo.",
+                (EnvField("FIRECRAWL_API_KEY", "API key", secret=True),
+                 EnvField("WAKU_SEARCH_BACKEND", "Search backend", FieldKind.CHOICE,
+                          default="auto",
+                          options=("auto", "tavily", "firecrawl", "duckduckgo"),
+                          option_labels=("Auto", "Tavily", "Firecrawl", "DuckDuckGo"),
+                          help="When both keys are set, Auto prefers Tavily.")),
+                None, None, "https://www.firecrawl.dev", ReloadMode.LIVE,
+                lambda env: bool(env.get("FIRECRAWL_API_KEY")), None),
     Integration("otel", "Search & Observability", "OpenTelemetry", "Exports traces to an OTLP collector.",
                 (EnvField("OTEL_EXPORTER_OTLP_ENDPOINT", "OTLP endpoint"),), "tracing", "opentelemetry",
                 "", ReloadMode.AGENT, lambda env: bool(env.get("OTEL_EXPORTER_OTLP_ENDPOINT")), None),
@@ -516,6 +526,15 @@ def _tavily_probe(values: Mapping[str, str]) -> None:
             raise ValueError(f"Tavily returned HTTP {response.status}")
 
 
+def _firecrawl_probe(values: Mapping[str, str]) -> None:
+    from waku.tools import search
+
+    key = values.get("FIRECRAWL_API_KEY", "")
+    if not key:
+        raise ValueError("FIRECRAWL_API_KEY is empty")
+    search._firecrawl("health check", key, 1)
+
+
 def _otel_probe(values: Mapping[str, str]) -> None:
     """Check that the configured OTLP/gRPC collector accepts TCP connections."""
     endpoint = values.get("OTEL_EXPORTER_OTLP_ENDPOINT", "").strip()
@@ -557,6 +576,8 @@ def _probed(integration: Integration) -> Integration:
         return Integration(**{**integration.__dict__, "probe": _notion_probe})
     if integration.key == "tavily":
         return Integration(**{**integration.__dict__, "probe": _tavily_probe})
+    if integration.key == "firecrawl":
+        return Integration(**{**integration.__dict__, "probe": _firecrawl_probe})
     if integration.key == "otel":
         return Integration(**{**integration.__dict__, "probe": _otel_probe})
     return integration

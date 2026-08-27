@@ -4,10 +4,13 @@
 loop across tools: search_web (read the web) → reason over the results →
 create_event once per match. Watch the LOOP box cycle on the dashboard.
 
-Zero new dependencies — just stdlib urllib. Two backends:
+Zero new dependencies — just stdlib urllib. Three backends:
   default  DuckDuckGo HTML (no key, no setup — good enough to demo)
-  better   Tavily, if TAVILY_API_KEY (or WAKU_SEARCH_API_KEY) is set — an
-           agent-friendly search API with cleaner results (free tier)
+  Tavily   if TAVILY_API_KEY (or WAKU_SEARCH_API_KEY) is set
+  Firecrawl if FIRECRAWL_API_KEY is set — POST /v2/search
+
+When both paid keys are present, Tavily wins unless WAKU_SEARCH_BACKEND is set
+to firecrawl (or duckduckgo). Auto keeps existing Tavily users unchanged.
 
 The tool returns plain text the model reads; it never parses HTML for the model.
 """
@@ -24,6 +27,30 @@ import urllib.request
 from waku.tools.registry import Tool
 
 _UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
+_FIRECRAWL_SEARCH = "https://api.firecrawl.dev/v2/search"
+_BACKENDS = frozenset({"auto", "tavily", "firecrawl", "duckduckgo"})
+
+
+def _tavily_key() -> str:
+    return (os.getenv("TAVILY_API_KEY") or os.getenv("WAKU_SEARCH_API_KEY") or "").strip()
+
+
+def _firecrawl_key() -> str:
+    return os.getenv("FIRECRAWL_API_KEY", "").strip()
+
+
+def resolve_backend() -> str:
+    """Which engine search_web will actually call."""
+    requested = os.getenv("WAKU_SEARCH_BACKEND", "auto").strip().lower() or "auto"
+    if requested not in _BACKENDS:
+        requested = "auto"
+    if requested in ("tavily", "firecrawl", "duckduckgo"):
+        return requested
+    if _tavily_key():
+        return "tavily"
+    if _firecrawl_key():
+        return "firecrawl"
+    return "duckduckgo"
 
 
 def _tavily(query: str, key: str, max_results: int) -> list[tuple[str, str, str]]:
@@ -35,6 +62,40 @@ def _tavily(query: str, key: str, max_results: int) -> list[tuple[str, str, str]
         data = json.loads(resp.read())
     return [(r.get("title", ""), (r.get("content", "") or "")[:400], r.get("url", ""))
             for r in data.get("results", [])]
+
+
+def _firecrawl_rows(payload: object) -> list[dict]:
+    """v2 search has come back as a list, {data: [...]}, or {data: {web: [...]}}."""
+    if isinstance(payload, list):
+        return [row for row in payload if isinstance(row, dict)]
+    if not isinstance(payload, dict):
+        return []
+    data = payload.get("data", payload)
+    if isinstance(data, list):
+        return [row for row in data if isinstance(row, dict)]
+    if isinstance(data, dict):
+        web = data.get("web") or data.get("results") or []
+        if isinstance(web, list):
+            return [row for row in web if isinstance(row, dict)]
+    return []
+
+
+def _firecrawl(query: str, key: str, max_results: int) -> list[tuple[str, str, str]]:
+    body = json.dumps({"query": query, "limit": max_results}).encode()
+    req = urllib.request.Request(
+        _FIRECRAWL_SEARCH, data=body,
+        headers={"Content-Type": "application/json",
+                 "Authorization": f"Bearer {key}",
+                 "User-Agent": _UA},
+    )
+    with urllib.request.urlopen(req, timeout=20) as resp:
+        payload = json.loads(resp.read())
+    out = []
+    for row in _firecrawl_rows(payload)[:max_results]:
+        snippet = (row.get("description") or row.get("markdown")
+                   or row.get("content") or "")
+        out.append((row.get("title", ""), snippet[:400], row.get("url", "")))
+    return out
 
 
 def _strip(text: str) -> str:
@@ -60,21 +121,35 @@ def _duckduckgo(query: str, max_results: int) -> list[tuple[str, str, str]]:
 
 def make_tool() -> Tool:
     def search_web(query: str, max_results: int = 5) -> str:
-        key = os.getenv("TAVILY_API_KEY") or os.getenv("WAKU_SEARCH_API_KEY")
+        backend = resolve_backend()
+        tavily_key, firecrawl_key = _tavily_key(), _firecrawl_key()
+        if backend == "tavily" and not tavily_key:
+            return ("Web search is set to Tavily but TAVILY_API_KEY is empty. "
+                    "Add the key, or set WAKU_SEARCH_BACKEND=firecrawl|duckduckgo.")
+        if backend == "firecrawl" and not firecrawl_key:
+            return ("Web search is set to Firecrawl but FIRECRAWL_API_KEY is empty. "
+                    "Add the key, or set WAKU_SEARCH_BACKEND=tavily|duckduckgo.")
+        labels = {"tavily": "Tavily", "firecrawl": "Firecrawl", "duckduckgo": "DuckDuckGo"}
+        engine = labels[backend]
         try:
-            results = _tavily(query, key, max_results) if key else _duckduckgo(query, max_results)
+            if backend == "tavily":
+                results = _tavily(query, tavily_key, max_results)
+            elif backend == "firecrawl":
+                results = _firecrawl(query, firecrawl_key, max_results)
+            else:
+                results = _duckduckgo(query, max_results)
         except Exception as exc:
-            results = None if key else []  # DDG blocked → fall through to the hint below
-            if key:
+            if backend == "duckduckgo":
+                results = []
+            else:
                 return f"Web search failed ({exc}). Answer from what you know, or ask the user."
         if not results:
-            if not key:
+            if backend == "duckduckgo":
                 return ("No results — DuckDuckGo's free endpoint often blocks automated "
-                        "requests. For reliable search set a free TAVILY_API_KEY in .env "
-                        "(https://tavily.com); see .env.example. Meanwhile, tell the user "
-                        "you couldn't search and ask them to add the key.")
+                        "requests. For reliable search set TAVILY_API_KEY or "
+                        "FIRECRAWL_API_KEY in .env; see .env.example. Meanwhile, tell "
+                        "the user you couldn't search and ask them to add a key.")
             return "No results found. Try a more specific query."
-        engine = "Tavily" if key else "DuckDuckGo"
         lines = [f"Web results for '{query}' (via {engine}):"]
         for i, (title, snippet, link) in enumerate(results, 1):
             lines.append(f"{i}. {title}\n   {snippet}\n   {link}")
