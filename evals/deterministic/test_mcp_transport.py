@@ -272,3 +272,29 @@ def test_a_server_name_cannot_escape_the_auth_directory():
     storage = FileTokenStorage(home, "../../etc/passwd")
     assert (home / "mcp-auth") in storage._path.parents
     assert "/" not in storage._path.name
+
+
+def test_an_oauth_failure_does_not_send_you_to_auth_env():
+    """An `oauth` server has no `auth_env`. Naming one in its failure sends the
+    reader to a setting their config does not contain — and the connection
+    error itself carries no status, so this hint is all they get."""
+    from waku.tools.mcp_client import _auth_hint
+
+    hint = _auth_hint(
+        {"name": "x", "url": "https://h/mcp", "oauth": True}, Path("/home/.waku/mcp-auth")
+    )
+    assert "auth_env" not in hint
+    assert "sign-in did not complete" in hint
+    assert "/home/.waku/mcp-auth" in hint, "say where to delete, not just that one can"
+
+
+def test_an_api_key_failure_names_the_variable_that_holds_the_key():
+    """The other half of the same choice: with `auth_env` set, the variable it
+    names is the one thing worth checking, so the hint says which."""
+    from waku.tools.mcp_client import _auth_hint
+
+    hint = _auth_hint(
+        {"name": "x", "url": "https://h/mcp", "auth_env": "WAKU_MEMORY_API_KEY"}, Path("/unused")
+    )
+    assert "WAKU_MEMORY_API_KEY" in hint
+    assert "sign-in" not in hint

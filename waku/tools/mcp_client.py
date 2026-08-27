@@ -71,6 +71,27 @@ def _model_safe_name(server: str, tool: str) -> str:
     return safe[-64:].lstrip("_")
 
 
+def _auth_hint(spec: dict, auth_dir: Path) -> str:
+    """What to tell someone whose remote server would not connect.
+
+    The SDK reports a rejected HTTP request as a generic "Server returned an
+    error response" with no status on the exception, so a 401 and a 500 are
+    indistinguishable by the time we see it. Name what the caller can actually
+    check rather than inventing a cause — and name the right thing: an `oauth`
+    server has no `auth_env`, so pointing its user at one sends them to a
+    setting their config does not contain.
+    """
+    if spec.get("oauth"):
+        return (
+            f"  {spec['url']} — sign-in did not complete. Run waku again to use a token "
+            f"that was saved, or delete {auth_dir} to start over"
+        )
+    return (
+        f"  {spec['url']} — if the server requires auth, check that "
+        f"{spec.get('auth_env') or 'auth_env'} holds a current credential"
+    )
+
+
 class MCPBridge:
     def __init__(self, config_path: Path, timeout: float = 30.0):
         self.config_path = config_path
@@ -162,47 +183,74 @@ class MCPBridge:
             streamable_http_client(url, http_client=client)
         )
 
-    async def _connect_all(self, servers) -> dict:
+    def _token_exists(self, spec: dict) -> bool:
+        """Whether a sign-in has already produced a token for this server.
+
+        Read from disk rather than remembered, because the token is written by
+        the SDK's auth flow on a different task than this one.
+        """
+        if not spec.get("oauth"):
+            return False
+        from waku.tools.mcp_oauth import FileTokenStorage
+
+        return FileTokenStorage(self.config_path.parent, spec["name"])._path.exists()
+
+    async def _connect_one(self, spec: dict) -> list[dict]:
+        """Open one server's session and return its tool metadata."""
         from mcp import ClientSession
 
+        name = spec["name"]
+        read, write = await self._open_streams(spec)
+        session = await self._stack.enter_async_context(ClientSession(read, write))
+        await session.initialize()
+        self._sessions[name] = session
+        tools = (await session.list_tools()).tools
+        # `input_schema` in the SDK's 2.x line; it was `inputSchema` in 1.x.
+        # getattr covers both so a user on either pin gets a working connector
+        # rather than an AttributeError reported as "failed to connect".
+        return [
+            {
+                "name": t.name,
+                "description": t.description,
+                "inputSchema": getattr(t, "input_schema", None) or getattr(t, "inputSchema", None),
+            }
+            for t in tools
+        ]
+
+    async def _connect_all(self, servers) -> dict:
         self._stack = AsyncExitStack()
         listed: dict = {}
         for spec in servers:
             name = spec["name"]
+            had_token = self._token_exists(spec)
             try:
-                read, write = await self._open_streams(spec)
-                session = await self._stack.enter_async_context(ClientSession(read, write))
-                await session.initialize()
-                self._sessions[name] = session
-                tools = (await session.list_tools()).tools
-                # `input_schema` in the SDK's 2.x line; it was `inputSchema`
-                # in 1.x. getattr covers both so a user on either pin gets a
-                # working connector rather than an AttributeError reported as
-                # "failed to connect".
-                listed[name] = [
-                    {
-                        "name": t.name,
-                        "description": t.description,
-                        "inputSchema": getattr(t, "input_schema", None)
-                        or getattr(t, "inputSchema", None),
-                    }
-                    for t in tools
-                ]
-            except Exception as exc:  # one bad server shouldn't stop the rest
-                print(f"MCP server '{name}' failed to connect: {exc}")
+                listed[name] = await self._connect_one(spec)
+            except Exception as first_exc:  # one bad server shouldn't stop the rest
+                # Bound to a name of our own: Python unbinds an `except … as`
+                # variable at the end of the block, so the retry below cannot
+                # reassign it.
+                error = first_exc
+                # A first sign-in spends human time in the browser — longer
+                # than the connection that triggered it is willing to wait. By
+                # the time the token is written the attempt has already failed,
+                # so the very run that signs you in is the one that appears not
+                # to work. Retry once, and only when a token exists now that
+                # did not before: that condition is true exactly after a
+                # sign-in, and false for every other failure.
+                if not had_token and self._token_exists(spec):
+                    print(f"  signed in — reconnecting to '{name}'")
+                    try:
+                        listed[name] = await self._connect_one(spec)
+                        continue
+                    except Exception as retry_exc:
+                        error = retry_exc
+
+                print(f"MCP server '{name}' failed to connect: {error}")
                 # ValueError is this module's own config refusal above; it
                 # already says exactly what is wrong, and adding an auth hint
                 # to it would point at the wrong thing.
-                if spec.get("url") and not isinstance(exc, ValueError):
-                    # The SDK reports a rejected HTTP request as a generic
-                    # "Server returned an error response" with no status on
-                    # the exception, so a 401 and a 500 are indistinguishable
-                    # here. Name what the caller can actually check instead of
-                    # inventing a cause.
-                    print(
-                        f"  {spec['url']} — if the server requires auth, check that "
-                        f"{spec.get('auth_env') or 'auth_env'} holds a current credential"
-                    )
+                if spec.get("url") and not isinstance(error, ValueError):
+                    print(_auth_hint(spec, self.config_path.parent / "mcp-auth"))
         return listed
 
     def call(self, server: str, tool: str, args: dict) -> str:
