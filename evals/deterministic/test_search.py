@@ -38,27 +38,11 @@ def _clear_search_env(monkeypatch):
         monkeypatch.delenv(name, raising=False)
 
 
-def test_both_keys_default_to_tavily(monkeypatch):
+def test_firecrawl_key_wins_over_tavily(monkeypatch):
+    """Pasting FIRECRAWL_API_KEY is the signal to use Firecrawl, even if Tavily is also set."""
     _clear_search_env(monkeypatch)
     monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
     monkeypatch.setenv("FIRECRAWL_API_KEY", "fc-test")
-    captured = {}
-    _install_urlopen(
-        monkeypatch, captured,
-        json.dumps({"results": [{"title": "A", "content": "snip", "url": "https://a.example"}]}).encode(),
-        url_contains="api.tavily.com",
-    )
-    out = search.make_tool().fn("world cup", max_results=3)
-    assert "via Tavily" in out
-    assert "https://a.example" in out
-    assert "api.firecrawl.dev" not in captured["url"]
-
-
-def test_explicit_firecrawl_hits_v2_search(monkeypatch):
-    _clear_search_env(monkeypatch)
-    monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
-    monkeypatch.setenv("FIRECRAWL_API_KEY", "fc-test")
-    monkeypatch.setenv("WAKU_SEARCH_BACKEND", "firecrawl")
     captured = {}
     payload = json.dumps({
         "data": {"web": [{"title": "Fire", "markdown": "md body", "url": "https://fc.example"}]},
@@ -71,6 +55,22 @@ def test_explicit_firecrawl_hits_v2_search(monkeypatch):
     body = json.loads(captured["body"])
     assert body == {"query": "best tools", "limit": 2}
     assert captured["auth"] == "Bearer fc-test"
+
+
+def test_env_override_can_force_tavily(monkeypatch):
+    _clear_search_env(monkeypatch)
+    monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
+    monkeypatch.setenv("FIRECRAWL_API_KEY", "fc-test")
+    monkeypatch.setenv("WAKU_SEARCH_BACKEND", "tavily")
+    captured = {}
+    _install_urlopen(
+        monkeypatch, captured,
+        json.dumps({"results": [{"title": "A", "content": "snip", "url": "https://a.example"}]}).encode(),
+        url_contains="api.tavily.com",
+    )
+    out = search.make_tool().fn("world cup", max_results=3)
+    assert "via Tavily" in out
+    assert "api.firecrawl.dev" not in captured["url"]
 
 
 def test_firecrawl_only_auto_selects_firecrawl(monkeypatch):

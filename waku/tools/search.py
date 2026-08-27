@@ -5,12 +5,13 @@ loop across tools: search_web (read the web) → reason over the results →
 create_event once per match. Watch the LOOP box cycle on the dashboard.
 
 Zero new dependencies — just stdlib urllib. Three backends:
-  default  DuckDuckGo HTML (no key, no setup — good enough to demo)
-  Tavily   if TAVILY_API_KEY (or WAKU_SEARCH_API_KEY) is set
+  default   DuckDuckGo HTML (no key, no setup — good enough to demo)
+  Tavily    if TAVILY_API_KEY (or WAKU_SEARCH_API_KEY) is set
   Firecrawl if FIRECRAWL_API_KEY is set — POST /v2/search
 
-When both paid keys are present, Tavily wins unless WAKU_SEARCH_BACKEND is set
-to firecrawl (or duckduckgo). Auto keeps existing Tavily users unchanged.
+A Firecrawl key means use Firecrawl (that's why you pasted it). Otherwise Tavily,
+otherwise DuckDuckGo. WAKU_SEARCH_BACKEND=tavily|firecrawl|duckduckgo is an
+optional .env override, not a dashboard control.
 
 The tool returns plain text the model reads; it never parses HTML for the model.
 """
@@ -28,7 +29,6 @@ from waku.tools.registry import Tool
 
 _UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
 _FIRECRAWL_SEARCH = "https://api.firecrawl.dev/v2/search"
-_BACKENDS = frozenset({"auto", "tavily", "firecrawl", "duckduckgo"})
 
 
 def _tavily_key() -> str:
@@ -40,16 +40,18 @@ def _firecrawl_key() -> str:
 
 
 def resolve_backend() -> str:
-    """Which engine search_web will actually call."""
-    requested = os.getenv("WAKU_SEARCH_BACKEND", "auto").strip().lower() or "auto"
-    if requested not in _BACKENDS:
-        requested = "auto"
+    """Which engine search_web will actually call.
+
+    Filling FIRECRAWL_API_KEY is the dashboard signal to use Firecrawl; Tavily
+    remains the paid fallback when that key is absent.
+    """
+    requested = os.getenv("WAKU_SEARCH_BACKEND", "").strip().lower()
     if requested in ("tavily", "firecrawl", "duckduckgo"):
         return requested
-    if _tavily_key():
-        return "tavily"
     if _firecrawl_key():
         return "firecrawl"
+    if _tavily_key():
+        return "tavily"
     return "duckduckgo"
 
 
@@ -124,11 +126,9 @@ def make_tool() -> Tool:
         backend = resolve_backend()
         tavily_key, firecrawl_key = _tavily_key(), _firecrawl_key()
         if backend == "tavily" and not tavily_key:
-            return ("Web search is set to Tavily but TAVILY_API_KEY is empty. "
-                    "Add the key, or set WAKU_SEARCH_BACKEND=firecrawl|duckduckgo.")
+            return "Web search is set to Tavily but TAVILY_API_KEY is empty. Add the key."
         if backend == "firecrawl" and not firecrawl_key:
-            return ("Web search is set to Firecrawl but FIRECRAWL_API_KEY is empty. "
-                    "Add the key, or set WAKU_SEARCH_BACKEND=tavily|duckduckgo.")
+            return "Web search is set to Firecrawl but FIRECRAWL_API_KEY is empty. Add the key."
         labels = {"tavily": "Tavily", "firecrawl": "Firecrawl", "duckduckgo": "DuckDuckGo"}
         engine = labels[backend]
         try:
