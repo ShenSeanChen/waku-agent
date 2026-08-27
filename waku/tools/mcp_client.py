@@ -16,10 +16,20 @@ Config: WAKU_HOME/mcp.json — two transports, picked by which key is present.
   {"servers": [{"name": "waku_memory", "url": "https://host/mcp",
                 "auth_env": "WAKU_MEMORY_API_KEY"}]}
 
+A remote server is authorised one of two ways, and naming both is refused:
+
+  "auth_env": "VAR"   a long-lived key, held in an environment variable
+  "oauth": true       the browser flow — no key to issue, none to hand over
+
 `auth_env` names an environment variable, and never holds the credential
 itself: mcp.json is a config file people paste into bug reports, and a
 bearer token in one is a leaked credential. The variable's value is sent as
 `Authorization: Bearer <value>`.
+
+`oauth` signs in through the server's own page on first use and keeps the
+result under WAKU_HOME/mcp-auth/. Nothing has to be issued out of band, which
+is what makes a remote server installable by someone who does not know us.
+See mcp_oauth.py.
 
 Streamable HTTP is the MCP spec's transport for remote servers. The older
 HTTP+SSE transport is deprecated and is deliberately not supported here.
@@ -114,7 +124,15 @@ class MCPBridge:
         from mcp.client.streamable_http import create_mcp_http_client, streamable_http_client
 
         headers = {}
+        auth = None
         auth_env = spec.get("auth_env")
+        use_oauth = bool(spec.get("oauth"))
+
+        if auth_env and use_oauth:
+            # Same reasoning as command-vs-url above: two credentials named,
+            # no stated precedence, so refusing beats picking one silently.
+            raise ValueError("server names both 'auth_env' and 'oauth' — pick one")
+
         if auth_env:
             token = os.environ.get(auth_env)
             if not token:
@@ -124,13 +142,22 @@ class MCPBridge:
                 # not export the key".
                 raise ValueError(f"{auth_env} is not set (named by 'auth_env' in mcp.json)")
             headers["Authorization"] = f"Bearer {token}"
+        elif use_oauth:
+            from waku.tools.mcp_oauth import build_provider
+
+            # An httpx auth flow, not a header: the SDK drives the 401, the
+            # discovery and the refresh itself, so this is handed to the
+            # client once and never thought about again.
+            auth = build_provider(url, spec["name"], self.config_path.parent)
 
         # create_mcp_http_client applies the SDK's own timeouts and
-        # follow_redirects; passing headers is the only supported way to
-        # authenticate this transport. Because we build the client rather
+        # follow_redirects; a header or an auth flow are the two supported ways
+        # to authenticate this transport. Because we build the client rather
         # than letting the transport build one, we own its lifecycle — hence
         # entering it on the stack ourselves.
-        client = await self._stack.enter_async_context(create_mcp_http_client(headers=headers))
+        client = await self._stack.enter_async_context(
+            create_mcp_http_client(headers=headers, auth=auth)
+        )
         return await self._stack.enter_async_context(
             streamable_http_client(url, http_client=client)
         )
