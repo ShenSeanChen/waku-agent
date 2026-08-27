@@ -16,10 +16,20 @@ Config: WAKU_HOME/mcp.json — two transports, picked by which key is present.
   {"servers": [{"name": "waku_memory", "url": "https://host/mcp",
                 "auth_env": "WAKU_MEMORY_API_KEY"}]}
 
+A remote server is authorised one of two ways, and naming both is refused:
+
+  "auth_env": "VAR"   a long-lived key, held in an environment variable
+  "oauth": true       the browser flow — no key to issue, none to hand over
+
 `auth_env` names an environment variable, and never holds the credential
 itself: mcp.json is a config file people paste into bug reports, and a
 bearer token in one is a leaked credential. The variable's value is sent as
 `Authorization: Bearer <value>`.
+
+`oauth` signs in through the server's own page on first use and keeps the
+result under WAKU_HOME/mcp-auth/. Nothing has to be issued out of band, which
+is what makes a remote server installable by someone who does not know us.
+See mcp_oauth.py.
 
 Streamable HTTP is the MCP spec's transport for remote servers. The older
 HTTP+SSE transport is deprecated and is deliberately not supported here.
@@ -59,6 +69,27 @@ def _model_safe_name(server: str, tool: str) -> str:
     # Keep the tail: the tool's own name is what disambiguates, and the
     # server prefix is the part a reader can afford to lose.
     return safe[-64:].lstrip("_")
+
+
+def _auth_hint(spec: dict, auth_dir: Path) -> str:
+    """What to tell someone whose remote server would not connect.
+
+    The SDK reports a rejected HTTP request as a generic "Server returned an
+    error response" with no status on the exception, so a 401 and a 500 are
+    indistinguishable by the time we see it. Name what the caller can actually
+    check rather than inventing a cause — and name the right thing: an `oauth`
+    server has no `auth_env`, so pointing its user at one sends them to a
+    setting their config does not contain.
+    """
+    if spec.get("oauth"):
+        return (
+            f"  {spec['url']} — sign-in did not complete. Run waku again to use a token "
+            f"that was saved, or delete {auth_dir} to start over"
+        )
+    return (
+        f"  {spec['url']} — if the server requires auth, check that "
+        f"{spec.get('auth_env') or 'auth_env'} holds a current credential"
+    )
 
 
 class MCPBridge:
@@ -114,7 +145,15 @@ class MCPBridge:
         from mcp.client.streamable_http import create_mcp_http_client, streamable_http_client
 
         headers = {}
+        auth = None
         auth_env = spec.get("auth_env")
+        use_oauth = bool(spec.get("oauth"))
+
+        if auth_env and use_oauth:
+            # Same reasoning as command-vs-url above: two credentials named,
+            # no stated precedence, so refusing beats picking one silently.
+            raise ValueError("server names both 'auth_env' and 'oauth' — pick one")
+
         if auth_env:
             token = os.environ.get(auth_env)
             if not token:
@@ -124,58 +163,94 @@ class MCPBridge:
                 # not export the key".
                 raise ValueError(f"{auth_env} is not set (named by 'auth_env' in mcp.json)")
             headers["Authorization"] = f"Bearer {token}"
+        elif use_oauth:
+            from waku.tools.mcp_oauth import build_provider
+
+            # An httpx auth flow, not a header: the SDK drives the 401, the
+            # discovery and the refresh itself, so this is handed to the
+            # client once and never thought about again.
+            auth = build_provider(url, spec["name"], self.config_path.parent)
 
         # create_mcp_http_client applies the SDK's own timeouts and
-        # follow_redirects; passing headers is the only supported way to
-        # authenticate this transport. Because we build the client rather
+        # follow_redirects; a header or an auth flow are the two supported ways
+        # to authenticate this transport. Because we build the client rather
         # than letting the transport build one, we own its lifecycle — hence
         # entering it on the stack ourselves.
-        client = await self._stack.enter_async_context(create_mcp_http_client(headers=headers))
+        client = await self._stack.enter_async_context(
+            create_mcp_http_client(headers=headers, auth=auth)
+        )
         return await self._stack.enter_async_context(
             streamable_http_client(url, http_client=client)
         )
 
-    async def _connect_all(self, servers) -> dict:
+    def _token_exists(self, spec: dict) -> bool:
+        """Whether a sign-in has already produced a token for this server.
+
+        Read from disk rather than remembered, because the token is written by
+        the SDK's auth flow on a different task than this one.
+        """
+        if not spec.get("oauth"):
+            return False
+        from waku.tools.mcp_oauth import FileTokenStorage
+
+        return FileTokenStorage(self.config_path.parent, spec["name"])._path.exists()
+
+    async def _connect_one(self, spec: dict) -> list[dict]:
+        """Open one server's session and return its tool metadata."""
         from mcp import ClientSession
 
+        name = spec["name"]
+        read, write = await self._open_streams(spec)
+        session = await self._stack.enter_async_context(ClientSession(read, write))
+        await session.initialize()
+        self._sessions[name] = session
+        tools = (await session.list_tools()).tools
+        # `input_schema` in the SDK's 2.x line; it was `inputSchema` in 1.x.
+        # getattr covers both so a user on either pin gets a working connector
+        # rather than an AttributeError reported as "failed to connect".
+        return [
+            {
+                "name": t.name,
+                "description": t.description,
+                "inputSchema": getattr(t, "input_schema", None) or getattr(t, "inputSchema", None),
+            }
+            for t in tools
+        ]
+
+    async def _connect_all(self, servers) -> dict:
         self._stack = AsyncExitStack()
         listed: dict = {}
         for spec in servers:
             name = spec["name"]
+            had_token = self._token_exists(spec)
             try:
-                read, write = await self._open_streams(spec)
-                session = await self._stack.enter_async_context(ClientSession(read, write))
-                await session.initialize()
-                self._sessions[name] = session
-                tools = (await session.list_tools()).tools
-                # `input_schema` in the SDK's 2.x line; it was `inputSchema`
-                # in 1.x. getattr covers both so a user on either pin gets a
-                # working connector rather than an AttributeError reported as
-                # "failed to connect".
-                listed[name] = [
-                    {
-                        "name": t.name,
-                        "description": t.description,
-                        "inputSchema": getattr(t, "input_schema", None)
-                        or getattr(t, "inputSchema", None),
-                    }
-                    for t in tools
-                ]
-            except Exception as exc:  # one bad server shouldn't stop the rest
-                print(f"MCP server '{name}' failed to connect: {exc}")
+                listed[name] = await self._connect_one(spec)
+            except Exception as first_exc:  # one bad server shouldn't stop the rest
+                # Bound to a name of our own: Python unbinds an `except … as`
+                # variable at the end of the block, so the retry below cannot
+                # reassign it.
+                error = first_exc
+                # A first sign-in spends human time in the browser — longer
+                # than the connection that triggered it is willing to wait. By
+                # the time the token is written the attempt has already failed,
+                # so the very run that signs you in is the one that appears not
+                # to work. Retry once, and only when a token exists now that
+                # did not before: that condition is true exactly after a
+                # sign-in, and false for every other failure.
+                if not had_token and self._token_exists(spec):
+                    print(f"  signed in — reconnecting to '{name}'")
+                    try:
+                        listed[name] = await self._connect_one(spec)
+                        continue
+                    except Exception as retry_exc:
+                        error = retry_exc
+
+                print(f"MCP server '{name}' failed to connect: {error}")
                 # ValueError is this module's own config refusal above; it
                 # already says exactly what is wrong, and adding an auth hint
                 # to it would point at the wrong thing.
-                if spec.get("url") and not isinstance(exc, ValueError):
-                    # The SDK reports a rejected HTTP request as a generic
-                    # "Server returned an error response" with no status on
-                    # the exception, so a 401 and a 500 are indistinguishable
-                    # here. Name what the caller can actually check instead of
-                    # inventing a cause.
-                    print(
-                        f"  {spec['url']} — if the server requires auth, check that "
-                        f"{spec.get('auth_env') or 'auth_env'} holds a current credential"
-                    )
+                if spec.get("url") and not isinstance(error, ValueError):
+                    print(_auth_hint(spec, self.config_path.parent / "mcp-auth"))
         return listed
 
     def call(self, server: str, tool: str, args: dict) -> str:

@@ -189,3 +189,112 @@ def test_streamable_http_round_trips_with_an_auth_header():
     finally:
         server.terminate()
         server.wait(timeout=10)
+
+
+# --- oauth: the credential nobody has to issue ------------------------------
+
+
+def test_naming_both_credentials_is_refused_not_resolved(capsys):
+    """`auth_env` and `oauth` are two answers to one question.
+
+    Same shape as the transport refusal above, and the same reason: with no
+    stated precedence, picking one silently authenticates as something other
+    than the author wrote.
+    """
+    bridge = _bridge(
+        {
+            "name": "x",
+            "url": "http://127.0.0.1:1/mcp",
+            "auth_env": "WAKU_TEST_KEY",
+            "oauth": True,
+        }
+    )
+    assert bridge.start() == []
+    assert "pick one" in capsys.readouterr().out
+    bridge.close()
+
+
+def test_oauth_tokens_are_stored_per_server_and_not_world_readable():
+    """The token file is a bearer credential: anything holding it can act as
+    the user until it expires. It is written 0600, under WAKU_HOME, one file
+    per server — a corrupt one should cost a single connection, not all of
+    them."""
+    import asyncio
+    import stat
+
+    from mcp.shared.auth import OAuthToken
+
+    from waku.tools.mcp_oauth import FileTokenStorage
+
+    home = Path(tempfile.mkdtemp())
+    a = FileTokenStorage(home, "server_a")
+    b = FileTokenStorage(home, "server_b")
+
+    asyncio.run(a.set_tokens(OAuthToken(access_token="tok-a", token_type="Bearer")))
+    asyncio.run(b.set_tokens(OAuthToken(access_token="tok-b", token_type="Bearer")))
+
+    assert asyncio.run(a.get_tokens()).access_token == "tok-a"
+    assert asyncio.run(b.get_tokens()).access_token == "tok-b"
+
+    written = sorted(p.name for p in (home / "mcp-auth").glob("*.json"))
+    assert written == ["server_a.json", "server_b.json"]
+
+    mode = (home / "mcp-auth" / "server_a.json").stat().st_mode
+    assert not mode & (stat.S_IRGRP | stat.S_IROTH), "token file is readable beyond its owner"
+
+
+def test_a_corrupt_token_file_costs_a_sign_in_not_a_crash():
+    """Hand-edited or half-written JSON is treated as absent.
+
+    The alternative is a harness that will not start until someone deletes a
+    file whose path they have never seen.
+    """
+    import asyncio
+
+    from waku.tools.mcp_oauth import FileTokenStorage
+
+    home = Path(tempfile.mkdtemp())
+    storage = FileTokenStorage(home, "server_a")
+    path = home / "mcp-auth" / "server_a.json"
+    path.parent.mkdir(parents=True)
+    path.write_text("{not json", encoding="utf-8")
+
+    assert asyncio.run(storage.get_tokens()) is None
+    assert asyncio.run(storage.get_client_info()) is None
+
+
+def test_a_server_name_cannot_escape_the_auth_directory():
+    """Server names come from mcp.json and become filenames. A name with a
+    slash or a parent reference must not write outside WAKU_HOME."""
+    from waku.tools.mcp_oauth import FileTokenStorage
+
+    home = Path(tempfile.mkdtemp())
+    storage = FileTokenStorage(home, "../../etc/passwd")
+    assert (home / "mcp-auth") in storage._path.parents
+    assert "/" not in storage._path.name
+
+
+def test_an_oauth_failure_does_not_send_you_to_auth_env():
+    """An `oauth` server has no `auth_env`. Naming one in its failure sends the
+    reader to a setting their config does not contain — and the connection
+    error itself carries no status, so this hint is all they get."""
+    from waku.tools.mcp_client import _auth_hint
+
+    hint = _auth_hint(
+        {"name": "x", "url": "https://h/mcp", "oauth": True}, Path("/home/.waku/mcp-auth")
+    )
+    assert "auth_env" not in hint
+    assert "sign-in did not complete" in hint
+    assert "/home/.waku/mcp-auth" in hint, "say where to delete, not just that one can"
+
+
+def test_an_api_key_failure_names_the_variable_that_holds_the_key():
+    """The other half of the same choice: with `auth_env` set, the variable it
+    names is the one thing worth checking, so the hint says which."""
+    from waku.tools.mcp_client import _auth_hint
+
+    hint = _auth_hint(
+        {"name": "x", "url": "https://h/mcp", "auth_env": "WAKU_MEMORY_API_KEY"}, Path("/unused")
+    )
+    assert "WAKU_MEMORY_API_KEY" in hint
+    assert "sign-in" not in hint
