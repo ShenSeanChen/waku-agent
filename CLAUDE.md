@@ -29,6 +29,34 @@ for its own sake is not.
 
 - **Be concise.** Sean wants short replies: lead with the answer, cut preamble and
   recap. A few lines beats a wall of text. Expand only when he asks for detail.
+- **Start every session by draining the community queue.** This is a public repo
+  with contributors waiting; an unanswered PR teaches someone that doing what we
+  asked gets silence. So on the first substantive turn of a new session, before
+  anything else, run:
+
+  ```
+  gh pr list --state open  ·  gh issue list --state open
+  ```
+
+  Report it as a **short table** — number, title, author, size, CI state, age —
+  plus anything already visibly wrong (an unrelated lockfile, a "Closes #N" that
+  points at the wrong issue, a `BEHIND` branch). Then propose an order,
+  **smallest first**, and stop.
+
+  Then walk the queue **one item at a time**, using the `review-pr` skill's four
+  fixed sections, in this order and no other:
+
+  1. **What this is** — plain language, no diff dump
+  2. **Why this is important** — the concrete failure, not the abstract benefit
+  3. **How do I test this** — copy-paste commands, and say what I already ran
+  4. **Merge / modify / close — and why** — one recommendation, then stop
+
+  **After each item, stop and wait for Sean's call on that one item.** Never
+  batch, never carry one yes forward to the next. Approving a plan is not
+  approval to merge anything. Test in throwaway worktrees via the `pr-worktree`
+  skill — never `gh pr checkout`. Frontend and TUI diffs are **Sean's to test**:
+  stand them up on port 7778 so the live 7777 is untouched, hand him the URL,
+  and never merge on my own screenshots.
 - **Never wipe runtime data without asking first, every time.** `scripts/demo_seed.py`
   and anything else that clears `.waku` (memory, calendar, chat log, traces, or the
   `usage.jsonl` spend ledger) must be proposed and explicitly approved by the user
