@@ -34,14 +34,22 @@
   .resizer{flex-shrink:0;width:5px;height:100vh;cursor:col-resize;background:transparent}
   .resizer:hover,body.resizing .resizer{background:var(--accent-soft)}
   body.resizing{cursor:col-resize;user-select:none}
-  #nav-toggle{float:right;background:none;border:none;color:var(--ink3);cursor:pointer;font-size:12px;padding:2px 4px;line-height:1}
+  #nav-toggle{margin-left:auto;background:none;border:none;color:var(--ink3);cursor:pointer;font-size:12px;padding:2px 4px;line-height:1}
   #nav-toggle:hover{color:var(--ink)}
   #nav-reopen{display:none;position:fixed;top:12px;left:12px;z-index:25;background:var(--panel);
     border:1px solid var(--line2);border-radius:8px;color:var(--ink2);width:34px;height:30px;cursor:pointer;font-size:14px}
   body.nav-hidden #nav,body.nav-hidden #nav-resizer{display:none}
   body.nav-hidden #nav-reopen{display:block}
-  .brand{font-weight:650;font-size:15px;padding:0 10px 4px}
-  .brand small{display:block;color:var(--ink3);font-weight:400;font-size:11px;margin-top:2px}
+  .brand{font-weight:650;font-size:15px;padding:0 10px 4px;
+    display:flex;align-items:baseline;gap:7px;flex-wrap:wrap}
+  /* The mark is a mask, not an <img>: an <img> of waku-mark.svg would follow
+     the BROWSER's colour scheme (the favicon has no choice), but in here it
+     has to follow the PAGE. Masking paints it in var(--ink) like any text,
+     and the evenodd holes in the sunglasses stay transparent. */
+  .brand .mark{width:17px;height:17px;flex:none;align-self:center;background:var(--ink);
+    -webkit-mask:url(/static/waku-mark.svg) center/contain no-repeat;
+    mask:url(/static/waku-mark.svg) center/contain no-repeat}
+  .brand small{display:block;width:100%;order:1;color:var(--ink3);font-weight:400;font-size:11px;margin-top:2px}
   /* Links are indented past their group header, which is what makes the header
      read as a PARENT instead of a line of text dropped between rows. Header and
      links used to share the same 10px left edge, so the sidebar looked like one
