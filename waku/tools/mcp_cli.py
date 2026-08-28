@@ -66,7 +66,10 @@ def _identity(auth_file: Path) -> str:
         # silently on the next call, and someone reading this should not
         # mistake the refresh for a problem.
         return f"{who} — token expired, refreshes on next use"
-    return f"{who} — {int(left.total_seconds() // 3600)}h left"
+    # Minutes below an hour: a token minted fifty minutes ago rendered as
+    # "0h left", which reads as expired and is the opposite of the truth.
+    minutes = int(left.total_seconds() // 60)
+    return f"{who} — {minutes // 60}h left" if minutes >= 60 else f"{who} — {minutes}m left"
 
 
 def _servers(home: Path) -> list[dict]:
@@ -135,6 +138,12 @@ def _login(home: Path, name: str) -> int:
 
     from waku.tools.mcp_client import MCPBridge
 
+    # Success here is "a token now exists for the account you chose", not "a
+    # session was established". They came apart in practice: the sign-in
+    # completed, the token was written, and the reconnect on the same
+    # already-failed exit stack reported an error anyway — so the command said
+    # it failed immediately after succeeding. This command exists to sign in;
+    # holding a session is the next run's job.
     bridge = MCPBridge(home / "mcp.json")
     try:
         bridge.start()
@@ -146,9 +155,18 @@ def _login(home: Path, name: str) -> int:
         print("\n  Timed out waiting for the browser sign-in.")
         print("  If you did finish it, `waku mcp` will show the account. Otherwise run this again.")
         return 1
+    except Exception:
+        # Swallowed deliberately, and only here: the token below is the thing
+        # that was asked for, and it is either on disk or it is not. A
+        # connection error after a successful sign-in is noise the next run
+        # will not reproduce.
+        pass
     finally:
         bridge.close()
 
+    if not path.exists():
+        print(f"\n  Sign-in did not complete — '{name}' has no token.")
+        return 1
     print(f"\n  {name} — {_identity(path)}")
     return 0
 

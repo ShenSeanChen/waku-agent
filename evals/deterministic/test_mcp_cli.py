@@ -99,3 +99,19 @@ def test_a_local_server_is_not_described_as_lacking_a_credential(capsys):
     )
     _list(home)
     assert "no credential needed" in capsys.readouterr().out
+
+
+def test_under_an_hour_is_minutes_not_a_rounded_down_zero():
+    """A token minted fifty minutes ago rendered as "0h left", which reads as
+    expired and is the opposite of the truth."""
+    home = Path(tempfile.mkdtemp())
+    path = _auth_file(home, "s", _token("a@b.c", exp_offset=57 * 60))
+    line = _identity(path)
+    assert "0h" not in line
+    assert "m left" in line
+
+
+def test_over_an_hour_stays_in_hours():
+    home = Path(tempfile.mkdtemp())
+    path = _auth_file(home, "s", _token("a@b.c", exp_offset=5 * 3600))
+    assert "5h left" in _identity(path)
