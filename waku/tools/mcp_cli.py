@@ -138,6 +138,14 @@ def _login(home: Path, name: str) -> int:
     bridge = MCPBridge(home / "mcp.json")
     try:
         bridge.start()
+    except TimeoutError:
+        # A traceback here is the wrong answer to "you took too long in the
+        # browser". The sign-in may still have completed — the callback writes
+        # the token whether or not anyone is still waiting — so say what to
+        # check rather than what broke.
+        print("\n  Timed out waiting for the browser sign-in.")
+        print("  If you did finish it, `waku mcp` will show the account. Otherwise run this again.")
+        return 1
     finally:
         bridge.close()
 

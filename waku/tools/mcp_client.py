@@ -101,12 +101,31 @@ class MCPBridge:
         self._stack: AsyncExitStack | None = None
         self._sessions: dict = {}
 
+    def _deadline(self, servers: list[dict]) -> float:
+        """How long to wait for every server to connect.
+
+        Normally twice the per-call timeout. But a server configured for oauth
+        with no token yet is about to open a browser and wait for a person to
+        read a consent screen, and that is minutes. Waiting the ordinary amount
+        means giving up while the browser is still open — which looks like a
+        broken server and leaves the sign-in half-finished.
+
+        The margin over SIGN_IN_TIMEOUT matters: expiring first would mean the
+        callback is still patiently listening on a connection nobody is holding
+        any more.
+        """
+        from waku.tools.mcp_oauth import SIGN_IN_TIMEOUT
+
+        if any(s.get("oauth") and not self._token_exists(s) for s in servers):
+            return SIGN_IN_TIMEOUT + 60.0
+        return self.timeout * 2
+
     def start(self) -> list[Tool]:
         """Connect every configured server and return their tools (as Tools)."""
         self._thread.start()
         servers = json.loads(self.config_path.read_text(encoding="utf-8")).get("servers", [])
         fut = asyncio.run_coroutine_threadsafe(self._connect_all(servers), self._loop)
-        listed = fut.result(self.timeout * 2)  # {server: [tool metas]}
+        listed = fut.result(self._deadline(servers))  # {server: [tool metas]}
         tools: list[Tool] = []
         for srv, metas in listed.items():
             for meta in metas:
