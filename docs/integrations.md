@@ -151,6 +151,23 @@ Delete that file to sign out.
 `oauth` and `auth_env` are two answers to one question, so naming both is
 refused rather than resolved by precedence.
 
+### Which account am I signed in as?
+
+```bash
+waku mcp                      # every server, and the account each knows you as
+waku mcp login waku_memory    # sign in again — as someone else, or after expiry
+waku mcp logout waku_memory   # forget the token
+```
+
+Two agents pointed at the same server as two different people look exactly
+like a broken server: you write something in one and the other cannot find it.
+`waku mcp` prints the email, so the mismatch is visible in one line instead of
+inferred from missing memories.
+
+`login` signs out first on purpose. Without that the stored token is still
+valid, the server never asks who you are, and "sign in as someone else"
+silently keeps the account you were trying to leave.
+
 Headless or over SSH there is no browser to open: the authorization URL is
 printed, and you can finish the sign-in from any machine that has one.
 

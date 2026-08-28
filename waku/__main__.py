@@ -3,6 +3,8 @@
   waku                       chat in the terminal (default)
   waku dashboard             the browser cockpit → localhost:7777 (+ Telegram if configured)
   waku connections           list configured integrations and their health
+  waku mcp                   MCP servers, and which account each knows you as
+  waku mcp login <name>      sign in again — as someone else, or after expiry
   waku voice                 talk to it (needs the [voice] extra)
   waku telegram              phone → laptop (needs TELEGRAM_BOT_TOKEN)
   waku discord               Discord → laptop (needs DISCORD_BOT_TOKEN)
@@ -56,6 +58,10 @@ def main() -> None:
         from waku.ops.gather import main as gather_main
 
         gather_main()
+    elif args[0] == "mcp":
+        from waku.tools.mcp_cli import cli_main as mcp_main
+
+        sys.exit(mcp_main())
     elif args[0] == "skill" and len(args) >= 3 and args[1] == "install":
         from waku.memory.procedural.installer import install
 
