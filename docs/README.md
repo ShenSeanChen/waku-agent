@@ -1,6 +1,14 @@
 # docs — what is in here
 
-Twelve files with no order is a folder nobody reads. Three groups.
+A folder with no order is a folder nobody reads. Three groups, and one
+file that comes before all of them.
+
+## Start here
+
+[status.md](status.md) — what works, what is known-broken, what is
+deliberately not built. Rewritten whole rather than appended to, so it
+cannot become a changelog. Read it before opening a PR: most of what is
+already known-broken is listed, and half of it has a fix in flight.
 
 ## Reference — how the system works
 
@@ -19,14 +27,6 @@ Twelve files with no order is a folder nobody reads. Three groups.
 |---|---|
 | [kimi-k3-explained.md](kimi-k3-explained.md) | the K3 model, and what the arena found |
 | [pi-agent.md](pi-agent.md) | delegating coding work to pi |
-| [stack-report.md](stack-report.md) | what this repo is built on and why |
-
-## notes/ — working material, not reference
-
-Filming checklists, rundowns and prompts — including
-[memory-video-rundown.md](notes/memory-video-rundown.md), the shot-by-shot for
-the memory-layer comparison. Useful, dated, and **not** the place to learn
-how anything works — they assume you already do.
 
 ## Whiteboards
 
