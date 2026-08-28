@@ -1,3 +1,8 @@
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/brand/waku-mark-on-dark.svg">
+  <img src="docs/brand/waku-mark-on-light.svg" alt="Waku" width="76" align="right">
+</picture>
+
 # waku-agent
 
 **Your own AI assistant. On your laptop. In code you can read in an afternoon.**
