@@ -90,9 +90,11 @@ for its own sake is not.
     `pip install waku-agent` from PyPI, assert `waku.__version__` matches and a
     file that did not exist in the previous release is present.
 
-  A rule is still only a reminder, and a reminder is what failed twice. The
-  structural fix is a `release.yml` that publishes on tag push via PyPI Trusted
-  Publishing (no stored token) — propose it, don't assume it.
+  Since 2026-08-29 `.github/workflows/release.yml` does this on its own: push a
+  `v*` tag and it runs the gate, builds, and publishes over PyPI Trusted
+  Publishing (no stored token). It **refuses** if the tag and `__version__`
+  disagree. So the release step is `git tag vX.Y.Z && git push origin vX.Y.Z` —
+  nothing to remember, and nothing for me to hold.
 - **`main` is protected — `git push origin main` is REJECTED, for everyone.** Since
   2026-07-26 a commit only lands once `skills-and-evals` is green, and `enforce_admins`
   is on, so the rule binds Sean and Claude identically. Ship via
