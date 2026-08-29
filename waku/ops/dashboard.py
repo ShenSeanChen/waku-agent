@@ -809,7 +809,7 @@ def memory_action(payload: dict) -> dict:
         text = (payload.get("content") or "").strip()
         if not text:
             return {"error": "SOUL cannot be empty"}
-        (settings.home / "SOUL.md").write_text(text + "\n")
+        (settings.home / "SOUL.md").write_text(text + "\n", encoding="utf-8")
         return {"ok": True}
     if action == "save_skill":
         # Edit any loaded SKILL.md by hand (same file the agent's create_skill
