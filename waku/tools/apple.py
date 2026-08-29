@@ -47,9 +47,47 @@ _SLOW_APP_TIMEOUT = 25
 _cache: dict[str, tuple[float, str]] = {}
 
 
-def _osa(script: str, timeout: int = _TIMEOUT) -> tuple[bool, str]:
+
+def _is_running(app: str) -> bool:
+    try:
+        return subprocess.run(["pgrep", "-x", app], capture_output=True,
+                              check=False, timeout=5).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return True  # cannot tell — assume it is up and let _osa report the truth
+
+
+def ensure_running(app: str, timeout: float = 12.0) -> None:
+    """Start `app` before talking to it, because AppleScript cannot.
+
+    Both of the obvious idioms answer -600 "Application isn't running" when the
+    app is not already running — the launch line is itself what raises, which is
+    why the error's character offset points straight at it. We shipped one of
+    them believing it fixed -600; it was the line producing it, so a closed
+    Calendar failed exactly as before. Mail, Reminders and Notes never tried.
+
+    Only a shell-level open can cold-start the app. `-g` keeps it behind the
+    user's windows and `-j` starts it hidden, so reading the calendar does not
+    steal focus mid-sentence.
+    """
+    if sys.platform != "darwin" or _is_running(app):
+        return
+    try:
+        subprocess.run(["open", "-gj", "-a", app], capture_output=True,
+                       check=False, timeout=15)
+    except (OSError, subprocess.SubprocessError):
+        return  # cannot launch it; _osa will say what actually went wrong
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if _is_running(app):
+            return
+        time.sleep(0.25)
+
+
+def _osa(script: str, timeout: int = _TIMEOUT, app: str | None = None) -> tuple[bool, str]:
     if sys.platform != "darwin":
         return False, "Apple tools are macOS-only."
+    if app:
+        ensure_running(app)
     try:
         r = subprocess.run(["osascript", "-e", script], capture_output=True, text=True, timeout=timeout, check=False)
     except subprocess.TimeoutExpired:
@@ -69,9 +107,13 @@ def probe_apple_tools() -> None:
     """Verify Automation access to every app without reading or writing user data."""
     failures = []
     for app in _PROBE_APPS:
+        # Without the launch a closed app answers -600 and the probe reports it
+        # as an Automation-permission failure — a different problem with a
+        # different fix, and a trip to System Settings for nothing.
         ok, detail = _osa(
             f'tell application "{app}" to return version',
             timeout=_PROBE_TIMEOUT,
+            app=app,
         )
         if not ok:
             failures.append(f"{app}: {detail}")
@@ -145,16 +187,12 @@ def read_apple_calendar(days_ahead: int = 7) -> str:
     end tell
   end try''' for c in cals)
 
-        # `launch` starts Calendar without stealing focus; without it a quit
-        # Calendar.app answers -600 "Application isn't running" instead of
-        # auto-starting, which read as a permissions problem for an hour.
         script = f'''
 set out to ""
-launch application "Calendar"
 tell application "Calendar"{blocks}
 end tell
 return out'''
-        ok, res = _osa(script, timeout=20 + 12 * len(cals))
+        ok, res = _osa(script, timeout=20 + 12 * len(cals), app="Calendar")
         if not ok:
             return f"Calendar unavailable: {res}"
 
@@ -191,7 +229,7 @@ tell application "Mail"
   end repeat
 end tell
 return out'''
-        ok, res = _osa(script, timeout=20)
+        ok, res = _osa(script, timeout=20, app="Mail")
         if ok:
             return res
         return (
@@ -208,14 +246,14 @@ def create_reminder(title: str, due: str = "") -> str:
     if due:
         props += f', due date:(date "{due}")'
     ok, res = _osa(f'tell application "Reminders" to make new reminder with properties {{{props}}}',
-                   timeout=_SLOW_APP_TIMEOUT)
+                   timeout=_SLOW_APP_TIMEOUT, app="Reminders")
     return f"Reminder created: {title}" if ok else f"Reminder failed: {res}"
 
 
 def create_note(title: str, body: str = "") -> str:
     safe = (title + "\n" + body).replace('"', "'")
     ok, res = _osa(f'tell application "Notes" to make new note at folder "Notes" with properties {{body:"{safe}"}}',
-                   timeout=_SLOW_APP_TIMEOUT)
+                   timeout=_SLOW_APP_TIMEOUT, app="Notes")
     return f"Note created: {title}" if ok else f"Note failed: {res}"
 
 

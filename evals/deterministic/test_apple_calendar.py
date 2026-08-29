@@ -33,7 +33,9 @@ def test_probe_apple_calendar_is_read_only_and_requires_a_writable_calendar(monk
     script = captured["cmd"][2]
     assert captured["cmd"][:2] == ["osascript", "-e"]
     assert captured["kwargs"]["timeout"] == 15
-    assert "launch application \"Calendar\"" in script
+    # AppleScript cannot cold-start an app: this line used to be here and was
+    # itself what raised -600. waku starts Calendar with a shell `open` now.
+    assert "launch application" not in script
     assert "writable" in script
     assert "make new event" not in script
     assert "make new calendar" not in script
