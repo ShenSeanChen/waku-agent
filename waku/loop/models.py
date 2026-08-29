@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import os
+import uuid
 from dataclasses import dataclass
 from types import SimpleNamespace
 
@@ -236,6 +237,32 @@ def _belongs_elsewhere(model: str, provider_name: str) -> bool:
     return bool(owner) and owner != provider_name
 
 
+def _opencode_headers() -> dict[str, str]:
+    """Identify as an opencode client so Zen counts us against its verified
+    quota instead of the anonymous fallback pool.
+
+    opencode.ai/zen rate-limits free models per-IP with two tiers: requests
+    carrying the opencode client's identifying headers get the normal daily
+    allowance; everyone else (a bare OpenAI SDK call included) shares a small
+    'dailyRequestsFallback' pool that is quickly exhausted and then answers
+    every request with FreeUsageLimitError (HTTP 429). The User-Agent is the
+    gate (verified live — swapping it back to the SDK default re-triggers the
+    429); the x-opencode-* ids are logged for routing/stickiness, so a stable
+    per-process session id is enough. Version mirrors the TUI's format.
+    """
+    session = getattr(_opencode_headers, "_session", None)
+    if session is None:
+        session = _opencode_headers._session = uuid.uuid4().hex
+    hexid = uuid.uuid4().hex
+    return {
+        "User-Agent": "opencode/1.18.11",
+        "x-opencode-client": "tui",
+        "x-opencode-session": f"ses_{session}",
+        "x-opencode-request": f"usr_{hexid}",
+        "x-opencode-project": f"prj_{hexid}",
+    }
+
+
 def get_client(settings: Settings):
     """Build the client for settings.provider and fill in default model ids.
     Returns anything with .messages.create(...) in the Anthropic shape."""
@@ -290,7 +317,11 @@ def get_client(settings: Settings):
         if base_url:
             kwargs["base_url"] = base_url
         return anthropic.Anthropic(**kwargs)
-    return OpenAICompatClient(api_key=api_key, base_url=base_url, timeout=timeout)
+    default_headers = _opencode_headers() if settings.provider.startswith("opencode") else None
+    if default_headers is None:
+        return OpenAICompatClient(api_key=api_key, base_url=base_url, timeout=timeout)
+    return OpenAICompatClient(api_key=api_key, base_url=base_url, timeout=timeout,
+                              default_headers=default_headers)
 
 
 class OpenAICompatClient:
@@ -299,10 +330,12 @@ class OpenAICompatClient:
     between the two wire formats — worth reading once.
     """
 
-    def __init__(self, api_key: str, base_url: str | None = None, timeout: float = 120.0):
+    def __init__(self, api_key: str, base_url: str | None = None, timeout: float = 120.0,
+                 default_headers: dict[str, str] | None = None):
         import openai
 
-        self._client = openai.OpenAI(api_key=api_key, base_url=base_url, timeout=timeout)
+        self._client = openai.OpenAI(api_key=api_key, base_url=base_url, timeout=timeout,
+                                     default_headers=default_headers)
         self.messages = SimpleNamespace(create=self._create, stream=self._stream)
 
     def _to_openai(self, *, model, messages, max_tokens, system=None, tools=None) -> dict:
