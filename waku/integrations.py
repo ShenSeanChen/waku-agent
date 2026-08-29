@@ -263,10 +263,14 @@ def _integration_from_provider(name: str, provider: Provider) -> Integration:
                             default=provider.base_url or "",
                             options=tuple(endpoint.base_url for endpoint in provider.endpoints),
                             option_labels=tuple(endpoint.label for endpoint in provider.endpoints)),)
+    elif provider.base_url_env:
+        fields += (EnvField(provider.base_url_env, "Base URL", default=provider.base_url or ""),)
     return Integration(name, "AI Providers", name.replace("_", " ").title(),
                        f"Uses {name.replace('_', ' ').title()} models.",
                        fields, None, None, "",
-                       ReloadMode.AGENT, lambda env, key=provider.key_env: bool(env.get(key)), _provider_probe)
+                       ReloadMode.AGENT,
+                       lambda env, key=provider.key_env, p=name: bool(env.get(key)) or env.get("WAKU_PROVIDER") == p,
+                       _provider_probe)
 
 
 def provider_integrations() -> tuple[Integration, ...]:

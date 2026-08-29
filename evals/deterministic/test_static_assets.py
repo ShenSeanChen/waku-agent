@@ -16,9 +16,9 @@ from pathlib import Path
 from waku.integrations import INTEGRATIONS
 
 STATIC = Path(__file__).resolve().parents[2] / "waku" / "ops" / "static"
-INDEX = (STATIC / "index.html").read_text()
+INDEX = (STATIC / "index.html").read_text(encoding="utf-8")
 JS_FILES = sorted((STATIC / "js").glob("*.js"))
-JS_SRC = "\n".join(f.read_text() for f in JS_FILES)
+JS_SRC = "\n".join(f.read_text(encoding="utf-8") for f in JS_FILES)
 CONNECTION_LOGOS = {f"{integration.key}.svg" for integration in INTEGRATIONS}
 
 # JS keywords / builtins / DOM globals an inline handler may call without a js/
@@ -47,7 +47,7 @@ def test_connection_card_logos_are_local_and_complete():
     logo_dir = STATIC / "logos" / "connections"
     assert {path.name for path in logo_dir.glob("*.svg")} == CONNECTION_LOGOS
     for name in CONNECTION_LOGOS:
-        svg = (logo_dir / name).read_text()
+        svg = (logo_dir / name).read_text(encoding="utf-8")
         assert svg.startswith("<svg "), f"{name} is not an SVG"
         assert "<title>" in svg, f"{name} needs an accessible title"
 
