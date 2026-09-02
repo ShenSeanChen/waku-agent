@@ -20,7 +20,7 @@ from datetime import date as date_cls
 
 from waku.tools.registry import Tool
 
-OPEN_STATUSES = ("已投递", "进行中", "待跟进")
+OPEN_STATUSES = ("已投递", "进行中", "通过", "待跟进")
 VALID_STATUSES = ("已投递", "进行中", "通过", "失败", "待跟进")
 
 

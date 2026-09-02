@@ -44,6 +44,23 @@ def test_log_interview_starts_fresh_row_after_closed(tmp_path):
     assert [r["status"] for r in rows] == ["失败", "进行中"]
 
 
+def test_log_interview_updates_same_row_after_passing_a_round(tmp_path):
+    """通过 means the CURRENT round was passed, not that the process closed —
+    more rounds (or an eventual 失败) can still follow. Regression: 通过 was
+    missing from OPEN_STATUSES, so the next call couldn't find this row and
+    inserted a duplicate instead, leaving a stale 通过 row on record next to
+    the real outcome (seen live: id=6/id=19 for 康宁 in state.db)."""
+    conn = connect(tmp_path)
+    tool = make_tool(conn)
+    tool.fn(company="Corning", role="Engineer", round="一面", status="通过")
+    tool.fn(company="Corning", role="Engineer", round="二面", status="失败")
+
+    rows = conn.execute("SELECT round, status FROM interview_entries ORDER BY id").fetchall()
+    assert len(rows) == 1  # updated in place, not a second row
+    assert rows[0]["round"] == "二面"
+    assert rows[0]["status"] == "失败"
+
+
 def test_log_interview_matches_case_insensitively_and_preserves_omitted_fields(tmp_path):
     conn = connect(tmp_path)
     tool = make_tool(conn)
