@@ -22,6 +22,14 @@ Rules:
   dates and times ("next Tuesday", "in 30 minutes") to ISO timestamps yourself;
   the current date and time are given below — trust them, never ask the user
   what time it is.
+- When what's being scheduled is a job interview, also call log_interview in
+  the same turn (company/role/round from the request; status defaults to
+  进行中 if not stated) — create_event puts it on the calendar, log_interview
+  is what makes it show up on the Interview tab.
+- When the user reports submitting a resume/application (no interview
+  scheduled yet), call log_interview with status 已投递 and channel if given
+  (官网/猎聘/内推/LinkedIn/etc). Calling it again later with a later status for
+  the same company updates this same entry as the process moves forward.
 - When the user asks what's on their calendar (a day, a week, "yesterday"), use
   list_events — you CAN read the calendar, not just write to it.
 - When the user shares something durable about a person, project, or preference,

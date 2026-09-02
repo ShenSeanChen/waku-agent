@@ -17,6 +17,7 @@ End-loop guardrails (the orange box's exit conditions):
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
@@ -29,6 +30,19 @@ from waku.tools.registry import ToolRegistry
 # them — without either being wired into the loop's logic.
 LoopEvent = dict[str, Any]
 Observer = Callable[[str, LoopEvent], None]
+
+# The harness is the ONLY thing allowed to write a "[tools used: ...]" line
+# (waku/runtime/session.py's add_exchange, built from REAL executed
+# tool_calls). Weaker models have seen that exact format in their own chat
+# history and sometimes imitate it as plain text INSTEAD of actually calling
+# the tool — claiming an action they never took. Caught live 2026-08-12:
+# qwen-max (openai wire format) replied with "[tools used: log_pnl(...) ->
+# Logged ...]" as text, no tool_use block anywhere in the response, and the
+# fabricated success reached the user and got written to chat_log verbatim.
+# If this branch has no tool_uses, NOTHING ran this iteration — any such tag
+# in the model's own text is a lie by construction. Strip it before it can be
+# stored or shown as fact.
+_FABRICATED_TOOL_TRACE = re.compile(r"\s*\[tools used:[\s\S]*\]\s*$")
 
 
 @dataclass
@@ -94,7 +108,12 @@ def run_loop(
 
         # ---- guardrail 1: no tool calls → the model is talking to the human
         if not tool_uses:
-            result.reply = "".join(b.text for b in response.content if b.type == "text")
+            reply = "".join(b.text for b in response.content if b.type == "text")
+            fabricated = _FABRICATED_TOOL_TRACE.search(reply)
+            if fabricated:
+                reply = _FABRICATED_TOOL_TRACE.sub("", reply).rstrip()
+                notify("fabricated_tool_trace", {"iteration": iteration, "raw": fabricated.group(0)})
+            result.reply = reply
             return result
 
         # ---- act: execute each requested tool; observe: feed results back

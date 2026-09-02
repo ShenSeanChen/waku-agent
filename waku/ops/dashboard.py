@@ -415,7 +415,9 @@ def collect() -> dict:
     db_info = {
         "path": str(db_path.resolve()),
         "size": db_path.stat().st_size if db_path.exists() else 0,
-        "tables": [table_info(n) for n in ("calendar_events", "facts", "episodes", "chat_log")],
+        "tables": [table_info(n) for n in
+                   ("calendar_events", "facts", "episodes", "chat_log",
+                    "finance_entries", "interview_entries")],
         "fts": [t for t in all_tables if t.endswith("_fts")],
         "all_tables": all_tables,
     }
@@ -477,6 +479,14 @@ def collect() -> dict:
         "current_session": (live.session.session_id if live is not None else dash_session()),
         "consolidate_every": settings.consolidate_every,
         "calendar": rows('SELECT title, start, "end", attendees, created_at FROM calendar_events ORDER BY start'),
+        "finance": rows(
+            "SELECT id, date, account, currency, pnl_amount, note, created_at "
+            "FROM finance_entries ORDER BY date DESC, id DESC"
+        ),
+        "interviews": rows(
+            "SELECT id, company, role, round, date, status, notes, channel, created_at, updated_at "
+            "FROM interview_entries ORDER BY updated_at DESC"
+        ),
         "outbox": outbox,
         "skills": skills,
         "eval_report": eval_report,
@@ -882,15 +892,22 @@ def events_since(cursor):
 
 class Handler(BaseHTTPRequestHandler):
     def _send(self, body: bytes, ctype: str, *, no_cache: bool = False) -> None:
-        self.send_response(200)
-        self.send_header("Content-Type", ctype)
-        self.send_header("Content-Length", str(len(body)))
-        # The frontend files (app.js/style.css) change as we develop; without
-        # this the browser serves a stale cached copy and edits look "missing".
-        if no_cache:
-            self.send_header("Cache-Control", "no-cache, must-revalidate")
-        self.end_headers()
-        self.wfile.write(body)
+        try:
+            self.send_response(200)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(len(body)))
+            # The frontend files (app.js/style.css) change as we develop; without
+            # this the browser serves a stale cached copy and edits look "missing".
+            if no_cache:
+                self.send_header("Cache-Control", "no-cache, must-revalidate")
+            self.end_headers()
+            self.wfile.write(body)
+        except (ConnectionResetError, BrokenPipeError):
+            # Client (browser tab closed/refreshed, polling fetch aborted) hung
+            # up before we finished writing. Nothing to recover — the response
+            # has no reader anymore — so drop it instead of printing a traceback
+            # for every ordinary disconnect.
+            pass
 
     def do_GET(self):
         if self.path == "/api/data":

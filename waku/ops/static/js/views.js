@@ -615,6 +615,66 @@ const VIEWS = {
       <div class="meta" style="margin-top:8px">all ${db.all_tables.length} tables: ${db.all_tables.map(t=>`<code>${esc(t)}</code>`).join(" ")}</div></div>`;
     return h;
   },
+  finance(d){
+    const entries = d.finance || [];
+
+    // Per-currency totals — CNY and USD are never summed together.
+    const totals = {};
+    for (const e of entries) totals[e.currency] = (totals[e.currency]||0) + e.pnl_amount;
+    const totalTiles = Object.entries(totals).map(([cur, amt]) =>
+      `<div class="tile"><b class="${amt>=0?"":"neg"}">${amt.toFixed(2)} ${esc(cur)}</b><span>total P&amp;L</span></div>`
+    ).join("");
+
+    // Per-account totals — one account maps to exactly one currency, so we
+    // can carry the account's own currency along with its running total.
+    const accountTotals = {};
+    for (const e of entries){
+      const cur = accountTotals[e.account] ? accountTotals[e.account].currency : e.currency;
+      accountTotals[e.account] = {
+        amt: (accountTotals[e.account]?.amt||0) + e.pnl_amount,
+        currency: cur,
+      };
+    }
+    const accountRows = Object.keys(accountTotals).length
+      ? Object.entries(accountTotals).map(([account, t]) => `<tr>
+          <td>${esc(account)}</td>
+          <td class="${t.amt>=0?"":"neg"}">${t.amt>=0?"+":""}${esc(t.amt.toFixed(2))} ${esc(t.currency)}</td></tr>`).join("")
+      : `<tr><td colspan="2" class="meta">No entries yet — tell Waku how an account did today.</td></tr>`;
+
+    const pnlRows = entries.length
+      ? entries.map(e => `<tr>
+          <td>${esc(e.date)}</td><td>${esc(e.account)}</td>
+          <td class="${e.pnl_amount>=0?"":"neg"}">${e.pnl_amount>=0?"+":""}${esc(e.pnl_amount)} ${esc(e.currency)}</td>
+          <td>${esc(e.note||"")}</td></tr>`).join("")
+      : `<tr><td colspan="4" class="meta">No entries yet — tell Waku how an account did today.</td></tr>`;
+
+    return `<div class="tiles">${totalTiles || '<div class="meta">No P&amp;L logged yet.</div>'}</div>
+      <h3 style="margin-top:20px">By account</h3>
+      <table class="datatable"><thead><tr><th>Account</th><th>Total P&amp;L</th></tr></thead>
+      <tbody>${accountRows}</tbody></table>
+      <h3 style="margin-top:20px">Daily P&amp;L</h3>
+      <table class="datatable"><thead><tr><th>Date</th><th>Account</th><th>P&amp;L</th><th>Note</th></tr></thead>
+      <tbody>${pnlRows}</tbody></table>`;
+  },
+  interviews(d){
+    const interviews = d.interviews || [];
+
+    // Grouped by status, in a fixed pipeline order; empty groups are
+    // skipped rather than rendered with a "no interviews" placeholder.
+    const STATUS_ORDER = ["已投递", "进行中", "待跟进", "通过", "失败"];
+    const groups = STATUS_ORDER.map(status => {
+      const rows = interviews.filter(i => i.status === status);
+      if (!rows.length) return "";
+      const body = rows.map(i => `<tr>
+          <td>${esc(i.company)}</td><td>${esc(i.role)}</td><td>${esc(i.round||"")}</td>
+          <td>${esc(i.channel||"")}</td><td>${esc(i.notes||"")}</td></tr>`).join("");
+      return `<h3 style="margin-top:20px">${esc(status)} (${rows.length})</h3>
+        <table class="datatable"><thead><tr><th>Company</th><th>Role</th><th>Round</th><th>Channel</th><th>Notes</th></tr></thead>
+        <tbody>${body}</tbody></table>`;
+    }).join("");
+
+    return interviews.length ? groups : `<div class="card empty">No interviews logged yet.</div>`;
+  },
   ops(d){
     const s = d.stats;
     const u = d.usage || {calls:0,total_in:0,total_out:0,total_cost:0,by_day:[],by_provider:[]};

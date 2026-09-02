@@ -121,10 +121,28 @@ def test_collect_returns_the_keys_the_page_reads():
     expected = {
         "settings", "tools", "facts", "episodes", "soul", "chat_log", "sessions",
         "turns", "stats", "db", "skills", "trace_file", "chat_pending", "graph",
+        "finance", "interviews",
     }
     src = inspect.getsource(dashboard.collect)
     for key in expected:
         assert f'"{key}"' in src, f"collect() no longer returns: {key}"
+
+
+def test_send_swallows_a_client_disconnect(monkeypatch):
+    """A browser tab closing (or a polling fetch aborting) mid-response used to
+    print a raw ConnectionResetError/BrokenPipeError traceback for every
+    ordinary disconnect. _send must swallow it, not propagate."""
+    handler = dashboard.Handler.__new__(dashboard.Handler)
+    monkeypatch.setattr(handler, "send_response", lambda *a, **k: None)
+    monkeypatch.setattr(handler, "send_header", lambda *a, **k: None)
+    monkeypatch.setattr(handler, "end_headers", lambda: None)
+
+    class _DeadSocket:
+        def write(self, body):
+            raise ConnectionResetError(54, "Connection reset by peer")
+
+    handler.wfile = _DeadSocket()
+    handler._send(b"{}", "application/json")  # must not raise
 
 
 def test_the_removed_arena_duplicate_stays_removed():
