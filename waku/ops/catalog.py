@@ -32,6 +32,15 @@ from waku.ops.pricing import remember_price
 
 _models_cache: dict[str, tuple[float, list]] = {}
 
+# Models that OpenAI still returns from GET /v1/models but 404 on actual use.
+# The whole -chat-latest line was deprecated; see issue #132 for the timeline.
+_DEPRECATED_IDS: frozenset[str] = frozenset({
+    "gpt-5.3-chat-latest",
+    "gpt-5.2-chat-latest",
+    "gpt-5.1-chat-latest",
+    "gpt-5-chat-latest",
+})
+
 
 def _known_default_ids(prov, out: dict, is_active: bool) -> list[dict]:
     """Best-effort model list when the live catalog is unreachable: the provider's
@@ -151,6 +160,7 @@ def list_models(provider: str | None = None, *, use_cache: bool = True) -> dict:
             # gate's tiny budget: the UI steers them away from the gate slot
             "reasoning": ("reasoning" in params) if params is not None else None,
             "context": m.get("context_length"),
+            "deprecated": mid in _DEPRECATED_IDS,
         }
         try:
             # OpenRouter prices are $/token strings; keep $/M for display + cost
