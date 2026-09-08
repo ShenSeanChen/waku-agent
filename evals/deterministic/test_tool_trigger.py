@@ -91,6 +91,33 @@ def test_no_tool_turn_ends_loop_in_one_iteration(tmp_path):
     assert result.reply == "Paris." and result.iterations == 1 and result.tool_calls == []
 
 
+def test_create_event_description_matches_config(tmp_path):
+    """The model answers "can you sync to Google Calendar?" from the tool
+    description alone — it must claim a mirror if and only if one is enabled.
+    Regression: a static "local calendar" description made the agent deny a
+    Google sync that WAKU_GOOGLE_CALENDAR=1 had turned on."""
+    import sqlite3
+
+    from waku.tools import calendar
+
+    conn = sqlite3.connect(":memory:")
+    home = tmp_path / "home"
+
+    plain = calendar.make_tool(conn, home).description
+    assert "Google Calendar" not in plain and "Apple Calendar" not in plain
+    assert "no calendar app sync" in plain
+
+    google = calendar.make_tool(conn, home, google_calendar=True,
+                                google_calendar_id="work").description
+    assert "Google Calendar (calendar 'work')" in google
+    assert "Apple Calendar" not in google
+
+    both = calendar.make_tool(conn, home, apple_calendar=True,
+                              google_calendar=True).description
+    assert "Apple Calendar" in both and "Google Calendar (calendar 'primary')" in both
+    assert "no calendar app sync" not in both
+
+
 def test_iteration_guardrail_stops_runaway_loop(tmp_path):
     gate = response([text_block('{"retrieve": false, "query": "", "reason": "test"}')])
     runaway = [

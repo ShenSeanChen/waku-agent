@@ -466,10 +466,25 @@ def make_tool(
             + f". {where}"
         )
 
+    # The description must claim exactly what THIS configuration does. The model
+    # answers "can you add this to my Google Calendar?" from this text alone —
+    # a static "local calendar" here made it deny a sync that was enabled.
+    mirrors = []
+    if apple_calendar:
+        mirrors.append("Apple Calendar")
+    if google_calendar:
+        mirrors.append(f"Google Calendar (calendar '{google_calendar_id}')")
+    if mirrors:
+        where = (
+            "the user's local calendar, mirrored to " + " and ".join(mirrors)
+        )
+    else:
+        where = "the user's local calendar (no calendar app sync is enabled)"
+
     return Tool(
         name="create_event",
         description=(
-            "Create a calendar event on the user's local calendar. Use whenever the user "
+            f"Create a calendar event on {where}. Use whenever the user "
             "wants to schedule, book, or plan something at a specific time."
         ),
         input_schema={
