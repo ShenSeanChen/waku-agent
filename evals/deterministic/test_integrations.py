@@ -23,7 +23,7 @@ def _isolate(monkeypatch, tmp_path):
 
 def test_registry_contract():
     items = integrations.registry()
-    assert len(items) == 24
+    assert len(items) == 25
     assert len({item.key for item in items}) == len(items)
     assert {item.key for item in items if item.group == "AI Providers"} == set(PROVIDERS)
     for item in items:

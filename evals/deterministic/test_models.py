@@ -140,6 +140,33 @@ def test_deepseek_provider_uses_expected_key_endpoint_and_models(monkeypatch, tm
     assert settings.small_model == "deepseek-v4-pro"
 
 
+def test_groq_provider_uses_expected_key_endpoint_and_models(monkeypatch, tmp_path):
+    captured = {}
+
+    class StubOpenAICompatClient:
+        def __init__(self, *, api_key, base_url, timeout):
+            captured.update(api_key=api_key, base_url=base_url, timeout=timeout)
+
+    monkeypatch.setenv("GROQ_API_KEY", "test-groq-key")
+    monkeypatch.setattr(models, "OpenAICompatClient", StubOpenAICompatClient)
+    settings = Settings(
+        provider="groq",
+        api_key="",
+        base_url=None,
+        model="",
+        small_model="",
+        home=tmp_path,
+    )
+
+    client = models.get_client(settings)
+
+    assert isinstance(client, StubOpenAICompatClient)
+    assert captured["api_key"] == "test-groq-key"
+    assert captured["base_url"] == "https://api.groq.com/openai/v1"
+    assert settings.model == "llama-3.3-70b-versatile"
+    assert settings.small_model == "meta-llama/llama-4-scout-17b-16e-instruct"
+
+
 def test_minimax_provider_uses_expected_key_endpoint_and_models(monkeypatch, tmp_path):
     captured = {}
 
