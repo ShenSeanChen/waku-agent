@@ -1,6 +1,6 @@
 ---
 name: interview-prep
-description: Prepare me for a job interview, technical interview, or placement. Use for "prep me for an interview", "help me prepare for an interview", "what should I revise", "practice interview questions", or "mock interview me".
+description: Job interview prep: prepare, practice, revise; technical, behavioral or placement interview; mock interview questions.
 ---
 
 ## How to prepare
