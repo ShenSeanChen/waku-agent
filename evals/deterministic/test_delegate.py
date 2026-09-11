@@ -8,6 +8,7 @@ and the honest strings for every failure mode (not installed / timeout / bad cwd
 from __future__ import annotations
 
 import subprocess
+import sys
 from types import SimpleNamespace
 
 import pytest
@@ -149,16 +150,31 @@ for e in events:
 '''
 
 
+def _install_fake_pi(tmp_path, body):
+    """Write `body` as a fake pi the REAL Popen path can execute on any OS.
+
+    POSIX execs the shebang script directly. Windows CreateProcess cannot
+    (WinError 193 — a text file is not a Win32 executable), so there the
+    entrypoint is a .bat shim that hands the script to this interpreter."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    script = bin_dir / "pi_impl.py"
+    script.write_text(body, encoding="utf-8")
+    if sys.platform == "win32":
+        shim = bin_dir / "pi.bat"
+        shim.write_text(f'@"{sys.executable}" "{script}" %*\n', encoding="utf-8")
+        return shim
+    script.chmod(0o755)
+    return script
+
+
 def test_delegate_streams_pi_events_and_ledgers_cost(tmp_path, monkeypatch):
     """The v2 contract, end to end through the REAL Popen path: pi's json events
     are relayed through _notify as kind="subagent", the reply is reconstructed
     from the final assistant message, the raw event stream is preserved, and —
     the arena-honesty fix — pi's tokens land in usage.jsonl as kind="subagent"
     so a delegated coding run is no longer free."""
-    fake = tmp_path / "bin" / "pi"
-    fake.parent.mkdir()
-    fake.write_text(FAKE_PI, encoding="utf-8")
-    fake.chmod(0o755)
+    fake = _install_fake_pi(tmp_path, FAKE_PI)
     monkeypatch.setattr(experimental.shutil, "which", lambda _: str(fake))
 
     home = tmp_path / "home"
@@ -187,14 +203,12 @@ def test_delegate_streams_pi_events_and_ledgers_cost(tmp_path, monkeypatch):
 def test_delegate_kills_a_silent_pi_at_the_deadline(tmp_path, monkeypatch):
     """A pi that starts streaming then hangs forever must not hang the loop:
     the queue-based deadline kills it and the model hears an honest timeout."""
-    fake = tmp_path / "bin" / "pi"
-    fake.parent.mkdir()
-    fake.write_text('#!/usr/bin/env python3\nimport sys, time\n'
-                    'if "--help" in sys.argv:\n'
-                    '    print("--mode json"); sys.exit(0)\n'
-                    'print(\'{"type": "turn_start"}\', flush=True)\n'
-                    'time.sleep(60)\n', encoding="utf-8")
-    fake.chmod(0o755)
+    fake = _install_fake_pi(tmp_path,
+                            '#!/usr/bin/env python3\nimport sys, time\n'
+                            'if "--help" in sys.argv:\n'
+                            '    print("--mode json"); sys.exit(0)\n'
+                            'print(\'{"type": "turn_start"}\', flush=True)\n'
+                            'time.sleep(60)\n')
     monkeypatch.setattr(experimental.shutil, "which", lambda _: str(fake))
 
     tool = experimental.make_delegate_tool(Settings(home=tmp_path / "home"))

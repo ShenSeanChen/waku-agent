@@ -1,6 +1,9 @@
 [project]
 name = "waku-agent"
-version = "0.1.4"
+# Single source of truth is waku/__init__.py — pyproject and the package
+# disagreed for four releases (0.1.4 here, 0.1.0 there) because nothing
+# forced them to match. Now there is only one number to bump.
+dynamic = ["version"]
 description = "A minimal, transparent, local-first Waku: harness + loop + memory + eval, in code you can read in an afternoon."
 readme = "README.md"
 license = { text = "MIT" }
@@ -127,6 +130,9 @@ build-backend = "hatchling.build"
 # whiteboard PNG and the .excalidraw sources, plus the agent tooling (.claude,
 # .agents, .pi) that only matters inside this repo. All of it stays on GitHub,
 # where people actually read it; none of it belongs in a package download.
+[tool.hatch.version]
+path = "waku/__init__.py"
+
 [tool.hatch.build.targets.sdist]
 exclude = [
     "docs", "examples",

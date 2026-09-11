@@ -298,3 +298,41 @@ def test_an_api_key_failure_names_the_variable_that_holds_the_key():
     )
     assert "WAKU_MEMORY_API_KEY" in hint
     assert "sign-in" not in hint
+
+
+def test_a_pending_sign_in_is_waited_for_longer_than_it_takes():
+    """`waku mcp login` gave up after 60s while the browser was still open and
+    the callback was still listening — two independently chosen timeouts, one
+    of them wrong. The connect deadline must exceed the sign-in one, or the
+    callback outlives the caller waiting on it."""
+    import json
+    import tempfile
+
+    from waku.tools.mcp_client import MCPBridge
+    from waku.tools.mcp_oauth import SIGN_IN_TIMEOUT
+
+    home = Path(tempfile.mkdtemp())
+    config = home / "mcp.json"
+    config.write_text(
+        json.dumps({"servers": [{"name": "x", "url": "https://h/mcp", "oauth": True}]}),
+        encoding="utf-8",
+    )
+    bridge = MCPBridge(config)
+    servers = json.loads(config.read_text())["servers"]
+    assert bridge._deadline(servers) > SIGN_IN_TIMEOUT, "would abandon a sign-in still in progress"
+
+
+def test_a_server_that_will_not_sign_in_does_not_get_the_long_wait():
+    """The long deadline is for human time in a browser. An api-key server has
+    none, and inheriting six minutes would turn a dead host into a six-minute
+    hang on every start."""
+    import json
+    import tempfile
+
+    from waku.tools.mcp_client import MCPBridge
+
+    home = Path(tempfile.mkdtemp())
+    config = home / "mcp.json"
+    config.write_text(json.dumps({"servers": []}), encoding="utf-8")
+    bridge = MCPBridge(config, timeout=30.0)
+    assert bridge._deadline([{"name": "y", "url": "https://h/mcp", "auth_env": "K"}]) == 60.0

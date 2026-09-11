@@ -49,6 +49,14 @@ AUTH_DIR = "mcp-auth"
 CALLBACK_PORT = 41765
 CALLBACK_PATH = "/callback"
 
+# How long the callback server waits for the browser to come back. This is
+# human time — reading a consent screen, picking between two Google accounts —
+# so it is minutes, not seconds. Exported because the caller that waits on the
+# connection has to wait longer than this, and two independently-chosen
+# numbers is how the CLI came to give up at 60s while this sat patiently for
+# five minutes.
+SIGN_IN_TIMEOUT = 300.0
+
 
 def _sanitise(name: str) -> str:
     """A server name is user-supplied and becomes a filename."""
@@ -186,7 +194,7 @@ def build_provider(server_url: str, server_name: str, home: Path) -> OAuthClient
         thread.start()
         # Poll rather than join: this runs on the bridge's event loop, and a
         # blocking join would stop the loop the transport is about to need.
-        for _ in range(600):  # 5 minutes at 0.5s
+        for _ in range(int(SIGN_IN_TIMEOUT / 0.5)):
             if _CallbackHandler.result:
                 break
             await asyncio.sleep(0.5)
