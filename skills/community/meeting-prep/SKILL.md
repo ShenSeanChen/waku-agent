@@ -1,6 +1,6 @@
 ---
 name: meeting-prep
-description: Prep me for a meeting or call — who I'm meeting, background, talking points. Use for "prep me for", "get me ready for", "what should I know before", "who am I meeting", "brief me on my call with".
+description: Meeting prep: brief me before a meeting, call, standup, 1:1 or pitch — who I'm meeting, background, talking points; prep me, ready.
 ---
 
 ## How to prep
