@@ -113,3 +113,71 @@ make dashboard                               # demo_word_count / demo_reverse_te
 
 Same pattern scales to any server, yours or a vendor's — no changes to Waku's code.
 
+### Remote servers (Streamable HTTP)
+
+A server that is already running somewhere else is named by `url` instead of
+`command`. This is the MCP spec's transport for remote servers; the older
+HTTP+SSE transport is deprecated and is not supported.
+
+```json
+{"servers": [{"name": "waku_memory",
+              "url": "https://your-host/mcp",
+              "auth_env": "WAKU_MEMORY_API_KEY"}]}
+```
+
+`auth_env` names an **environment variable**; its value is sent as
+`Authorization: Bearer <value>`. The credential never goes in `mcp.json` —
+that file gets pasted into bug reports, and a bearer token in one is a leaked
+credential. If the variable is not exported, Waku says so by name rather than
+connecting anonymously and letting the server's 401 look like an outage.
+
+### Signing in instead of holding a key
+
+A server that speaks MCP's authorization spec needs no key at all. Say so, and
+Waku opens your browser on first use:
+
+```json
+{"servers": [{"name": "waku_memory",
+              "url": "https://your-host/mcp",
+              "oauth": true}]}
+```
+
+Nothing is issued out of band and nothing is pasted anywhere. Waku registers
+itself with the server, catches the redirect on `127.0.0.1:41765`, and keeps
+the result in `.waku/mcp-auth/<server>.json`, written `0600` — one file per
+server, so a corrupt one costs a single connection rather than all of them.
+Delete that file to sign out.
+
+`oauth` and `auth_env` are two answers to one question, so naming both is
+refused rather than resolved by precedence.
+
+### Which account am I signed in as?
+
+```bash
+waku mcp                      # every server, and the account each knows you as
+waku mcp login waku_memory    # sign in again — as someone else, or after expiry
+waku mcp logout waku_memory   # forget the token
+```
+
+Two agents pointed at the same server as two different people look exactly
+like a broken server: you write something in one and the other cannot find it.
+`waku mcp` prints the email, so the mismatch is visible in one line instead of
+inferred from missing memories.
+
+`login` signs out first on purpose. Without that the stored token is still
+valid, the server never asks who you are, and "sign in as someone else"
+silently keeps the account you were trying to leave.
+
+Headless or over SSH there is no browser to open: the authorization URL is
+printed, and you can finish the sign-in from any machine that has one.
+
+Try it against the demo server, no remote host required:
+
+```bash
+python examples/mcp_demo_server.py --http --port 8931
+# .waku/mcp.json → {"servers": [{"name": "demo", "url": "http://127.0.0.1:8931/mcp"}]}
+```
+
+Requires `mcp>=2.1` (`pip install -e '.[mcp]'`). The 1.x SDK spelled this
+transport differently and the remote branch does not work on it.
+

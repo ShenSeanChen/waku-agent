@@ -27,20 +27,24 @@ def geval_metrics():
     judge = AnthropicJudge()
     helpful = GEval(
         name="Helpfulness",
-        criteria=(
-            "The assistant reply should directly address the user's request, confirm any "
-            "action taken (what/when/who), and be concise and warm."
-        ),
+        evaluation_steps=[
+            "Check whether the assistant reply directly addresses the user's request.",
+            ("Check whether the reply confirms any action taken, including what was "
+             "done, when, and who was involved."),
+            "Check whether the reply is concise and warm.",
+        ],
         evaluation_params=[LLMTestCaseParams.INPUT, LLMTestCaseParams.ACTUAL_OUTPUT],
         model=judge,
         threshold=0.6,
     )
     uses_memory = GEval(
         name="MemoryUse",
-        criteria=(
-            "Given the retrieval context (the user's stored memories), the reply should "
-            "correctly incorporate relevant remembered facts instead of ignoring them."
-        ),
+        evaluation_steps=[
+            ("Identify the remembered facts in the Retrieval Context that are relevant "
+             "to the user's Input."),
+            ("Check whether the assistant reply correctly incorporates those relevant "
+             "remembered facts instead of ignoring them."),
+        ],
         evaluation_params=[
             LLMTestCaseParams.INPUT,
             LLMTestCaseParams.ACTUAL_OUTPUT,
