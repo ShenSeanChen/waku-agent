@@ -74,6 +74,27 @@ for its own sake is not.
   turn or session with working changes left uncommitted — the repo must always be traceable
   from GitHub, and uncommitted work has been lost to branch switches before. Use the `/ship`
   skill. If several milestones land in one session, commit each as its own logical commit.
+- **PyPI must never lag `main`.** `pip install waku-agent` is how most people meet
+  this project, and for four weeks it handed them Aug 1 code: `0.1.1` was live
+  while `main` had moved 67 commits. `v0.1.3` and `v0.1.4` were tagged and built
+  and **never uploaded** — a tag is not a release. So:
+
+  - The version has **one home**: `waku/__init__.py`. `pyproject.toml` reads it
+    (`dynamic = ["version"]`), and `evals/deterministic/test_version.py` goes red
+    if a second one is ever added.
+  - When a user-visible change lands on `main`, **cut the release in the same
+    session** — bump, `git tag`, `uv build`, `uvx twine check dist/*`. Don't let
+    releasable work sit behind an unpublished tag.
+  - **Sean runs `uvx twine upload dist/*` with his own token. I never handle it.**
+  - **Confirm by installing, not by reading the index page**: fresh venv,
+    `pip install waku-agent` from PyPI, assert `waku.__version__` matches and a
+    file that did not exist in the previous release is present.
+
+  Since 2026-08-29 `.github/workflows/release.yml` does this on its own: push a
+  `v*` tag and it runs the gate, builds, and publishes over PyPI Trusted
+  Publishing (no stored token). It **refuses** if the tag and `__version__`
+  disagree. So the release step is `git tag vX.Y.Z && git push origin vX.Y.Z` —
+  nothing to remember, and nothing for me to hold.
 - **`main` is protected — `git push origin main` is REJECTED, for everyone.** Since
   2026-07-26 a commit only lands once `skills-and-evals` is green, and `enforce_admins`
   is on, so the rule binds Sean and Claude identically. Ship via

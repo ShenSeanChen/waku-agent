@@ -10,9 +10,31 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The lockfile check below diffs against the base branch, which is
+          # not fetched by the default shallow clone.
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      # A lockfile refresh is 3,880 lines nobody reads, so it hides inside any
+      # PR it rides along with — and an unreviewed lockfile is how a dependency
+      # arrives that nobody chose. If the dependencies really changed,
+      # pyproject.toml says so; if they did not, the lock does not belong here.
+      # A deliberate refresh is welcome as its own PR, where it is the diff
+      # rather than the noise around it.
+      - name: uv.lock changes only alongside pyproject.toml
+        if: github.event_name == 'pull_request'
+        run: |
+          base="origin/${{ github.base_ref }}"
+          changed=$(git diff --name-only "$base"...HEAD)
+          if grep -qx 'uv.lock' <<<"$changed" && ! grep -qx 'pyproject.toml' <<<"$changed"; then
+            echo "::error::uv.lock changed but pyproject.toml did not."
+            echo "If you did not mean to change dependencies:  git checkout $base -- uv.lock"
+            echo "If you did, say so in pyproject.toml. A deliberate lock refresh is welcome as its own PR."
+            exit 1
+          fi
+
       - name: Install
         run: pip install -e '.[dev]'
       - name: Lint (ruff)
