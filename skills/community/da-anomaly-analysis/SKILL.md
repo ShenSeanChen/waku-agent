@@ -1,6 +1,6 @@
 ---
 name: da-anomaly-analysis
-description: Investigate a metric anomaly (DAU, GMV, conversion, retention) — why it dropped or spiked. Use for "why did X drop", "anomaly analysis", "metric attribution", "what caused this change".
+description: Metric anomaly investigation: DAU, GMV, conversion, retention, revenue, KPI or dashboard metric drop, dropped, fell, spike or spiked. Metric attribution and funnel breakdown.
 ---
 
 ## Instructions
