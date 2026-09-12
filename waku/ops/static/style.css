@@ -1,32 +1,24 @@
 :root{
-    /* let native UI (scrollbars, form controls) follow the active scheme,
-       otherwise they stay light even in dark mode */
-    color-scheme:light dark;
-    --bg:#fafaf9;--panel:#ffffff;--line:#e7e6e4;--line2:#d9d8d5;
-    --ink:#21201d;--ink2:#6f6e69;--ink3:#a3a29d;
-    --accent:#5e6ad2;--accent-soft:#eef0fb;
-    --good:#1f7a4d;--good-soft:#e8f4ee;--bad:#c0392b;--bad-soft:#faeceb;
-    --mono:ui-monospace,'SF Mono',Menlo,monospace;
+    /* The old short names, kept for now so the inline styles in js/ keep
+       working. None holds a value: each points at a Waku Memory token in
+       design/tokens.css. Dark mode comes from there too. New code uses the
+       token names; the design-system test stops new code using these. */
+    --bg:var(--surface-bg);--panel:var(--surface-paper);
+    --line:var(--rule);--line2:var(--rule-hard);
+    --ink:var(--text-ink);--ink2:var(--text-muted);--ink3:var(--text-faint);
+    --accent-soft:var(--surface-raised);--good-soft:var(--surface-raised);--bad-soft:var(--surface-raised);
+    --good:var(--ok);--mono:var(--face-mono);
   }
-  @media (prefers-color-scheme:dark){:root{
-    --bg:#101012;--panel:#18181b;--line:#26262a;--line2:#333338;
-    --ink:#ececea;--ink2:#96959f;--ink3:#5f5e66;
-    --accent:#7c8aec;--accent-soft:#20223a;
-    --good:#4cc38a;--good-soft:#12291d;--bad:#e5655a;--bad-soft:#331714;
-  }}
   *{box-sizing:border-box;margin:0}
-  /* thin theme-colored scrollbars (like the chat dock's), instead of the
-     chunky native ones */
-  *{scrollbar-width:thin;scrollbar-color:var(--line2) transparent}
-  *::-webkit-scrollbar{width:6px;height:6px}
-  *::-webkit-scrollbar-track{background:transparent}
-  *::-webkit-scrollbar-thumb{background:var(--line2);border-radius:3px}
-  *::-webkit-scrollbar-thumb:hover{background:var(--ink3)}
+  /* Thin scrollbars in the token colour. Only the two standard properties:
+     styling ::-webkit-scrollbar as well makes the browser ignore them and
+     forces the old always-visible bar. */
+  *{scrollbar-width:thin;scrollbar-color:var(--scrollbar-thumb) transparent}
   /* three fixed-height columns, each scrolling independently: the main
      content's scrollbar sits at its own right edge (the "middle"), never over
      the chat dock. */
-  body{background:var(--bg);color:var(--ink);
-       font:14px/1.55 -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+  body{background:var(--surface-bg);color:var(--text-ink);
+       font-family:var(--face-sans);font-size:var(--text-sm);line-height:1.55;
        display:flex;height:100vh;overflow:hidden}
   nav{width:var(--nav-w,208px);flex-shrink:0;border-right:1px solid var(--line);padding:20px 12px;
       height:100vh;overflow-y:auto}

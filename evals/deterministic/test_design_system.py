@@ -115,3 +115,30 @@ def test_sync_design_copies_and_records(tmp_path, monkeypatch):
     for name in COPIED:
         assert (dest / name).read_text() == f"/* {name} */\n"
         assert f"{hashlib.sha256((dest / name).read_bytes()).hexdigest()}  {name}" in source
+
+
+# style.css keeps its short names in PR 1 so the inline styles in js/ keep
+# working. Each one holds no value of its own; it points at a token.
+ALIASES = {
+    "--bg": "--surface-bg", "--panel": "--surface-paper",
+    "--line": "--rule", "--line2": "--rule-hard",
+    "--ink": "--text-ink", "--ink2": "--text-muted", "--ink3": "--text-faint",
+    "--accent-soft": "--surface-raised", "--good-soft": "--surface-raised", "--bad-soft": "--surface-raised",
+    "--good": "--ok", "--mono": "--face-mono",
+}
+
+
+def test_design_files_load_before_style():
+    html = _index()
+    order = ["design/fonts.css", "design/tokens.css", "design/type.css", "design/controls.css", "style.css"]
+    pos = [html.find(f'href="/static/{name}"') for name in order]
+    assert -1 not in pos, dict(zip(order, pos))
+    assert pos == sorted(pos), "the design files must load before style.css"
+
+
+def test_old_names_point_at_tokens():
+    root = "".join(body for sel, body in _blocks(_style()) if sel == ":root").replace(" ", "").replace("\n", "")
+    for old, token in ALIASES.items():
+        assert f"{old}:var({token});" in root + ";", f"{old} should be var({token})"
+    for token_name in ("--accent", "--bad"):
+        assert f"{token_name}:" not in root, f"{token_name} is a token; style.css must not redefine it"
