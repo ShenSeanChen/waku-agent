@@ -99,16 +99,15 @@ def test_dashboard_edited_skill_is_written_as_utf8(
     assert_utf8_skill(path, "dashboard-report")
 
 
-def test_dashboard_save_soul_is_written_as_utf8(
-    tmp_path, monkeypatch, require_explicit_text_encoding
-):
+def test_dashboard_soul_is_written_as_utf8(tmp_path, monkeypatch, require_explicit_text_encoding):
     home = tmp_path / "home"
-    soul = f"# Waku\n\n{DESCRIPTION}\n{BODY}\n"
     monkeypatch.setenv("WAKU_HOME", str(home))
+    soul = f"# Waku\n\n{DESCRIPTION}\n{BODY}\n用户偏好中文回复 \U0001f680\n"
 
     result = memory_action({"action": "save_soul", "content": soul})
 
     assert result == {"ok": True}
     text = (home / "SOUL.md").read_bytes().decode("utf-8")
     assert DESCRIPTION in text and BODY in text
+    assert "用户偏好中文回复" in text
     assert text.endswith("\n")

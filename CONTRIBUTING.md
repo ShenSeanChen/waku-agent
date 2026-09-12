@@ -13,7 +13,12 @@ how the system works is what we push back on.
 
 1. Copy [`skills/TEMPLATE.md`](skills/TEMPLATE.md) to `skills/community/<your-skill>/SKILL.md`
 2. Fill in `name` + `description` (the Agent Skills frontmatter) and the body
-3. Test locally: `python scripts/validate_skills.py`, then chat — your skill loads when it matches
+3. Test locally: `python scripts/validate_skills.py`, then chat — your skill loads when it matches.
+   CI also checks that it does **not** load on everyday messages, and does not take over
+   another skill's messages (`evals/deterministic/test_skill_triggers.py`). Skills load on
+   shared words, so describe yours with words specific to its domain (*DAU*, *interview*,
+   *standup*), not question words like *why / what / should / for* — those appear in almost
+   every message anyone sends.
 4. Open a PR. CI runs the same validator.
 
 Anyone can then try your skill instantly:
