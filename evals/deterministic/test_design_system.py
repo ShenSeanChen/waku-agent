@@ -238,3 +238,19 @@ def test_native_controls_get_a_data_slot():
     assert re.search(r"^function watchSlots\(", js["util.js"], re.MULTILINE)
     assert "MutationObserver" in js["util.js"]
     assert re.search(r"^watchSlots\(\);", js["main.js"], re.MULTILINE), "main.js must call watchSlots() at bootstrap"
+
+
+OLD_NAME = re.compile(r"var\(--(?:bg|panel|line2?|ink[23]?|accent-soft|good-soft|bad-soft|good|mono)\)")
+
+# Files that still read an old name on the day PR 1 merged. This set only
+# shrinks: PR 3 moves every use onto the token name, empties it, and deletes
+# the alias block. A file not listed here must use the token names.
+ALIAS_USERS = {"compare.js", "models.js", "render.js", "style.css", "views.js"}
+
+
+def test_no_new_code_uses_old_names():
+    style_without_aliases = re.sub(r":root\{[^}]*\}", "", _style(), count=1)
+    users = {name for name, src in _js().items() if OLD_NAME.search(src)}
+    if OLD_NAME.search(style_without_aliases):
+        users.add("style.css")
+    assert users <= ALIAS_USERS, f"use the token names (see ALIASES) in {sorted(users - ALIAS_USERS)}"

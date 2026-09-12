@@ -6,7 +6,9 @@ files to change the UI; edit `dashboard.py` to change the server/API.
 
 - `index.html` — the shell (sidebar nav, `<main>`, chat dock) + the ordered
   `<script>` tags.
-- `style.css` — one flat file, `:root` design tokens at the top, light + dark.
+- `style.css` — one flat file of rules; every value comes from the tokens in
+  `design/` (see "Design system" below).
+- `design/`, `fonts/` — the Waku Memory design system and its three fonts.
 - `js/` — the app, split by concern (below).
 
 ## The files (`js/`), in load order
@@ -51,6 +53,43 @@ Data flows one way: `refresh()` (main.js) fetches `/api/data` into the global
   stop — the whole point is that this reads and runs with nothing installed.
 - **No emojis in UI** (project rule). Known pre-existing exception: the `★`/`☆`
   pin stars in `models.js` (typographic dingbats, not colour emoji) — left as-is.
+
+## Design system (read before changing how anything looks)
+
+The dashboard uses the Waku Memory design system. The values live in
+`design/`:
+
+- `tokens.css` and `controls.css` are **copies** of Waku Memory's files. Do
+  not edit them here — a test checks their hashes. To change a token, change
+  it in Waku Memory, then run `python scripts/sync_design.py <path to
+  waku-memory-frontend>`. `design/SOURCE.md` says which commit they came from.
+- `type.css` holds the type scale, the two weights, the line heights and the
+  field border. `fonts.css` loads the three fonts from `fonts/`. Nothing is
+  fetched from the network.
+
+When you write CSS here or an inline style in `js/`:
+
+- **Every value comes from a token.** Colour (`--text-*`, `--surface-*`,
+  `--rule*`, `--accent*`, `--ok`/`--warn`/`--bad`, `--chart-1…5`), size
+  (`--text-xs|sm|base|lg|xl|2xl`), weight (400 or 500), face
+  (`--face-sans|mono|display`), corner (`--radius`, or `--shape-chip` for a
+  badge and `--shape-circle` for a dot), duration (`--motion-fast`). No
+  shadows: separate things with a 1px `--rule`.
+- **Amber is a surface, not a text colour.** Amber text uses `--accent-fg`.
+  Text on an amber fill uses `--accent-ink`.
+- **Buttons never fill.** Four levels: *primary* (the main action — paper
+  ground, `--rule-hard` border, ink label: `.save`, Send), *secondary*
+  (transparent, `--rule` border, muted label: `.save.ghost`, `.sessbtn`),
+  *tertiary* (text only), *destructive* (`--bad` label). Hover moves the
+  border. controls.css adds the focus ring, pressed and disabled.
+- **Labels** are uppercase `--face-mono` at `--tracking-label`.
+- **Controls get `data-slot` automatically** (`stampSlots` in `util.js`).
+  Use native `<button>`, `<input>`, `<select>`; don't fake them with `<div>`.
+- **Use the token names, not the old short ones** (`--ink2`, `--line`, …).
+  The old names are aliases kept only until the views are rebuilt.
+
+`evals/deterministic/test_design_system.py` enforces all of this, except
+which button level you pick.
 
 ## Verifying a change (no JS test runner exists)
 
