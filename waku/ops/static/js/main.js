@@ -50,13 +50,12 @@ function render(){
     if (keepScroll) main.scrollTop = y;
   }
   activeView = view; activeSub = sub;
-  document.getElementById("model").textContent = `${D.provider} · ${D.model}`;
-  document.getElementById("n-gw").textContent = (D.chat_log||[]).length;
-  document.getElementById("n-loop").textContent = D.stats.turns;
+  document.getElementById("n-gw").textContent = (D.chat_log||[]).length || "";
+  document.getElementById("n-loop").textContent = D.stats.turns || "";
   document.getElementById("n-graph").textContent =
     (D.graph && (D.graph.stats.quick + D.graph.stats.full)) || "";
-  document.getElementById("n-mem").textContent = D.facts.length + D.episodes.length;
-  document.getElementById("n-tools").textContent = D.calendar.length + D.outbox.length;
+  document.getElementById("n-mem").textContent = (D.facts.length + D.episodes.length) || "";
+  document.getElementById("n-tools").textContent = (D.calendar.length + D.outbox.length) || "";
   document.getElementById("n-db").textContent = (D.db && D.db.all_tables.length) || "";
   document.getElementById("n-ops").textContent = D.stats.tool_errors || (D.eval_report ? "" : "!");
 }
@@ -118,17 +117,20 @@ function wireResizer(id, cssVar, key, fromRight, min, max){
   };
 }
 function wireChrome(){
-  // restore saved widths
-  const nw = localStorage.getItem("navW"); if (nw) document.documentElement.style.setProperty("--nav-w", nw+"px");
+  // The dock keeps its drag handle. The rail collapses instead of resizing,
+  // and the collapse is not remembered: a rail that reopens closed hides the
+  // navigation from someone coming back (Memory's rule).
   const dw = localStorage.getItem("dockW"); if (dw) document.documentElement.style.setProperty("--dock-w", dw+"px");
-  wireResizer("nav-resizer", "--nav-w", "navW", false, 150, 380);
   wireResizer("dock-resizer", "--dock-w", "dockW", true, 260, 680);
-  // hide / show the sidebar
-  const setNav = v => { document.body.classList.toggle("nav-hidden", v); localStorage.setItem("navHidden", v?"1":"0"); };
-  const nt = document.getElementById("nav-toggle"), nr = document.getElementById("nav-reopen");
-  if (nt) nt.onclick = () => setNav(true);
-  if (nr) nr.onclick = () => setNav(false);
-  setNav(localStorage.getItem("navHidden") === "1");
+  const rail = document.getElementById("nav"), btn = document.getElementById("nav-collapse");
+  if (btn) btn.onclick = () => {
+    const c = rail.classList.toggle("collapsed");
+    btn.setAttribute("aria-expanded", String(!c));
+    btn.setAttribute("aria-label", c ? "Expand the sidebar" : "Collapse the sidebar");
+    btn.innerHTML = c ? "&#8250;" : "&#8249;";
+    // collapsed, the letter alone is on screen, so the name goes in the tooltip
+    rail.querySelectorAll(":scope > a").forEach(a => { a.title = c ? a.getAttribute("aria-label") : ""; });
+  };
 }
 
 // --- voice on the dashboard: record in the browser, transcribe on the server

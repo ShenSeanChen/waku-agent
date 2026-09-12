@@ -262,6 +262,24 @@ def test_theme_toggle_is_wired():
     assert re.search(r"^function cycleTheme\(", _js().get("theme.js", ""), re.MULTILINE)
 
 
+def test_rail_links_carry_their_letter():
+    """Collapsed, the rail shows each item's first letter (from data-short);
+    the full name stays in aria-label for a screen reader and the tooltip."""
+    links = re.findall(r'(<a href="#[^"]*"[^>]*data-v="[^"]*"[^>]*>)<span class="lbl">([^<]+)</span>', _index())
+    assert len(links) == 13, f"expected 13 rail links with a .lbl label, found {len(links)}"
+    for tag, label in links:
+        assert f'data-short="{label[0]}"' in tag, f"{label}: data-short must be its first letter"
+        assert f'aria-label="{label}"' in tag, f"{label}: aria-label must be its full name"
+
+
+def test_rail_resize_and_model_line_are_gone():
+    """The rail collapses instead of resizing, and the model line moved to the
+    chat dock's model chip."""
+    src = _index() + "".join(_js().values())
+    for gone in ("navW", "navHidden", "nav-resizer", "nav-reopen", 'id="model"', 'getElementById("model")'):
+        assert gone not in src, f"{gone} belongs to the old sidebar"
+
+
 OLD_NAME = re.compile(r"var\(--(?:bg|panel|line2?|ink[23]?|accent-soft|good-soft|bad-soft|good|mono)\)")
 
 # Files that still read an old name on the day PR 1 merged. This set only
