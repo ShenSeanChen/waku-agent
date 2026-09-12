@@ -247,6 +247,21 @@ def test_title_has_no_ligatures():
     assert "font-variant-ligatures:none" in title.replace(" ", "")
 
 
+def test_theme_is_applied_before_paint():
+    """The stored theme is applied in <head>, before the design files load,
+    so a reader who chose dark never sees a flash of the light ground."""
+    html = _index()
+    head = html[: html.index("</head>")]
+    script = head.find("waku-theme")
+    assert script != -1, "<head> must apply the stored waku-theme"
+    assert script < head.find('href="/static/design/fonts.css"'), "apply the theme before the design files load"
+
+
+def test_theme_toggle_is_wired():
+    assert 'id="theme-toggle"' in _index()
+    assert re.search(r"^function cycleTheme\(", _js().get("theme.js", ""), re.MULTILINE)
+
+
 OLD_NAME = re.compile(r"var\(--(?:bg|panel|line2?|ink[23]?|accent-soft|good-soft|bad-soft|good|mono)\)")
 
 # Files that still read an old name on the day PR 1 merged. This set only

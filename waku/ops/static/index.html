@@ -1,5 +1,7 @@
 <!doctype html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
+<!-- Apply the stored theme before anything paints (see js/theme.js). -->
+<script>try{var t=localStorage.getItem("waku-theme");if(t==="light"||t==="dark")document.documentElement.dataset.theme=t}catch(e){}</script>
 <title>Waku わく</title>
 <link rel="icon" type="image/svg+xml" href="/static/waku-mark.svg">
 <link rel="stylesheet" href="/static/design/fonts.css">
@@ -9,6 +11,7 @@
 <link rel="stylesheet" href="/static/style.css"></head><body>
 <nav id="nav">
   <div class="brand"><i class="mark" aria-hidden="true"></i>Waku わく<small id="model" style="cursor:pointer" title="click to change the model" onclick="location.hash='#models'"></small>
+    <button id="theme-toggle" onclick="cycleTheme()"></button>
     <button id="nav-toggle" title="Hide sidebar">&#10094;</button></div>
   <div class="grp">System</div>
   <a href="#overview" data-v="overview">Overview</a>
@@ -69,6 +72,7 @@
      (no build step, no modules). Order matters only in that main.js runs the
      bootstrap and must load LAST. See static/README.md for the file map. -->
 <script src="/static/js/util.js"></script>
+<script src="/static/js/theme.js"></script>
 <script src="/static/js/memory.js"></script>
 <script src="/static/js/models.js"></script>
 <script src="/static/js/render.js"></script>
