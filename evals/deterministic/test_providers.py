@@ -97,6 +97,40 @@ def test_bad_key_gives_a_fixable_error_not_a_codec_crash(monkeypatch):
     assert "claude-opus-4-8" in [m["id"] for m in result["models"]]
 
 
+def test_deprecated_models_are_marked(monkeypatch):
+    """Models in the deny-list appear in the catalog with deprecated=True so
+    the picker can show them greyed-out instead of silently hiding them."""
+    import io
+    import json
+    import urllib.request
+
+    from waku.ops import catalog
+
+    def fake_urlopen(req, timeout=10):
+        body = io.BytesIO(json.dumps({"data": [
+            {"id": "gpt-5.5"},
+            {"id": "gpt-5.3-chat-latest"},
+            {"id": "gpt-4.1-mini"},
+        ]}).encode())
+        body.__enter__ = lambda *a: body
+        body.__exit__ = lambda *a: None
+        return body
+
+    monkeypatch.setenv("WAKU_PROVIDER", "openai")
+    monkeypatch.setenv("OPENAI_API_KEY", "fake-key")
+    monkeypatch.delenv("WAKU_BASE_URL", raising=False)
+    monkeypatch.delenv("WAKU_MODEL", raising=False)
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    catalog._models_cache.clear()
+
+    result = catalog.list_models()
+    by_id = {m["id"]: m for m in result["models"]}
+    assert by_id["gpt-5.3-chat-latest"]["deprecated"] is True
+    assert by_id["gpt-5.5"]["deprecated"] is False
+    assert by_id["gpt-4.1-mini"]["deprecated"] is False
+    catalog._models_cache.clear()
+
+
 def test_catalog_url_is_used_with_both_auth_styles(monkeypatch):
     """kimi chats on the anthropic wire but LISTS models on its OpenAI-compat
     endpoint — catalog_url must win, carrying both auth header styles, so the

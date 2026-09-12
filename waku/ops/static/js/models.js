@@ -55,6 +55,11 @@ function modelRow(m, st){
   const price = m.free ? "free" : (m.price_out != null ? `$${m.price_in}/$${m.price_out} per M` : "");
   const tags = [price, m.context ? Math.round(m.context/1000) + "k ctx" : ""]
                .filter(Boolean).join(" · ");
+  if (m.deprecated) return `<div class="tool" style="display:flex;align-items:center;gap:8px;padding:6px 8px;opacity:0.45">
+    <code style="flex:1;word-break:break-all;text-decoration:line-through">${esc(m.id)}</code>
+    <span class="meta" style="margin:0;white-space:nowrap">${esc(tags)}</span>
+    <span class="srcpill" style="background:var(--bad-soft,#fee);color:var(--bad,#c00)" title="this model returns 404 — OpenAI deprecated it but still lists it in GET /v1/models">unavailable</span>
+  </div>`;
   return `<div class="tool" style="display:flex;align-items:center;gap:8px;padding:6px 8px">
     <a class="pinstar ${isPinned?"on":""}" title="${isPinned?"pinned to Your models — click to remove":"pin to Your models (shows in chat switcher)"}"
        onclick="pinModel('${esc(st.provider)}','${esc(m.id)}','${isPinned?"unpin":"pin"}')">${isPinned?"★":"☆"}</a>
@@ -74,11 +79,11 @@ function modelRow(m, st){
 // free first, then biggest context. Gate: cheap non-reasoning instruct-style.
 const GATE_HINT = /instruct|gemma|haiku|flash|mini|nano|lite|small/;
 function loopPicks(ms){
-  return ms.filter(m => m.tools)
+  return ms.filter(m => m.tools && !m.deprecated)
            .sort((a,b) => (b.free - a.free) || ((b.context||0) - (a.context||0))).slice(0, 4);
 }
 function gatePicks(ms){
-  return ms.filter(m => m.tools !== false && m.reasoning !== true
+  return ms.filter(m => m.tools !== false && m.reasoning !== true && !m.deprecated
                         && (m.free || (m.price_out != null && m.price_out <= 1.5)))
            .sort((a,b) => (GATE_HINT.test(b.id) - GATE_HINT.test(a.id))
                         || (b.free - a.free) || ((a.price_out||99) - (b.price_out||99))).slice(0, 4);
@@ -197,7 +202,7 @@ async function loadAddModels(provider){
   try { data = await (await fetch("/api/models?provider=" + encodeURIComponent(provider))).json(); }
   catch(e){ sel.innerHTML = `<option value="">couldn't load — pick another provider</option>`; return; }
   const ms = data.models || [];
-  sel.innerHTML = `<option value="">choose a model…</option>` + ms.map(m => {
+  sel.innerHTML = `<option value="">choose a model…</option>` + ms.filter(m => !m.deprecated).map(m => {
     const meta = [m.free ? "free" : (m.price_out != null ? `$${m.price_in}/$${m.price_out}` : ""),
                   m.context ? Math.round(m.context/1000) + "k" : ""].filter(Boolean).join(" · ");
     return `<option value="${esc(m.id)}">${esc(m.id)}${meta ? "  ("+esc(meta)+")" : ""}</option>`;
@@ -442,7 +447,9 @@ function renderModelPickerItems(id, query){
   const metaBox = document.getElementById(id + "-meta");
   if (!itemsBox) return;
   const filtered = _modalModels.filter(m => (m.id || "").toLowerCase().includes(query));
-  itemsBox.innerHTML = filtered.map((m, index) => `<div class="model-picker-item${index === 0 ? " active" : ""}" role="option" data-model="${escAttr(m.id)}">${esc(m.id)}</div>`).join("");
+  itemsBox.innerHTML = filtered.map((m, index) => m.deprecated
+    ? `<div class="model-picker-item" role="option" style="opacity:0.45;text-decoration:line-through;pointer-events:none" data-model="${escAttr(m.id)}">${esc(m.id)} (unavailable)</div>`
+    : `<div class="model-picker-item${index === 0 ? " active" : ""}" role="option" data-model="${escAttr(m.id)}">${esc(m.id)}</div>`).join("");
   if (metaBox){
     if (_modalModels.length === 0) metaBox.textContent = "No models loaded — you can still type any model id.";
     else if (filtered.length === 0) metaBox.textContent = `No models match "${query}".`;
