@@ -213,3 +213,18 @@ def test_one_tracking_value():
     found = [(f, s, v) for f, s, p, v in _declarations()
              if p == "letter-spacing" and v not in ("var(--tracking-label)", "0", "normal") and not _is_svg_text(s)]
     assert not found, f"letter-spacing is --tracking-label or 0: {found}"
+
+
+SHAPES = {"0", "var(--radius)", "var(--shape-chip)", "var(--shape-circle)", "var(--shape-pill)"}
+
+
+def test_corners_come_from_tokens():
+    found = [(f, s, v) for f, s, p, v in _declarations()
+             if p == "border-radius" and not set(v.split()) <= SHAPES]
+    assert not found, f"border-radius must be --radius or a --shape-* token: {found[:10]}"
+
+
+def test_one_duration():
+    found = [(f, s, v) for f, s, p, v in _declarations()
+             if p in ("transition", "transition-duration") and re.search(r"(?<![\w-])\d*\.?\d+m?s\b", v)]
+    assert not found, f"transitions use var(--motion-fast): {found}"

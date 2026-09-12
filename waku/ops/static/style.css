@@ -31,7 +31,7 @@
   #nav-toggle{margin-left:auto;background:none;border:none;color:var(--ink3);cursor:pointer;font-size:var(--text-xs);padding:2px 4px;line-height:1}
   #nav-toggle:hover{color:var(--ink)}
   #nav-reopen{display:none;position:fixed;top:12px;left:12px;z-index:25;background:var(--panel);
-    border:1px solid var(--line2);border-radius:8px;color:var(--ink2);width:34px;height:30px;cursor:pointer;font-size:var(--text-sm)}
+    border:1px solid var(--line2);border-radius:var(--radius);color:var(--ink2);width:34px;height:30px;cursor:pointer;font-size:var(--text-sm)}
   body.nav-hidden #nav,body.nav-hidden #nav-resizer{display:none}
   body.nav-hidden #nav-reopen{display:block}
   .brand{font-weight:var(--font-weight-medium);font-size:var(--text-base);padding:0 10px 4px;
@@ -49,7 +49,7 @@
      links used to share the same 10px left edge, so the sidebar looked like one
      flat list with two captions randomly inserted into it. */
   nav a{display:flex;justify-content:space-between;align-items:center;color:var(--ink2);
-        text-decoration:none;padding:6px 10px 6px 20px;border-radius:6px;font-size:var(--text-sm);margin-top:2px}
+        text-decoration:none;padding:6px 10px 6px 20px;border-radius:var(--radius);font-size:var(--text-sm);margin-top:2px}
   nav a:hover{background:var(--panel);color:var(--ink)}
   nav a.on{background:var(--accent-soft);color:var(--accent-fg);font-weight:var(--font-weight-medium)}
   nav .n{font-size:var(--text-xs);color:var(--ink3);font-variant-numeric:tabular-nums}
@@ -75,7 +75,7 @@
   .subtab.on{color:var(--accent-fg);border-bottom-color:var(--accent);font-weight:var(--font-weight-medium)}
   .subtab .n{font-size:var(--text-xs);color:var(--ink3);margin-left:5px}
   /* long tables scroll within their own box, header pinned */
-  .scrolly{max-height:62vh;overflow:auto;border:1px solid var(--line);border-radius:8px;background:var(--panel)}
+  .scrolly{max-height:62vh;overflow:auto;border:1px solid var(--line);border-radius:var(--radius);background:var(--panel)}
   .scrolly table{border:none}
   .scrolly th{position:sticky;top:0;background:var(--panel);z-index:1}
   /* aligned schema: the column header IS the indigo chip, so labels line up
@@ -88,25 +88,25 @@
   h2{font-family:var(--face-mono);font-size:var(--text-xs);text-transform:uppercase;letter-spacing:var(--tracking-label);color:var(--ink2);
      font-weight:var(--font-weight-medium);margin:28px 0 10px}
   .tiles{display:grid;grid-template-columns:repeat(auto-fill,minmax(128px,1fr));gap:10px}
-  .tile{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:12px 14px}
+  .tile{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:12px 14px}
   .tile b{font-family:var(--face-mono);font-size:var(--text-lg);font-weight:var(--font-weight-medium);font-variant-numeric:tabular-nums;display:block}
   .tile span{color:var(--ink2);font-size:var(--text-xs)}
   .map{display:flex;flex-direction:column;gap:10px;margin-top:6px}
   .lane{display:flex;align-items:stretch;gap:0;flex-wrap:wrap}
   .lane-label{font-family:var(--face-mono);width:86px;flex-shrink:0;color:var(--ink3);font-size:var(--text-xs);text-transform:uppercase;
               letter-spacing:var(--tracking-label);padding-top:14px}
-  .box{background:var(--panel);border:1px solid var(--line);border-radius:8px;
-       padding:10px 14px;cursor:pointer;min-width:118px;transition:border-color .1s}
+  .box{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);
+       padding:10px 14px;cursor:pointer;min-width:118px;transition:border-color var(--motion-fast) var(--motion-ease)}
   .box:hover{border-color:var(--accent)}
   .box b{font-size:var(--text-sm);font-weight:var(--font-weight-medium);display:block}
   .box span{color:var(--ink2);font-size:var(--text-xs)}
   .arrow{align-self:center;color:var(--ink3);padding:0 8px;font-size:var(--text-sm)}
-  .card{background:var(--panel);border:1px solid var(--line);border-radius:8px;
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);
         padding:14px 16px;margin-bottom:10px;position:relative}
-  .badge{display:inline-block;font-size:var(--text-xs);padding:1px 8px;border-radius:99px;
+  .badge{display:inline-block;font-size:var(--text-xs);padding:1px 8px;border-radius:var(--shape-chip);
          border:1px solid var(--line2);color:var(--ink2);margin-right:8px}
   .badge.retrieve{border-color:var(--accent);color:var(--accent-fg)}
-  .pill{font-size:var(--text-xs);padding:2px 9px;border-radius:99px;font-weight:var(--font-weight-medium)}
+  .pill{font-size:var(--text-xs);padding:2px 9px;border-radius:var(--shape-chip);font-weight:var(--font-weight-medium)}
   .pill.pass{background:var(--good-soft);color:var(--good)}
   .pill.fail{background:var(--bad-soft);color:var(--bad)}
   .pill.skip{background:var(--accent-soft);color:var(--accent-fg)}
@@ -130,9 +130,9 @@
                border-bottom:1px solid var(--line);background:var(--surface-raised)}
   .mdcode-lang{font-family:var(--face-mono);font-size:var(--text-xs);text-transform:uppercase;
                letter-spacing:var(--tracking-label);color:var(--ink3);font-weight:var(--font-weight-medium)}
-  .mdcode-copy{background:none;border:1px solid var(--line2);border-radius:6px;color:var(--ink3);
+  .mdcode-copy{background:none;border:1px solid var(--line2);border-radius:var(--radius);color:var(--ink3);
                font-size:var(--text-xs);padding:2px 8px;cursor:pointer;font-family:inherit;
-               transition:color .15s,border-color .15s,background .15s}
+               transition:color var(--motion-fast) var(--motion-ease),border-color var(--motion-fast) var(--motion-ease),background var(--motion-fast) var(--motion-ease)}
   .mdcode-copy:hover{color:var(--accent-fg);border-color:var(--accent)}
   .mdcode-copy.copied{color:var(--good);border-color:var(--good);background:var(--good-soft)}
   .mdcode pre{margin:0;padding:12px 14px;overflow-x:auto;font-family:var(--face-mono);
@@ -142,18 +142,18 @@
   .mdhr{border:none;border-top:1px solid var(--line2);margin:14px 0}
   /* copy-message button — appears on card hover */
   .msg-copy{display:none;position:absolute;top:10px;right:12px;background:var(--panel);
-             border:1px solid var(--line2);border-radius:6px;color:var(--ink3);
+             border:1px solid var(--line2);border-radius:var(--radius);color:var(--ink3);
              font-size:var(--text-xs);padding:2px 8px;cursor:pointer;font-family:inherit;
-             transition:color .15s,border-color .15s;z-index:2}
+             transition:color var(--motion-fast) var(--motion-ease),border-color var(--motion-fast) var(--motion-ease);z-index:2}
   .card:hover .msg-copy{display:block}
   .msg-copy:hover{color:var(--accent-fg);border-color:var(--accent)}
   .msg-copy.copied{color:var(--good);border-color:var(--good)}
   .meta{color:var(--ink3);font-size:var(--text-xs);margin-top:8px;font-variant-numeric:tabular-nums}
-  .tool{border:1px solid var(--line);border-radius:7px;padding:8px 10px;margin-top:8px;background:var(--bg)}
+  .tool{border:1px solid var(--line);border-radius:var(--radius);padding:8px 10px;margin-top:8px;background:var(--bg)}
   .tool.error{border-color:var(--bad);background:var(--bad-soft)}
   .tool.warn{border-color:var(--line2)}
   .tool-head{display:flex;align-items:center;gap:8px;font-size:var(--text-xs)}
-  .dot{width:7px;height:7px;border-radius:99px;flex-shrink:0;background:var(--good)}
+  .dot{width:7px;height:7px;border-radius:var(--shape-circle);flex-shrink:0;background:var(--good)}
   .dot.error{background:var(--bad)} .dot.warn{background:var(--warn)}
   .tool code{border:none;background:transparent;padding:0;color:var(--ink)}
   .tool details{margin-top:6px}
@@ -165,10 +165,10 @@
   @keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
   /* streaming caret — the token-by-token "thinking" cursor */
   .caret{display:inline-block;width:7px;height:14px;margin-left:2px;vertical-align:text-bottom;
-         background:var(--accent);border-radius:1px;animation:blink 1s step-start infinite}
+         background:var(--accent);border-radius:var(--radius);animation:blink 1s step-start infinite}
   @keyframes blink{50%{opacity:0}}
   @media (prefers-reduced-motion:reduce){.caret{animation:none}}
-  .splitbar{display:flex;height:26px;border-radius:6px;overflow:hidden;border:1px solid var(--line);margin-top:2px}
+  .splitbar{display:flex;height:26px;border-radius:var(--radius);overflow:hidden;border:1px solid var(--line);margin-top:2px}
   .splitbar div{display:flex;align-items:center;justify-content:center;font-size:var(--text-xs);font-weight:var(--font-weight-medium);color:var(--accent-ink);min-width:0;overflow:hidden;white-space:nowrap}
   .seg-skip{background:var(--chart-1)} .seg-ret{background:var(--chart-3)}
   .tile b.money{color:var(--good)}
@@ -192,38 +192,38 @@
   .arch .head{fill:var(--ink3)}
   /* live animation: node lights up (fill+stroke) + flowing edge (n8n-style).
      drop-shadow(var()) is unreliable on SVG, so we light the fill instead. */
-  .arch .bx{transition:stroke .15s ease, fill .15s ease, stroke-width .15s ease}
+  .arch .bx{transition:stroke var(--motion-fast) var(--motion-ease), fill var(--motion-fast) var(--motion-ease), stroke-width var(--motion-fast) var(--motion-ease)}
   .arch .node.hot .bx{stroke:var(--accent) !important;stroke-width:2.6;fill:var(--accent-soft) !important}
   /* A node holds .hot for as long as it is WORKING, then flashes .done. Held
      rather than pulsed because four nodes in one wave lit together is the
      thing worth seeing, and a pulse on completion shows the opposite. */
   .arch .node.done .bx{stroke:var(--good) !important;stroke-width:2.2;fill:var(--good-soft) !important}
-  .arch .gate{transition:stroke .15s ease, stroke-width .15s ease}
+  .arch .gate{transition:stroke var(--motion-fast) var(--motion-ease), stroke-width var(--motion-fast) var(--motion-ease)}
   .arch .gate.hot{stroke:var(--accent) !important;stroke-width:4}
   .arch .flow.live{stroke:var(--accent) !important;stroke-width:2.6;opacity:1;stroke-dasharray:6 5;
                    animation:flowdash .5s linear infinite}
   @keyframes flowdash{to{stroke-dashoffset:-22}}
   .arch-status{font-size:var(--text-xs);font-weight:var(--font-weight-medium);color:var(--accent-fg);text-transform:none;
                letter-spacing:0;margin-left:10px}
-  .arch-status .live-dot{display:inline-block;width:7px;height:7px;border-radius:99px;
+  .arch-status .live-dot{display:inline-block;width:7px;height:7px;border-radius:var(--shape-circle);
                background:var(--accent);margin-right:5px;vertical-align:middle;animation:pulse 1s ease-in-out infinite}
   @media (prefers-reduced-motion:reduce){.arch .flow.live{animation:none}.arch-status .live-dot{animation:none}}
   .convo{display:flex;flex-direction:column;gap:8px}
-  .msg{border:1px solid var(--line);border-radius:9px;padding:10px 13px;max-width:78%}
+  .msg{border:1px solid var(--line);border-radius:var(--radius);padding:10px 13px;max-width:78%}
   .msg.user{align-self:flex-end;background:var(--surface-raised);border-color:var(--rule)}
   .msg.assistant{align-self:flex-start;background:var(--panel)}
   .msg .who{font-family:var(--face-mono);font-size:var(--text-xs);color:var(--ink3);font-weight:var(--font-weight-medium);text-transform:uppercase;letter-spacing:var(--tracking-label);margin-bottom:3px}
   .msg .mtext{font-size:var(--text-sm);white-space:pre-wrap;color:var(--ink)}
-  .chip-c{display:inline-block;font-size:var(--text-xs);font-weight:var(--font-weight-medium);padding:1px 6px;border-radius:99px;
+  .chip-c{display:inline-block;font-size:var(--text-xs);font-weight:var(--font-weight-medium);padding:1px 6px;border-radius:var(--shape-chip);
           background:var(--good-soft);color:var(--good);text-transform:none;letter-spacing:0;vertical-align:middle}
   .cols{display:flex;flex-wrap:wrap;gap:5px;margin-bottom:8px}
-  .col-chip{font-family:var(--face-mono);font-size:var(--text-xs);padding:2px 8px;border-radius:5px;
+  .col-chip{font-family:var(--face-mono);font-size:var(--text-xs);padding:2px 8px;border-radius:var(--radius);
             background:var(--accent-soft);color:var(--accent-fg);border:1px solid var(--line)}
   .dbcell{font-family:var(--face-mono);font-size:var(--text-xs);color:var(--ink2);max-width:240px;overflow:hidden;text-overflow:ellipsis}
   .reveal{color:var(--accent-fg);cursor:pointer;font-weight:500;border-bottom:1px dashed var(--accent);padding-bottom:1px}
   .reveal:hover{border-bottom-style:solid}
   .reveal.del{color:var(--bad);border-color:var(--bad)}
-  .editor{width:100%;min-height:120px;background:var(--bg);border:1px solid var(--line2);border-radius:8px;
+  .editor{width:100%;min-height:120px;background:var(--bg);border:1px solid var(--line2);border-radius:var(--radius);
           padding:10px 12px;color:var(--ink);font-family:var(--face-mono);font-size:var(--text-sm);line-height:1.5;resize:vertical;outline:none}
   .editor:focus{border-color:var(--accent)}
   tr .editor{min-height:52px}
@@ -241,20 +241,20 @@
        border:var(--rule-width) solid var(--rule)}
   .save.ghost:hover,.sessbtn:hover,.cmp-sortbtn:hover,#mic:hover{border-color:var(--rule-hard);color:var(--text-ink)}
   .teletoggle.on,.cmp-sortbtn.on{background:var(--surface-raised);color:var(--text-ink);border-color:var(--rule-hard)}
-  .save{border-radius:7px;padding:8px 16px}
+  .save{border-radius:var(--radius);padding:8px 16px}
   /* dirty-state: a save button is muted until there's an unsaved change */
   .save:disabled{cursor:default}
   /* Tools tab: capability cards grouped by origin */
-  .toolcard{border:1px solid var(--line);border-radius:8px;padding:10px 13px;margin-bottom:8px;background:var(--panel)}
+  .toolcard{border:1px solid var(--line);border-radius:var(--radius);padding:10px 13px;margin-bottom:8px;background:var(--panel)}
   .toolcard .tn{font-family:var(--face-mono);font-size:var(--text-xs);font-weight:var(--font-weight-medium);color:var(--ink)}
   .toolcard .td{color:var(--ink2);font-size:var(--text-xs);margin-top:3px}
   .srcpill{font-family:var(--face-mono);font-size:var(--text-xs);font-weight:var(--font-weight-medium);text-transform:uppercase;letter-spacing:var(--tracking-label);
-           padding:1px 7px;border-radius:99px;background:var(--accent-soft);color:var(--accent-fg);margin-left:8px;vertical-align:middle}
+           padding:1px 7px;border-radius:var(--shape-chip);background:var(--accent-soft);color:var(--accent-fg);margin-left:8px;vertical-align:middle}
   .srcpill.mcp{background:var(--good-soft);color:var(--good)}
   .srcpill.apple{background:transparent;border:1px solid var(--line2);color:var(--ink2)}
   /* read-only SQL console (the Supabase-editor idea, scoped down) */
   .sqlbox{width:100%;min-height:70px;background:var(--surface-sunk);color:var(--text-ink);border:1px solid var(--line2);
-          border-radius:8px;padding:11px 13px;font-family:var(--face-mono);font-size:var(--text-xs);line-height:1.5;resize:vertical;outline:none}
+          border-radius:var(--radius);padding:11px 13px;font-family:var(--face-mono);font-size:var(--text-xs);line-height:1.5;resize:vertical;outline:none}
   .sqlbox:focus{border-color:var(--accent)}
   .qexample{font-family:var(--face-mono);font-size:var(--text-xs);color:var(--accent-fg);cursor:pointer;border-bottom:1px dashed var(--accent)}
   /* session picker in the chat surfaces */
@@ -263,19 +263,19 @@
      min-width:0 is the other half — without it a flex child refuses to shrink
      below its content and the row overflows even when it IS allowed to wrap. */
   .sesshead{display:flex;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap;min-width:0}
-  .sessbtn{border-radius:7px;padding:5px 11px;white-space:nowrap}
+  .sessbtn{border-radius:var(--radius);padding:5px 11px;white-space:nowrap}
   /* per-turn stats (gate/seconds/iters/tools) hide together when toggled off */
   body.no-tele .chatlog .tele{display:none}
-  .sessmenu{position:absolute;z-index:30;background:var(--panel);border:1px solid var(--line2);border-radius:10px;
+  .sessmenu{position:absolute;z-index:30;background:var(--panel);border:1px solid var(--line2);border-radius:var(--radius);
             width:300px;max-height:340px;overflow-y:auto;padding:6px}
   /* mini model switcher: a pill in the chat header + its dropdown */
   /* margin-left:auto parks the chip on the right — which, in a row too narrow to
      hold it, parked it past the right edge of the window. It may shrink now. */
   .modelchip{margin-left:auto;display:inline-flex;align-items:center;gap:6px;max-width:150px;min-width:0;
-             background:var(--accent-soft);border:1px solid var(--line2);border-radius:99px;
+             background:var(--accent-soft);border:1px solid var(--line2);border-radius:var(--radius);
              color:var(--ink);padding:4px 9px;font-size:var(--text-xs);cursor:pointer;line-height:1.2}
   .modelchip:hover{border-color:var(--accent)}
-  .modelchip .mc-dot{width:6px;height:6px;border-radius:99px;background:var(--good);flex-shrink:0}
+  .modelchip .mc-dot{width:6px;height:6px;border-radius:var(--shape-circle);background:var(--good);flex-shrink:0}
   .modelchip .mc-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
                       font-family:var(--face-mono);font-size:var(--text-xs)}
   .modelchip .mc-caret{color:var(--ink3);font-size:var(--text-xs);flex-shrink:0}
@@ -283,51 +283,51 @@
   .modelmenu .mm-h{font-family:var(--face-mono);font-size:var(--text-xs);color:var(--ink3);text-transform:uppercase;letter-spacing:var(--tracking-label);padding:5px 10px 4px}
   .modelmenu .mm-load{padding:8px 10px;color:var(--ink3);font-size:var(--text-xs)}
   .modelmenu .mm-id{font-family:var(--face-mono);font-size:var(--text-xs)}
-  .modelmenu .mm-free{font-size:var(--text-xs);color:var(--good);border:1px solid var(--good);border-radius:99px;
+  .modelmenu .mm-free{font-size:var(--text-xs);color:var(--good);border:1px solid var(--good);border-radius:var(--shape-chip);
                       padding:0 5px;margin-left:6px;vertical-align:1px}
   .modelmenu .mm-f{font-size:var(--text-xs);color:var(--ink3);padding:8px 10px 4px;border-top:1px solid var(--line);margin-top:4px}
   .modelmenu .mm-f code{font-size:var(--text-xs);background:none;padding:0}
   .modelmenu .mm-f a{color:var(--accent-fg);text-decoration:none}
   .modelmenu .mm-prov{font-family:var(--face-mono);font-size:var(--text-xs);color:var(--ink3);text-transform:uppercase;letter-spacing:var(--tracking-label);margin-right:5px}
-  .modelmenu .mm-def{font-size:var(--text-xs);color:var(--accent-fg);border:1px solid var(--accent);border-radius:99px;
+  .modelmenu .mm-def{font-size:var(--text-xs);color:var(--accent-fg);border:1px solid var(--accent);border-radius:var(--shape-chip);
                      padding:0 5px;margin-left:6px;vertical-align:1px}
   .pinrow{display:flex;align-items:center;gap:8px;padding:6px 2px;font-size:var(--text-xs);border-bottom:1px solid var(--line)}
   .pinrow:last-of-type{border-bottom:none}
-  .pinrow.on{background:var(--accent-soft);border-radius:7px;padding-left:8px;padding-right:8px}
+  .pinrow.on{background:var(--accent-soft);border-radius:var(--radius);padding-left:8px;padding-right:8px}
   .pinrow .mm-prov{font-family:var(--face-mono);font-size:var(--text-xs);color:var(--ink3);text-transform:uppercase;letter-spacing:var(--tracking-label);min-width:64px}
   .pinstar{cursor:pointer;color:var(--ink3);font-size:var(--text-base);line-height:1;text-decoration:none;flex-shrink:0}
   .pinstar.on{color:var(--accent-fg)}
   .pinstar:hover{color:var(--accent-fg)}
   .addmodel{display:flex;gap:8px;align-items:center;margin-top:12px;flex-wrap:wrap}
-  .addmodel select{background:var(--bg);border:1px solid var(--line2);border-radius:8px;padding:8px 10px;
+  .addmodel select{background:var(--bg);border:1px solid var(--line2);border-radius:var(--radius);padding:8px 10px;
           color:var(--ink);font-size:var(--text-sm);outline:none;max-width:100%}
   .addmodel #add-model{flex:1;min-width:180px}
-  .addmodel input{flex:1;min-width:180px;background:var(--bg);border:1px solid var(--line2);border-radius:8px;
+  .addmodel input{flex:1;min-width:180px;background:var(--bg);border:1px solid var(--line2);border-radius:var(--radius);
           padding:8px 12px;color:var(--ink);font-size:var(--text-sm);outline:none}
   .addmodel select:focus,.addmodel input:focus{border-color:var(--accent)}
-  .sessitem{padding:8px 10px;border-radius:7px;cursor:pointer;font-size:var(--text-xs)}
+  .sessitem{padding:8px 10px;border-radius:var(--radius);cursor:pointer;font-size:var(--text-xs)}
   .sessitem:hover{background:var(--accent-soft)}
   .sessitem.on{background:var(--accent-soft);color:var(--accent-fg)}
   .sessitem .sm{color:var(--ink3);font-size:var(--text-xs);margin-top:2px}
   .fld{display:flex;flex-direction:column;gap:4px;margin-bottom:12px;font-size:var(--text-xs);color:var(--ink2)}
-  .fld input,.fld select{background:var(--bg);border:1px solid var(--line2);border-radius:8px;padding:9px 12px;
+  .fld input,.fld select{background:var(--bg);border:1px solid var(--line2);border-radius:var(--radius);padding:9px 12px;
           color:var(--ink);font-size:var(--text-sm);outline:none}
   .fld input:focus,.fld select:focus{border-color:var(--accent)}
   .cat-controls{display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin-bottom:8px}
   .cat-controls input[type=text]{flex:1;min-width:160px;background:var(--bg);border:1px solid var(--line2);
-          border-radius:8px;padding:8px 12px;color:var(--ink);font-size:var(--text-sm);outline:none}
+          border-radius:var(--radius);padding:8px 12px;color:var(--ink);font-size:var(--text-sm);outline:none}
   .cat-controls input[type=text]:focus{border-color:var(--accent)}
   .cat-controls input[type=checkbox],#catalog input[type=checkbox]{accent-color:var(--accent)}
   details.adv{margin:2px 0 10px}
   details.adv>summary{cursor:pointer;font-size:var(--text-xs);color:var(--ink2)}
   details.adv[open]>summary{margin-bottom:8px}
   .watchhead{font-family:var(--face-mono);font-size:var(--text-xs);text-transform:uppercase;letter-spacing:var(--tracking-label);color:var(--ink2);font-weight:var(--font-weight-medium);margin-bottom:8px}
-  .chat-arch{max-width:600px;margin:0 auto 16px;border:1px solid var(--line);border-radius:12px;
+  .chat-arch{max-width:600px;margin:0 auto 16px;border:1px solid var(--line);border-radius:var(--radius);
              padding:8px;background:var(--panel);position:sticky;top:96px;z-index:3}
   .chat-arch svg{min-width:0;width:100%;height:auto}
   .chatlog{display:flex;flex-direction:column;gap:10px}
   .bubble{align-self:flex-end;background:var(--surface-raised);color:var(--text-ink);border:var(--rule-width) solid var(--rule);padding:8px 13px;
-          border-radius:14px 14px 3px 14px;max-width:75%;font-size:var(--text-sm)}
+          border-radius:var(--radius);max-width:75%;font-size:var(--text-sm)}
   .chatbar{display:flex;gap:10px;padding:12px 0;border-top:1px solid var(--line);
            background:var(--bg);position:sticky;bottom:0;min-width:0}
   /* the chat side-dock: chat from any tab, watch the harness in main */
@@ -335,22 +335,22 @@
         height:100vh;display:flex;flex-direction:column;background:var(--bg);padding:0 14px}
   /* gateway source tags (which channel a message came in through) */
   .gwtag{font-family:var(--face-mono);font-size:var(--text-xs);font-weight:var(--font-weight-medium);text-transform:uppercase;letter-spacing:var(--tracking-label);
-         padding:1px 6px;border-radius:99px;vertical-align:middle;margin-left:6px;
+         padding:1px 6px;border-radius:var(--shape-chip);vertical-align:middle;margin-left:6px;
          border:1px solid var(--line2);color:var(--ink2)}
   /* One neutral tag for every channel, told apart by its word: the system
      allows one hue per screen. */
-  #mic{border-radius:8px;padding:0 12px;cursor:pointer;font-size:var(--text-base)}
+  #mic{border-radius:var(--radius);padding:0 12px;cursor:pointer;font-size:var(--text-base)}
   #mic.rec{background:transparent;color:var(--bad);border-color:var(--bad);animation:pulse 1s infinite}
   .dockhead{display:flex;align-items:center;gap:10px;padding:18px 2px 10px;
             border-bottom:1px solid var(--line)}
   .dockhead .dt{font-weight:var(--font-weight-medium);font-size:var(--text-sm)}
   .dockhead .arch-status{flex:1}
-  #dock-close{background:none;border:1px solid var(--line2);border-radius:6px;color:var(--ink2);
+  #dock-close{background:none;border:1px solid var(--line2);border-radius:var(--radius);color:var(--ink2);
               width:24px;height:24px;cursor:pointer;font-size:var(--text-sm);line-height:1}
   #dock .chatlog{flex:1;overflow-y:auto;padding:12px 2px}
   #dock .chatbar{padding:12px 0 16px}
   #dock-reopen{display:none;position:fixed;bottom:16px;right:16px;z-index:20;
-               border-radius:99px;padding:9px 16px}
+               border-radius:var(--radius);padding:9px 16px}
   body.dock-closed #dock,body.dock-closed #dock-resizer{display:none}
   body.dock-closed #dock-reopen{display:block}
   /* min-width:0 is what actually makes `flex:1` shrink. flex:1 sets the basis
@@ -358,13 +358,13 @@
      width — so the input refused to go below that and pushed Send off the edge
      of the dock. The buttons then get flex-shrink:0 so the input absorbs the
      squeeze instead of the controls turning into slivers. */
-  .chatbar input{flex:1;min-width:0;background:var(--panel);border:1px solid var(--line2);border-radius:8px;
+  .chatbar input{flex:1;min-width:0;background:var(--panel);border:1px solid var(--line2);border-radius:var(--radius);
                  padding:10px 14px;color:var(--ink);font-size:var(--text-sm);outline:none}
   .chatbar input:focus{border-color:var(--accent)}
-  .chatbar button{border-radius:8px;padding:0 18px;flex-shrink:0}
+  .chatbar button{border-radius:var(--radius);padding:0 18px;flex-shrink:0}
   .chatbar button:disabled{cursor:default}
   .stages{display:flex;gap:6px;margin:2px 0 4px}
-  .stage{font-size:var(--text-xs);padding:2px 9px;border-radius:99px;border:1px solid var(--line2);color:var(--ink3)}
+  .stage{font-size:var(--text-xs);padding:2px 9px;border-radius:var(--shape-chip);border:1px solid var(--line2);color:var(--ink3)}
   .stage.on{border-color:var(--accent);color:var(--accent-fg);background:var(--accent-soft)}
   .stage.done{border-color:var(--good);color:var(--good)}
   .stage.subagent{border-color:var(--accent);color:var(--accent-fg);background:var(--accent-soft);font-weight:var(--font-weight-medium)}
@@ -374,10 +374,10 @@
   th{font-family:var(--face-mono);color:var(--ink3);font-size:var(--text-xs);text-transform:uppercase;letter-spacing:var(--tracking-label);font-weight:var(--font-weight-medium)}
   .empty{color:var(--ink3);font-style:normal;font-size:var(--text-sm)}
   code{font-family:var(--face-mono);font-size:var(--text-xs);background:var(--bg);border:1px solid var(--line);
-       padding:1px 5px;border-radius:4px}
+       padding:1px 5px;border-radius:var(--radius)}
   /* Model arena (Compare tab): message + model picks, then a scrolling row of
      one result column per model. */
-  .cmp-input{width:100%;background:var(--bg);border:1px solid var(--line2);border-radius:8px;
+  .cmp-input{width:100%;background:var(--bg);border:1px solid var(--line2);border-radius:var(--radius);
        padding:10px 12px;color:var(--ink);font-size:var(--text-sm);font-family:inherit;outline:none;resize:vertical}
   .cmp-input:focus{border-color:var(--accent)}
   .cmp-picks{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px;align-items:center}
@@ -394,23 +394,23 @@
      over the page. Any table that can outgrow its card belongs in one of these. */
   .tablescroll{overflow-x:auto;max-width:100%}
   .cmp-pick{display:inline-flex;align-items:center;gap:5px;font-size:var(--text-xs);color:var(--ink2);
-       border:1px solid var(--line2);border-radius:99px;padding:4px 10px;cursor:pointer}
+       border:1px solid var(--line2);border-radius:var(--shape-chip);padding:4px 10px;cursor:pointer}
   .cmp-pick.on{border-color:var(--accent);color:var(--accent-fg);background:var(--accent-soft)}
   .cmp-pick input{margin:0}
   /* Responsive: as many ~300px columns as fit, then wrap to the next row. */
   .cmp-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));
        gap:12px;margin-top:12px;align-items:start}
-  .cmp-col{background:var(--panel);border:1px solid var(--line);border-radius:12px;
+  .cmp-col{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);
        padding:12px 14px;display:flex;flex-direction:column;gap:8px}
   .cmp-col.err{border-color:var(--bad)}
   /* One wave's nodes all start together, so every bar shares a left edge and
      ends where that node finished. Four bars of different lengths from the same
      origin IS the wave — the topology chart above can only promise it. */
-  .wavebar{height:6px;background:var(--line);border-radius:3px;overflow:hidden}
-  .wavebar i{display:block;height:100%;background:var(--accent);border-radius:3px}
+  .wavebar{height:6px;background:var(--line);border-radius:var(--radius);overflow:hidden}
+  .wavebar i{display:block;height:100%;background:var(--accent);border-radius:var(--radius)}
   .cmp-h{display:flex;align-items:center;gap:6px;font-size:var(--text-sm)}
   .cmp-stats{display:flex;flex-wrap:wrap;gap:5px;align-items:center}
-  .chip{font-size:var(--text-xs);color:var(--ink2);border:1px solid var(--line2);border-radius:99px;padding:1px 8px}
+  .chip{font-size:var(--text-xs);color:var(--ink2);border:1px solid var(--line2);border-radius:var(--shape-chip);padding:1px 8px}
   .chip.money{color:var(--good);border-color:var(--good)}
   /* A graph node's chip while it WORKS, and after. Several .live at once is
      the fan-out made visible in the chat card — the pending state used to say
@@ -423,25 +423,25 @@
   .cmp-th{cursor:pointer;white-space:nowrap}
   .cmp-th:hover{color:var(--ink)}
   .cmp-th.on{color:var(--accent-fg)}
-  .cmp-score{display:inline-block;padding:1px 8px;border-radius:99px;font-size:var(--text-xs);
+  .cmp-score{display:inline-block;padding:1px 8px;border-radius:var(--shape-chip);font-size:var(--text-xs);
     font-weight:var(--font-weight-medium);letter-spacing:0;white-space:nowrap;vertical-align:middle}
   .cmp-score.pass{background:var(--good-soft);color:var(--good)}
   .cmp-score.fail{background:var(--bad-soft);color:var(--bad)}
   .cmp-score.part{background:var(--surface-raised);color:var(--warn)}
   .cmp-col.solved{border-color:var(--ok)}
   .cmp-col.failed{border-color:var(--bad)}
-  .cmp-q{display:inline-block;padding:1px 8px;border-radius:99px;font-size:var(--text-xs);
+  .cmp-q{display:inline-block;padding:1px 8px;border-radius:var(--shape-chip);font-size:var(--text-xs);
     font-weight:var(--font-weight-medium);white-space:nowrap;vertical-align:middle}
   .cmp-q.hi{background:var(--good-soft);color:var(--good)}
   .cmp-q.mid{background:var(--surface-raised);color:var(--warn)}
   .cmp-q.lo{background:var(--bad-soft);color:var(--bad)}
   .cmp-grade1{margin-left:auto;font-size:var(--text-xs);white-space:nowrap;flex-shrink:0}
   .cmp-judge{display:inline-flex;align-items:center;gap:5px;font-size:var(--text-xs);color:var(--ink3);
-    cursor:pointer;white-space:nowrap;padding:4px 8px;border-radius:8px;border:1px solid var(--line)}
+    cursor:pointer;white-space:nowrap;padding:4px 8px;border-radius:var(--radius);border:1px solid var(--line)}
   .cmp-judge.on{color:var(--accent-fg);border-color:var(--accent)}
   .cmp-judge input{margin:0}
   .cmp-judge select{font:inherit;font-size:var(--text-xs);color:var(--ink);background:transparent;
-    border:1px solid var(--line);border-radius:6px;padding:1px 4px;margin-left:2px;cursor:pointer}
+    border:1px solid var(--line);border-radius:var(--radius);padding:1px 4px;margin-left:2px;cursor:pointer}
   .cmp-judge select:disabled{cursor:default}
   .scatter{width:100%;height:auto;display:block}
   .scatter text{font-family:inherit}   /* match the page's sans, not SVG's default serif */
@@ -454,17 +454,17 @@
   .scatter .sc-yhit{fill:transparent;cursor:help;pointer-events:all}
   .sc-tip{position:fixed;display:none;z-index:9999;pointer-events:none;max-width:340px;
     white-space:pre-line;background:var(--panel);color:var(--ink);border:1px solid var(--line);
-    border-radius:8px;padding:8px 11px;font-size:var(--text-xs);line-height:1.45}
+    border-radius:var(--radius);padding:8px 11px;font-size:var(--text-xs);line-height:1.45}
   .scatter .sc-lbl{fill:var(--ink2);font-size:10.5px}
   .scatter .sc-dot.hi{fill:var(--good)}
   .scatter .sc-dot.mid{fill:var(--warn)}
   .scatter .sc-dot.lo{fill:var(--bad)}
   .cmp-sortbar{display:flex;align-items:center;gap:6px;margin:2px 0 12px;font-size:var(--text-xs);color:var(--ink3)}
-  .cmp-sortbtn{border-radius:99px;padding:3px 12px}
+  .cmp-sortbtn{border-radius:var(--radius);padding:3px 12px}
 
 /* Sub-agent receipt (Arena cards): pi working inside a card. Live = small
    terminal window; finished = one quiet row, expandable. */
-.subterm{ margin:6px 0; border:1px solid var(--line); border-radius:8px;
+.subterm{ margin:6px 0; border:1px solid var(--line); border-radius:var(--radius);
   background:var(--bg); font-size:var(--text-xs); overflow:hidden; }
 .subterm.live{ border-color:var(--accent); background:var(--accent-soft); }
 .subterm-h{ display:flex; align-items:center; gap:7px; padding:4px 8px;
@@ -487,29 +487,29 @@ details.subterm > summary.subterm-h::-webkit-details-marker{ display:none; }
 
 /* Models page: provider card grid + edit modal. */
 .provgrid{ display:grid; grid-template-columns:repeat(auto-fill, minmax(230px, 1fr)); gap:12px; }
-.provcard{ background:var(--panel); border:1px solid var(--line); border-radius:10px;
+.provcard{ background:var(--panel); border:1px solid var(--line); border-radius:var(--radius);
   padding:16px 14px 12px; display:flex; flex-direction:column; align-items:flex-start;
   gap:6px; position:relative; }
 .provcard .prov-current{ position:absolute; top:10px; right:10px; }
-.provlogo{ width:44px; height:44px; border-radius:10px; }
+.provlogo{ width:44px; height:44px; border-radius:var(--radius); }
 .provname{ font-weight:var(--font-weight-medium); font-size:var(--text-sm); }
 .provstatus{ display:flex; align-items:center; gap:6px; font-size:var(--text-xs); color:var(--ink2); }
-.provdot{ width:9px; height:9px; border-radius:99px; flex-shrink:0; }
+.provdot{ width:9px; height:9px; border-radius:var(--shape-circle); flex-shrink:0; }
 .provactions{ display:flex; gap:8px; margin-top:4px; }
 .provactions .save{ padding:5px 12px; font-size:var(--text-xs); }
 .provmodal-back{ position:fixed; inset:0; background:var(--scrim); backdrop-filter:blur(var(--scrim-blur)); z-index:60;
   display:flex; align-items:center; justify-content:center; }
-.provmodal{ background:var(--panel); border:1px solid var(--line); border-radius:12px;
+.provmodal{ background:var(--panel); border:1px solid var(--line); border-radius:var(--radius);
   padding:20px; width:min(520px, 92vw); max-height:90vh; overflow-y:auto; }
 .provmodal-models{ width:min(640px, 92vw); min-height:min(430px, 90vh); padding:24px; }
 
 .model-picker{ position:relative; }
 .model-picker-input{ display:flex; align-items:stretch; }
-.model-picker-input input{ flex:1; border-radius:8px 0 0 8px; border-right:none; }
-.model-picker-toggle{ width:34px; border:1px solid var(--line2); border-radius:0 8px 8px 0; background:var(--bg); color:var(--ink2); cursor:pointer; }
+.model-picker-input input{ flex:1; border-radius:var(--radius) 0 0 var(--radius); border-right:none; }
+.model-picker-toggle{ width:34px; border:1px solid var(--line2); border-radius:0 var(--radius) var(--radius) 0; background:var(--bg); color:var(--ink2); cursor:pointer; }
 .model-picker-toggle:hover{ background:var(--panel); color:var(--ink); }
 .model-picker-toggle:focus-visible{ outline:2px solid var(--accent); outline-offset:2px; }
-.model-picker-list{ display:none; position:absolute; top:100%; left:0; right:0; margin-top:4px; background:var(--panel); border:1px solid var(--line2); border-radius:8px; z-index:10; max-height:240px; overflow:auto; }
+.model-picker-list{ display:none; position:absolute; top:100%; left:0; right:0; margin-top:4px; background:var(--panel); border:1px solid var(--line2); border-radius:var(--radius); z-index:10; max-height:240px; overflow:auto; }
 .model-picker-list.open{ display:block; }
 .model-picker-search{ position:sticky; top:0; padding:8px 10px; border:none; border-bottom:1px solid var(--line2); background:var(--panel); width:100%; outline:none; }
 .model-picker-search:focus{ border-bottom-color:var(--accent); }
@@ -523,11 +523,11 @@ details.subterm > summary.subterm-h::-webkit-details-marker{ display:none; }
 .connsection:first-child h2{margin-top:0}
 .connsection + .connsection h2{margin-top:30px}
 .conngrid{align-items:stretch}
-.conncard{min-height:190px;transition:border-color .12s ease}
+.conncard{min-height:190px;transition:border-color var(--motion-fast) var(--motion-ease)}
 .conncard:hover{border-color:var(--line2)}
 .connlogo{object-fit:contain}
 .connstatus{display:inline-flex;align-items:center;gap:6px;font-size:var(--text-xs);color:var(--ink2)}
-.conndot{width:9px;height:9px;border-radius:99px;background:var(--ink3);flex-shrink:0}
+.conndot{width:9px;height:9px;border-radius:var(--shape-circle);background:var(--ink3);flex-shrink:0}
 .connstatus.connected{color:var(--good)}
 .connstatus.connected .conndot{background:var(--good)}
 .connstatus.error{color:var(--bad)}
@@ -548,21 +548,21 @@ details.subterm > summary.subterm-h::-webkit-details-marker{ display:none; }
 .connactions{margin-top:auto}
 .connmodal-back{position:fixed;inset:0;z-index:60;background:var(--scrim);backdrop-filter:blur(var(--scrim-blur));
   display:flex;align-items:center;justify-content:center;padding:24px}
-.connmodal{background:var(--panel);border:1px solid var(--line);border-radius:14px;
+.connmodal{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);
   width:min(560px,100%);max-height:88vh;
   overflow-y:auto;padding:20px;outline:none}
 .connmodal-head{display:flex;align-items:center;gap:12px}
 .connmodal-title{min-width:0;flex:1}
 .connmodal-title h3{font-size:var(--text-base);line-height:1.3;margin-bottom:3px}
 .connmodal-close{align-self:flex-start;background:transparent;border:1px solid var(--line2);
-  border-radius:7px;color:var(--ink2);cursor:pointer;font-size:var(--text-xs);padding:5px 9px}
+  border-radius:var(--radius);color:var(--ink2);cursor:pointer;font-size:var(--text-xs);padding:5px 9px}
 .connmodal-close:hover,.connmodal-close:focus-visible{border-color:var(--accent);color:var(--accent-fg)}
 .connmodal-desc{margin:14px 0 0;font-size:var(--text-sm)}
 .connmodal-meta{display:flex;flex-wrap:wrap;gap:4px 12px;min-height:18px;margin-top:6px;
   color:var(--ink3);font-size:var(--text-xs);font-variant-numeric:tabular-nums}
 .connsetup{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;
   margin-top:14px;padding:10px 12px;background:var(--bg);border:1px solid var(--line);
-  border-radius:8px;font-size:var(--text-xs)}
+  border-radius:var(--radius);font-size:var(--text-xs)}
 .connsetup code{overflow-wrap:anywhere}
 .connsetup a{color:var(--accent-fg);font-weight:var(--font-weight-medium);text-decoration:none}
 .connsetup a:hover{text-decoration:underline}
@@ -573,7 +573,7 @@ details.subterm > summary.subterm-h::-webkit-details-marker{ display:none; }
 .conn-check{display:flex;align-items:center;gap:9px;color:var(--ink2);font-size:var(--text-xs);
   cursor:pointer;padding:8px 0}
 .conn-check input,.conn-clear input{accent-color:var(--accent)}
-.conn-secret-state{display:inline-flex;border-radius:99px;background:var(--good-soft);
+.conn-secret-state{display:inline-flex;border-radius:var(--shape-chip);background:var(--good-soft);
   color:var(--good);font-size:var(--text-xs);font-weight:var(--font-weight-medium);padding:1px 7px;margin-left:4px}
 .conn-clear{display:flex;align-items:center;gap:6px;width:max-content;margin-top:6px;
   color:var(--ink3);cursor:pointer;font-size:var(--text-xs)}
@@ -596,7 +596,7 @@ details.subterm > summary.subterm-h::-webkit-details-marker{ display:none; }
 .ma-seed{margin:0;padding-left:20px;font-size:var(--text-sm);color:var(--ink2);line-height:1.7}
 .ma-seed li{margin:1px 0}
 .ma-legend{display:flex;flex-wrap:wrap;gap:6px 18px;margin-top:10px;font-size:var(--text-xs)}
-.ma-o{font-family:var(--face-mono);font-size:var(--text-xs);padding:1px 7px;border-radius:99px;border:1px solid var(--line2)}
+.ma-o{font-family:var(--face-mono);font-size:var(--text-xs);padding:1px 7px;border-radius:var(--shape-chip);border:1px solid var(--line2)}
 .ma-pass{color:var(--good);border-color:var(--good)}
 .ma-stale{color:var(--warn);border-color:var(--warn)}
 /* invented is the headline failure — a confident answer to something it was
@@ -605,7 +605,7 @@ details.subterm > summary.subterm-h::-webkit-details-marker{ display:none; }
 .ma-miss{color:var(--ink3)}
 .ma-expect{color:var(--good);font-family:var(--face-mono);font-size:var(--text-xs)}
 .ma-forbid{color:var(--bad);font-family:var(--face-mono);font-size:var(--text-xs)}
-.ma-source{margin-top:10px;padding:8px 10px;border-radius:6px;background:var(--accent-soft);
+.ma-source{margin-top:10px;padding:8px 10px;border-radius:var(--radius);background:var(--accent-soft);
            color:var(--ink2);font-size:var(--text-xs);line-height:1.6}
 .ma-race{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-top:12px}
 /* Questions and Model are ONE setup decision, so they belong on one line. They
@@ -647,10 +647,10 @@ details.subterm > summary.subterm-h::-webkit-details-marker{ display:none; }
 .ma-facts li{margin:2px 0}
 .ma-prov{font-size:var(--text-xs);color:var(--ink3);margin:-2px 0 8px;font-family:var(--face-mono);line-height:1.5;
   flex:0 0 auto}
-.ma-warn{margin-top:10px;padding:8px 10px;border-radius:6px;background:var(--accent-soft);
+.ma-warn{margin-top:10px;padding:8px 10px;border-radius:var(--radius);background:var(--accent-soft);
          color:var(--ink2);font-size:var(--text-xs);line-height:1.6}
 .ma-facts-meta{font-size:var(--text-xs);color:var(--ink3);font-family:var(--face-mono);margin:4px 0 2px}
 .ma-test{display:inline-block;font-family:var(--face-mono);font-size:var(--text-xs);text-transform:uppercase;
          letter-spacing:var(--tracking-label);color:var(--accent-fg);background:var(--accent-soft);
-         padding:2px 7px;border-radius:99px}
+         padding:2px 7px;border-radius:var(--shape-chip)}
 .ma-q{font-size:var(--text-xs);color:var(--ink);margin-top:5px;line-height:1.45;max-width:210px}
