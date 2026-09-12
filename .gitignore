@@ -29,3 +29,6 @@ credentials.json
 client_secret*.json
 *token*.json
 .gcp/
+
+# Disposable design mockups: propose, decide, implement, delete.
+docs/proposals/*.html
