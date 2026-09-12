@@ -237,7 +237,8 @@ The agent loops across two tools: [`search_web`](waku/tools/search.py) reads the
 reasons over the results, then calls [`create_event`](waku/tools/calendar.py) once per match —
 several iterations in a single turn. You'll see `iter 4`, `iter 5`… on the Loop tab and the
 LOOP box pulse for each cycle. `search_web` works keyless via DuckDuckGo but that endpoint
-rate-limits bots, so for a clean take set a free `TAVILY_API_KEY` (see [`.env.example`](.env.example)).
+rate-limits bots, so for a clean take set a free `TAVILY_API_KEY` or a `YDC_API_KEY`
+(You.com) — see [`.env.example`](.env.example).
 
 ## Graph workflows — when a turn needs shape
 
