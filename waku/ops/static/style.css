@@ -85,7 +85,10 @@
   .scrolly th.dbcol{color:var(--accent-fg);background:var(--accent-soft);font-family:var(--face-mono);
                     font-size:var(--text-xs);text-transform:none;letter-spacing:0;font-weight:var(--font-weight-medium);border-bottom:1px solid var(--line)}
   .scrolly th.dbcol small{color:var(--ink3);font-weight:400;margin-left:5px}
-  h1{font-family:var(--face-display);font-size:var(--text-lg);font-weight:var(--font-weight-normal);line-height:var(--leading-snug);margin-bottom:2px}
+  /* No ligatures: Playfair Display SC draws fi and fl as lowercase glyphs,
+     so "Graph workflows" came out as "WORKfLOWS" between the small caps. */
+  h1{font-family:var(--face-display);font-size:var(--text-lg);font-weight:var(--font-weight-normal);line-height:var(--leading-snug);
+     font-variant-ligatures:none;margin-bottom:2px}
   .sub{color:var(--ink3);font-size:var(--text-xs);font-family:var(--face-mono)}
   h2{font-family:var(--face-mono);font-size:var(--text-xs);text-transform:uppercase;letter-spacing:var(--tracking-label);color:var(--ink2);
      font-weight:var(--font-weight-medium);margin:28px 0 10px}

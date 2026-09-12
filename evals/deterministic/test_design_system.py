@@ -240,6 +240,13 @@ def test_native_controls_get_a_data_slot():
     assert re.search(r"^watchSlots\(\);", js["main.js"], re.MULTILINE), "main.js must call watchSlots() at bootstrap"
 
 
+def test_title_has_no_ligatures():
+    """Playfair Display SC's fi and fl ligatures are lowercase glyphs, so a
+    title like "Graph workflows" rendered as "WORKfLOWS" between small caps."""
+    title = "".join(body for sel, body in _blocks(_style()) if sel == "h1")
+    assert "font-variant-ligatures:none" in title.replace(" ", "")
+
+
 OLD_NAME = re.compile(r"var\(--(?:bg|panel|line2?|ink[23]?|accent-soft|good-soft|bad-soft|good|mono)\)")
 
 # Files that still read an old name on the day PR 1 merged. This set only
