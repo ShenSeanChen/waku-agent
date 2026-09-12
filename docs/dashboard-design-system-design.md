@@ -316,9 +316,14 @@ Decided from the mockup, questions 1–5. Layout numbers come from Memory's
   right.
 - The top block holds the mark, the word WAKU in the mono label style, and
   a tertiary button that collapses the rail.
-- Items are mono, uppercase, 12px, at `--tracking-label`, in
-  `--text-muted`. The current page gets a 2px `--accent` rule on its left,
-  a `--surface-raised` ground and `--text-ink` text.
+- Items are mono in normal case, 13px, with no tracking, in
+  `--text-muted`. The design owner chose this over Memory's uppercase
+  labels on 2026-09-13, because thirteen uppercase labels are hard to scan,
+  and asked for Memory's rail to change to match. Items sit one step
+  (`--space-6`) in from the group labels, so each label reads as their
+  parent.
+- The current page gets a 2px `--accent` rule on its left, a
+  `--surface-raised` ground and `--text-ink` text.
 - Counts sit at the right in `--text-faint`. A count of zero shows nothing,
   as in Memory.
 - The three group headings stay, as faint mono labels with no rule above

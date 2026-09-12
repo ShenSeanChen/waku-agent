@@ -51,9 +51,12 @@
      so they read as captions, not as rows. */
   .r-grp{font-family:var(--face-mono);font-size:var(--text-xs);letter-spacing:var(--tracking-label);text-transform:uppercase;
          color:var(--text-faint);padding:var(--space-4) var(--space-4) var(--space-2)}
+  /* Items are normal case, mono, at 13px with no tracking — easier to read
+     than thirteen uppercase labels (design owner, 2026-09-13). They sit one
+     step in from the group labels so each label reads as their parent. */
   .rail > a{display:flex;align-items:center;justify-content:space-between;gap:var(--space-3);margin:0 var(--space-2);
-            border-left:2px solid transparent;padding:var(--space-2) var(--space-3);font-family:var(--face-mono);
-            font-size:var(--text-xs);letter-spacing:var(--tracking-label);text-transform:uppercase;color:var(--text-muted);
+            border-left:2px solid transparent;padding:var(--space-2) var(--space-3) var(--space-2) var(--space-6);
+            font-family:var(--face-mono);font-size:var(--text-sm);color:var(--text-muted);
             text-decoration:none;transition:color var(--motion-fast) var(--motion-ease)}
   .rail > a:hover{color:var(--text-ink)}
   .rail > a.on{border-left-color:var(--accent);background:var(--surface-raised);color:var(--text-ink)}
@@ -681,7 +684,7 @@ details.subterm > summary.subterm-h::-webkit-details-marker{ display:none; }
         border-right:none;border-bottom:var(--rule-width) solid var(--rule)}
   .r-top{border-bottom:none;margin:0;padding:var(--space-3)}
   .r-chev,.r-grp,.rail .n,.r-gh{display:none}
-  .rail > a{flex-shrink:0;border-left:none;border-bottom:2px solid transparent;margin:0}
+  .rail > a{flex-shrink:0;border-left:none;border-bottom:2px solid transparent;margin:0;padding:var(--space-2) var(--space-3)}
   .rail > a.on{border-bottom-color:var(--accent);background:transparent}
   .r-bottom{margin-top:0;margin-left:auto;border-top:none;position:sticky;right:0;background:var(--surface-paper)}
   main{height:auto;padding:0 var(--space-4) var(--space-8)}
