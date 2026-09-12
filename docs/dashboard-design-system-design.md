@@ -2,7 +2,8 @@
 
 Status: PROPOSED. PR 1 (foundation) is specified in full. PRs 2 and 3 are
 sketched in §10; each gets a full section here before its code starts.
-Scope: `waku/ops/static/` only. No Python, no API, no terminal UI.
+Scope: `waku/ops/static/`, plus one line in `dashboard.py` so the fonts are
+served as `font/woff2`. No API change, no terminal UI.
 
 ## 1. Goal
 
@@ -64,15 +65,16 @@ Source: `ShenSeanChen/waku-memory-frontend` at `03ab1d7`,
 `public/design/tokens.css` and `public/design/controls.css`.
 
 The console defines a few more values outside those files, in
-`app/globals.css`: the type scale, the two weights, and the field border.
-They are nine values. `type.css` holds them under the same names, and
-`SOURCE.md` records the file and lines they come from:
+`app/globals.css`: the type scale, the two weights, the line heights, and
+the field border. They are twelve values. `type.css` holds them under the
+same names, and `SOURCE.md` records the file they come from:
 
 | Token | Value |
 |---|---|
 | `--text-xs` / `--text-sm` / `--text-base` | 12px / 13px / 15px |
 | `--text-lg` / `--text-xl` / `--text-2xl` | 20px / 27px / 36px |
 | `--font-weight-normal` / `--font-weight-medium` | 400 / 500 |
+| `--leading-tight` / `--leading-snug` / `--leading-normal` | 1.12 / 1.3 / 1.72 |
 | `--input` | ink at 48% on the ground |
 
 ## 4. Files
@@ -88,8 +90,8 @@ waku/ops/static/
   fonts/
     InstrumentSans-*.woff2
     JetBrainsMono-*.woff2
-    PlayfairDisplaySC-400.woff2, PlayfairDisplaySC-700.woff2
-    OFL.txt          # all three faces use the SIL Open Font License
+    PlayfairDisplaySC-400.woff2   # titles only, so one weight
+    OFL-*.txt        # one SIL Open Font License per face
   index.html         # links fonts.css, tokens.css, type.css, controls.css, then style.css
   style.css          # reads tokens; holds no raw colour
 ```
@@ -129,8 +131,8 @@ from using an old name.
 
 **Colour.**
 - Amber is a surface colour, not a text colour. Every `color:var(--accent)`
-  (49 in `style.css`, 3 in `js/`) becomes `--accent-fg`. Text on an amber
-  fill uses `--accent-ink`.
+  in `style.css` and `js/` becomes `--accent-fg`. Text on an amber fill uses
+  `--accent-ink`.
 - Every hard-coded colour is removed. The warning amber (`#c8951f` and
   similar) clashes with the new accent and becomes `--warn`. The three
   channel-tag colours become one neutral tag, told apart by its word, because
@@ -144,8 +146,9 @@ from using an old name.
 - Scrollbars use `--scrollbar-thumb`.
 
 **Type.**
-- The body is Instrument Sans at the console's size, 15px with 1.72 line
-  height. Numbers, ids and labels use JetBrains Mono. The page title uses
+- The body is Instrument Sans at `--text-sm` (13px). The console reads at
+  15px, but the dashboard packs more onto a screen, and the approved mockup
+  uses 13px. Numbers, ids and labels use JetBrains Mono. The page title uses
   Playfair Display SC.
 - Font sizes move onto the six-step scale in §3. Today's 9–12.5px sizes
   become 12px. Today's 13–14px sizes become 13px.
