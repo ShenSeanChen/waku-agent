@@ -1,7 +1,8 @@
 # Dashboard design system — the Waku Memory look
 
-Status: PROPOSED. PR 1 (foundation) is specified in full. PRs 2 and 3 are
-sketched in §10; each gets a full section here before its code starts.
+Status: PR 1 (foundation) is built and in review. PR 2 (shell) is
+specified in §11. PR 3's design decisions are recorded in §10; it gets a
+full section before its code starts.
 Scope: `waku/ops/static/`, plus one line in `dashboard.py` so the fonts are
 served as `font/woff2`. No API change, no terminal UI.
 
@@ -261,13 +262,26 @@ console errors. Before and after screenshots go in the PR.
 
 ## 10. Later PRs, sketched
 
-**PR 2 — shell.** The sidebar becomes the console's nav rail: uppercase mono
-items, a 2px amber rule on the active item, faint counts, and a theme toggle
-in the bottom block. The toggle is stored under `waku-theme`, the same key the
-console uses. To decide: whether the rail keeps drag-to-resize, where the
-`provider · model` line goes, what happens to the three group headings (the
-rail has none), and how the chat dock is framed (the console has no chat
-dock).
+**PR 2 — shell.** Decided on 2026-09-13 from the mockup
+(`docs/proposals/big-decisions.html`, questions 1–5; the recommended option
+each time). Specified in full in §11.
+
+**PR 3 decisions**, from the same mockup:
+
+- Stat tiles become Memory's stat band: one bordered strip, a divider
+  between figures, label above, 27px mono number.
+- Sub-tabs use Memory's `line` tabs: a 2px ink bar, not amber. Amber marks
+  the current page in the rail only.
+- The retrieval gate shows two large figures over a 6px bar in the chart
+  ramp.
+- Model race follows Memory's chart rule: one hue, grade written beside
+  each point. Card grades become neutral `value` badges; only solved and
+  failed keep `--ok` and `--bad`.
+- Explanation boxes become Memory's Notice (raised ground, bottom rule, a
+  label mark).
+- The architecture and graph diagrams stay frozen and are only recoloured.
+- Tables, cards, dialogs and Memory-race outcomes follow Memory's
+  primitives as specified in its `components/ui`.
 
 **PR 3 — views and primitives.** Each tab uses its closest console pattern:
 stat band, table, list rows, card grid, dialog, notice.
@@ -290,3 +304,62 @@ out anyway. Then the alias block from §5 is deleted.
 To decide, because the console has no equivalent: the architecture and graph
 diagrams, the gate split bar, the model-race live columns and cost/quality
 scatter, the memory-race outcome colours, and sub-tabs.
+
+## 11. PR 2 — the shell
+
+Decided from the mockup, questions 1–5. Layout numbers come from Memory's
+`components/console/console-nav.tsx`.
+
+**The rail.** The sidebar becomes Memory's nav rail.
+
+- 196px wide on a `--surface-paper` ground, with a 1px `--rule` on its
+  right.
+- The top block holds the mark, the word WAKU in the mono label style, and
+  a tertiary button that collapses the rail.
+- Items are mono, uppercase, 12px, at `--tracking-label`, in
+  `--text-muted`. The current page gets a 2px `--accent` rule on its left,
+  a `--surface-raised` ground and `--text-ink` text.
+- Counts sit at the right in `--text-faint`. A count of zero shows nothing,
+  as in Memory.
+- The three group headings stay, as faint mono labels with no rule above
+  them. The dashboard has 13 items; Memory has 5.
+- Collapsed, the rail is 56px and each item shows its first letter. The
+  full name is in the item's `title` and `aria-label`. The collapsed state
+  is not remembered: a rail that reopens closed hides the navigation from
+  someone coming back.
+- The bottom block holds a GitHub link and the theme toggle. The link has
+  no star count, because fetching one would be a network call.
+
+**Removed.** Drag-to-resize on the rail, the hide and reopen buttons, their
+`navW` and `navHidden` storage, and the `provider · model` line. The chat
+dock's model chip already shows the model and switches it.
+
+**The theme toggle.** One button cycles system → light → dark, like
+Memory's. The choice is stored under `waku-theme`, the key Memory uses.
+Light and dark set `data-theme` on `<html>`; system removes it, and
+`tokens.css` then follows the OS. A short inline script in `<head>` applies
+the stored choice before the page paints, so the wrong theme never flashes.
+The button shows the state as a 16px icon (contrast, sun, moon) and says it
+in its `aria-label` and `title`.
+
+**The page header.** The title stays 20px. It sits on a baseline row that
+can hold a count and actions on the right; PR 3 fills those per view. The
+`live · updated · path` line stays below it.
+
+**The chat dock.** A `--surface-paper` ground, like the rail, so the two
+tool columns frame the page between them. The header reads CHAT in the mono
+label style. The dock keeps its resize handle and its collapse button.
+
+**Below 768px.** The rail becomes a row across the top that scrolls
+sideways, with the theme toggle fixed at its right end. The chat dock
+starts closed and opens from its reopen button.
+
+**Checks.** Added to `test_design_system.py`:
+
+- `index.html` applies the stored theme in `<head>`, before the design
+  files load;
+- a theme toggle exists and `js/` defines the function it calls;
+- every rail link has a `data-short` equal to the first letter of its
+  label;
+- nothing reads or writes `navW` or `navHidden`, and no `#model` element or
+  lookup remains.
