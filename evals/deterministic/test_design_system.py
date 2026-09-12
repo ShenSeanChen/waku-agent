@@ -142,3 +142,45 @@ def test_old_names_point_at_tokens():
         assert f"{old}:var({token});" in root + ";", f"{old} should be var({token})"
     for token_name in ("--accent", "--bad"):
         assert f"{token_name}:" not in root, f"{token_name} is a token; style.css must not redefine it"
+
+
+COLOUR = re.compile(r"(?<![&\w])#[0-9a-fA-F]{3,8}\b|\b(?:rgb|rgba|hsl|hsla)\(")
+
+
+def test_no_colour_literals():
+    """Every colour is a token. (An HTML entity such as &#9662; is not a colour.)"""
+    found = [(f, s, p, v) for f, s, p, v in _declarations() if COLOUR.search(v)]
+    assert not found, f"raw colours — use a token: {found[:10]}"
+    for name, src in _js().items():
+        literal = re.findall(r"""["'`]\s*#[0-9a-fA-F]{3,8}\s*["'`]""", src)
+        assert not literal, f"{name} has a colour literal: {literal}"
+
+
+def test_accent_is_never_text():
+    """Amber measures 1.56:1 on bone — a surface, not a text colour. Text uses
+    --accent-fg; text on an amber fill uses --accent-ink."""
+    found = [(f, s) for f, s, p, v in _declarations() if p == "color" and v == "var(--accent)"]
+    assert not found, f"use --accent-fg for amber text: {found}"
+
+
+def test_no_shadows():
+    found = [(f, s, v) for f, s, p, v in _declarations()
+             if p == "box-shadow" and v not in ("none", "var(--shadow-sm)", "var(--shadow-md)", "var(--shadow-lg)")]
+    assert not found, f"nothing casts a shadow — separate with a rule: {found}"
+
+
+BUTTONS = re.compile(r"(?:^|[\s,>+~])(?:button|\.save|\.btn|\.sessbtn|\.cmp-sortbtn|#dsend|#mic|#dock-reopen|#nav-reopen)\b")
+
+
+def test_buttons_never_fill():
+    """Waku Memory's button has four levels and none of them is a colour fill."""
+    grounds = {"transparent", "none", "var(--surface-paper)", "var(--surface-raised)", "var(--surface-sunk)",
+               "var(--panel)", "var(--bg)", "var(--accent-soft)"}
+    found = [(s, v) for f, s, p, v in _declarations()
+             if f == "style.css" and BUTTONS.search(s) and p in ("background", "background-color") and v not in grounds]
+    assert not found, f"buttons never fill: {found}"
+
+
+def test_disabled_is_a_colour_not_an_opacity():
+    found = [s for s, body in _blocks(_style()) if ":disabled" in s and "opacity" in body]
+    assert not found, f"controls.css colours disabled controls; drop the opacity: {found}"

@@ -245,7 +245,7 @@ function modelsGrid(d){
 function providerCard(p, st){
   const status = providerCardStatus(p, st);
   const current = p.key === st.provider;
-  const dot = status === "enabled" ? "var(--good)" : status === "configured" ? "#4c9aff" : "var(--bad)";
+  const dot = status === "enabled" ? "var(--good)" : status === "configured" ? "var(--accent)" : "var(--bad)";
   return `<div class="provcard" data-provider="${esc(p.key)}">
     ${current ? `<span class="srcpill prov-current" style="background:var(--good-soft);color:var(--good)">current</span>` : ""}
     <img class="provlogo" src="/static/logos/${esc(p.key)}.svg" alt="" onerror="this.style.display='none'">
