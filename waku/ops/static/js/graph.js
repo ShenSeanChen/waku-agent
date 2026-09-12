@@ -51,7 +51,7 @@ function graphSVG(wf, opts = {}){
     if (n === "START" || n === "END")
       return `<g class="node" data-node="${nid(n)}">
         <rect class="bx" x="${p.x + W/2 - 34}" y="${p.y + H/2 - 15}" width="68" height="30" rx="15"/>
-        <text class="nt" x="${p.x + W/2}" y="${p.y + H/2 + 5}" text-anchor="middle" style="font-size:12px">${n}</text></g>`;
+        <text class="nt" x="${p.x + W/2}" y="${p.y + H/2 + 5}" text-anchor="middle" style="font-size:var(--text-xs)">${n}</text></g>`;
     const sub = SUB[kinds[n]] || "";
     return `<g class="node" data-node="${nid(n)}">
       <rect class="bx" x="${p.x}" y="${p.y}" width="${W}" height="${H}" rx="9"/>

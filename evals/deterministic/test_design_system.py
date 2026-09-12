@@ -184,3 +184,32 @@ def test_buttons_never_fill():
 def test_disabled_is_a_colour_not_an_opacity():
     found = [s for s, body in _blocks(_style()) if ":disabled" in s and "opacity" in body]
     assert not found, f"controls.css colours disabled controls; drop the opacity: {found}"
+
+
+SIZES = {f"var(--text-{s})" for s in ("xs", "sm", "base", "lg", "xl", "2xl")}
+WEIGHTS = {"400", "500", "normal", "var(--font-weight-normal)", "var(--font-weight-medium)"}
+
+
+def test_font_sizes_use_the_scale():
+    found = [(f, s, v) for f, s, p, v in _declarations()
+             if p == "font-size" and v not in SIZES | {"inherit"} and not _is_svg_text(s)]
+    assert not found, f"font-size must be a --text-* token: {found[:10]}"
+    shorthand = [(f, s, v) for f, s, p, v in _declarations() if p == "font" and v != "inherit"]
+    assert not shorthand, f"use font-family/font-size, not the font shorthand: {shorthand}"
+
+
+def test_two_weights():
+    found = [(f, s, v) for f, s, p, v in _declarations() if p == "font-weight" and v not in WEIGHTS]
+    assert not found, f"only 400 and 500: {found[:10]}"
+
+
+def test_faces_come_from_tokens():
+    found = [(f, s, v) for f, s, p, v in _declarations()
+             if p == "font-family" and v != "inherit" and not v.startswith("var(--face-")]
+    assert not found, f"font-family must be a --face-* token: {found}"
+
+
+def test_one_tracking_value():
+    found = [(f, s, v) for f, s, p, v in _declarations()
+             if p == "letter-spacing" and v not in ("var(--tracking-label)", "0", "normal") and not _is_svg_text(s)]
+    assert not found, f"letter-spacing is --tracking-label or 0: {found}"

@@ -188,7 +188,7 @@ function toolsMCP(t){
   h += `<h2>Connect one (30 seconds)</h2><div class="card">
     <div class="meta">1 — install the extra: <code>pip install -e '.[mcp]'</code></div>
     <div class="meta" style="margin-top:6px">2 — create ${reveal("","the .waku folder")}<code>/mcp.json</code>:</div>
-    <pre style="font-family:var(--mono);font-size:11.5px;color:var(--ink2);white-space:pre-wrap;margin-top:8px">{"servers": [
+    <pre style="font-family:var(--face-mono);font-size:var(--text-xs);color:var(--ink2);white-space:pre-wrap;margin-top:8px">{"servers": [
   {"name": "fs", "command": "npx",
    "args": ["-y", "@modelcontextprotocol/server-filesystem", "${esc(D&&D.home||"")}"]}
 ]}</pre>
@@ -602,7 +602,7 @@ const VIEWS = {
       uses a <code>MEMORY.md</code> file, Waku uses these queryable tables — and mirrors them to a
       readable <code>MEMORY.md</code> too.</span></div>`;
     h += `<div class="card">
-      <div class="u" style="font-family:var(--mono);font-size:12.5px;word-break:break-all">${esc(db.path)}</div>
+      <div class="u" style="font-family:var(--face-mono);font-size:var(--text-xs);word-break:break-all">${esc(db.path)}</div>
       <div class="meta">${kb} KB on disk · SQLite + FTS5 · open it yourself: <code>sqlite3 .waku/state.db</code></div>
       <div class="meta" style="margin-top:8px">${reveal("state.db","reveal state.db in Finder")} &nbsp;·&nbsp; ${reveal("","open the .waku folder")}</div></div>`;
     h += `<h2>Tables — click a tab above, or a row here</h2>`;

@@ -254,7 +254,7 @@ function compareErrorReason(err){
 // not low capability (a model can't know about releases after its cutoff).
 // Server-supplied (MODEL_CUTOFF in dashboard.py); absent = vendor unpublished.
 function cutoffTag(cutoff){
-  return cutoff ? ` <span class="meta" style="font-size:11px;white-space:nowrap"
+  return cutoff ? ` <span class="meta" style="font-size:var(--text-xs);white-space:nowrap"
     title="knowledge cutoff — this model's world knowledge ends here; it cannot know releases after this date">knows to ${esc(cutoff)}</span>` : "";
 }
 // The sub-agent's receipt: pi working inside this card. Live = a small
@@ -376,7 +376,7 @@ function modelArenaView(d){
     // on every model in THIS run (the cards below); "clear cards" just dismisses
     // the columns. Both act on the current run.
     const regradeBtn = (done.length && !compareState.running)
-      ? `<a class="reveal" style="margin-left:auto;font-size:12px" title="Re-run the referee on every model in this run (fills a skipped/429'd grade, or re-scores)" onclick="regradeCompare()">${compareState.regrading?"re-grading…":"re-grade run"}</a>` : "";
+      ? `<a class="reveal" style="margin-left:auto;font-size:var(--text-xs)" title="Re-run the referee on every model in this run (fills a skipped/429'd grade, or re-scores)" onclick="regradeCompare()">${compareState.regrading?"re-grading…":"re-grade run"}</a>` : "";
     const clearBtn = (order.length && !compareState.running)
       ? `<a class="reveal" style="${regradeBtn?"":"margin-left:auto;"}font-size:12px" onclick="clearCards()">clear cards</a>` : "";
     // Prominent, tab-like sort buttons — the selected one is highlighted.
@@ -984,7 +984,7 @@ function compareHistoryHtml(){
   const scoreboard = agg.length ? `
     <h2 style="margin-top:22px;display:flex;align-items:center;gap:10px">Scoreboard
       <span class="meta" style="font-weight:400">— totals across ${raceCount} race${raceCount===1?"":"s"}</span>
-      <a class="reveal" style="margin-left:auto;font-size:12px" onclick="clearCompareHistory()">clear all</a></h2>
+      <a class="reveal" style="margin-left:auto;font-size:var(--text-xs)" onclick="clearCompareHistory()">clear all</a></h2>
     ${costQualityScatter(agg)}
     <div class="card" style="padding:4px 8px"><div class="tablescroll"><table>
       <tr><th>model</th><th title="knowledge cutoff — when each model's world knowledge ends; it cannot know releases after this date">cutoff</th>${th("cases_passed","solved")}<th class="cmp-th ${bs.key==="quality_avg"?"on":""}" onclick="setBoardSort('quality_avg')" title="referee's mean 0-10 grade on the replies (correctness, honesty, concision) — referee is not a racing model">grade${arrow("quality_avg")}</th>${th("runs","races")}<th>ok</th>${th("total_latency_ms","total time")}${th("total_tokens_in","in tok")}${th("total_tokens_out","out tok")}${th("total_tokens","total tok")}<th title="list price per million tokens, input / output">rate $/M</th>${th("total_cost_usd","total cost")}</tr>
@@ -1006,7 +1006,7 @@ function compareHistoryHtml(){
       <div class="pinrow" style="cursor:pointer" onclick="openCompareRun(${i})">
         <code style="flex:1;word-break:break-all">${esc((run.message||"").slice(0,90))}</code>
         <span class="meta" style="white-space:nowrap">${(run.results||[]).length} models · ${esc((run.ts||"").slice(0,16).replace("T"," "))}</span>
-        <a class="reveal del" style="margin-left:8px;font-size:14px" title="delete just this run" onclick="event.stopPropagation(); deleteCompareRun('${esc(run.ts||"")}')">×</a>
+        <a class="reveal del" style="margin-left:8px;font-size:var(--text-sm)" title="delete just this run" onclick="event.stopPropagation(); deleteCompareRun('${esc(run.ts||"")}')">×</a>
       </div>`).join("")}</div>` : "";
   return scoreboard + recent;
 }
