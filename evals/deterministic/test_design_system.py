@@ -228,3 +228,13 @@ def test_one_duration():
     found = [(f, s, v) for f, s, p, v in _declarations()
              if p in ("transition", "transition-duration") and re.search(r"(?<![\w-])\d*\.?\d+m?s\b", v)]
     assert not found, f"transitions use var(--motion-fast): {found}"
+
+
+def test_native_controls_get_a_data_slot():
+    """controls.css styles by data-slot. The views build controls as HTML
+    strings, so util.js stamps the attribute instead of every string."""
+    js = _js()
+    assert re.search(r"^function stampSlots\(", js["util.js"], re.MULTILINE)
+    assert re.search(r"^function watchSlots\(", js["util.js"], re.MULTILINE)
+    assert "MutationObserver" in js["util.js"]
+    assert re.search(r"^watchSlots\(\);", js["main.js"], re.MULTILINE), "main.js must call watchSlots() at bootstrap"

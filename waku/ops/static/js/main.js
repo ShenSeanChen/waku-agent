@@ -198,6 +198,7 @@ function wireMic(){ const b = document.getElementById("mic"); if (b) b.onclick =
 
 window.addEventListener("hashchange", render);
 window.__hold = (v)=>{ animating = v; };   // test hook: freeze the diagram
+watchSlots();
 wireDock(); wireChrome(); wireMic();
 refresh(); setInterval(refresh, 5000); setInterval(tickLive, 1000);
 pollEvents(); setInterval(pollEvents, 450);   // live harness animation

@@ -124,3 +124,34 @@ const sessionMeta = s =>
 // wraps), but the chip itself must look identical in both or the same tool
 // call appears to be two different things.
 const toolChip = name => `<span class="stage done">tool · ${esc(name)}</span>`;
+
+// --- data-slot: how Waku Memory's controls.css finds a control.
+//
+// controls.css styles controls by data-slot, not by class: the shape, the
+// focus ring, pressed and disabled. The views build their controls as HTML
+// strings, so rather than adding the attribute to every string (and every
+// future one), stamp it on native controls as they appear. An element that
+// already has a data-slot is left alone.
+const SLOT_FOR = [
+  ["button", "button"],
+  ["textarea", "textarea"],
+  ["select", "select-trigger"],
+  ['input[type="checkbox"]', "checkbox"],
+  ['input[type="radio"]', "radio-group-item"],
+  ['input:not([type]), input[type="text"], input[type="search"], input[type="password"], input[type="email"], input[type="url"], input[type="number"]', "input"],
+  [".badge, .pill, .chip, .chip-c, .srcpill, .gwtag, .stage, .cmp-score, .cmp-q, .ma-o, .ma-test", "badge"],
+];
+function stampSlots(root){
+  for (const [sel, slot] of SLOT_FOR){
+    if (root.matches && root.matches(sel) && !root.dataset.slot) root.dataset.slot = slot;
+    if (root.querySelectorAll) root.querySelectorAll(sel).forEach(el => { if (!el.dataset.slot) el.dataset.slot = slot; });
+  }
+}
+// Views are rebuilt every 5 s and modals are appended to <body>, so watch the
+// whole body rather than stamping once.
+function watchSlots(){
+  stampSlots(document.body);
+  new MutationObserver(records => {
+    for (const r of records) for (const n of r.addedNodes) if (n.nodeType === 1) stampSlots(n);
+  }).observe(document.body, {childList: true, subtree: true});
+}

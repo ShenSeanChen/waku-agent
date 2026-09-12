@@ -12,6 +12,8 @@
   *{box-sizing:border-box;margin:0}
   /* the browser makes these 700 by default; the system has only 400 and 500 */
   b,strong,h2,h3,h4,th{font-weight:var(--font-weight-medium)}
+  /* native checkboxes and radios take the accent, not the OS blue */
+  input[type=checkbox],input[type=radio]{accent-color:var(--accent)}
   /* Thin scrollbars in the token colour. Only the two standard properties:
      styling ::-webkit-scrollbar as well makes the browser ignore them and
      forces the old always-visible bar. */
@@ -223,7 +225,7 @@
   .reveal{color:var(--accent-fg);cursor:pointer;font-weight:500;border-bottom:1px dashed var(--accent);padding-bottom:1px}
   .reveal:hover{border-bottom-style:solid}
   .reveal.del{color:var(--bad);border-color:var(--bad)}
-  .editor{width:100%;min-height:120px;background:var(--bg);border:1px solid var(--line2);border-radius:var(--radius);
+  .editor{width:100%;min-height:120px;background:transparent;border:var(--rule-width) solid var(--input);border-radius:var(--radius);
           padding:10px 12px;color:var(--ink);font-family:var(--face-mono);font-size:var(--text-sm);line-height:1.5;resize:vertical;outline:none}
   .editor:focus{border-color:var(--accent)}
   tr .editor{min-height:52px}
@@ -253,7 +255,7 @@
   .srcpill.mcp{background:var(--good-soft);color:var(--good)}
   .srcpill.apple{background:transparent;border:1px solid var(--line2);color:var(--ink2)}
   /* read-only SQL console (the Supabase-editor idea, scoped down) */
-  .sqlbox{width:100%;min-height:70px;background:var(--surface-sunk);color:var(--text-ink);border:1px solid var(--line2);
+  .sqlbox{width:100%;min-height:70px;background:var(--surface-sunk);color:var(--text-ink);border:var(--rule-width) solid var(--input);
           border-radius:var(--radius);padding:11px 13px;font-family:var(--face-mono);font-size:var(--text-xs);line-height:1.5;resize:vertical;outline:none}
   .sqlbox:focus{border-color:var(--accent)}
   .qexample{font-family:var(--face-mono);font-size:var(--text-xs);color:var(--accent-fg);cursor:pointer;border-bottom:1px dashed var(--accent)}
@@ -299,10 +301,10 @@
   .pinstar.on{color:var(--accent-fg)}
   .pinstar:hover{color:var(--accent-fg)}
   .addmodel{display:flex;gap:8px;align-items:center;margin-top:12px;flex-wrap:wrap}
-  .addmodel select{background:var(--bg);border:1px solid var(--line2);border-radius:var(--radius);padding:8px 10px;
+  .addmodel select{background:transparent;border:var(--rule-width) solid var(--input);border-radius:var(--radius);padding:8px 10px;
           color:var(--ink);font-size:var(--text-sm);outline:none;max-width:100%}
   .addmodel #add-model{flex:1;min-width:180px}
-  .addmodel input{flex:1;min-width:180px;background:var(--bg);border:1px solid var(--line2);border-radius:var(--radius);
+  .addmodel input{flex:1;min-width:180px;background:transparent;border:var(--rule-width) solid var(--input);border-radius:var(--radius);
           padding:8px 12px;color:var(--ink);font-size:var(--text-sm);outline:none}
   .addmodel select:focus,.addmodel input:focus{border-color:var(--accent)}
   .sessitem{padding:8px 10px;border-radius:var(--radius);cursor:pointer;font-size:var(--text-xs)}
@@ -310,14 +312,13 @@
   .sessitem.on{background:var(--accent-soft);color:var(--accent-fg)}
   .sessitem .sm{color:var(--ink3);font-size:var(--text-xs);margin-top:2px}
   .fld{display:flex;flex-direction:column;gap:4px;margin-bottom:12px;font-size:var(--text-xs);color:var(--ink2)}
-  .fld input,.fld select{background:var(--bg);border:1px solid var(--line2);border-radius:var(--radius);padding:9px 12px;
+  .fld input,.fld select{background:transparent;border:var(--rule-width) solid var(--input);border-radius:var(--radius);padding:9px 12px;
           color:var(--ink);font-size:var(--text-sm);outline:none}
   .fld input:focus,.fld select:focus{border-color:var(--accent)}
   .cat-controls{display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin-bottom:8px}
-  .cat-controls input[type=text]{flex:1;min-width:160px;background:var(--bg);border:1px solid var(--line2);
+  .cat-controls input[type=text]{flex:1;min-width:160px;background:transparent;border:var(--rule-width) solid var(--input);
           border-radius:var(--radius);padding:8px 12px;color:var(--ink);font-size:var(--text-sm);outline:none}
   .cat-controls input[type=text]:focus{border-color:var(--accent)}
-  .cat-controls input[type=checkbox],#catalog input[type=checkbox]{accent-color:var(--accent)}
   details.adv{margin:2px 0 10px}
   details.adv>summary{cursor:pointer;font-size:var(--text-xs);color:var(--ink2)}
   details.adv[open]>summary{margin-bottom:8px}
@@ -358,7 +359,7 @@
      width — so the input refused to go below that and pushed Send off the edge
      of the dock. The buttons then get flex-shrink:0 so the input absorbs the
      squeeze instead of the controls turning into slivers. */
-  .chatbar input{flex:1;min-width:0;background:var(--panel);border:1px solid var(--line2);border-radius:var(--radius);
+  .chatbar input{flex:1;min-width:0;background:transparent;border:var(--rule-width) solid var(--input);border-radius:var(--radius);
                  padding:10px 14px;color:var(--ink);font-size:var(--text-sm);outline:none}
   .chatbar input:focus{border-color:var(--accent)}
   .chatbar button{border-radius:var(--radius);padding:0 18px;flex-shrink:0}
@@ -377,7 +378,7 @@
        padding:1px 5px;border-radius:var(--radius)}
   /* Model arena (Compare tab): message + model picks, then a scrolling row of
      one result column per model. */
-  .cmp-input{width:100%;background:var(--bg);border:1px solid var(--line2);border-radius:var(--radius);
+  .cmp-input{width:100%;background:transparent;border:var(--rule-width) solid var(--input);border-radius:var(--radius);
        padding:10px 12px;color:var(--ink);font-size:var(--text-sm);font-family:inherit;outline:none;resize:vertical}
   .cmp-input:focus{border-color:var(--accent)}
   .cmp-picks{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px;align-items:center}
@@ -572,7 +573,6 @@ details.subterm > summary.subterm-h::-webkit-details-marker{ display:none; }
 .conn-field-help{margin-top:5px;color:var(--ink3);font-size:var(--text-xs);line-height:1.45}
 .conn-check{display:flex;align-items:center;gap:9px;color:var(--ink2);font-size:var(--text-xs);
   cursor:pointer;padding:8px 0}
-.conn-check input,.conn-clear input{accent-color:var(--accent)}
 .conn-secret-state{display:inline-flex;border-radius:var(--shape-chip);background:var(--good-soft);
   color:var(--good);font-size:var(--text-xs);font-weight:var(--font-weight-medium);padding:1px 7px;margin-left:4px}
 .conn-clear{display:flex;align-items:center;gap:6px;width:max-content;margin-top:6px;
