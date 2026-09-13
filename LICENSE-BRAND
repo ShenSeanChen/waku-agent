@@ -1,0 +1,25 @@
+Waku brand assets
+
+Copyright (c) 2026 AutoManus Technologies, Inc. All rights reserved.
+
+The MIT license in LICENSE covers the waku-agent source code. It does not
+cover the Waku brand assets listed below. They belong to AutoManus
+Technologies, Inc. and are not licensed under MIT or any other open-source
+license.
+
+Brand assets
+  waku/ops/static/design/         the Waku design system (tokens, controls, type)
+  waku/ops/static/waku-mark.svg   the Waku mark
+  docs/brand/                     the Waku mark, light and dark variants
+  the names "Waku" and "Waku Memory", and the Waku mark
+
+You may run, build and redistribute waku-agent with these files included and
+unmodified, as part of waku-agent or of a fork of it.
+
+You may not, without written permission from AutoManus Technologies, Inc.,
+use these files, the names or the mark in another product or service, or in
+a way that suggests AutoManus Technologies, Inc. or Waku endorses it.
+
+Third-party files keep their own licenses. The fonts in
+waku/ops/static/fonts/ are licensed under the SIL Open Font License 1.1; see
+the OFL-*.txt files beside them.

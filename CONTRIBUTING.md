@@ -141,4 +141,6 @@ keep it legible.
 ## Community
 
 Questions, show-and-tell, pair-debugging: [Discord](https://discord.gg/ebbdvSCXqu). By
-contributing you agree your work is licensed under the repo's MIT license.
+contributing you agree your work is licensed under the repo's MIT license. The brand assets
+listed in [LICENSE-BRAND](LICENSE-BRAND) — the design system and the Waku mark — are not
+MIT and are not open for reuse outside waku-agent.
