@@ -327,7 +327,7 @@
   .chatlog{display:flex;flex-direction:column;gap:10px}
   .bubble{align-self:flex-end;background:var(--accent);color:#fff;padding:8px 13px;
           border-radius:14px 14px 3px 14px;max-width:75%;font-size:13.5px}
-  .chatbar{display:flex;gap:10px;padding:12px 0;border-top:1px solid var(--line);
+  .chatbar{display:flex;align-items: flex-end;gap:10px;padding:12px 0;border-top:1px solid var(--line);
            background:var(--bg);position:sticky;bottom:0;min-width:0}
   /* the chat side-dock: chat from any tab, watch the harness in main */
   #dock{width:var(--dock-w,380px);flex-shrink:0;border-left:1px solid var(--line);
@@ -363,11 +363,12 @@
      width — so the input refused to go below that and pushed Send off the edge
      of the dock. The buttons then get flex-shrink:0 so the input absorbs the
      squeeze instead of the controls turning into slivers. */
-  .chatbar input{flex:1;min-width:0;background:var(--panel);border:1px solid var(--line2);border-radius:8px;
-                 padding:10px 14px;color:var(--ink);font-size:14px;outline:none}
-  .chatbar input:focus{border-color:var(--accent)}
+
+  .chatbar textarea {flex: 1;min-width: 0;background: var(--panel);border: 1px solid var(--line2);border-radius: 8px;padding: 10px 14px;color: var(--ink);font-size: 14px;outline: none;height: 38px;
+  resize: none;overflow-y: hidden;font-family: inherit;box-sizing: border-box;}
+  .chatbar textarea:focus {border-color: var(--accent)}
   .chatbar button{background:var(--accent);color:#fff;border:none;border-radius:8px;
-                  padding:0 18px;font-weight:600;font-size:13.5px;cursor:pointer;flex-shrink:0}
+                  padding:0 18px;font-weight:600;font-size:13.5px;cursor:pointer;flex-shrink:0;height: 38px; box-sizing: border-box;display: inline-flex;align-items: center;justify-content: center;}
   .chatbar button:disabled{opacity:.5;cursor:default}
   .stages{display:flex;gap:6px;margin:2px 0 4px}
   .stage{font-size:11px;padding:2px 9px;border-radius:99px;border:1px solid var(--line2);color:var(--ink3)}

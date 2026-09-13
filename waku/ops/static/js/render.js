@@ -185,20 +185,53 @@ function applyStreamEvent(pending, ev){
   }
 }
 
+const textarea = document.getElementById('dmsg');
+const originalHeight = 38; 
+
+textarea.addEventListener('input', function() {
+  this.style.height = originalHeight + 'px'; 
+  
+  if (this.scrollHeight > originalHeight) {
+    this.style.height = this.scrollHeight + 'px';
+  }
+}); 
+
+textarea.addEventListener('keydown', function(e) {
+  // If user presses Enter WITHOUT holding Shift
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault(); // <-- THIS STOPS THE CURSOR DROP
+    sendChat();         // Trigger your send function
+  }
+});
+
 async function sendChat(fromInput){
   const input = fromInput || document.getElementById("msg") || document.getElementById("dmsg");
   const text = (input && input.value || "").trim();
   if (!text) return;
+
+  // 1. Keep a backup of the text in case the network fails completely
+  const originalText = input.value; 
+
+  // 2. Clear the UI text box and reset its height instantly
   input.value = "";
+  if (input.tagName === "TEXTAREA") {
+    input.style.height = '38px'; // Resizes back down seamlessly
+  }
+
   CHAT.push({role:"user", text});
   const pending = {role:"waku", pending:true, stream:"", started: Date.now()};
   CHAT.push(pending);
   syncChatLogs();
-  // tick the elapsed counter while we wait for the first token
+  
   const ticker = setInterval(() => { if (pending.pending && !pending.stream) syncChatLogs(); }, 1000);
+  
   try {
     const res = await fetch("/api/chat/stream", {method:"POST",
       headers:{"Content-Type":"application/json"}, body:JSON.stringify({message:text})});
+    
+    // If the server returns an error code (e.g., 500, 404), throw it to trigger the catch block
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
     const reader = res.body.getReader(), dec = new TextDecoder();
     let buf = "";
     for (;;){
@@ -213,16 +246,28 @@ async function sendChat(fromInput){
         syncChatLogs();
       }
     }
-  } catch(e){ Object.assign(pending, {pending:false, reply:"Error: "+e}); }
+  } catch(e){ 
+    Object.assign(pending, {pending:false, reply:"Error: "+e}); 
+    
+    // 3. NETWORK FAILED PROTECTION: Bring back the text so they can retry!
+    if (input) {
+      input.value = originalText;
+      // Trigger the input event to restore its grown height
+      input.dispatchEvent(new Event('input')); 
+    }
+  }
+  
   clearInterval(ticker);
-  if (pending.pending) pending.pending = false;   // stream ended without a 'done'
+  if (pending.pending) pending.pending = false;   
   syncChatLogs();
   input.focus();
 }
+
+
 function wireDock(){
   const b = document.getElementById("dsend"), i = document.getElementById("dmsg");
   if (b) b.onclick = () => sendChat(i);
-  if (i) i.onkeydown = e => { if (e.key==="Enter") sendChat(i); };
+  if (i) i.onkeydown = e => { if (e.key==="Enter" && !e.shiftKey) sendChat(i); };
   const close = document.getElementById("dock-close"), reopen = document.getElementById("dock-reopen");
   const setClosed = v => { document.body.classList.toggle("dock-closed", v); localStorage.setItem("dockClosed", v?"1":"0"); };
   if (close) close.onclick = () => setClosed(true);
