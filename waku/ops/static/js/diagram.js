@@ -20,14 +20,15 @@ function archSVG(d){
   const flow = (d2,cls="",eid="") => `<path class="flow ${cls}" ${eid?`data-edge="${eid}"`:""} d="${d2}"/>`;
   const flowLbl = (x,y,t,anchor="start") => `<text class="fl" x="${x}" y="${y}" text-anchor="${anchor}">${t}</text>`;
 
-  return `<div style="overflow-x:auto"><svg viewBox="0 -10 1044 674" class="arch" role="img">
+  return `<div style="overflow-x:auto"><svg viewBox="0 -16 1044 680" class="arch" role="img">
     <defs><marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
       <path d="M0 0 L10 5 L0 10 z" class="head"/></marker></defs>
 
     <!-- HARNESS container: everything runs on your laptop, including the
          offline LLM Ops loop (tinted sub-panel) -->
-    <rect class="container" x="12" y="20" width="1020" height="628" rx="16"/>
-    ${lbl(16,4,"HARNESS — runs on your laptop · the turn inside is ephemeral")}
+    <!-- border at y=10 so the arc's label at y=28 sits clear of the dashes -->
+    <rect class="container" x="12" y="10" width="1020" height="638" rx="16"/>
+    ${lbl(16,-2,"HARNESS — runs on your laptop · the turn inside is ephemeral")}
 
     <!-- the turn: gateway → working memory → loop → reply -->
     ${box(32,72,128,56,"Gateway","cli · voice · web","chat","","gateway")}
