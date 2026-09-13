@@ -15,7 +15,8 @@ function uiCard(body, {title = "", action = "", footer = "", size = "", cls = ""
 // Badge — the 20px chip. variant: neutral | ok | warn | bad | live | miss | value.
 // "value" is for data (a grade, a cost, a model id): normal case, no tracking.
 function uiBadge(text, variant = "neutral", title = ""){
-  return `<span class="badge badge-${variant}"${title ? ` title="${esc(title)}"` : ""}>${text}</span>`;
+  // .badge-t is the text's own box: it is what a capped badge ellipsizes.
+  return `<span class="badge badge-${variant}"${title ? ` title="${esc(title)}"` : ""}><span class="badge-t">${text}</span></span>`;
 }
 
 // Table — columns: [labelHtml, …]; rows: [[cellHtml, …], …]. Cells are HTML,

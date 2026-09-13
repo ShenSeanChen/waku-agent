@@ -127,12 +127,18 @@
   .badge-live,.badge.retrieve{color:var(--accent-fg);border-color:var(--accent)}
   .badge-miss{color:var(--text-faint);border-style:dashed}
   .badge-value{text-transform:none;letter-spacing:0;color:var(--text-ink)}
+  /* The text's own box, so a capped badge can end in an ellipsis: text sitting
+     directly in the inline-flex badge is an anonymous flex item that
+     text-overflow cannot reach. */
+  .badge-t{min-width:0;overflow:hidden;text-overflow:ellipsis}
   .pill{font-size:var(--text-xs);padding:calc(var(--spacing) * 0.5) var(--space-2);border-radius:var(--shape-chip);font-weight:var(--font-weight-medium)}
   .pill.pass{background:var(--surface-raised);color:var(--ok)}
   .pill.fail{background:var(--surface-raised);color:var(--bad)}
   .pill.skip{background:var(--surface-raised);color:var(--accent-fg)}
   .u{font-weight:var(--font-weight-medium)}
-  .r{color:var(--text-muted);white-space:pre-wrap;margin-top:var(--space-2)}
+  /* overflow-wrap: a long unbroken token (a URL, a tool call's arguments)
+     breaks instead of widening the card past the chat column. */
+  .r{color:var(--text-muted);white-space:pre-wrap;overflow-wrap:anywhere;margin-top:var(--space-2)}
   /* .r keeps a reply's line breaks. Prose written in JS also carries .prose,
      so its source line breaks and indents do not reach the page; the Ops
      ledger card read as noise because they did. */
@@ -365,8 +371,10 @@
   /* Chat (17C): your message is a rounded bubble whose corner nearest you
      stays square; Waku's reply has no box, so the two sides read apart. */
   .chatlog{display:flex;flex-direction:column;gap:var(--space-4)}
+  /* overflow-wrap: a long unbroken word in your message wraps instead of
+     pushing the chat column sideways (same rule as .r). */
   .bubble{align-self:flex-end;background:var(--surface-raised);color:var(--text-ink);border:var(--rule-width) solid var(--rule);padding:var(--space-2) var(--space-3);
-          border-radius:var(--shape-bubble);border-bottom-right-radius:var(--radius);max-width:75%;font-size:var(--text-sm)}
+          border-radius:var(--shape-bubble);border-bottom-right-radius:var(--radius);max-width:75%;font-size:var(--text-sm);overflow-wrap:anywhere}
   /* Waku's reply keeps its card, on the page ground so it reads against
      the paper dock. Your message is the rounded bubble; the card is square. */
   #dock .card{background:var(--surface-bg)}
@@ -414,7 +422,12 @@
   .chatbar input:focus{border-color:var(--accent)}
   .chatbar button{flex-shrink:0}
   .chatbar button:disabled{cursor:default}
-  .stages{display:flex;gap:calc(var(--spacing) * 1.5);margin:calc(var(--spacing) * 0.5) 0 var(--spacing)}
+  .stages{display:flex;flex-wrap:wrap;gap:calc(var(--spacing) * 1.5);margin:calc(var(--spacing) * 0.5) 0 var(--spacing)}
+  /* In the chat dock a badge can be wider than the whole column (a tool name
+     at 260px). The row wraps, and a badge still too wide for a row of its own
+     is cut with an ellipsis; toolChip puts the full name in its title. The cap
+     leaves room for the badge's own margin-right. */
+  .stages .badge{max-width:calc(100% - var(--space-2));min-width:0}
   .stage{font-size:var(--text-xs);padding:calc(var(--spacing) * 0.5) var(--space-2);border-radius:var(--shape-chip);border:1px solid var(--rule-hard);color:var(--text-faint)}
   .stage.on{border-color:var(--accent);color:var(--accent-fg);background:var(--surface-raised)}
   .stage.done{border-color:var(--ok);color:var(--ok)}

@@ -123,7 +123,9 @@ const sessionMeta = s =>
 // are otherwise different on purpose (the arena has no gate/reply stage and
 // wraps), but the chip itself must look identical in both or the same tool
 // call appears to be two different things.
-const toolChip = name => uiBadge("tool · " + esc(name), "ok");
+// Tool names run long (waku_memory_memory_search), and in a narrow chat dock the
+// badge is cut to fit, so the full name rides along as the hover title.
+const toolChip = name => uiBadge("tool · " + esc(name), "ok", "tool · " + name);
 
 // --- data-slot: how Waku Memory's controls.css finds a control.
 //
