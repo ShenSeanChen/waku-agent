@@ -106,7 +106,8 @@ function wireResizer(id, cssVar, key, fromRight, min, max){
     document.body.classList.add("resizing");
     const move = ev => {
       let w = fromRight ? (window.innerWidth - ev.clientX) : ev.clientX;
-      w = Math.max(min, Math.min(max, w));
+      const hi = typeof max === "function" ? Math.max(min, max()) : max;
+      w = Math.max(min, Math.min(hi, w));
       document.documentElement.style.setProperty(cssVar, w + "px");
       localStorage.setItem(key, w);
     };
@@ -121,8 +122,17 @@ function wireChrome(){
   // and the collapse is not remembered: a rail that reopens closed hides the
   // navigation from someone coming back (Memory's rule).
   const dw = localStorage.getItem("dockW"); if (dw) document.documentElement.style.setProperty("--dock-w", dw+"px");
-  wireResizer("dock-resizer", "--dock-w", "dockW", true, 260, 680);
   const rail = document.getElementById("nav"), btn = document.getElementById("nav-collapse");
+  // The handle stops where main would drop below --main-min: the same limit
+  // the dock's CSS clamp holds, so a drag can never squeeze or cover the page.
+  // A custom property reads back as its expression ("calc(480px + …)"), not
+  // as pixels, so resolve it the way the dock's CSS does: by laying it out.
+  const px = v => { const p = document.createElement("div");
+    p.style.cssText = `position:absolute;visibility:hidden;width:var(${v})`;
+    document.body.appendChild(p); const w = p.getBoundingClientRect().width; p.remove(); return w; };
+  const dockMax = () => Math.min(680, window.innerWidth - rail.getBoundingClientRect().width
+    - document.getElementById("dock-resizer").getBoundingClientRect().width - px("--main-min"));
+  wireResizer("dock-resizer", "--dock-w", "dockW", true, 260, dockMax);
   if (btn) btn.onclick = () => {
     const c = rail.classList.toggle("collapsed");
     btn.setAttribute("aria-expanded", String(!c));

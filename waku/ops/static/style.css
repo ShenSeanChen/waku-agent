@@ -190,7 +190,9 @@
   
    
   
-  .arch{width:100%;min-width:760px;height:auto;font-family:var(--face-sans)}
+  /* Scales with its column so it stays whole beside the chat; below 480px
+     its labels stop being readable, so the column scrolls instead. */
+  .arch{width:100%;min-width:480px;height:auto;font-family:var(--face-sans)}
   .arch .container{fill:none;stroke:var(--rule-hard);stroke-dasharray:5 4}
   /* LLM Ops is a SEPARATE system (offline, improves the agent) — a solid
      tinted panel so it never reads as part of the ephemeral Harness. */
@@ -371,8 +373,14 @@
   .chatbar{display:flex;gap:var(--space-2);padding:var(--space-3) 0;border-top:1px solid var(--rule);
            background:var(--surface-bg);position:sticky;bottom:0;min-width:0}
   /* the chat side-dock: chat from any tab, watch the harness in main */
-  #dock{width:var(--dock-w,380px);flex-shrink:0;border-left:1px solid var(--rule);
+  /* The page is never covered, and the chat is always resizable. The dock
+     sits beside main and gives up width first: it keeps the width you
+     dragged it to while main still has --main-min, and shrinks toward
+     260px when it does not. The drag handle stops at the same limit
+     (wireChrome in main.js), so dragging can never squeeze the page. */
+  #dock{width:clamp(260px, var(--dock-w,380px), calc(100vw - var(--rail-w,196px) - 5px - var(--main-min)));flex-shrink:0;border-left:1px solid var(--rule);
         height:100vh;display:flex;flex-direction:column;background:var(--surface-paper);padding:0 var(--space-3)}
+  body:has(.rail.collapsed){--rail-w:56px}
   /* gateway source tags (which channel a message came in through) */
   .gwtag{font-family:var(--face-mono);font-size:var(--text-xs);font-weight:var(--font-weight-medium);text-transform:uppercase;letter-spacing:var(--tracking-label);
          padding:calc(var(--spacing) * 0.5) calc(var(--spacing) * 1.5);border-radius:var(--shape-chip);vertical-align:middle;margin-left:calc(var(--spacing) * 1.5);

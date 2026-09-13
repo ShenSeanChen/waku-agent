@@ -20,6 +20,9 @@
   /* The chat bubble's corner. The dashboard's own: Waku Memory has no chat
      screen, so its tokens do not have this shape. */
   --shape-bubble:calc(var(--spacing) * 3);
+  /* The narrowest main gets while the chat dock is open: 480px of chart
+     plus main's padding. The dock shrinks to protect it (style.css). */
+  --main-min:calc(480px + 2 * var(--space-8));
 }
 :root,[data-theme]{
   --input:color-mix(in srgb,var(--text-ink) 48%,var(--surface-bg));
