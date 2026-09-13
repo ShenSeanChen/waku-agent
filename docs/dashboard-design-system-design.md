@@ -1,8 +1,8 @@
 # Dashboard design system — the Waku Memory look
 
-Status: PR 1 (foundation) is built and in review. PR 2 (shell) is
-specified in §11. PR 3's design decisions are recorded in §10; it gets a
-full section before its code starts.
+Status: PR 1 (foundation, #189) and PR 2 (shell, #190) are built and in
+review; PR 2 is specified in §11. PR 3 (views) is specified in §12, from
+the decisions recorded in §10.
 Scope: `waku/ops/static/`, plus one line in `dashboard.py` so the fonts are
 served as `font/woff2`. No API change, no terminal UI.
 
@@ -368,3 +368,119 @@ starts closed and opens from its reopen button.
   label;
 - nothing reads or writes `navW` or `navHidden`, and no `#model` element or
   lookup remains.
+
+## 12. PR 3 — views and primitives
+
+Decided from the mockup, questions 6–11 (§10). This section covers the
+parts that apply to every view. The per-view changes are listed in §12.6.
+
+### 12.1 Primitives
+
+`js/ui.js` holds one function per primitive. Each returns an HTML string,
+the same way the views already build their markup. Names follow the Memory
+console's `components/ui`, with a `ui` prefix, because the `js/` files
+share one global scope and a bare `card` or `badge` would collide with
+local variables.
+
+| Function | Memory primitive | Drawn as |
+|---|---|---|
+| `uiCard(body, {title, action, footer, size})` | Card | paper ground, 1px `--rule`, 16px padding (12px at `size: "sm"`); title in the display face |
+| `uiBadge(text, variant)` | Badge | 20px chip, mono uppercase at `--tracking-label`; variants `neutral`, `ok`, `warn`, `bad`, `live` (amber edge), `value` (normal case, no tracking) |
+| `uiTable(columns, rows, {caption})` | Table | faint mono uppercase header, 8px cells, a `--rule` under each row, `--surface-raised` on hover |
+| `uiTabs(items, active)` | Tabs, `line` variant | 13px medium labels in `--text-muted`; the active one in ink with a 2px ink bar |
+| `uiNotice(level, html, action)` | Notice | `--surface-raised` ground, a `--rule` under it, a mono level word (`note`, `ok`, `warn`, `failed`) before the message |
+| `uiStatBand(items)` | the Overview stat band | one bordered strip, a divider between figures, label above, 27px mono number, faint subline |
+| `uiRow(lead, title, meta)` | the recent-writes row | a grid of lead and body, a `--rule` under each row |
+| `openDialog(html)` / `closeDialog()` | Dialog | a native `<dialog>`: `--surface-raised`, 1px `--rule`, 32px padding, `--scrim` behind, actions right-aligned in a footer |
+
+`data-slot` is stamped the same way controls are (`stampSlots`), so
+`controls.css` reaches every Badge and tab trigger. `/static/README.md`
+lists the functions and says which to reach for.
+
+### 12.2 Spacing
+
+Memory's primitives use spacing two ways, and the dashboard follows both:
+
+- **Between things** — blocks, card padding, page and section gaps — only
+  the five named steps: `--space-2` 8px, `--space-3` 12px, `--space-4`
+  16px, `--space-6` 24px, `--space-8` 32px. A value between two steps goes
+  to the one that matches its job: a gap between two related blocks is
+  `--space-4`, a group gap `--space-6`.
+- **Inside one control** — a badge's padding, the gap between an icon and
+  its label — `calc(var(--spacing) * N)` with N of 0.5, 1 or 1.5 (2, 4 or
+  6px), the way Memory's Badge uses 2px and its menus 6px.
+
+313 spacing values are raw px today. A 1px nudge becomes 0 or 2px, and
+most 10px gaps become 8px or 12px, so some elements move by 1–4px. The page
+gutter moves from 40px to `--space-8`.
+
+### 12.3 Old names removed
+
+Every `var(--bg)`, `var(--ink2)` and the rest of §5's aliases becomes the
+token it points at, in `style.css` and in `js/`. Then the alias block is
+deleted.
+
+### 12.4 Checks
+
+Added to `test_design_system.py`, replacing the PR 1 alias allow-list:
+
+- `padding`, `margin` and `gap` only through a `--space-*` token, a
+  `calc()` of `--spacing`, `0` or `auto`;
+- no old alias name anywhere, and no alias block;
+- `js/ui.js` loads before the views, and each primitive's class names
+  (`notice`, `stat-band`, `tabs`, …) appear only in `js/ui.js` and
+  `style.css` — a view calls the function instead of writing the markup.
+
+### 12.5 Verification
+
+As for PR 2: the full deterministic suite, lint, a wheel build, and all
+13 tabs in light and dark with zero console errors, with before and after
+screenshots in the PR.
+
+### 12.6 Per view
+
+From an inventory of every pattern the views emit (file and function in
+brackets).
+
+- **Stat tiles → `uiStatBand`.** Overview and Ops headline numbers, and
+  Memory's consolidation figures (`views.js`: `overview`, `ops`,
+  `memConsolidation`). Memory's three pillars stay cards.
+- **Sub-tabs → `uiTabs`.** `subtabBar` in `views.js` (Memory, Tools,
+  Database). The arena's sort buttons stay buttons.
+- **Explanation boxes → `uiNotice`.** "Memory vs Database", "Database vs
+  Memory", the episodic note, the MCP status box, and the connection
+  setup box (`views.js`). Plain cards of "How it works." prose stay cards.
+- **Tables → `uiTable`.** The shared `table()` helper in `render.js` (ten
+  callers), the hand-built tables in `memSemantic`, `memEpisodic`, the
+  database views, the memory race and the scoreboard (`compare.js`).
+  Markdown tables in chat replies keep their own style.
+- **Badges → `uiBadge`.** `.badge`, `.pill`, `.chip`, `.srcpill`,
+  `.gwtag`, `.stage`, `.cmp-score`, `.cmp-q`, `.ma-o`, `.ma-test`,
+  `.mm-def` and `.conn-secret-state` become one Badge with variants:
+  - pass, solved, connected, current, done → `ok`;
+  - stale, partial, needs setup → `warn`;
+  - fail, failed, invented, error → `bad`;
+  - a stage or node that is running → `live`;
+  - miss → `neutral` with a dashed edge, like Memory's `observed`;
+  - numbers, model names, grades (`8.5 / 10`), costs → `value`;
+  - everything else → `neutral`.
+- **The retrieval gate → two figures over a thin bar** (§10). `gateSplit`
+  in `render.js`, and the graph panel's copy of it in `graph.js`, which
+  then uses the same function.
+- **The model-race scatter → one hue** (§10). Points take `--chart-1` to
+  `--chart-4` by grade, and each label prints the grade and the cost.
+- **Dialogs → `openDialog`.** The provider dialog (`models.js`) and the
+  connection dialog (`views.js`). Both gain Escape to close and focus on
+  open; the connection dialog already had them.
+- **Rows → `uiRow`.** The recent-races list (`compare.js`) and the
+  gateway inbox (`views.js`).
+
+Left as they are: the architecture and graph diagrams (§10), the chat
+dock's menus (`.sessmenu`, `.modelmenu`), and the `<a class="reveal">`
+links. The links are about 44 inline actions; making them buttons is a
+separate change.
+
+CSS that no JS emits (`.ma-source`, `.ma-warn`, `.chip-c`, `.col-chip`,
+`.mm-free`) is deleted rather than moved onto tokens. Unused JS
+(`yourModelsCard`, `loadModelList`, `renderCatalog`, `renderCatalogList`,
+`modelRow`, `pickTrack`) is out of scope and is listed in the PR.
