@@ -181,6 +181,17 @@ def _run_command(command: tuple[str, str], emit) -> None:
     """
     name, arg = command
     start = datetime.now(UTC)
+    if name == "connect":
+        # Signing in opens YOUR browser and waits for you to click Allow. The
+        # dashboard runs on your machine, so it does that in-process: no shell,
+        # no terminal. ThreadingHTTPServer keeps the wait to this one request.
+        from waku.config import load_settings
+        from waku.connect import connect as connect_integration
+        from waku.connect import usage as connect_usage
+
+        reply = connect_integration(arg, load_settings().home) if arg else connect_usage()
+        emit("done", {"reply": reply, "tools": [], "iterations": 0, "latency_ms": 0, "gate": None})
+        return
     if name in ("graphs", "help", "?"):
         emit("done", {"reply": commands.describe(), "tools": [], "iterations": 0,
                       "latency_ms": 0, "gate": None})
