@@ -3,6 +3,7 @@
   waku                       chat in the terminal (default)
   waku dashboard             the browser cockpit → localhost:7777 (+ Telegram if configured)
   waku connections           list configured integrations and their health
+  waku connect google        sign in to Google Calendar (opens your browser)
   waku mcp                   MCP servers, and which account each knows you as
   waku mcp login <name>      sign in again — as someone else, or after expiry
   waku voice                 talk to it (needs the [voice] extra)
@@ -47,6 +48,10 @@ def main() -> None:
         from waku.integrations import cli_main
 
         sys.exit(cli_main())
+    elif args[0] == "connect":
+        from waku.connect import cli_main as connect_main
+
+        sys.exit(connect_main(args[1:]))
     elif args[0] == "voice":
         from waku.gateway.voice import main as voice_main
 
