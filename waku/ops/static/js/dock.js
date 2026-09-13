@@ -114,8 +114,7 @@ function toggleModelMenu(ev){
        onclick: `switchTo('${esc(p.provider)}','${esc(p.model)}')`})
   ).join("") : `<div class="menu-empty">No models pinned yet.</div>`;
   openMenu(ev.currentTarget, uiMenuLabel("Your models") + items + uiMenuSep()
-    + uiMenuItem("Manage models…", {onclick: "location.hash='models';closeMenu()"}),
-    {width: "250px"});
+    + uiMenuItem("Manage models…", {onclick: "location.hash='models';closeMenu()"}));
 }
 // Switch BOTH provider and model in one click (a pinned model can be any
 // provider). Same-provider switch keeps the gate model; cross-provider lets the

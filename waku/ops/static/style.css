@@ -687,7 +687,10 @@ details.subterm > summary.subterm-h::-webkit-details-marker{ display:none; }
 .notice-ok .notice-mark{color:var(--ok)}
 .notice-warn .notice-mark{color:var(--warn)}
 .notice-failed .notice-mark{color:var(--bad)}
-.notice-body{line-height:var(--leading-snug);overflow-wrap:anywhere;min-width:0}
+.notice-body{line-height:var(--leading-normal);overflow-wrap:anywhere;min-width:0}
+/* .r keeps a reply's line breaks; a notice's text is prose written in JS, so
+   its source line breaks must not show. */
+.notice-body .r{white-space:normal}
 .notice-action{margin-left:auto;flex-shrink:0}
 /* Stat band: one bordered strip, a divider between figures. */
 .stat-band{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));border:var(--rule-width) solid var(--rule);
@@ -756,7 +759,7 @@ dialog.dialog :focus-visible{outline:var(--focus-ring-width) solid var(--accent)
 .link:hover{text-decoration-color:var(--accent)}
 /* Menu (15B): paper, a hard rule, the hovered item one step raised, the
    current item in accent text. Memory's DropdownMenu follows the same look. */
-.menu{position:fixed;z-index:var(--z-menu);min-width:calc(var(--spacing) * 32);max-height:70vh;overflow-y:auto;
+.menu{position:fixed;z-index:var(--z-menu);min-width:calc(var(--spacing) * 32);max-width:calc(100vw - var(--space-8));max-height:70vh;overflow-y:auto;
       background:var(--surface-paper);border:var(--rule-width) solid var(--rule-hard);border-radius:var(--radius);
       padding:calc(var(--spacing) * 1.5)}
 .menu-label{font-family:var(--face-mono);font-size:var(--text-xs);text-transform:uppercase;letter-spacing:var(--tracking-label);
@@ -770,4 +773,5 @@ dialog.dialog :focus-visible{outline:var(--focus-ring-width) solid var(--accent)
 .menu-sub{margin-left:auto;padding-left:var(--space-2);font-family:var(--face-mono);color:var(--text-faint)}
 .menu-sep{height:var(--rule-width);background:var(--rule);margin:var(--spacing) 0}
 .menu-empty{padding:var(--space-2);font-size:var(--text-xs);color:var(--text-faint)}
-.menu-item code{font-family:var(--face-mono);font-size:var(--text-xs);background:none;border:none;padding:0}
+.menu-item code{font-family:var(--face-mono);font-size:var(--text-xs);background:none;border:none;padding:0;white-space:nowrap}
+.menu-sub{white-space:nowrap}
