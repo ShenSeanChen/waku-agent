@@ -21,6 +21,9 @@ for its own sake is not.
   `retrieval_gate.py` (hero 1) + `consolidation.py` (every N exchanges)
 - `waku/ops/` — tracing (JSONL + OTel), dashboard (localhost:7777), release_gate,
   `compare_history.py` (the Compare arena's own JSONL scoreboard — never state.db)
+- `waku/ops/static/` — the dashboard frontend, on the Waku Memory design system;
+  read the "Design system" section of `static/README.md` before changing how
+  anything looks
 - `evals/deterministic/` (0/1, pytest) vs `evals/judge/` (DeepEval, scored) — never mix
 - `examples/` — teaching material, not product (see the rule below); one folder per topic
 - Runtime state lives in `.waku/` (state.db, calendar.ics, outbox/, traces/) — gitignored
