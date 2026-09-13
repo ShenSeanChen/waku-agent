@@ -133,6 +133,10 @@
   .pill.skip{background:var(--surface-raised);color:var(--accent-fg)}
   .u{font-weight:var(--font-weight-medium)}
   .r{color:var(--text-muted);white-space:pre-wrap;margin-top:var(--space-2)}
+  /* .r keeps a reply's line breaks. Prose written in JS also carries .prose,
+     so its source line breaks and indents do not reach the page; the Ops
+     ledger card read as noise because they did. */
+  .r.prose{white-space:normal}
   /* rendered markdown in chat replies (blocks handle their own spacing, so
      they read as normal HTML, not pre-wrapped source) */
   .r .mdp,.r .mdh,.r .mdlist,.r .mdtable{white-space:normal}
@@ -262,6 +266,9 @@
      min-width:0 is the other half — without it a flex child refuses to shrink
      below its content and the row overflows even when it IS allowed to wrap. */
   .sesshead{display:flex;align-items:center;gap:var(--space-2);margin-bottom:var(--space-2);flex-wrap:wrap;min-width:0}
+  /* The three buttons share the row, so its right edge lines up with the
+     model chip under it. */
+  .sesshead .sessbtn{flex:1 1 auto}
   /* per-turn stats (gate/seconds/iters/tools) hide together when toggled off */
   body.no-tele .chatlog .tele{display:none}
   
@@ -276,6 +283,23 @@
   .modelchip .mc-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
                       font-family:var(--face-mono);font-size:var(--text-xs)}
   .modelchip .mc-caret{color:var(--text-faint);font-size:var(--text-xs);flex-shrink:0}
+  /* Every <select> looks like the model chip above: one dropdown across the
+     dashboard, the design owner's call on 2026-09-13. The browser's arrow goes
+     and the chip's caret takes its place, drawn as two half-squares of
+     gradient rather than an SVG, because a gradient can read --text-faint and
+     follow the theme while an image cannot. A select inside a form keeps the
+     form's taller padding (.fld, .addmodel) so it lines up with the input
+     beside it. */
+  select{appearance:none;-webkit-appearance:none;cursor:pointer;outline:none;
+         background-color:var(--surface-raised);border:var(--rule-width) solid var(--rule-hard);border-radius:var(--radius);
+         color:var(--text-ink);font-family:var(--face-mono);font-size:var(--text-xs);line-height:var(--leading-snug);
+         padding:var(--spacing) var(--space-6) var(--spacing) var(--space-2);
+         background-image:linear-gradient(to bottom left,var(--text-faint) 50%,transparent 50%),
+                          linear-gradient(to bottom right,var(--text-faint) 50%,transparent 50%);
+         background-size:var(--spacing) calc(var(--spacing) * 1.25);
+         background-position:right calc(var(--space-2) + var(--spacing)) center,right var(--space-2) center;
+         background-repeat:no-repeat}
+  select:hover,select:focus{border-color:var(--accent)}
   
   
   
@@ -294,20 +318,21 @@
   .pinstar.on{color:var(--accent-fg)}
   .pinstar:hover{color:var(--accent-fg)}
   .addmodel{display:flex;gap:var(--space-2);align-items:center;margin-top:var(--space-3);flex-wrap:wrap}
-  .addmodel select{background:transparent;border:var(--rule-width) solid var(--input);border-radius:var(--radius);padding:var(--space-2) var(--space-2);
-          color:var(--text-ink);font-size:var(--text-sm);outline:none;max-width:100%}
+  .addmodel select{padding-top:var(--space-2);padding-bottom:var(--space-2);
+          max-width:100%}
   .addmodel #add-model{flex:1;min-width:180px}
   .addmodel input{flex:1;min-width:180px;background:transparent;border:var(--rule-width) solid var(--input);border-radius:var(--radius);
           padding:var(--space-2) var(--space-3);color:var(--text-ink);font-size:var(--text-sm);outline:none}
-  .addmodel select:focus,.addmodel input:focus{border-color:var(--accent)}
+  .addmodel input:focus{border-color:var(--accent)}
   
   
   
   
   .fld{display:flex;flex-direction:column;gap:var(--spacing);margin-bottom:var(--space-3);font-size:var(--text-xs);color:var(--text-muted)}
-  .fld input,.fld select{background:transparent;border:var(--rule-width) solid var(--input);border-radius:var(--radius);padding:var(--space-2) var(--space-3);
+  .fld input{background:transparent;border:var(--rule-width) solid var(--input);border-radius:var(--radius);padding:var(--space-2) var(--space-3);
           color:var(--text-ink);font-size:var(--text-sm);outline:none}
-  .fld input:focus,.fld select:focus{border-color:var(--accent)}
+  .fld input:focus{border-color:var(--accent)}
+  .fld select{padding-top:var(--space-2);padding-bottom:var(--space-2)}
   .cat-controls{display:flex;gap:var(--space-3);align-items:center;flex-wrap:wrap;margin-bottom:var(--space-2)}
   .cat-controls input[type=text]{flex:1;min-width:160px;background:transparent;border:var(--rule-width) solid var(--input);
           border-radius:var(--radius);padding:var(--space-2) var(--space-3);color:var(--text-ink);font-size:var(--text-sm);outline:none}
@@ -396,6 +421,9 @@
        border:1px solid var(--rule-hard);border-radius:var(--shape-chip);padding:var(--spacing) var(--space-2);cursor:pointer}
   .cmp-pick.on{border-color:var(--accent);color:var(--accent-fg);background:var(--surface-raised)}
   .cmp-pick input{margin:0}
+  /* "slow" and "no memory" reuse .meta for its colour, and .meta's margin-top
+     pushed them below the chip's edge. Inside a chip they sit on the line. */
+  .cmp-pick .meta{margin-top:0}
   /* Responsive: as many ~300px columns as fit, then wrap to the next row. */
   .cmp-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));
        gap:var(--space-3);margin-top:var(--space-3);align-items:start}
@@ -438,8 +466,7 @@
     cursor:pointer;white-space:nowrap;padding:var(--spacing) var(--space-2);border-radius:var(--radius);border:1px solid var(--rule)}
   .cmp-judge.on{color:var(--accent-fg);border-color:var(--accent)}
   .cmp-judge input{margin:0}
-  .cmp-judge select{font:inherit;font-size:var(--text-xs);color:var(--text-ink);background:transparent;
-    border:1px solid var(--rule);border-radius:var(--radius);padding:calc(var(--spacing) * 0.5) var(--spacing);margin-left:calc(var(--spacing) * 0.5);cursor:pointer}
+  .cmp-judge select{margin-left:calc(var(--spacing) * 0.5)}
   .cmp-judge select:disabled{cursor:default}
   .scatter{width:100%;height:auto;display:block}
   .scatter text{font-family:inherit}   /* match the page's sans, not SVG's default serif */
@@ -763,7 +790,7 @@ dialog.dialog :focus-visible{outline:var(--focus-ring-width) solid var(--accent)
 .link:hover{text-decoration-color:var(--accent)}
 /* Menu (15B): paper, a hard rule, the hovered item one step raised, the
    current item in accent text. Memory's DropdownMenu follows the same look. */
-.menu{position:fixed;z-index:var(--z-menu);min-width:calc(var(--spacing) * 32);max-width:calc(100vw - var(--space-8));max-height:70vh;overflow-y:auto;
+.menu{position:fixed;box-shadow:var(--shadow-md);z-index:var(--z-menu);min-width:calc(var(--spacing) * 32);max-width:calc(100vw - var(--space-8));max-height:70vh;overflow-y:auto;
       background:var(--surface-paper);border:var(--rule-width) solid var(--rule-hard);border-radius:var(--radius);
       padding:calc(var(--spacing) * 1.5)}
 .menu-label{font-family:var(--face-mono);font-size:var(--text-xs);text-transform:uppercase;letter-spacing:var(--tracking-label);
@@ -779,3 +806,9 @@ dialog.dialog :focus-visible{outline:var(--focus-ring-width) solid var(--accent)
 .menu-empty{padding:var(--space-2);font-size:var(--text-xs);color:var(--text-faint)}
 .menu-item code{font-family:var(--face-mono);font-size:var(--text-xs);background:none;border:none;padding:0;white-space:nowrap}
 .menu-sub{white-space:nowrap}
+/* A row wraps rather than scrolls: the sub label keeps to the right and drops
+   to its own line when the title needs the room, and a long id breaks
+   anywhere. The history menu scrolled sideways before, which hid the start
+   of every row behind a scrollbar. */
+.menu{overflow-x:hidden}
+.menu-item{flex-wrap:wrap;overflow-wrap:anywhere}

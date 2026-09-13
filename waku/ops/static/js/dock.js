@@ -72,7 +72,7 @@ function toggleSessMenu(ev){
     ? sessions.map(s => uiMenuItem(`${esc(s.title||s.id)} ${gwTags(s)}`,
         {sub: sessionMeta(s), on: s.id === SESSION, onclick: `openConversation('${esc(s.id)}')`})).join("")
     : `<div class="menu-empty">no past conversations yet</div>`;
-  openMenu(ev.currentTarget, allItem + uiMenuSep() + rows, {width: "300px"});
+  openMenu(ev.currentTarget, allItem + uiMenuSep() + rows, {width: "400px"});
 }
 
 // --- mini model switcher in the chat dock: a pill showing the current brain,

@@ -24,3 +24,20 @@
 :root,[data-theme]{
   --input:color-mix(in srgb,var(--text-ink) 48%,var(--surface-bg));
 }
+
+/* A floating menu's shadow (the design owner's call on 2026-09-13): the one
+   exception to "nothing casts a shadow". Made here first; Waku Memory's
+   tokens.css is changing --shadow-md to match, and then this block goes.
+   Built from --scrim (black, 40% on bone and 55% on dark) so no colour is
+   written twice: 8% black on bone, 40% on dark, where a lighter one is lost. */
+:root,[data-theme="light"]{
+  --shadow-md:0 var(--spacing) calc(var(--spacing) * 4) color-mix(in srgb,var(--scrim) 20%,transparent);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --shadow-md:0 var(--spacing) calc(var(--spacing) * 4) color-mix(in srgb,var(--scrim) 73%,transparent);
+  }
+}
+[data-theme="dark"]{
+  --shadow-md:0 var(--spacing) calc(var(--spacing) * 4) color-mix(in srgb,var(--scrim) 73%,transparent);
+}

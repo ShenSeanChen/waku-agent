@@ -525,6 +525,14 @@ change Waku Memory too, so the two products stay one system.
   box and sits on the dock's ground, so the two sides read apart. The token
   lives in `type.css` and is the dashboard's own: Waku Memory has no chat
   screen.
+- **Menu shadow (18A).** A floating menu casts a light shadow: 4px down,
+  16px blur, 8% black on light and 40% on dark, built from `--scrim`. It is
+  the one exception to "nothing casts a shadow"; cards and buttons still
+  have none. `type.css` sets `--shadow-md` until Waku Memory's tokens.css
+  changes to the same value for its DropdownMenu, Select and Popover.
+- **Selects look like the model chip.** Every `<select>` takes the chip's
+  raised ground, hard rule, mono text and caret, so there is one dropdown
+  across the dashboard. Memory's Select keeps its chevron for now.
 
 Until the Memory changes land, `type.css` and `SOURCE.md` record that
 `--leading-normal` is ahead of `globals.css`.

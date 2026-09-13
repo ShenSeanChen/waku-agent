@@ -143,7 +143,7 @@ function memSoul(d){
 }
 function memConsolidation(d){
   const distilled = d.facts.filter(f => f.source==="consolidation");
-  let h = uiCard(`<b>How it works.</b> <span class="r">Every ${d.consolidate_every} exchanges,
+  let h = uiCard(`<b>How it works.</b> <span class="r prose">Every ${d.consolidate_every} exchanges,
     a cheap model reads the unconsolidated ${"<code>chat_log</code>"} and distills it into durable
     <b>facts</b> (semantic) plus one <b>episode</b> (episodic). Batching keeps it cheap and gives the
     summarizer enough context to pick what's worth keeping.</span>`);
@@ -616,9 +616,10 @@ const VIEWS = {
     const verdict = v => v === "pass" ? "ok" : v === "fail" ? "bad" : "neutral";
 
     h += `<h2>Spend <span class="meta" style="font-weight:400">· permanent ledger — survives a demo reset</span></h2>`;
-    h += uiCard(`<span class="r">Every LLM call's tokens are logged to
+    h += uiCard(`<span class="r prose">Every LLM call's tokens are logged to
       <code>.waku/usage.jsonl</code> (append-only, never wiped). Dollar cost is estimated from tokens
-      × current pricing — the tokens are the ground truth. ${reveal("usage.jsonl","open usage.jsonl")}</span>`);
+      × current pricing — the tokens are the ground truth.</span>`,
+      {footer: reveal("usage.jsonl","open usage.jsonl")});
     if ((u.by_provider||[]).length){
       h += table(["provider","LLM calls","tokens in","tokens out","cost (est)"], u.by_provider.map(p =>
         `<tr><td><code>${esc(p.provider)}</code></td><td class="meta">${p.calls}</td>
@@ -644,7 +645,7 @@ const VIEWS = {
     }
 
     h += `<h2>Release gate <span class="meta" style="font-weight:400">· the ship/no-ship check</span></h2>`;
-    h += uiCard(`<span class="r">Before you ship a change (new prompt, swapped model, tuned
+    h += uiCard(`<span class="r prose">Before you ship a change (new prompt, swapped model, tuned
       retrieval), <code>make gate</code> runs both eval suites: deterministic must pass 100%, the judge must
       clear its threshold. It's manual — you run it — so there's one record per run. The history below grows
       each time you run it.</span>`);
@@ -674,9 +675,10 @@ const VIEWS = {
       h += d.trace_errors.map(e => uiCard(`${uiBadge("trace encoding error", "bad")}
         <div class="meta" style="margin-top:var(--space-2)"><code>${esc(e.file)}</code> — ${esc(e.error)}</div>`)).join("");
     }
-    h += uiCard(`<span class="r">${s.trace_files} trace file(s) in <code>traces/</code>${
-      d.trace_file?` (newest: <code>${esc(d.trace_file)}</code>)`:""}. ${reveal("traces","open the traces folder")}.
-      A trace is just "what happened, in order" — here are the most recent lines:</span>`);
+    h += uiCard(`<span class="r prose">${s.trace_files} trace file(s) in <code>traces/</code>${
+      d.trace_file?` (newest: <code>${esc(d.trace_file)}</code>)`:""}.
+      A trace is just "what happened, in order" — here are the most recent lines:</span>`,
+      {footer: reveal("traces","open the traces folder")});
     h += (d.trace_tail||[]).length ? table(["event","detail","when"], d.trace_tail.map(e =>
         `<tr><td><code>${esc(e.type)}</code></td><td class="meta">${esc(String(e.detail).slice(0,60))}</td>
           <td class="meta">${esc((e.ts||"").replace("T"," ").slice(0,19))}</td></tr>`))
