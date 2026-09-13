@@ -484,3 +484,46 @@ CSS that no JS emits (`.ma-source`, `.ma-warn`, `.chip-c`, `.col-chip`,
 `.mm-free`) is deleted rather than moved onto tokens. Unused JS
 (`yourModelsCard`, `loadModelList`, `renderCatalog`, `renderCatalogList`,
 `modelRow`, `pickTrack`) is out of scope and is listed in the PR.
+
+## 13. PR 4 — components
+
+PR 3 moved every value onto tokens but left some markup hand-written. PR 4
+closes that gap. Decided by the design owner on 2026-09-13 from
+`docs/proposals/pr4-decisions.html`: **13A, 14A, 15B, 16B**. 15B and 16B
+change Waku Memory too, so the two products stay one system.
+
+- **Actions are buttons (13A).** The 45 `<a class="reveal">` actions —
+  edit, delete, grade, clear, open in Finder — become Memory's tertiary
+  button (mono, uppercase, `--text-muted`, ink on hover; delete is the
+  destructive level). They become real `<button>`s, so the keyboard reaches
+  them. A link that goes to another tab stays a link and takes Memory's
+  link style: `--accent-fg` with a hairline underline that turns amber on
+  hover.
+- **`uiButton(label, {level, size, onclick, attrs})`.** Memory's four levels
+  (primary, secondary, tertiary, destructive) and two sizes. The 27
+  buttons with hand-written classes (`save`, `save ghost`, `sessbtn`,
+  `msg-copy`, …) call it.
+- **Cards (14A).** The 47 hand-written cards call `uiCard`. A card whose
+  title is a name — a provider, a connection, a store, a memory pillar —
+  sets it in the display face at `--text-base`, as Memory's Card does. A
+  title that is code (a tool name such as `create_event`) stays mono.
+- **Menus (15B).** The chat history, the model menu and the model picker
+  share one menu: `--surface-paper` ground, a `--rule-hard` edge, 12px
+  items, `--surface-raised` under the hovered or focused item, and
+  `--accent-fg` text on the current one. Escape closes it and focus
+  returns to its trigger. Memory's DropdownMenu changes to the same look.
+- **Line height (16B).** `--leading-normal` becomes 1.55, not 1.72, in
+  Memory and here; the body and every paragraph use it. The other raw
+  line heights move to `--leading-snug` (1.3) or `--leading-normal`;
+  `line-height: 1` stays for single-line controls.
+- **Headline figures.** The stat band and the gate figures are
+  `--text-lg` (20px), not `--text-xl` (a PR 3 follow-up). Memory's stat
+  band changes to match.
+
+Until the Memory changes land, `type.css` and `SOURCE.md` record that
+`--leading-normal` is ahead of `globals.css`.
+
+**Checks.** `test_design_system.py` also fails on: a `class="card"`
+outside `ui.js`; a `<button class="save|sessbtn|…">` built by hand; an
+`<a class="reveal">`; a `line-height` that is not a `--leading-*` token or
+`1`.
