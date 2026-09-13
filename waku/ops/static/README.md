@@ -86,8 +86,10 @@ When you write CSS here or an inline style in `js/`:
 - **Labels** are uppercase `--face-mono` at `--tracking-label`.
 - **Controls get `data-slot` automatically** (`stampSlots` in `util.js`).
   Use native `<button>`, `<input>`, `<select>`; don't fake them with `<div>`.
-- **Use the token names, not the old short ones** (`--ink2`, `--line`, …).
-  The old names are aliases kept only until the views are rebuilt.
+- **Use the token names.** The old short names (`--ink2`, `--line`, …) are
+  gone, and a test fails if one comes back.
+- **Spacing** is `--space-2|3|4|6|8` (8–32px) between things, and
+  `calc(var(--spacing) * 0.5|1|1.5)` (2–6px) inside one control.
 
 `evals/deterministic/test_design_system.py` enforces all of this, except
 which button level you pick.

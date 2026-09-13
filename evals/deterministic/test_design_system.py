@@ -117,31 +117,12 @@ def test_sync_design_copies_and_records(tmp_path, monkeypatch):
         assert f"{hashlib.sha256((dest / name).read_bytes()).hexdigest()}  {name}" in source
 
 
-# style.css keeps its short names in PR 1 so the inline styles in js/ keep
-# working. Each one holds no value of its own; it points at a token.
-ALIASES = {
-    "--bg": "--surface-bg", "--panel": "--surface-paper",
-    "--line": "--rule", "--line2": "--rule-hard",
-    "--ink": "--text-ink", "--ink2": "--text-muted", "--ink3": "--text-faint",
-    "--accent-soft": "--surface-raised", "--good-soft": "--surface-raised", "--bad-soft": "--surface-raised",
-    "--good": "--ok", "--mono": "--face-mono",
-}
-
-
 def test_design_files_load_before_style():
     html = _index()
     order = ["design/fonts.css", "design/tokens.css", "design/type.css", "design/controls.css", "style.css"]
     pos = [html.find(f'href="/static/{name}"') for name in order]
     assert -1 not in pos, dict(zip(order, pos))
     assert pos == sorted(pos), "the design files must load before style.css"
-
-
-def test_old_names_point_at_tokens():
-    root = "".join(body for sel, body in _blocks(_style()) if sel == ":root").replace(" ", "").replace("\n", "")
-    for old, token in ALIASES.items():
-        assert f"{old}:var({token});" in root + ";", f"{old} should be var({token})"
-    for token_name in ("--accent", "--bad"):
-        assert f"{token_name}:" not in root, f"{token_name} is a token; style.css must not redefine it"
 
 
 COLOUR = re.compile(r"(?<![&\w])#[0-9a-fA-F]{3,8}\b|\b(?:rgb|rgba|hsl|hsla)\(")
@@ -174,8 +155,7 @@ BUTTONS = re.compile(r"(?:^|[\s,>+~])(?:button|\.save|\.btn|\.sessbtn|\.cmp-sort
 
 def test_buttons_never_fill():
     """Waku Memory's button has four levels and none of them is a colour fill."""
-    grounds = {"transparent", "none", "var(--surface-paper)", "var(--surface-raised)", "var(--surface-sunk)",
-               "var(--panel)", "var(--bg)", "var(--accent-soft)"}
+    grounds = {"transparent", "none", "var(--surface-paper)", "var(--surface-raised)", "var(--surface-sunk)", "var(--surface-bg)"}
     found = [(s, v) for f, s, p, v in _declarations()
              if f == "style.css" and BUTTONS.search(s) and p in ("background", "background-color") and v not in grounds]
     assert not found, f"buttons never fill: {found}"
@@ -296,15 +276,58 @@ def test_primitives_are_defined_and_load_first():
 
 OLD_NAME = re.compile(r"var\(--(?:bg|panel|line2?|ink[23]?|accent-soft|good-soft|bad-soft|good|mono)\)")
 
-# Files that still read an old name on the day PR 1 merged. This set only
-# shrinks: PR 3 moves every use onto the token name, empties it, and deletes
-# the alias block. A file not listed here must use the token names.
-ALIAS_USERS = {"compare.js", "models.js", "render.js", "style.css", "views.js"}
+def test_no_old_names():
+    """PR 1 kept the short names (--ink2, --line, …) as aliases so it could
+    stay small. PR 3 moved every use onto the token name and deleted them."""
+    assert not OLD_NAME.search(_style()), "style.css still reads an old name"
+    for name, src in _js().items():
+        assert not OLD_NAME.search(src), f"{name} still reads an old name"
+    root = "".join(body for sel, body in _blocks(_style()) if sel == ":root")
+    assert not re.search(r"--(bg|panel|line2?|ink[23]?|good|mono)\s*:", root), "the alias block is gone"
 
 
-def test_no_new_code_uses_old_names():
-    style_without_aliases = re.sub(r":root\{[^}]*\}", "", _style(), count=1)
-    users = {name for name, src in _js().items() if OLD_NAME.search(src)}
-    if OLD_NAME.search(style_without_aliases):
-        users.add("style.css")
-    assert users <= ALIAS_USERS, f"use the token names (see ALIASES) in {sorted(users - ALIAS_USERS)}"
+# Spacing comes from Memory's steps: the five named ones between things, and
+# small multiples of --spacing inside one control (a badge's 2px, a menu's 6px).
+SPACING_PART = re.compile(
+    r"0|auto|var\(--space-[23468]\)|var\(--spacing\)|var\(--(control-pad-[xy]|field-pad-x|control-gap)\)"
+    r"|calc\(var\(--spacing\) \* (0\.5|1|1\.5|5)\)|calc\(var\(--space-[23468]\) \* -1\)")
+
+
+def _parts(value: str) -> list[str]:
+    """Split a CSS value on spaces that are not inside parentheses."""
+    parts, depth, cur = [], 0, ""
+    for ch in value:
+        depth += ch == "("
+        depth -= ch == ")"
+        if ch == " " and depth == 0:
+            if cur:
+                parts.append(cur)
+            cur = ""
+        else:
+            cur += ch
+    return parts + ([cur] if cur else [])
+
+
+def test_spacing_comes_from_tokens():
+    found = []
+    for f, s, p, v in _declarations():
+        if not (p.startswith(("padding", "margin")) or p in ("gap", "row-gap", "column-gap")):
+            continue
+        for part in _parts(v.replace("!important", "").strip()):
+            if "${" not in part and not SPACING_PART.fullmatch(part):
+                found.append((f, s, p, v))
+                break
+    assert not found, f"padding/margin/gap must use --space-* or calc(var(--spacing) * N): {found[:10]}"
+
+
+PRIMITIVE_CLASSES = ("notice", "stat-band", "tabs", "tbl", "list-row", "badge")
+
+
+def test_views_call_the_primitives():
+    """A view calls uiNotice(), uiBadge() and the rest instead of writing
+    their markup, so every Badge on screen is the same Badge."""
+    for name, src in _js().items():
+        if name == "ui.js":
+            continue
+        for cls in PRIMITIVE_CLASSES:
+            assert not re.search(rf'class="{cls}[ "]', src), f"{name} writes a {cls} by hand — call the ui.js function"
