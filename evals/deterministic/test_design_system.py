@@ -260,7 +260,32 @@ def test_rail_resize_and_model_line_are_gone():
         assert gone not in src, f"{gone} belongs to the old sidebar"
 
 
-UI_FUNCTIONS = ("uiCard", "uiBadge", "uiTable", "uiTabs", "uiNotice", "uiStatBand", "uiRow", "openDialog", "closeDialog")
+UI_FUNCTIONS = ("uiCard", "uiBadge", "uiTable", "uiTabs", "uiNotice", "uiStatBand", "uiRow", "openDialog", "closeDialog",
+                "uiButton", "uiLink", "openMenu", "closeMenu", "uiMenuLabel", "uiMenuItem", "uiMenuSep")
+
+# Buttons and actions the views used to style by hand. index.html is the one
+# exception: it is static, so its few buttons use the btn classes directly.
+HAND_BUTTON = re.compile(r'<button[^>]*class="(save|sessbtn|msg-copy|mdcode-copy|connmodal-close|model-picker-toggle)[ "]')
+
+
+def test_cards_buttons_and_actions_call_the_primitives():
+    for name, src in _js().items():
+        if name == "ui.js":
+            continue
+        assert not re.search(r'class="card[ "]', src), f"{name} writes a card by hand — call uiCard()"
+        assert not re.search(r'class="reveal[ "]', src), f"{name} has an <a class=\"reveal\"> action — call uiButton() or uiLink()"
+        hand = HAND_BUTTON.search(src)
+        assert not hand, f"{name} styles a button by hand ({hand.group(1) if hand else ''}) — call uiButton()"
+
+
+def test_line_heights_use_tokens():
+    """--leading-normal is 1.55 in the dashboard and in Memory (design owner,
+    2026-09-13); every other line height is one of the three tokens, or 1 for
+    a single-line control."""
+    allowed = {"1", "var(--leading-tight)", "var(--leading-snug)", "var(--leading-normal)"}
+    found = [(f, s, v) for f, s, p, v in _declarations() if p == "line-height" and v not in allowed]
+    assert not found, f"line-height must be a --leading-* token: {found[:10]}"
+    assert re.search(r"--leading-normal:\s*1\.55;", (DESIGN / "type.css").read_text())
 
 
 def test_primitives_are_defined_and_load_first():

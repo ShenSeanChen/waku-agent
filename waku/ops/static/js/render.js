@@ -32,13 +32,17 @@ function histItem(m){
   return {role:"waku", reply:m.content, historical:true};
 }
 
-const turnCard = t => `<div class="card">
+const turnCard = t => uiCard(`
   <div class="u">${esc(t.user_message)}</div>
   <div class="meta" style="margin-top:var(--spacing)">${gateBadge(t.gate)}</div>
   ${(t.tools||[]).map(toolRow).join("")}
   <div class="r">${renderMarkdown(t.reply)}</div>
-  <div class="meta">${esc((t.ts||"").replace("T"," ").slice(0,19))} · ${secs(t.latency_ms)} · ${t.iterations??"?"} iter · ${money(t.cost||0)}${t.consolidation?` · consolidated ${t.consolidation.new_facts} fact(s)`:""}</div>
-</div>`;
+  <div class="meta">${esc((t.ts||"").replace("T"," ").slice(0,19))} · ${secs(t.latency_ms)} · ${t.iterations??"?"} iter · ${money(t.cost||0)}${t.consolidation?` · consolidated ${t.consolidation.new_facts} fact(s)`:""}</div>`);
+
+// The reply's copy button. It sits inside the card, and CSS shows it only
+// while the card is hovered (.card:hover .msg-copy).
+const msgCopy = text => uiButton("Copy", {level: "tertiary", size: "sm", cls: "msg-copy",
+  onclick: "copyMsg(this)", title: "Copy reply", attrs: `data-text="${esc(text)}"`});
 
 // uiTable takes rows as arrays of cell HTML. A row may still arrive as a
 // "<tr><td>…</td></tr>" string; parse it into its cells (a <td class> is kept
@@ -101,15 +105,14 @@ function stagesRow(t, live){
 const teleFooter = t => `<div class="meta tele">${secs(t.latency_ms)} · ${t.iterations??"?"} iter${
   t.model?` · ${esc(t.model)}`:""}${t.consolidation?` · consolidated ${t.consolidation.new_facts} fact(s)`:""}</div>`;
 
-const chatTurnCard = t => `<div class="card">
-  <button class="msg-copy" onclick="copyMsg(this)" data-text="${esc(t.reply)}" title="Copy reply">Copy</button>
+const chatTurnCard = t => uiCard(`
+  ${msgCopy(t.reply)}
   ${(t.gate||t.graph)?`${stagesRow(t, false)}
     <div class="meta tele" style="margin:0 0 calc(var(--spacing) * 1.5)">${esc((t.gate&&t.gate.reason)||(t.graph&&t.graph.reason)||"")}</div>`:""}
   ${nodesRow(t)}
   ${(t.tools||[]).length?`<div class="tele">${(t.tools||[]).map(toolRow).join("")}</div>`:""}
   <div class="r" style="margin-top:var(--space-2)">${renderMarkdown(t.reply)}</div>
-  ${teleFooter(t)}
-</div>`;
+  ${teleFooter(t)}`);
 
 // While a turn runs we stream it live: stages light up as the harness reaches
 // them, and the reply text appears token by token (with a blinking caret).
@@ -126,7 +129,7 @@ const nodesRow = m => {
   }).join("") + `</div>`;
 };
 
-const streamingCard = m => `<div class="card">
+const streamingCard = m => uiCard(`
   ${stagesRow(m, true)}
   ${nodesRow(m)}
   ${m.gate&&m.gate.reason?`<div class="meta" style="margin:0 0 calc(var(--spacing) * 1.5)">${esc(m.gate.reason)}</div>`:""}
@@ -136,17 +139,15 @@ const streamingCard = m => `<div class="card">
      : `<div class="meta" style="margin:0">thinking&hellip;${m.started?` ${Math.round((Date.now()-m.started)/1000)}s`:""}${
          m.started && Date.now()-m.started > 20000
          ? `<br>still waiting: slow models (free tiers especially) can queue for a while; this errors out at the WAKU_LLM_TIMEOUT limit instead of hanging forever`
-         : ""}</div>`}
-</div>`;
+         : ""}</div>`}`);
 
 // Messages loaded from history (a switched/opened conversation) have no live
 // latency/iteration data, and their stored form carries an internal
 // "[tools used: ...]" annotation — strip both so the thread reads cleanly.
 const stripTools = t => (t || "").replace(/\s*\[tools used:[\s\S]*\]\s*$/, "").trim();
-const historicalCard = m => `<div class="card">
-  <button class="msg-copy" onclick="copyMsg(this)" data-text="${esc(stripTools(m.reply))}" title="Copy reply">Copy</button>
-  <div class="r">${renderMarkdown(stripTools(m.reply))}</div>
-</div>`;
+const historicalCard = m => uiCard(`
+  ${msgCopy(stripTools(m.reply))}
+  <div class="r">${renderMarkdown(stripTools(m.reply))}</div>`);
 
 function renderChatLog(){
   if (!CHAT.length)

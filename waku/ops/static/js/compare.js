@@ -289,15 +289,16 @@ function replyBlock(res){
   const long = r.length > 400 || (r.match(/\n/g)||[]).length > 8;
   if (!long) return `<div class="r cmp-reply">${renderMarkdown(res.reply||"")}</div>`;
   return `<div class="r cmp-reply ${res.replyOpen?"":"clamped"}">${renderMarkdown(res.reply||"")}</div>
-    <a class="reveal cmp-more" onclick="const r=compareState.results['${esc(res.spec)}']; if(r){r.replyOpen=!r.replyOpen; render();}">${res.replyOpen?"show less":"show full reply"}</a>`;
+    ${uiButton(res.replyOpen?"show less":"show full reply", {level: "tertiary", size: "sm", cls: "cmp-more",
+      onclick: `const r=compareState.results['${esc(res.spec)}']; if(r){r.replyOpen=!r.replyOpen; render();}`})}`;
 }
 function compareCol(res){
   if (res.error){
     const why = compareErrorReason(res.error);
-    return `<div class="cmp-col err"><div class="cmp-h"><span class="mm-prov">${esc(res.provider)}</span> <code>${esc(res.model)}</code>${cutoffTag(res.cutoff)}
+    return uiCard(`<div class="cmp-h"><span class="mm-prov">${esc(res.provider)}</span> <code>${esc(res.model)}</code>${cutoffTag(res.cutoff)}
       ${uiBadge("error", "bad")}</div>
       ${why?`<div class="meta" style="color:var(--bad)"><b>${esc(why)}</b></div>`:""}
-      <div class="meta" style="opacity:.7">${esc(res.error)}</div></div>`;
+      <div class="meta" style="opacity:.7">${esc(res.error)}</div>`, {cls: "cmp-col err", size: "sm"});
   }
   const tools = (res.tools||[]).map(t => t.tool === "delegate_task"
     ? `<span class="stage done subagent" title="the loop spawned a pi sub-agent on ${esc(res.model)} to write &amp; run the code">delegate_task → pi · ${esc(res.model)}</span>`
@@ -305,14 +306,14 @@ function compareCol(res){
   const decision = res.gate ? res.gate.decision : "…";
   const gateBadgeHtml = uiBadge("gate · " + esc(decision), decision === "retrieve" ? "live" : "neutral");
   if (res.streaming){
-    return `<div class="cmp-col">
+    return uiCard(`
       <div class="cmp-h"><span class="mm-prov">${esc(res.provider)}</span> <code>${esc(res.model)}</code>${cutoffTag(res.cutoff)}
         <span class="live-dot"></span></div>
       <div class="cmp-stats">${gateBadgeHtml}</div>
       ${tools?`<div class="stages" style="flex-wrap:wrap">${tools}</div>`:""}
       ${res.sub?subPane(res.sub, true):""}
-      <div class="meta">${(res.tools||[]).length?"running tools…":"thinking…"} <span class="caret"></span></div>
-    </div>`;
+      <div class="meta">${(res.tools||[]).length?"running tools…":"thinking…"} <span class="caret"></span></div>`,
+      {cls: "cmp-col", size: "sm"});
   }
   const c = res.completion;
   const completionBadge = c ? (c.passed
@@ -322,8 +323,9 @@ function compareCol(res){
   const qualityBadge = q && q.score!=null
     ? uiBadge(`${q.score} / 10`, "value", `graded ${q.score}/10 by ${q.judge||"referee"} — ${q.reason||""}`) : "";
   // per-card grade button — grade just this card if the referee skipped it (429)
-  const gradeBtn = `<a class="reveal cmp-grade1" title="grade this card with the referee" onclick="gradeCard('${esc(res.spec)}')">${res._grading?"grading…":(q&&q.score!=null?"re-grade":"grade")}</a>`;
-  return `<div class="cmp-col${c?(c.passed?" solved":" failed"):""}">
+  const gradeBtn = uiButton(res._grading?"grading…":(q&&q.score!=null?"re-grade":"grade"), {level: "tertiary", size: "sm",
+    cls: "cmp-grade1", title: "grade this card with the referee", onclick: `gradeCard('${esc(res.spec)}')`});
+  return uiCard(`
     <div class="cmp-h"><span class="mm-prov">${esc(res.provider)}</span> <code>${esc(res.model)}</code>${cutoffTag(res.cutoff)}${completionBadge}${qualityBadge}${gradeBtn}</div>
     <div class="cmp-stats">
       ${gateBadgeHtml}
@@ -334,8 +336,7 @@ function compareCol(res){
     </div>
     ${tools?`<div class="stages" style="flex-wrap:wrap">${tools}</div>`:""}
     ${res.sub?subPane(res.sub, false, res.spec):""}
-    ${replyBlock(res)}
-  </div>`;
+    ${replyBlock(res)}`, {cls: "cmp-col" + (c ? (c.passed ? " solved" : " failed") : ""), size: "sm"});
 }
 
 // The Arena runs two races, and they are the same machine with a different
@@ -357,7 +358,7 @@ function modelArenaView(d){
     const spec = `${p.provider}:${p.model}`, on = compareState.picked.has(spec);
     return `<label class="cmp-pick ${on?"on":""}"><input type="checkbox" ${on?"checked":""}
       onchange="toggleCompareModel('${esc(spec)}')"> <span class="mm-prov">${esc(p.provider)}</span> ${esc(p.model)}</label>`;
-  }).join("") : `<div class="meta">No models pinned yet — star some in <a class="reveal" onclick="location.hash='#models'">Models</a>.</div>`;
+  }).join("") : `<div class="meta">No models pinned yet — star some in ${uiLink("Models", "#models")}.</div>`;
   const n = compareState.picked ? compareState.picked.size : 0;
 
   // One column per raced model, in order. Each shows "racing…" until its result
@@ -380,12 +381,16 @@ function modelArenaView(d){
     // on every model in THIS run (the cards below); "clear cards" just dismisses
     // the columns. Both act on the current run.
     const regradeBtn = (done.length && !compareState.running)
-      ? `<a class="reveal" style="margin-left:auto;font-size:var(--text-xs)" title="Re-run the referee on every model in this run (fills a skipped/429'd grade, or re-scores)" onclick="regradeCompare()">${compareState.regrading?"re-grading…":"re-grade run"}</a>` : "";
+      ? uiButton(compareState.regrading?"re-grading…":"re-grade run", {level: "tertiary", size: "sm", onclick: "regradeCompare()",
+          title: "Re-run the referee on every model in this run (fills a skipped/429'd grade, or re-scores)",
+          attrs: `style="margin-left:auto"`}) : "";
     const clearBtn = (order.length && !compareState.running)
-      ? `<a class="reveal" style="${regradeBtn?"":"margin-left:auto;"}font-size:var(--text-xs)" onclick="clearCards()">clear cards</a>` : "";
+      ? uiButton("clear cards", {level: "tertiary", size: "sm", onclick: "clearCards()",
+          attrs: regradeBtn ? "" : `style="margin-left:auto"`}) : "";
     // Prominent, tab-like sort buttons — the selected one is highlighted.
     const sortBar = (done.length || clearBtn) ? `<div class="cmp-sortbar">${done.length
-      ? `sort by ${sorters.map(([k, label]) => `<button class="cmp-sortbtn ${compareState.sortBy === k ? "on" : ""}" onclick="setCompareSort('${k}')">${label}</button>`).join("")}`
+      ? `sort by ${sorters.map(([k, label]) => uiButton(label, {level: "secondary", size: "sm",
+          cls: compareState.sortBy === k ? "cmp-sortbtn on" : "cmp-sortbtn", onclick: `setCompareSort('${k}')`})).join("")}`
       : ""}${regradeBtn}${clearBtn}</div>` : "";
     // Only a progress line while the race is still running; once every column is
     // in, the sort tabs + cards + scoreboard say it all (no redundant summary).
@@ -406,8 +411,8 @@ function modelArenaView(d){
     const cols = shown.map(s => {
       const r = results[s];
       if (r) return compareCol(r);
-      return `<div class="cmp-col"><div class="cmp-h"><span class="mm-prov">${esc(s.split(":")[0])}</span> <code>${esc(s.split(":").slice(1).join(":"))}</code></div>
-        <div class="meta">racing… <span class="caret"></span></div></div>`;
+      return uiCard(`<div class="cmp-h"><span class="mm-prov">${esc(s.split(":")[0])}</span> <code>${esc(s.split(":").slice(1).join(":"))}</code></div>
+        <div class="meta">racing… <span class="caret"></span></div>`, {cls: "cmp-col", size: "sm"});
     }).join("");
     grid = `${summary ? `<div class="meta" style="margin:calc(var(--spacing) * 0.5) 0 calc(var(--spacing) * 1.5)">${summary}</div>` : ""}${sortBar}<div class="cmp-grid">${cols}</div>`
       + (compareState.raceError ? `<div class="meta" style="color:var(--bad)">${esc(compareState.raceError)}</div>` : "");
@@ -417,7 +422,7 @@ function modelArenaView(d){
   // 5s refresh from re-triggering); loadCompareHistory re-renders when it lands.
   if (compareState.history === undefined){ compareState.history = []; setTimeout(loadCompareHistory, 0); }
 
-  return `<div class="card">
+  return uiCard(`
     <div class="cmp-controls">
       <span class="meta cmp-blurb">One message, every brain at once — same harness, isolated homes, real receipts (gate · latency · cost · tools). Compare, don't guess.</span>
       <label class="cmp-judge ${compareState.apple?"on":""}" style="margin-left:auto" title="Write create_event results to your REAL Apple Calendar (the 'Waku' calendar). Off by default so a race doesn't spam duplicates — when on, EACH model writes its own event (use 1-2 models).">
@@ -429,13 +434,12 @@ function modelArenaView(d){
         <select onchange="setJudgeModel(this.value)" onclick="event.stopPropagation()" ${compareState.judge?"":"disabled"}>
           ${JUDGES.map(j=>`<option value="${j.spec}" ${(compareState.judgeModel||"openai:gpt-5.6-sol")===j.spec?"selected":""}>${esc(j.label)}</option>`).join("")}
         </select></label>
-      <button class="save cmp-race" onclick="runCompare()" ${(!n||compareState.running)?"disabled":""}>
-        ${compareState.running?"Racing…":`Race ${n} model${n===1?"":"s"}`}</button>
+      ${uiButton(compareState.running?"Racing…":`Race ${n} model${n===1?"":"s"}`, {level: "primary", cls: "cmp-race",
+        onclick: "runCompare()", attrs: (!n||compareState.running) ? "disabled" : ""})}
     </div>
     <textarea id="cmp-msg" class="cmp-input" rows="2" onfocus="markEditing()"
       oninput="compareState.message=this.value">${esc(compareState.message)}</textarea>
-    <div class="cmp-picks">${chips}</div>
-  </div>${grid}${compareHistoryHtml()}`;
+    <div class="cmp-picks">${chips}</div>`) + grid + compareHistoryHtml();
 }
 
 // --- Memory arena -----------------------------------------------------------
@@ -652,7 +656,7 @@ function maResultsHtml(){
     return [probeCell, ...names.map(n => cell(p, n, i === 0))];
   }));
   return `<h2 style="margin-top:var(--space-6)">Results${maRun.running?' <span class="meta" style="font-weight:400">— running…</span>':""}</h2>
-    ${maRun.error?`<div class="card" style="color:var(--bad)">${esc(maRun.error)}</div>`:""}
+    ${maRun.error?uiCard(`<div style="color:var(--bad)">${esc(maRun.error)}</div>`):""}
     ${board}
     ${grid}`;
 }
@@ -675,11 +679,11 @@ async function maSeeAll(store){
 function memoryArenaView(){
   if (memoryArenaFixture === undefined){
     setTimeout(loadMemoryArena, 0);
-    return `<div class="card empty">loading…</div>`;
+    return uiCard("loading…", {cls: "empty"});
   }
   if (memoryArenaFixture === null){
-    return `<div class="card empty">The probe file lives in <code>evals/memory_arena.json</code>,
-      which a packaged install does not ship. Run Waku from a clone to see it.</div>`;
+    return uiCard(`The probe file lives in <code>evals/memory_arena.json</code>,
+      which a packaged install does not ship. Run Waku from a clone to see it.`, {cls: "empty"});
   }
   const track = memoryArenaFixture.tracks[(maTrack && memoryArenaFixture.tracks[maTrack])
     ? maTrack : Object.keys(memoryArenaFixture.tracks)[0]];
@@ -714,22 +718,21 @@ function memoryArenaView(){
             m.spec===maModelSpec()?"selected":""}>${esc(m.spec)} — $${m.price_in}/$${m.price_out} per M</option>`).join("")}
         </select></label>` : ""}
     </div>`;
-  const race = `<div class="card">
+  const busy = (maRun.running || !picks.length) ? "disabled" : "";
+  const race = uiCard(`
     ${picker}
     <div class="cmp-picks" style="margin-bottom:var(--space-2)">${chips}</div>
     <div class="ma-race">
-      <button class="save ghost" onclick="seedMemoryArena()"
-              title="Telling never changes, so it is its own button — do it once and ask as many times as you like."
-              ${maRun.running||!picks.length?"disabled":""}>
-        ${maRun.running && maRun.seedOnly ? "Telling…"
-          : `Tell ${picks.length} store${picks.length===1?"":"s"}`}</button>
-      <button class="save" onclick="runMemoryArena()"
-              title="Asks the same questions of every store and scores the answers. Tells anything not yet told. Each store runs in its own copy; your real memory is never touched."
-              ${maRun.running||!picks.length?"disabled":""}>
-        ${maRun.running && !maRun.seedOnly ? "Asking…"
-          : `Ask ${picks.length} store${picks.length===1?"":"s"}`}</button>
+      ${uiButton(maRun.running && maRun.seedOnly ? "Telling…"
+          : `Tell ${picks.length} store${picks.length===1?"":"s"}`, {level: "secondary", onclick: "seedMemoryArena()",
+        title: "Telling never changes, so it is its own button — do it once and ask as many times as you like.",
+        attrs: busy})}
+      ${uiButton(maRun.running && !maRun.seedOnly ? "Asking…"
+          : `Ask ${picks.length} store${picks.length===1?"":"s"}`, {level: "primary", onclick: "runMemoryArena()",
+        title: "Asks the same questions of every store and scores the answers. Tells anything not yet told. Each store runs in its own copy; your real memory is never touched.",
+        attrs: busy})}
       ${maRun.running ? `<span class="meta">${esc(maRun.log)}</span>` : ""}
-    </div></div>`;
+    </div>`);
   // ORDER MATTERS, and it used to be wrong: race, results, stores, asks. The
   // questions were dead last, so you could start a race — and film one —
   // without ever having seen what the stores get told or asked. A benchmark
@@ -796,18 +799,18 @@ async function loadMemoryStores(){
 }
 
 function maStoresHtml(){
-  const btn = `<button class="save ghost" onclick="loadMemoryStores()"
-    ${maStores === "loading" ? "disabled" : ""}>${maStores === "loading" ? "reading…" : "Read stores"}</button>`;
+  const btn = uiButton(maStores === "loading" ? "reading…" : "Read stores", {level: "secondary", size: "sm",
+    onclick: "loadMemoryStores()", attrs: maStores === "loading" ? "disabled" : ""});
   // The heading carries the button. This used to be a whole card wrapping one
   // control and a paragraph — a card's worth of vertical space to say "press
   // this". On a page where the useful content is five store cards further
   // down, that is the most expensive furniture on screen.
   const head = `<h2 class="ma-head">What each store is holding ${btn}
-    <button class="save ghost" onclick="cleanMemoryStores()"
-      title="Deletes only what this race wrote: its .waku-arena copies and its waku-arena partition. Your own memory and the waku partition are never named, so they cannot be reached.">Clean</button>
+    ${uiButton("Clean", {level: "secondary", size: "sm", onclick: "cleanMemoryStores()",
+      title: "Deletes only what this race wrote: its .waku-arena copies and its waku-arena partition. Your own memory and the waku partition are never named, so they cannot be reached."})}
     <span class="meta">${maClean || "what each made of the SAME facts &middot; live call, on demand"}</span></h2>`;
   if (!Array.isArray(maStores)) return head;
-  const cards = maStores.map(s => `<div class="card ma-store">
+  const cards = maStores.map(s => uiCard(`
       <div class="ma-store-h"><code>${esc(s.store)}</code>
         ${s.error ? uiBadge("error", "bad", s.error)
                   : `<span class="meta">${s.count} fact${s.count===1?"":"s"}</span>`}</div>
@@ -826,10 +829,9 @@ function maStoresHtml(){
               ? `<b>${esc(f.subject)}</b> — ` : ""}${esc(f.content)}</li>`).join("")}</ul>${
               s.count > s.facts.length
                 ? `<div class="meta" style="margin-top:calc(var(--spacing) * 1.5)">showing ${s.facts.length} of ${s.count}
-                     &middot; <a class="reveal" onclick="maSeeAll('${esc(s.store)}')">see all</a></div>`
+                     &middot; ${uiButton("see all", {level: "tertiary", size: "sm", onclick: `maSeeAll('${esc(s.store)}')`})}</div>`
                 : ""}`
-          : `<div class="meta">empty</div>`}
-    </div>`).join("");
+          : `<div class="meta">empty</div>`}`, {cls: "ma-store"})).join("");
   // This used to carry a warning that the counts were NOT a comparison —
   // because sqlite was the live agent, with weeks of real use, sitting beside
   // stores that had only ever seen one benchmark run. The warning was correct
@@ -956,7 +958,7 @@ function costQualityScatter(agg){
       + "0     ignores it, or claims an action it didn't take"
     : "Completion — fraction of the task's checklist met (right tool, right args, enough calls). Deterministic, no judge.";
   const yLabel = useQ ? "referee grade" : "completion";
-  return `<div class="card" style="padding:var(--space-3);margin-top:var(--space-3)">
+  return uiCard(`
     <div class="meta" style="margin-bottom:var(--spacing)">Cost vs ${useQ?"quality (referee grade)":"completion"} — cheap &amp; good is top-left</div>
     <svg viewBox="0 0 ${W} ${H}" class="scatter" preserveAspectRatio="xMidYMid meet">
       <line x1="${L}" y1="${T}" x2="${L}" y2="${H-B}" class="sc-axis"/>
@@ -966,7 +968,7 @@ function costQualityScatter(agg){
       <text x="14" y="${(T+(H-B-T)/2).toFixed(0)}" class="sc-tick sc-ylabel" text-anchor="middle" transform="rotate(-90 14 ${(T+(H-B-T)/2).toFixed(0)})">${yLabel} →</text>
       <rect class="sc-yhit" x="0" y="${T}" width="26" height="${H-B-T}" data-tip="${esc(yCriteria)}"
         onmouseenter="showScatterTip(event)" onmousemove="moveScatterTip(event)" onmouseleave="hideScatterTip()"/>
-    </svg></div>`;
+    </svg>`);
 }
 function compareHistoryHtml(){
   const agg = boardAggregate();
@@ -992,7 +994,7 @@ function compareHistoryHtml(){
   const scoreboard = agg.length ? `
     <h2 style="margin-top:var(--space-6);display:flex;align-items:center;gap:var(--space-2)">Scoreboard
       <span class="meta" style="font-weight:400">— totals across ${raceCount} race${raceCount===1?"":"s"}</span>
-      <a class="reveal" style="margin-left:auto;font-size:var(--text-xs)" onclick="clearCompareHistory()">clear all</a></h2>
+      ${uiButton("clear all", {level: "tertiary", size: "sm", onclick: "clearCompareHistory()", attrs: `style="margin-left:auto"`})}</h2>
     ${costQualityScatter(agg)}
     ${uiTable(columns, rows.map(a => [
       `<span class="mm-prov">${esc(a.provider)}</span> <code>${esc(a.model)}</code>`,
@@ -1009,7 +1011,9 @@ function compareHistoryHtml(){
     ${uiCard(hist.map((run, i) => uiRow(
       esc((run.ts||"").slice(0,16).replace("T"," ")),
       `<code style="word-break:break-all">${esc((run.message||"").slice(0,90))}</code>`,
-      `${(run.results||[]).length} models <a class="reveal del" style="margin-left:var(--space-2);font-size:var(--text-sm)" title="delete just this run" onclick="event.stopPropagation(); deleteCompareRun('${esc(run.ts||"")}')">×</a>`,
+      `${(run.results||[]).length} models ${uiButton("×", {level: "tertiary", size: "sm", danger: true, title: "delete just this run",
+        onclick: `event.stopPropagation(); deleteCompareRun('${esc(run.ts||"")}')`,
+        attrs: `aria-label="delete just this run" style="margin-left:var(--space-2)"`})}`,
       {onclick: `openCompareRun(${i})`})).join(""))}` : "";
   return scoreboard + recent;
 }

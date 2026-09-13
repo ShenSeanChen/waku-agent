@@ -58,7 +58,7 @@ function renderMarkdown(text){
       while (i < lines.length && !/^\s*`{3,}\s*$/.test(lines[i])){ codeLines.push(lines[i]); i++; }
       if (i < lines.length) i++;   // skip closing ```
       const langLabel = lang ? `<span class="mdcode-lang">${lang}</span>` : "";
-      out.push(`<div class="mdcode"><div class="mdcode-head">${langLabel}<button class="mdcode-copy" onclick="copyCode(this)">Copy</button></div><pre><code>${codeLines.join("\n")}</code></pre></div>`);
+      out.push(`<div class="mdcode"><div class="mdcode-head">${langLabel}${uiButton("Copy", {level: "tertiary", size: "sm", cls: "mdcode-copy", onclick: "copyCode(this)"})}</div><pre><code>${codeLines.join("\n")}</code></pre></div>`);
       continue;
     }
     if (/^\s*[-*_]{3,}\s*$/.test(l)){ out.push("<hr class='mdhr'>"); i++; continue; } // hr
@@ -92,7 +92,7 @@ let D = null;
 
 // Click a section's data to open the real local file/folder (editor or Finder).
 function revealFile(p){ fetch("/api/reveal?path=" + encodeURIComponent(p)); }
-const reveal = (path, label) => `<a class="reveal" onclick="revealFile('${path}')">${esc(label)}</a>`;
+const reveal = (path, label) => uiButton(esc(label), {level: "tertiary", size: "sm", onclick: `revealFile('${path}')`});
 
 // --- memory CRUD (dashboard side). `editing` pauses the 5s rebuild so an
 // in-progress edit isn't wiped (same idea as the animation guard).

@@ -62,10 +62,12 @@ function modelRow(m, st){
     <span class="meta" style="margin:0;white-space:nowrap">${esc(tags)}</span>
     ${m.reasoning ? uiBadge("reasoning", "neutral", "thinks out loud before answering: fine for the loop, a poor fit for the gate's tiny token budget") : ""}
     ${curGate ? uiBadge("gate", "ok")
-              : `<a class="reveal" data-id="${esc(m.id)}" onclick="switchModel(this.dataset.id,true)" title="use as the gate/summary model">gate</a>`}
+              : uiButton("gate", {level: "tertiary", size: "sm", onclick: "switchModel(this.dataset.id,true)",
+                                  title: "use as the gate/summary model", attrs: `data-id="${esc(m.id)}"`})}
     ${cur ? uiBadge("current", "ok")
           : (m.tools === false ? `<span class="meta" style="margin:0" title="the loop needs tool calling">chat-only</span>`
-                               : `<button class="save" data-id="${esc(m.id)}" onclick="switchModel(this.dataset.id)">use</button>`)}
+                               : uiButton("use", {level: "primary", size: "sm", onclick: "switchModel(this.dataset.id)",
+                                                  attrs: `data-id="${esc(m.id)}"`}))}
   </div>`;
 }
 
@@ -164,8 +166,10 @@ function yourModelsCard(st){
       <span class="mm-prov">${esc(p.provider)}</span>
       <code style="flex:1;word-break:break-all">${esc(p.model)}</code>
       ${p.default ? uiBadge("default", "value", "this provider's default model")
-                  : `<a class="reveal" onclick="pinModel('${esc(p.provider)}','${esc(p.model)}','default')" title="make this ${esc(p.provider)}'s default">make default</a>`}
-      <a class="reveal" onclick="pinModel('${esc(p.provider)}','${esc(p.model)}','unpin')" title="remove from your list">remove</a>
+                  : uiButton("make default", {level: "tertiary", size: "sm",
+                      onclick: `pinModel('${esc(p.provider)}','${esc(p.model)}','default')`, title: `make this ${p.provider}'s default`})}
+      ${uiButton("remove", {level: "tertiary", size: "sm", danger: true,
+          onclick: `pinModel('${esc(p.provider)}','${esc(p.model)}','unpin')`, title: "remove from your list"})}
     </div>`).join("") || `<div class="meta">No models pinned yet — add one below.</div>`;
   // The add row is self-contained: pick any provider + type/choose a model id,
   // then Add. Works even for providers with no live catalog. The datalist
@@ -175,15 +179,14 @@ function yourModelsCard(st){
   // card is in the DOM (a fresh fetch of that provider's catalog).
   setTimeout(() => loadAddModels(st.provider), 0);
   return `<h2>Your models <span class="meta" style="font-weight:400">— what the chat switcher shows</span></h2>
-    <div class="card">
+    ${uiCard(`
       ${rows}
       <div class="addmodel">
         <select id="add-prov" onfocus="markEditing()" onchange="loadAddModels(this.value)">${provOpts}</select>
         <select id="add-model"><option value="">loading models…</option></select>
-        <button class="save" onclick="addPinnedModel()">Add</button>
+        ${uiButton("Add", {level: "primary", onclick: "addPinnedModel()"})}
       </div>
-      <div class="meta" style="margin-top:calc(var(--spacing) * 1.5)" id="add-msg">Pick a provider, choose a model, then Add.</div>
-    </div>`;
+      <div class="meta" style="margin-top:calc(var(--spacing) * 1.5)" id="add-msg">Pick a provider, choose a model, then Add.</div>`)}`;
 }
 
 // Fill the add-row model <select> with a provider's catalog (any provider, not
@@ -245,16 +248,16 @@ function providerCard(p, st){
   const status = providerCardStatus(p, st);
   const current = p.key === st.provider;
   const dot = status === "enabled" ? "var(--ok)" : status === "configured" ? "var(--accent)" : "var(--bad)";
-  return `<div class="provcard" data-provider="${esc(p.key)}">
+  const act = (label, onclick) => uiButton(label, {level: "secondary", size: "sm", onclick});
+  return uiCard(`
     ${current ? `<span class="prov-current">${uiBadge("current", "ok")}</span>` : ""}
     <img class="provlogo" src="/static/logos/${esc(p.key)}.svg" alt="" onerror="this.style.display='none'">
-    <div class="provname">${esc(p.name)}</div>
     <div class="provstatus"><span class="provdot" style="background:${dot}"></span>${status}</div>
     <div class="provactions">
-      <button class="save ghost" onclick="openProviderModal('${esc(p.key)}')">edit</button>
-      ${status === "configured" ? `<button class="save ghost" onclick="toggleProvider('${esc(p.key)}',false)">enable</button>` : ""}
-      ${status === "enabled" && !current ? `<button class="save ghost" onclick="toggleProvider('${esc(p.key)}',true)">disable</button>` : ""}
-    </div></div>`;
+      ${act("edit", `openProviderModal('${esc(p.key)}')`)}
+      ${status === "configured" ? act("enable", `toggleProvider('${esc(p.key)}',false)`) : ""}
+      ${status === "enabled" && !current ? act("disable", `toggleProvider('${esc(p.key)}',true)`) : ""}
+    </div>`, {title: esc(p.name), cls: "provcard"});
 }
 
 // enable/disable a provider (the grid button). Server keeps the key; the
@@ -278,7 +281,7 @@ function openProviderModal(provider){
   const selectedBaseUrl = current && st.base_url ? st.base_url : (baseField?.value || "");
   const d = openDialog(`
       <div class="u" style="display:flex;justify-content:space-between;align-items:center">
-        <b>${esc(p.name)}</b><a class="reveal" onclick="closeProviderModal()">✕</a></div>
+        <b>${esc(p.name)}</b>${uiButton("✕", {level: "tertiary", size: "sm", onclick: "closeProviderModal()", attrs: 'aria-label="close"'})}</div>
       <label class="fld"><span>API key <span class="meta">(${esc(f.name || "")})</span>
         ${f.configured ? uiBadge("set ····" + esc(f.last4 || ""), "ok")
                        : uiBadge("not set", "neutral")}</span>
@@ -295,10 +298,12 @@ function openProviderModal(provider){
       ${renderModelPicker("pm-small-model", "Gate / summary model", st.small_model || "")}` : ""}
       <span class="meta" id="pm-msg"></span>
       <div class="dialog-foot">
-        ${!current ? `<button class="save ghost" id="pm-make-current" onclick="makeCurrentProvider('${esc(provider)}')">Set as current provider</button>` : ""}
-        <button class="save" id="pm-save" onclick="saveProviderModal('${esc(provider)}')">Save</button>
+        ${!current ? uiButton("Set as current provider", {level: "secondary", onclick: `makeCurrentProvider('${esc(provider)}')`, attrs: 'id="pm-make-current"'}) : ""}
+        ${uiButton("Save", {level: "primary", onclick: `saveProviderModal('${esc(provider)}')`, attrs: 'id="pm-save"'})}
       </div>`,
     {wide: true, label: `${p.name} provider`, onClose: () => { editing = false; }});
+  // openDialog focuses the first control, which is now the close button; start on the key instead.
+  document.getElementById("pm-key")?.focus();
   // Escape inside an open model list closes that list, not the whole dialog.
   d.addEventListener("keydown", e => {
     if (e.key === "Escape" && d.querySelector(".model-picker-list.open")) e.preventDefault();
@@ -348,7 +353,9 @@ function renderModelPicker(id, label, value){
     <div class="model-picker" id="${escAttr(id)}-picker">
       <div class="model-picker-input">
         <input type="text" id="${escAttr(id)}" value="${escAttr(value || "")}" autocomplete="off" onfocus="markEditing()" onclick="event.stopPropagation()">
-        <button type="button" class="model-picker-toggle" onclick="toggleModelPicker('${escAttr(id)}'); event.stopPropagation();" aria-label="toggle models" aria-controls="${escAttr(id)}-list" aria-expanded="false">▾</button>
+        ${uiButton("▾", {level: "secondary", size: "sm", cls: "model-picker-toggle",
+            onclick: `toggleModelPicker('${escAttr(id)}'); event.stopPropagation();`,
+            attrs: `aria-label="toggle models" aria-controls="${escAttr(id)}-list" aria-expanded="false"`})}
       </div>
       <div class="model-picker-list" id="${escAttr(id)}-list" role="listbox">
         <input type="text" class="model-picker-search" id="${escAttr(id)}-search" placeholder="filter models..." autocomplete="off" aria-label="filter models" oninput="filterModelPicker('${escAttr(id)}')" onfocus="markEditing()" onclick="event.stopPropagation()">

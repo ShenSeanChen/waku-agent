@@ -114,20 +114,21 @@ function graphPanel(d){
   // copy ("off = every turn runs the classic loop") was quietly false the
   // moment a second workflow existed.
   if (!g.enabled && !last)
-    return `<div class="card"><div class="meta">The per-message graph door is <b>off</b> — every chat turn
+    return uiCard(`<div class="meta">The per-message graph door is <b>off</b> — every chat turn
       runs the classic loop above. Switch on <b>graph workflows</b> in
-      <a class="reveal" onclick="location.hash='settings'">Behaviour</a> to triage each message first.
+      ${uiLink("Behaviour", "#settings")} to triage each message first.
       Workflows you run yourself, like <code>make gather</code>, do not need the flag —
-      <a class="reveal" onclick="location.hash='graph'">see them here</a>.</div></div>`;
+      ${uiLink("see them here", "#graph")}.</div>`);
   const when = GRAPH_LIVE
     ? `<span class="live-dot"></span><b>${esc(GRAPH_LIVE)}</b> running now`
     : last
     ? `last run: <b>${esc(last.workflow || "")}</b>${last.ms ? ` · ${(last.ms/1000).toFixed(1)}s` : ""}${
         last.steps ? ` · ${last.steps} nodes` : ""}`
     : "live — nodes light up as a turn flows through";
-  return `<div class="card" style="cursor:pointer" onclick="location.hash='graph'">
+  // The whole card opens the Graph tab; uiCard takes no handler, so a wrapper carries it.
+  return `<div style="cursor:pointer" onclick="location.hash='graph'">${uiCard(`
     ${g.enabled ? split : ""}${wf ? graphSVG(wf) : ""}
-    <div class="meta" style="margin-top:var(--space-2)">${when} · click for the full story</div></div>`;
+    <div class="meta" style="margin-top:var(--space-2)">${when} · click for the full story</div>`)}</div>`;
 }
 
 // --- live animation: same machinery as the loop's STAGE map. hot() lights
@@ -302,11 +303,11 @@ function graphCol(name){
 
 function graphRunPanel(){
   const R = graphRun;
-  const btn = `<button class="btn" onclick="runGraph('gather')" ${R.running ? "disabled" : ""}>
-    ${R.running ? "running…" : "Run gather"}</button>`;
-  let h = `<h2>Run it — watch the wave <span class="meta" style="font-weight:400">
-    the chart shows the shape; these cards show it happening</span></h2>
-    <div class="card">${btn}
+  const btn = uiButton(R.running ? "running…" : "Run gather",
+    {level: "primary", onclick: "runGraph('gather')", attrs: R.running ? "disabled" : ""});
+  const title = `<h2>Run it — watch the wave <span class="meta" style="font-weight:400">
+    the chart shows the shape; these cards show it happening</span></h2>`;
+  let h = `${btn}
     <span class="meta" style="margin-left:var(--space-2)">fetches GitHub, the web, your calendar and your
     memory — together. Proposes only: the digest lands in the outbox.</span>`;
   if (R.error) h += `<div class="meta" style="color:var(--bad);margin-top:var(--space-2)">${esc(R.error)}</div>`;
@@ -321,6 +322,6 @@ function graphRunPanel(){
   });
   if (R.totalMs) h += `<div class="meta" style="margin-top:var(--space-3)">finished in
     ${(R.totalMs/1000).toFixed(1)}s${R.draft ? ` · saved to <code>${esc(R.draft)}</code>` : ""}</div>`;
-  if (R.digest) h += `<div class="card" style="margin-top:var(--space-2)">${renderMarkdown(R.digest)}</div>`;
-  return h + `</div>`;
+  if (R.digest) h += `<div style="margin-top:var(--space-2)">${uiCard(renderMarkdown(R.digest))}</div>`;
+  return title + uiCard(h);
 }

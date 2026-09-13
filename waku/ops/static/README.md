@@ -78,11 +78,11 @@ When you write CSS here or an inline style in `js/`:
   shadows: separate things with a 1px `--rule`.
 - **Amber is a surface, not a text colour.** Amber text uses `--accent-fg`.
   Text on an amber fill uses `--accent-ink`.
-- **Buttons never fill.** Four levels: *primary* (the main action — paper
-  ground, `--rule-hard` border, ink label: `.save`, Send), *secondary*
-  (transparent, `--rule` border, muted label: `.save.ghost`, `.sessbtn`),
-  *tertiary* (text only), *destructive* (`--bad` label). Hover moves the
-  border. controls.css adds the focus ring, pressed and disabled.
+- **Buttons never fill.** Four levels, all from `uiButton`: *primary* (the
+  main action — paper ground, `--rule-hard` border, ink label: Save, Send),
+  *secondary* (transparent, `--rule` border, muted label), *tertiary* (text
+  only), *destructive* (`--bad` label). Hover moves the border. controls.css
+  adds the focus ring, pressed and disabled.
 - **Labels** are uppercase `--face-mono` at `--tracking-label`.
 - **Controls get `data-slot` automatically** (`stampSlots` in `util.js`).
   Use native `<button>`, `<input>`, `<select>`; don't fake them with `<div>`.
@@ -109,6 +109,9 @@ HTML string and is named after the Waku Memory console's `components/ui`:
 | `uiStatBand(items)` | a view's headline numbers |
 | `uiRow(lead, title, meta, {onclick})` | a list of things you can open |
 | `openDialog(html, {wide, onClose})` / `closeDialog()` | a task that needs its own space; Escape and the scrim close it |
+| `uiButton(label, {level, size, onclick, danger, cls, attrs})` | any action: `primary` (the main one), `secondary`, `tertiary` (text only — row actions such as edit), `destructive`; `danger` makes a tertiary delete red |
+| `uiLink(label, href)` | going to another tab — never for an action |
+| `openMenu(trigger, html)` / `closeMenu()` with `uiMenuLabel`, `uiMenuItem`, `uiMenuSep` | a short list of choices under a button; outside click and Escape close it |
 
 If none fits, ask before adding one: a new primitive is a design decision.
 

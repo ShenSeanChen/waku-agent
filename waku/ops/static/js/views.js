@@ -13,7 +13,7 @@ function subtabBar(view, tabs, active){
 // A raw SQLite table, scrollable, with the column names AS the sticky headers
 // so the schema lines up over its data instead of floating above it.
 function dbTable(t){
-  if (!t.sample.length) return `<div class="card empty">empty — no rows yet</div>`;
+  if (!t.sample.length) return uiCard(`<span class="empty">empty — no rows yet</span>`);
   const cols = t.columns.map(c => `${esc(c)}${
     t.types&&t.types[c]?`<small>${esc(t.types[c].toLowerCase())}</small>`:""}`);
   const rows = t.sample.map(r => t.columns.map(c =>
@@ -37,7 +37,7 @@ function dbQueryView(){
       (the Supabase-editor idea, scoped down). Only <code>SELECT</code> runs — the file is opened read-only,
       so nothing here can change your data.</div>
     <textarea class="sqlbox" id="sqlbox" spellcheck="false" onfocus="markEditing()" oninput="markEditing()">${esc(QUERY_EXAMPLES[0])}</textarea>
-    <div style="margin:var(--space-2) 0"><button class="save" onclick="runQuery()">Run</button>
+    <div style="margin:var(--space-2) 0">${uiButton("Run", {level: "primary", onclick: "runQuery()"})}
       <span class="meta" style="margin-left:var(--space-3)">try: ${QUERY_EXAMPLES.map(q=>`<span class="qexample" onclick="qFill(this.textContent)">${esc(q)}</span>`).join(" &nbsp; ")}</span></div>
     <div id="qout"></div>`;
 }
@@ -50,8 +50,8 @@ async function runQuery(){
   const out = document.getElementById("qout");
   out.innerHTML = `<div class="meta">running…</div>`;
   const r = await postJSON("/api/query", {sql});
-  if (r.error){ out.innerHTML = `<div class="card empty" style="color:var(--bad)">${esc(r.error)}</div>`; return; }
-  if (!r.rows.length){ out.innerHTML = `<div class="card empty">0 rows</div>`; return; }
+  if (r.error){ out.innerHTML = uiCard(`<span class="empty" style="color:var(--bad)">${esc(r.error)}</span>`); return; }
+  if (!r.rows.length){ out.innerHTML = uiCard(`<span class="empty">0 rows</span>`); return; }
   out.innerHTML = `<div class="scrolly">${uiTable(r.columns.map(esc),
     r.rows.map(row => row.map(v => `<span class="dbcell">${esc(String(v).slice(0,120))}</span>`)))}</div>
     <div class="meta" style="margin-top:calc(var(--spacing) * 1.5)">${r.rows.length} row(s)</div>`;
@@ -65,11 +65,11 @@ function memOverview(d){
     ["Semantic","semantic",d.facts.length+" facts","durable, distilled facts about you and your people"],
     ["Episodic","episodic",d.episodes.length+" episodes","one dated summary per consolidation — stays small on purpose"],
     ["Procedural","skills",d.skills.length+" skills","SKILL.md files loaded only when relevant — how to act"],
-  ].map(([t,sub,n,desc]) => `<div class="box" style="min-width:0" onclick="location.hash='memory/${sub}'">
-      <b>${t} <span class="meta" style="font-weight:400">· ${n}</span></b><span>${desc}</span></div>`).join("");
+  ].map(([t,sub,n,desc]) => uiCard(`<span>${desc}</span>`,
+      {title: t, action: uiLink(n, `#memory/${sub}`), cls: "box"})).join("");
   return uiNotice("note", `<b>Memory vs Database — two views of one file.</b>
       <div class="r">This tab is the curated, per-pillar view of what Waku remembers. The
-      <a class="reveal" onclick="location.hash='database'">Database tab</a> shows the exact same
+      ${uiLink("Database tab", "#database")} shows the exact same
       thing as raw SQLite tables (plus the FTS5 keyword index). Same
       <code>.waku/state.db</code> — different altitude.
       <br><br>Some assistants (Hermes) keep memory as a single <code>MEMORY.md</code> file. Waku keeps
@@ -93,21 +93,21 @@ function memSemantic(d){
     `<code>${esc(f.subject)}</code>`,
     `<span class="fc">${esc(f.content)}</span>`,
     `<span class="meta">${esc(f.source)}</span>`,
-    `<span style="white-space:nowrap"><a class="reveal" onclick="editFact(${f.id})">edit</a> · <a class="reveal del" onclick="delMem('delete_fact',${f.id})">delete</a></span>`,
+    `<span style="white-space:nowrap">${uiButton("edit", {level: "tertiary", size: "sm", onclick: `editFact(${f.id})`})} · ${uiButton("delete", {level: "tertiary", size: "sm", danger: true, onclick: `delMem('delete_fact',${f.id})`})}</span>`,
   ]})), {empty: "no facts yet"});
   return h;
 }
 function memEpisodic(d){
   const src = d.episodes_source || "sqlite";
   let h = `<div class="meta" style="margin-bottom:var(--space-2)">backend: ${uiBadge(esc(src), "value")}</div>`;
-  if (d.episodes_error) h += `<div class="card empty">Could not read episodes from Notion: ${esc(d.episodes_error)}</div>`;
+  if (d.episodes_error) h += uiCard(`<span class="empty">Could not read episodes from Notion: ${esc(d.episodes_error)}</span>`);
   h += uiNotice("note", `<b>Why is this small?</b> <span class="r">Episodic memory holds one <i>distilled</i> summary per
     consolidation, not every message. The raw, blow-by-blow conversation lives in the
-    <a class="reveal" onclick="location.hash='database/chat_log'"><code>chat_log</code> table</a>
+    ${uiLink("<code>chat_log</code> table", "#database/chat_log")}
     (the big one) on the Database tab — episodes are its highlights.</span>`);
   h += uiTable(["date","episode",""], d.episodes.map(e => [
     `<span class="meta">${esc(e.happened_at)}</span>`, esc(e.summary),
-    `<a class="reveal del" onclick="delMem('delete_episode','${e.id}')">delete</a>`,
+    uiButton("delete", {level: "tertiary", size: "sm", danger: true, onclick: `delMem('delete_episode','${e.id}')`}),
   ]), {empty: "no episodes yet"});
   return h;
 }
@@ -122,31 +122,31 @@ description: ${sk.description}
 ---
 
 ${sk.body}`;
-    return `<div class="card">
+    return uiCard(`
       <div class="u"><code>${esc(sk.name)}</code> <span class="meta" style="font-weight:400">· ${esc(sk.description)}</span>
         <span style="margin-left:calc(var(--spacing) * 1.5)">${uiBadge(sk.editable?"home":"built-in")}</span></div>
       <textarea class="editor" id="sk-${i}" style="min-height:150px;margin-top:var(--space-2)" data-path="${esc(sk.path)}"
         oninput="dirty('sksave-${i}')" onfocus="markEditing()">${esc(full)}</textarea>
-      <div style="margin-top:var(--space-2)"><button class="save" id="sksave-${i}" disabled onclick="saveSkill(${i})">Save SKILL.md</button>
-        <span class="meta" id="skmsg-${i}" style="margin-left:var(--space-2)">${esc(sk.rel)}</span></div></div>`;
-  }).join("") || `<div class="card empty">no skills loaded</div>`;
+      <div style="margin-top:var(--space-2)">${uiButton("Save SKILL.md", {level: "primary", onclick: `saveSkill(${i})`, attrs: `id="sksave-${i}" disabled`})}
+        <span class="meta" id="skmsg-${i}" style="margin-left:var(--space-2)">${esc(sk.rel)}</span></div>`);
+  }).join("") || uiCard(`<span class="empty">no skills loaded</span>`);
   return h;
 }
 function memSoul(d){
   return `<div class="meta" style="margin-bottom:var(--space-3)">SOUL.md is Waku's persona — the system prompt it
     loads every turn. Editing it changes who your Waku is. Changes are live next turn.</div>
-    <div class="card"><textarea id="soul" class="editor" style="min-height:260px"
+    ${uiCard(`<textarea id="soul" class="editor" style="min-height:260px"
       oninput="dirty('soul-save')" onfocus="markEditing()">${esc(d.soul||"")}</textarea>
-    <div style="margin-top:var(--space-2)"><button class="save" id="soul-save" disabled onclick="saveSoul()">Save SOUL.md</button>
-      <span class="meta" id="soul-msg" style="margin-left:var(--space-2)"></span></div></div>
+    <div style="margin-top:var(--space-2)">${uiButton("Save SOUL.md", {level: "primary", onclick: "saveSoul()", attrs: 'id="soul-save" disabled'})}
+      <span class="meta" id="soul-msg" style="margin-left:var(--space-2)"></span></div>`)}
     <div class="meta" style="margin-top:var(--space-2)">${reveal("SOUL.md","open SOUL.md in your editor")}</div>`;
 }
 function memConsolidation(d){
   const distilled = d.facts.filter(f => f.source==="consolidation");
-  let h = `<div class="card"><b>How it works.</b> <span class="r">Every ${d.consolidate_every} exchanges,
+  let h = uiCard(`<b>How it works.</b> <span class="r">Every ${d.consolidate_every} exchanges,
     a cheap model reads the unconsolidated ${"<code>chat_log</code>"} and distills it into durable
     <b>facts</b> (semantic) plus one <b>episode</b> (episodic). Batching keeps it cheap and gives the
-    summarizer enough context to pick what's worth keeping.</span></div>`;
+    summarizer enough context to pick what's worth keeping.</span>`);
   h += `<div style="margin-top:var(--space-3)">${uiStatBand([
     {label:"messages queued", value:d.chat_pending},
     {label:"trigger threshold", value:d.consolidate_every*2},
@@ -157,7 +157,7 @@ function memConsolidation(d){
   h += table(["subject","fact","when"], distilled.map(f =>
     `<tr><td><code>${esc(f.subject)}</code></td><td>${esc(f.content)}</td><td class="meta">${esc((f.created_at||"").slice(0,10))}</td></tr>`));
   h += `<div class="meta" style="margin-top:var(--space-2)">This is a memory operation, shown here. Each run is also
-    <a class="reveal" onclick="location.hash='ops'">traced</a> (Ops) and can be scored by the judge evals.</div>`;
+    ${uiLink("traced", "#ops")} (Ops) and can be scored by the judge evals.</div>`;
   return h;
 }
 
@@ -170,8 +170,8 @@ function toolsResults(d){
     `<tr><td>${esc(e.title)}</td><td class="meta">${esc(e.start)}</td><td class="meta">${esc(e.end)}</td><td>${esc(e.attendees)}</td></tr>`));
   h += `<div class="meta" style="margin-bottom:var(--space-4)">also written to <code>calendar.ics</code> — ${reveal("calendar.ics","reveal calendar.ics in Finder")} (double-click to import into Calendar.app)</div>`;
   h += `<h2>Outbox — drafted messages <span style="font-weight:400;text-transform:none;letter-spacing:0">· ${reveal("outbox","open the outbox folder")}</span></h2>`;
-  h += d.outbox.length ? d.outbox.map(o=>`<div class="card"><span class="u">${esc(o.name)}</span><div class="r">${esc(o.text)}</div></div>`).join("")
-                       : `<div class="card empty">no drafted messages</div>`;
+  h += d.outbox.length ? d.outbox.map(o => uiCard(`<span class="u">${esc(o.name)}</span><div class="r">${esc(o.text)}</div>`)).join("")
+                       : uiCard(`<span class="empty">no drafted messages</span>`);
   return h;
 }
 // Tools ▸ MCP: external connectors. Shows live status + a copy-paste config so
@@ -183,7 +183,7 @@ function toolsMCP(t){
     namespaced <code>&lt;server&gt;_&lt;tool&gt;</code>. ${m.configured
       ? `Configured servers: ${m.servers.map(s=>`<code>${esc(s)}</code>`).join(" ")}${m.live?"":" — start a chat to connect them."}`
       : "None configured yet."}</div>`);
-  h += `<h2>Connect one (30 seconds)</h2><div class="card">
+  h += `<h2>Connect one (30 seconds)</h2>` + uiCard(`
     <div class="meta">1 — install the extra: <code>pip install -e '.[mcp]'</code></div>
     <div class="meta" style="margin-top:calc(var(--spacing) * 1.5)">2 — create ${reveal("","the .waku folder")}<code>/mcp.json</code>:</div>
     <pre style="font-family:var(--face-mono);font-size:var(--text-xs);color:var(--text-muted);white-space:pre-wrap;margin-top:var(--space-2)">{"servers": [
@@ -191,7 +191,7 @@ function toolsMCP(t){
    "args": ["-y", "@modelcontextprotocol/server-filesystem", "${esc(D&&D.home||"")}"]}
 ]}</pre>
     <div class="meta" style="margin-top:var(--space-2)">3 — restart the dashboard. The server's tools appear above under
-      <a class="reveal" onclick="location.hash='tools/available'">Available ▸ MCP servers</a>, callable in chat.</div></div>`;
+      ${uiLink("Available ▸ MCP servers", "#tools/available")}, callable in chat.</div>`);
   h += `<div class="meta" style="margin-top:var(--space-3)">The same pattern scales: any MCP server (yours or a vendor's)
     plugs in the same way — no code changes to Waku. Skills work the same way — drop a <code>SKILL.md</code>
     in ${reveal("skills","skills/")}.</div>`;
@@ -226,7 +226,7 @@ async function saveConnection(key, force){
   msg.textContent = force ? "saving without a successful test…" : "saving…";
   const r = await postJSON("/api/connections", {key, values, clear, force:!!force});
   if (!r.ok && r.can_force) {
-    msg.innerHTML = `${esc(r.error)} <button class="save ghost conn-force" onclick="saveConnection('${esc(key)}',true)">Save anyway</button>`;
+    msg.innerHTML = `${esc(r.error)} ${uiButton("Save anyway", {level: "secondary", cls: "conn-force", onclick: `saveConnection('${esc(key)}',true)`})}`;
   } else if (!r.ok) {
     msg.textContent = r.error || "failed";
   } else {
@@ -319,16 +319,14 @@ function connectionCard(item){
   const why = (item.status && item.status.message
     && (item.status.state === "installed_but_unconfigured" || item.status.state === "error"))
     ? `<div class="connwhy">${esc(item.status.message)}</div>` : "";
-  return `<article class="provcard conncard" data-connection-card="${esc(item.key)}">
+  return uiCard(`
     <img class="provlogo connlogo" src="/static/logos/connections/${esc(item.key)}.svg" alt="">
-    <div class="provname">${esc(item.name)}</div>
     <div class="connstatus ${display.className}"><span class="conndot"></span>${esc(display.label)}</div>
     ${why}
     <div class="conndesc">${esc(item.what)}</div>
     <div class="provactions connactions">
-      <button class="save ghost" onclick="openConnectionModal('${esc(item.key)}')">${action}</button>
-    </div>
-  </article>`;
+      ${uiButton(action, {level: "secondary", onclick: `openConnectionModal('${esc(item.key)}')`})}
+    </div>`, {title: esc(item.name), cls: "provcard conncard"});
 }
 
 function connectionsGrid(items){
@@ -359,7 +357,7 @@ function openConnectionModal(key){
           <h3 id="connection-modal-title">${esc(item.name)}</h3>
           <div class="connstatus ${display.className}" id="connection-modal-status"><span class="conndot"></span>${esc(display.label)}</div>
         </div>
-        <button class="connmodal-close" type="button" onclick="closeConnectionModal()" aria-label="Close">Close</button>
+        ${uiButton("Close", {level: "tertiary", size: "sm", cls: "connmodal-close", onclick: "closeConnectionModal()", attrs: 'aria-label="Close"'})}
       </header>
       <p class="conndesc connmodal-desc">${esc(item.what)}</p>
       <div class="connmodal-meta">
@@ -370,8 +368,8 @@ function openConnectionModal(key){
       <div class="connection-fields">${fields}</div>
       <div class="dialog-foot">
         <span class="connmodal-message" id="connection-msg-${esc(item.key)}" aria-live="polite"></span>
-        <button class="save" onclick="saveConnection('${esc(item.key)}')">Save</button>
-        <button class="save ghost" onclick="testConnection('${esc(item.key)}')">Test connection</button>
+        ${uiButton("Save", {level: "primary", onclick: `saveConnection('${esc(item.key)}')`})}
+        ${uiButton("Test connection", {level: "secondary", onclick: `testConnection('${esc(item.key)}')`})}
       </div>
     </div>`, {label: item.name, onClose: () => {
       editing = false;
@@ -398,7 +396,7 @@ const VIEWS = {
   },
   connections(d){
     const items = d.connections || [];
-    return items.length ? connectionsGrid(items) : `<div class="card empty">No integrations registered.</div>`;
+    return items.length ? connectionsGrid(items) : uiCard(`<span class="empty">No integrations registered.</span>`);
   },
   // Gateway: ONE unified conversation across every channel (dashboard, telegram,
   // voice, cli) — the same loop + memory answer all of them. Each message is
@@ -412,7 +410,7 @@ const VIEWS = {
       web, phone (Telegram), voice, terminal — answered by the same brain. Click one to open it in the
       chat dock &rarr;. This is the inbox; the dock is the open thread.</div>`;
     if (!sessions.length)
-      return h + `<div class="card empty">no conversations yet — say something in the chat dock &rarr;</div>`;
+      return h + uiCard(`<span class="empty">no conversations yet — say something in the chat dock &rarr;</span>`);
     h += sessions.map(s => uiRow(gwTags(s),
       `${esc(s.title||s.id)} <span class="meta" style="font-weight:400;white-space:nowrap">· ${sessionMeta(s)}</span>`,
       esc(s.last||""),
@@ -433,10 +431,10 @@ const VIEWS = {
     ${archSVG(d)}
     <h2>Graph workflows — when a turn needs shape</h2>
     ${graphPanel(d)}
-    <h2>Latest turn</h2>${d.turns.length?turnCard(d.turns[0]):'<div class="card empty">no turns yet — talk to Waku first</div>'}`;
+    <h2>Latest turn</h2>${d.turns.length?turnCard(d.turns[0]):uiCard('<span class="empty">no turns yet — talk to Waku first</span>')}`;
   },
   loop(d){
-    return d.turns.length ? d.turns.map(turnCard).join("") : `<div class="card empty">no turns yet</div>`;
+    return d.turns.length ? d.turns.map(turnCard).join("") : uiCard(`<span class="empty">no turns yet</span>`);
   },
   // Graph workflows: the loop's sibling. The chart is rendered from the
   // engine's own describe() (served in d.graph.workflows) so it can never
@@ -451,11 +449,11 @@ const VIEWS = {
       IS the same loop, running as one step. The harness routes every message itself — and workflows you
       can also call BY NAME from the chat box: type <code>/graphs</code> to see them.</div>`;
     if (!g.enabled)
-      h += `<div class="card"><b>Off</b> — every turn currently runs the classic loop.
+      h += uiCard(`<b>Off</b> — every turn currently runs the classic loop.
         <div class="meta" style="margin-top:calc(var(--spacing) * 1.5)">Switch on <b>graph workflows</b> in
-        <a class="reveal" onclick="location.hash='settings'">Behaviour</a>, or set
+        ${uiLink("Behaviour", "#settings")}, or set
         <code>WAKU_GRAPH_WORKFLOWS=1</code> in <code>.env</code>. Any failure anywhere fails open to the
-        plain loop — this can never lose a reply, only save time and tokens.</div></div>`;
+        plain loop — this can never lose a reply, only save time and tokens.</div>`);
     // The two workflows are two different JOBS with different triggers, which is
     // the thing the page has to make obvious — otherwise two stacked charts read
     // like two options you pick between.
@@ -474,22 +472,22 @@ const VIEWS = {
       const tot = g.stats.quick + g.stats.full;
       const extra = w.name === "triage" && tot
         ? ` · ${g.stats.quick} quick / ${g.stats.full} full so far` : "";
-      h += `<div class="card">${graphSVG(w)}
+      h += uiCard(`${graphSVG(w)}
         <div class="meta" style="margin-top:var(--space-2)">${NOTE[w.name] || ""}${extra} ·
-        drawn from the engine's own <code>describe()</code>, so this picture cannot drift from the code</div></div>`;
+        drawn from the engine's own <code>describe()</code>, so this picture cannot drift from the code</div>`);
       if (w.name === "gather") h += graphRunPanel();
     });
     const gturns = (d.turns||[]).filter(t => t.graph && t.graph.route);
     h += `<h2>Graph turns</h2>`;
     h += gturns.length
-      ? gturns.slice(0,20).map(t => `<div class="card">
+      ? gturns.slice(0,20).map(t => uiCard(`
           <div class="u">${esc(t.user_message)}</div>
           <div class="meta" style="margin-top:var(--spacing)">${uiBadge(`graph · ${esc(t.graph.route)}`, t.graph.route==="quick" ? "neutral" : "value")}
             <span class="meta" style="margin:0">${esc(t.graph.reason||"")}</span></div>
-          <div class="r">${renderMarkdown(t.reply||"")}</div></div>`).join("")
-      : `<div class="card empty">no graph turns yet — ${g.enabled
+          <div class="r">${renderMarkdown(t.reply||"")}</div>`)).join("")
+      : uiCard(`<span class="empty">no graph turns yet — ${g.enabled
           ? 'say "thanks!" in the chat and watch it take the quick door'
-          : "switch the flag on first"}</div>`;
+          : "switch the flag on first"}</span>`);
     return h;
   },
   memory(d, sub){
@@ -507,28 +505,28 @@ const VIEWS = {
   },
   settings(d){
     const st = d.settings || {providers:[]};
-    return `<h2>Experimental tools</h2><div class="card">
+    return `<h2>Experimental tools</h2>${uiCard(`
       <div class="meta" style="margin-bottom:var(--space-2)">Opt in to local coding delegation for chat.</div>
       <label class="fld">Sub-agent delegation<select id="set-experimental" onfocus="markEditing()">
         <option value="" ${!st.experimental?"selected":""}>off</option>
         <option value="1" ${st.experimental?"selected":""}>on</option>
       </select></label>
-      <button class="save" onclick="saveSettings()">Save</button><span class="meta" id="set-msg"></span></div>
-    <h2>Graph workflows</h2><div class="card">
+      ${uiButton("Save", {level: "primary", onclick: "saveSettings()"})}<span class="meta" id="set-msg"></span>`)}
+    <h2>Graph workflows</h2>${uiCard(`
       <div class="meta" style="margin-bottom:var(--space-2)">Off by default. When on, <b>every</b> message is triaged
         through a graph first: a small model classifies it while today's calendar loads in parallel — trivial
         messages get a fast small-model reply, real tasks run the exact same loop as a node. This flag governs
         the AUTOMATIC door only — workflows you call by name (<code>/gather</code>) run either way. Any
         failure fails open to the plain loop. Watch it live on the
-        <a class="reveal" onclick="location.hash='graph'">Graph</a> tab.</div>
+        ${uiLink("Graph", "#graph")} tab.</div>
       <label class="fld">Triage-first turns
         <select id="set-graph-workflows" onfocus="markEditing()">
           <option value="" ${!st.graph_workflows?"selected":""}>off — every turn runs the classic loop (default)</option>
           <option value="1" ${st.graph_workflows?"selected":""}>on — triage graph routes each message</option>
         </select></label>
-      <div style="margin-top:var(--space-3)"><button class="save" onclick="saveSettings()">Save &amp; switch</button>
+      <div style="margin-top:var(--space-3)">${uiButton("Save &amp; switch", {level: "primary", onclick: "saveSettings()"})}
         <span class="meta" style="margin-left:var(--space-2)">rebuilds the agent in-process — no restart</span></div>
-    </div>`;
+    `)}`;
   },
   tools(d, sub){
     const t = d.tools || {catalog:[], mcp:{configured:false,servers:[],live:false}, apple_on:false};
@@ -542,7 +540,7 @@ const VIEWS = {
     h += `<div class="meta" style="margin-bottom:var(--space-3)">The capabilities the agent can call this turn.
       A tool is a name + description the model reads, a JSON schema, and a Python function — that's it.
       ${t.apple_on?"":"Apple tools are off (set <code>WAKU_APPLE_TOOLS=1</code>). "}Connect more via
-      <a class="reveal" onclick="location.hash='tools/mcp'">MCP</a>.</div>`;
+      ${uiLink("MCP", "#tools/mcp")}.</div>`;
     const SRC = [["flagship","Flagship task — scheduling"],["web","Web search"],
       ["self-management","Self-management — it edits its own memory"],
       ["apple","Apple ecosystem"],["mcp","MCP servers"],["other","Other"]];
@@ -550,16 +548,16 @@ const VIEWS = {
       const items = t.catalog.filter(c => c.source === key);
       if (!items.length) return;
       h += `<h2>${label}</h2>`;
-      h += items.map(c => `<div class="toolcard">
-        <div class="tn">${esc(c.name)} ${uiBadge(esc(key), key==="mcp" ? "ok" : "neutral")}</div>
-        <div class="td">${esc(c.description)}</div></div>`).join("");
+      h += items.map(c => uiCard(`
+        <div class="tn"><code>${esc(c.name)}</code> ${uiBadge(esc(key), key==="mcp" ? "ok" : "neutral")}</div>
+        <div class="td">${esc(c.description)}</div>`, {cls: "toolcard", size: "sm"})).join("");
     });
     // Roadmap: whiteboard boxes not wired in yet — set expectations, don't over-promise.
     if ((t.planned||[]).length){
       h += `<h2>Coming soon <span class="meta" style="font-weight:400">· on the architecture chart, not wired in yet (opt in with <code>WAKU_EXPERIMENTAL=1</code>)</span></h2>`;
-      h += t.planned.map(p => `<div class="toolcard" style="opacity:.7">
-        <div class="tn">${esc(p.name)} ${uiBadge(`soon · ${esc(p.box)}`)}</div>
-        <div class="td">${esc(p.description)}</div></div>`).join("");
+      h += t.planned.map(p => uiCard(`
+        <div class="tn"><code>${esc(p.name)}</code> ${uiBadge(`soon · ${esc(p.box)}`)}</div>
+        <div class="td">${esc(p.description)}</div>`, {cls: "toolcard toolcard-soon", size: "sm"})).join("");
     }
     return h;
   },
@@ -577,31 +575,31 @@ const VIEWS = {
     if (sub === "query") return h + dbQueryView();
     if (sub !== "overview"){
       const t = tables.find(x => x.name === sub);
-      if (!t) return h + `<div class="card empty">no such table</div>`;
+      if (!t) return h + uiCard(`<span class="empty">no such table</span>`);
       const notionNote = (t.name === "episodes" && d.episodes_source === "notion")
         ? `<div class="meta" style="margin-bottom:var(--space-2)">Episodes currently live in Notion — see
-            <a class="reveal" onclick="location.hash='memory/episodic'">Memory ▸ Episodic</a>.
+            ${uiLink("Memory ▸ Episodic", "#memory/episodic")}.
             The rows below are the old local copy in state.db.</div>` : "";
       return h + notionNote + `<div class="meta" style="margin-bottom:var(--space-2)">${DB_DESC[t.name]||""}</div>` + dbTable(t);
     }
     const kb = (db.size/1024).toFixed(1);
     h += uiNotice("note", `<b>Database vs Memory.</b> <span class="r">This is the raw persistence layer — the literal SQLite
-      tables. The <a class="reveal" onclick="location.hash='memory'">Memory tab</a> is the friendly
+      tables. The ${uiLink("Memory tab", "#memory")} is the friendly
       view of the same rows (facts, episodes, skills, persona). One file, two altitudes. Where Hermes
       uses a <code>MEMORY.md</code> file, Waku uses these queryable tables — and mirrors them to a
       readable <code>MEMORY.md</code> too.</span>`);
-    h += `<div class="card">
+    h += uiCard(`
       <div class="u" style="font-family:var(--face-mono);font-size:var(--text-xs);word-break:break-all">${esc(db.path)}</div>
       <div class="meta">${kb} KB on disk · SQLite + FTS5 · open it yourself: <code>sqlite3 .waku/state.db</code></div>
-      <div class="meta" style="margin-top:var(--space-2)">${reveal("state.db","reveal state.db in Finder")} &nbsp;·&nbsp; ${reveal("","open the .waku folder")}</div></div>`;
+      <div class="meta" style="margin-top:var(--space-2)">${reveal("state.db","reveal state.db in Finder")} &nbsp;·&nbsp; ${reveal("","open the .waku folder")}</div>`);
     h += `<h2>Tables — click a tab above, or a row here</h2>`;
     h += table(["table","rows","what it holds"], tables.map(t =>
-      `<tr><td><a class="reveal" onclick="location.hash='database/${esc(t.name)}'"><code>${esc(t.name)}</code></a></td>
+      `<tr><td>${uiLink(`<code>${esc(t.name)}</code>`, `#database/${esc(t.name)}`)}</td>
         <td class="meta">${t.count}</td><td class="meta">${DB_DESC[t.name]||""}</td></tr>`));
-    h += `<h2>FTS5 — the keyword index</h2><div class="card">The <code>*_fts</code> virtual tables (and their
+    h += `<h2>FTS5 — the keyword index</h2>` + uiCard(`The <code>*_fts</code> virtual tables (and their
       <code>*_fts_data</code>/<code>*_fts_idx</code> shadows) make memory searchable by keyword — no embeddings,
       no vector DB. This is the "keyword top-k" the retrieval gate queries.
-      <div class="meta" style="margin-top:var(--space-2)">all ${db.all_tables.length} tables: ${db.all_tables.map(t=>`<code>${esc(t)}</code>`).join(" ")}</div></div>`;
+      <div class="meta" style="margin-top:var(--space-2)">all ${db.all_tables.length} tables: ${db.all_tables.map(t=>`<code>${esc(t)}</code>`).join(" ")}</div>`);
     return h;
   },
   ops(d){
@@ -618,9 +616,9 @@ const VIEWS = {
     const verdict = v => v === "pass" ? "ok" : v === "fail" ? "bad" : "neutral";
 
     h += `<h2>Spend <span class="meta" style="font-weight:400">· permanent ledger — survives a demo reset</span></h2>`;
-    h += `<div class="card"><span class="r">Every LLM call's tokens are logged to
+    h += uiCard(`<span class="r">Every LLM call's tokens are logged to
       <code>.waku/usage.jsonl</code> (append-only, never wiped). Dollar cost is estimated from tokens
-      × current pricing — the tokens are the ground truth. ${reveal("usage.jsonl","open usage.jsonl")}</span></div>`;
+      × current pricing — the tokens are the ground truth. ${reveal("usage.jsonl","open usage.jsonl")}</span>`);
     if ((u.by_provider||[]).length){
       h += table(["provider","LLM calls","tokens in","tokens out","cost (est)"], u.by_provider.map(p =>
         `<tr><td><code>${esc(p.provider)}</code></td><td class="meta">${p.calls}</td>
@@ -646,15 +644,15 @@ const VIEWS = {
     }
 
     h += `<h2>Release gate <span class="meta" style="font-weight:400">· the ship/no-ship check</span></h2>`;
-    h += `<div class="card"><span class="r">Before you ship a change (new prompt, swapped model, tuned
+    h += uiCard(`<span class="r">Before you ship a change (new prompt, swapped model, tuned
       retrieval), <code>make gate</code> runs both eval suites: deterministic must pass 100%, the judge must
       clear its threshold. It's manual — you run it — so there's one record per run. The history below grows
-      each time you run it.</span></div>`;
-    h += d.eval_report ? `<div class="card">
+      each time you run it.</span>`);
+    h += d.eval_report ? uiCard(`
         ${uiBadge(`deterministic · ${esc(d.eval_report.deterministic)}`, verdict(d.eval_report.deterministic))}
         <span style="margin-left:var(--space-2)">${uiBadge(`llm-judge · ${esc(d.eval_report.judge)}`, verdict(d.eval_report.judge))}</span>
-        <div class="meta">last run ${esc(d.eval_report.ran_at)} — re-run with <code>make gate</code></div></div>`
-      : `<div class="card empty">never run yet — run <code>make gate</code> to populate this</div>`;
+        <div class="meta">last run ${esc(d.eval_report.ran_at)} — re-run with <code>make gate</code></div>`)
+      : uiCard(`<span class="empty">never run yet — run <code>make gate</code> to populate this</span>`);
 
     if ((d.eval_history||[]).length){
       const cnt = s => s ? `${s.passed||0} pass · ${s.failed||0} fail` : "—";
@@ -673,16 +671,16 @@ const VIEWS = {
 
     h += `<h2>Tracing <span class="meta" style="font-weight:400">· every turn as JSONL, always on</span></h2>`;
     if ((d.trace_errors||[]).length){
-      h += d.trace_errors.map(e => `<div class="card">${uiBadge("trace encoding error", "bad")}
-        <div class="meta" style="margin-top:var(--space-2)"><code>${esc(e.file)}</code> — ${esc(e.error)}</div></div>`).join("");
+      h += d.trace_errors.map(e => uiCard(`${uiBadge("trace encoding error", "bad")}
+        <div class="meta" style="margin-top:var(--space-2)"><code>${esc(e.file)}</code> — ${esc(e.error)}</div>`)).join("");
     }
-    h += `<div class="card"><span class="r">${s.trace_files} trace file(s) in <code>traces/</code>${
+    h += uiCard(`<span class="r">${s.trace_files} trace file(s) in <code>traces/</code>${
       d.trace_file?` (newest: <code>${esc(d.trace_file)}</code>)`:""}. ${reveal("traces","open the traces folder")}.
-      A trace is just "what happened, in order" — here are the most recent lines:</span></div>`;
+      A trace is just "what happened, in order" — here are the most recent lines:</span>`);
     h += (d.trace_tail||[]).length ? table(["event","detail","when"], d.trace_tail.map(e =>
         `<tr><td><code>${esc(e.type)}</code></td><td class="meta">${esc(String(e.detail).slice(0,60))}</td>
           <td class="meta">${esc((e.ts||"").replace("T"," ").slice(0,19))}</td></tr>`))
-      : `<div class="card empty">no trace lines yet — talk to Waku</div>`;
+      : uiCard(`<span class="empty">no trace lines yet — talk to Waku</span>`);
     h += `<div class="meta" style="margin-top:var(--space-2)">Span waterfalls: <code>make trace</code> + <code>OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317</code>.</div>`;
 
     if (d.wake_scans.length){

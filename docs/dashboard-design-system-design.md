@@ -494,9 +494,10 @@ change Waku Memory too, so the two products stay one system.
 
 - **Actions are buttons (13A).** The 45 `<a class="reveal">` actions —
   edit, delete, grade, clear, open in Finder — become Memory's tertiary
-  button (mono, uppercase, `--text-muted`, ink on hover; delete is the
-  destructive level). They become real `<button>`s, so the keyboard reaches
-  them. A link that goes to another tab stays a link and takes Memory's
+  button (mono, uppercase, `--text-muted`, ink on hover). Delete is the
+  same tertiary button in `--bad` text, without a border, as in the
+  mockup; the bordered destructive level is for a dialog's delete button.
+  They become real `<button>`s, so the keyboard reaches them. A link that goes to another tab stays a link and takes Memory's
   link style: `--accent-fg` with a hairline underline that turns amber on
   hover.
 - **`uiButton(label, {level, size, onclick, attrs})`.** Memory's four levels
