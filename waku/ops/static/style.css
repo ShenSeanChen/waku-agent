@@ -97,6 +97,9 @@
   .tile{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:12px 14px}
   .tile b{font-size:19px;font-weight:600;font-variant-numeric:tabular-nums;display:block}
   .tile span{color:var(--ink2);font-size:11.5px}
+  .datatable{width:100%;border-collapse:collapse;margin-top:8px}
+  .datatable th,.datatable td{text-align:left;padding:6px 10px;border-bottom:1px solid var(--line)}
+  .neg{color:var(--bad)}
   .map{display:flex;flex-direction:column;gap:10px;margin-top:6px}
   .lane{display:flex;align-items:stretch;gap:0;flex-wrap:wrap}
   .lane-label{width:86px;flex-shrink:0;color:var(--ink3);font-size:11px;text-transform:uppercase;

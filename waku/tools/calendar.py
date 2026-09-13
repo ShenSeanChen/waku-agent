@@ -55,6 +55,29 @@ def _write_ics(home: Path, title: str, start: str, end: str, attendees: str) -> 
     ics_path.write_text(body + event + "END:VCALENDAR\n", encoding="utf-8")
 
 
+def _regenerate_ics(home: Path, conn: sqlite3.Connection) -> None:
+    """Rewrite calendar.ics from scratch off calendar_events — the DB is the
+    source of truth. _write_ics only ever appends, which is fine for new
+    events but can't reflect a row that moved or was renamed in place; a
+    reschedule needs the file to actually replace the old VEVENT, not grow
+    another one next to it."""
+    def dt(s: str) -> str:
+        return s.replace("-", "").replace(":", "") + ("00" if len(s) == 16 else "")
+
+    rows = conn.execute('SELECT title, start, "end", attendees FROM calendar_events ORDER BY id').fetchall()
+    body = "BEGIN:VCALENDAR\nVERSION:2.0\nPRODID:-//waku-agent//EN\n"
+    for r in rows:
+        body += (
+            "BEGIN:VEVENT\n"
+            f"SUMMARY:{r['title']}\n"
+            f"DTSTART:{dt(r['start'])}\n"
+            f"DTEND:{dt(r['end'] or r['start'])}\n"
+            f"DESCRIPTION:attendees: {r['attendees'] or ''}\n"
+            "END:VEVENT\n"
+        )
+    (home / "calendar.ics").write_text(body + "END:VCALENDAR\n", encoding="utf-8")
+
+
 def _applescript_date(var: str, iso: str) -> str:
     """Build an AppleScript date from ISO parts — immune to system locale
     (never feed AppleScript a formatted date string; parsing is locale-bound)."""
@@ -484,6 +507,86 @@ def make_tool(
             "required": ["title", "start"],
         },
         fn=create_event,
+    )
+
+
+def make_update_tool(conn: sqlite3.Connection, home: Path) -> Tool:
+    """update_event — reschedule/rename an existing local event IN PLACE.
+
+    create_event only inserts; without this, "the interview got moved to
+    Tuesday" had no way to land except as a second create_event call, leaving
+    the stale original sitting in the calendar untouched next to a new one.
+    See the 2026-08-19 bug report.
+
+    Matching is a case-insensitive substring on the current title (the model
+    won't know the exact string it typed last time, e.g. "EPAM" should find
+    "EPAM 面试 - 第一轮"). Ambiguous matches are refused rather than guessed at.
+    """
+    def update_event(
+        old_title: str,
+        new_start: str = "",
+        new_end: str = "",
+        new_title: str = "",
+    ) -> str:
+        if not old_title:
+            return "update_event needs old_title — the current title (or part of it) to find the event."
+        candidates = conn.execute(
+            'SELECT id, title, start, "end" FROM calendar_events WHERE title LIKE ? ORDER BY start',
+            (f"%{old_title}%",),
+        ).fetchall()
+        if not candidates:
+            return f"No event found matching '{old_title}'."
+        if len(candidates) > 1:
+            listed = "; ".join(f"'{c['title']}' at {c['start']}" for c in candidates)
+            return (
+                f"Multiple events match '{old_title}': {listed}. "
+                "Be more specific (use more of the title)."
+            )
+
+        row = candidates[0]
+        start = (new_start[:16] if new_start else row["start"])
+        if new_end:
+            end = new_end[:16]
+        elif new_start:
+            # preserve the original duration when only the start moves
+            from datetime import timedelta
+            old_start = datetime.fromisoformat(row["start"])
+            old_end = datetime.fromisoformat(row["end"]) if row["end"] else old_start + timedelta(hours=1)
+            end = (datetime.fromisoformat(start) + (old_end - old_start)).isoformat(timespec="minutes")
+        else:
+            end = row["end"] or start
+        title = new_title or row["title"]
+
+        conn.execute(
+            'UPDATE calendar_events SET title=?, start=?, "end"=? WHERE id=?',
+            (title, start, end, row["id"]),
+        )
+        conn.commit()
+        _regenerate_ics(home, conn)
+
+        return f"Event moved: '{title}' now {start} → {end}. (was '{row['title']}' at {row['start']})"
+
+    return Tool(
+        name="update_event",
+        description=(
+            "Reschedule or rename an existing calendar event IN PLACE — use this "
+            "instead of create_event whenever the user says an already-scheduled "
+            "event moved, changed time, or was renamed. old_title matches by "
+            "substring against the current title (need not be exact/full); if it "
+            "matches more than one event, this returns an error asking for a more "
+            "specific title instead of guessing."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "old_title": {"type": "string", "description": "Current title, or a distinctive part of it"},
+                "new_start": {"type": "string", "description": "New start time, ISO 8601. Omit to keep the current start."},
+                "new_end": {"type": "string", "description": "New end time, ISO 8601. Defaults to the original duration."},
+                "new_title": {"type": "string", "description": "New title. Omit to keep the current title."},
+            },
+            "required": ["old_title"],
+        },
+        fn=update_event,
     )
 
 

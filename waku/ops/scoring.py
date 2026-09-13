@@ -40,7 +40,7 @@ def check_case(case: dict, tool_calls: list[dict]) -> tuple[bool, str]:
         return (False, f"expected {case['expect_tool']}, called {fired or 'nothing'}")
     args = next(c["args"] for c in tool_calls if c["tool"] == case["expect_tool"])
     for key, needle in case.get("expect_in_args", {}).items():
-        if needle.lower() not in str(args.get(key, "")).lower():
+        if str(needle).lower() not in str(args.get(key, "")).lower():
             return (False, f"'{needle}' not in args[{key}]")
     want = case.get("expect_min_tool_calls", 0)
     if len(fired) < want:

@@ -47,6 +47,17 @@ def test_case_for_message_matches_trimmed_input():
     assert scoring.case_for_message("something else entirely", cases) is None
 
 
+def test_scoring_handles_numeric_needle():
+    # evals/dataset.jsonl's log-pnl-basic case expects a numeric arg (pnl_amount:
+    # 200, an int) — the substring check must not crash on a non-string needle.
+    case = {"expect_tool": "log_pnl", "expect_in_args": {"account": "IBKR", "pnl_amount": 200}}
+    ok, why = scoring.check_case(case, [{"tool": "log_pnl", "args": {"account": "IBKR", "pnl_amount": 200}}])
+    assert ok, why
+
+    ok, why = scoring.check_case(case, [{"tool": "log_pnl", "args": {"account": "IBKR", "pnl_amount": 999}}])
+    assert not ok and "200" in why
+
+
 def test_real_dataset_loads_and_every_case_is_scoreable():
     cases = scoring.load_cases()
     assert len(cases) >= 11
