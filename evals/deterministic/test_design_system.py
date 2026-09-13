@@ -152,8 +152,9 @@ def test_no_shadows():
 
 def test_only_a_floating_menu_casts_a_shadow():
     found = [(f, s) for f, s, p, v in _declarations()
-             if p == "box-shadow" and v != "none" and not s.strip().startswith(".menu")]
-    assert not found, f"only .menu takes --shadow-md: {found}"
+             if p == "box-shadow" and v != "none"
+             and not (s.strip().startswith(".menu") or "::picker(select)" in s)]
+    assert not found, f"only a floating menu (.menu, a select's open list) takes --shadow-md: {found}"
 
 
 BUTTONS = re.compile(r"(?:^|[\s,>+~])(?:button|\.save|\.btn|\.sessbtn|\.cmp-sortbtn|#dsend|#mic|#dock-reopen|#nav-reopen)\b")

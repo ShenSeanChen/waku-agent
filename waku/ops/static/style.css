@@ -290,7 +290,7 @@
      follow the theme while an image cannot. A select inside a form keeps the
      form's taller padding (.fld, .addmodel) so it lines up with the input
      beside it. */
-  select{appearance:none;-webkit-appearance:none;cursor:pointer;outline:none;
+  select{-webkit-appearance:none;appearance:none;appearance:base-select;cursor:pointer;outline:none;
          background-color:var(--surface-raised);border:var(--rule-width) solid var(--rule-hard);border-radius:var(--radius);
          color:var(--text-ink);font-family:var(--face-mono);font-size:var(--text-xs);line-height:var(--leading-snug);
          padding:var(--spacing) var(--space-6) var(--spacing) var(--space-2);
@@ -300,6 +300,19 @@
          background-position:right calc(var(--space-2) + var(--spacing)) center,right var(--space-2) center;
          background-repeat:no-repeat}
   select:hover,select:focus{border-color:var(--accent)}
+  /* A select's open list is the dashboard's menu (.menu): Chrome draws it
+     from CSS once the select is appearance:base-select. A browser without
+     that drops these rules and keeps its own list. The chip's caret is
+     already drawn, so the built-in icon and checkmark go. */
+  select:open{border-color:var(--accent)}
+  ::picker(select){appearance:base-select;background:var(--surface-paper);border:var(--rule-width) solid var(--rule-hard);
+    border-radius:var(--radius);padding:calc(var(--spacing) * 1.5);margin-top:calc(var(--spacing) * 1.5);box-shadow:var(--shadow-md)}
+  select::picker-icon{display:none}
+  select option::checkmark{display:none}
+  select option{padding:var(--space-2);border-radius:var(--radius);font-family:var(--face-mono);font-size:var(--text-xs);
+    color:var(--text-ink);cursor:pointer}
+  select option:checked{color:var(--accent-fg)}
+  select option:hover,select option:focus-visible{background:var(--surface-raised)}
   
   
   

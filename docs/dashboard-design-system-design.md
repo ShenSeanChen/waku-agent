@@ -537,7 +537,9 @@ change Waku Memory too, so the two products stay one system.
   the questions come from.
 - **Selects look like the model chip.** Every `<select>` takes the chip's
   raised ground, hard rule, mono text and caret, so there is one dropdown
-  across the dashboard. Memory's Select keeps its chevron for now.
+  across the dashboard. Its open list is the dashboard's menu: Chrome draws
+  it from CSS (`appearance: base-select`), and a browser without that keeps
+  its own list. Memory's Select keeps its chevron for now.
 
 Until the Memory changes land, `type.css` and `SOURCE.md` record that
 `--leading-normal` is ahead of `globals.css`.

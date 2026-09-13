@@ -76,7 +76,9 @@ When you write CSS here or an inline style in `js/`:
   (`--face-sans|mono|display`), corner (`--radius`, or `--shape-chip` for a
   badge, `--shape-circle` for a dot, `--shape-bubble` for your chat message), duration (`--motion-fast`). No
   shadows: separate things with a 1px `--rule`. The one exception is a floating
-  menu (`openMenu`), which takes `--shadow-md`.
+  menu (`openMenu`, and a select's open list), which takes `--shadow-md`.
+  Use a native `<select>` for a choice in a form: style.css draws its open
+  list as the menu, so it needs no JavaScript.
 - **Amber is a surface, not a text colour.** Amber text uses `--accent-fg`.
   Text on an amber fill uses `--accent-ink`.
 - **Buttons never fill.** Four levels, all from `uiButton`: *primary* (the
