@@ -6,10 +6,11 @@ name = "waku-agent"
 dynamic = ["version"]
 description = "A minimal, transparent, local-first Waku: harness + loop + memory + eval, in code you can read in an afternoon."
 readme = "README.md"
-# Code is MIT; the Waku brand assets are not (LICENSE-BRAND). PEP 639 lets the
-# package say both, so PyPI no longer reports the whole wheel as MIT.
-license = "MIT AND LicenseRef-Waku-Brand"
-license-files = ["LICENSE", "LICENSE-BRAND"]
+# Code is MIT; the Waku brand assets are not (LICENSE-BRAND); the bundled fonts
+# are SIL OFL 1.1. PEP 639 lets the package say all three, so PyPI no longer
+# reports the whole wheel as MIT.
+license = "MIT AND OFL-1.1 AND LicenseRef-Waku-Brand"
+license-files = ["LICENSE", "LICENSE-BRAND", "waku/ops/static/fonts/OFL-*.txt"]
 authors = [{ name = "Sean Chen (ShenSeanChen)" }]
 requires-python = ">=3.11"
 keywords = ["ai-agent", "llm", "agent-framework", "local-first", "llmops", "memory", "eval"]
