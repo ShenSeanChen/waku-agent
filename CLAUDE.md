@@ -94,8 +94,10 @@ for its own sake is not.
     file that did not exist in the previous release is present.
 
   Since 2026-08-29 `.github/workflows/release.yml` does this on its own: push a
-  `v*` tag and it runs the gate, builds, and publishes over PyPI Trusted
-  Publishing (no stored token). It **refuses** if the tag and `__version__`
+  `v*` tag and it runs the gate, builds, publishes over PyPI Trusted
+  Publishing (no stored token), and then creates the GitHub Release for the
+  tag with the same files and generated notes — so the repo page's "Latest"
+  always matches PyPI. It **refuses** if the tag and `__version__`
   disagree. So the release step is `git tag vX.Y.Z && git push origin vX.Y.Z` —
   nothing to remember, and nothing for me to hold.
 - **`main` is protected — `git push origin main` is REJECTED, for everyone.** Since

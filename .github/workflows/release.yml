@@ -20,6 +20,7 @@ jobs:
     environment: pypi
     permissions:
       id-token: write  # OIDC — how PyPI knows this workflow is really us
+      contents: write  # create the GitHub Release for the tag
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -53,3 +54,16 @@ jobs:
         run: pipx run twine check dist/*
 
       - uses: pypa/gh-action-pypi-publish@release/v1
+
+      # The GitHub Release comes after PyPI, never before: the Releases page
+      # should only name a version `pip install` can already fetch. It carries
+      # the same wheel and sdist, and notes GitHub writes from the PRs merged
+      # since the previous release. Until 2026-09-13 only v0.1.0 and v0.1.1
+      # had one, so the repo page called v0.1.1 "Latest" for six weeks while
+      # PyPI moved on.
+      - name: GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >
+          gh release create "$GITHUB_REF_NAME" dist/*.whl dist/*.tar.gz
+          --repo "$GITHUB_REPOSITORY" --verify-tag --generate-notes --title "$GITHUB_REF_NAME"
