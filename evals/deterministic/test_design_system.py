@@ -280,6 +280,20 @@ def test_rail_resize_and_model_line_are_gone():
         assert gone not in src, f"{gone} belongs to the old sidebar"
 
 
+UI_FUNCTIONS = ("uiCard", "uiBadge", "uiTable", "uiTabs", "uiNotice", "uiStatBand", "uiRow", "openDialog", "closeDialog")
+
+
+def test_primitives_are_defined_and_load_first():
+    """Views build screens from js/ui.js, so it must define every primitive
+    and load before any view calls one."""
+    src = _js().get("ui.js", "")
+    for fn in UI_FUNCTIONS:
+        assert re.search(rf"^function {fn}\(", src, re.MULTILINE), f"js/ui.js must define {fn}"
+    html = _index()
+    assert "/static/js/ui.js" in html, "index.html must load js/ui.js"
+    assert html.index("/static/js/ui.js") < html.index("/static/js/views.js"), "ui.js loads before the views"
+
+
 OLD_NAME = re.compile(r"var\(--(?:bg|panel|line2?|ink[23]?|accent-soft|good-soft|bad-soft|good|mono)\)")
 
 # Files that still read an old name on the day PR 1 merged. This set only

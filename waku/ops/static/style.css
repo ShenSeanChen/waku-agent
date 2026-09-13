@@ -118,11 +118,29 @@
   .box b{font-size:var(--text-sm);font-weight:var(--font-weight-medium);display:block}
   .box span{color:var(--ink2);font-size:var(--text-xs)}
   .arrow{align-self:center;color:var(--ink3);padding:0 8px;font-size:var(--text-sm)}
-  .card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);
-        padding:14px 16px;margin-bottom:10px;position:relative}
-  .badge{display:inline-block;font-size:var(--text-xs);padding:1px 8px;border-radius:var(--shape-chip);
-         border:1px solid var(--line2);color:var(--ink2);margin-right:8px}
-  .badge.retrieve{border-color:var(--accent);color:var(--accent-fg)}
+  /* Card and Badge are primitives (js/ui.js: uiCard, uiBadge), after Waku
+     Memory's components/ui. */
+  .card{background:var(--surface-paper);border:var(--rule-width) solid var(--rule);border-radius:var(--radius);
+        padding:var(--space-4);margin-bottom:var(--space-3);position:relative}
+  .card-sm{padding:var(--space-3)}
+  .card-head{display:flex;align-items:baseline;gap:var(--space-3);margin-bottom:var(--space-2)}
+  .card-title{font-family:var(--face-display);font-size:var(--text-base);line-height:var(--leading-snug);
+              font-variant-ligatures:none}
+  .card-action{margin-left:auto}
+  .card-foot{display:flex;align-items:center;gap:var(--space-2);border-top:var(--rule-width) solid var(--rule);
+             background:var(--surface-raised);margin:var(--space-4) calc(var(--space-4) * -1) calc(var(--space-4) * -1);
+             padding:var(--space-3) var(--space-4)}
+  .badge{display:inline-flex;align-items:center;height:calc(var(--spacing) * 5);white-space:nowrap;
+         padding:calc(var(--spacing) * 0.5) var(--space-3);border:var(--rule-width) solid var(--rule);
+         border-radius:var(--shape-chip);font-family:var(--face-mono);font-size:var(--text-xs);
+         text-transform:uppercase;letter-spacing:var(--tracking-label);color:var(--text-muted);
+         margin-right:var(--space-2);vertical-align:middle}
+  .badge-ok{color:var(--ok);border-color:currentColor}
+  .badge-warn{color:var(--warn);border-color:currentColor}
+  .badge-bad{color:var(--bad);border-color:currentColor}
+  .badge-live,.badge.retrieve{color:var(--accent-fg);border-color:var(--accent)}
+  .badge-miss{color:var(--text-faint);border-style:dashed}
+  .badge-value{text-transform:none;letter-spacing:0;color:var(--text-ink)}
   .pill{font-size:var(--text-xs);padding:2px 9px;border-radius:var(--shape-chip);font-weight:var(--font-weight-medium)}
   .pill.pass{background:var(--good-soft);color:var(--good)}
   .pill.fail{background:var(--bad-soft);color:var(--bad)}
@@ -693,3 +711,59 @@ details.subterm > summary.subterm-h::-webkit-details-marker{ display:none; }
   #dock-resizer{display:none}
   #dock{position:fixed;inset:0;width:auto;height:100vh;z-index:var(--z-dialog);border-left:none}
 }
+
+/* ---- Primitives (js/ui.js) — Waku Memory's components/ui --------------- */
+/* Table: faint mono header, 8px cells, a rule under each row. */
+.tbl-wrap{border:var(--rule-width) solid var(--rule);border-radius:var(--radius);overflow-x:auto;
+          background:var(--surface-paper);margin-bottom:var(--space-3)}
+.tbl{width:100%;border-collapse:collapse;font-size:var(--text-sm)}
+.tbl th{font-family:var(--face-mono);font-size:var(--text-xs);text-transform:uppercase;letter-spacing:var(--tracking-label);
+        font-weight:var(--font-weight-medium);color:var(--text-faint);text-align:left;padding:var(--space-2);
+        border-bottom:var(--rule-width) solid var(--rule);white-space:nowrap}
+.tbl td{padding:var(--space-2);vertical-align:top;border-bottom:var(--rule-width) solid var(--rule)}
+.tbl tr:last-child td{border-bottom:none}
+.tbl tr:hover td{background:var(--surface-raised)}
+.tbl-caption{font-size:var(--text-sm);color:var(--text-muted);margin-top:var(--space-2)}
+/* Tabs (line variant): the active tab gets a 2px ink bar. Amber marks the
+   current page in the rail only. */
+.tabs{display:flex;flex-wrap:wrap;gap:var(--spacing);border-bottom:var(--rule-width) solid var(--rule);margin-bottom:var(--space-4)}
+.tab{position:relative;font-size:var(--text-sm);font-weight:var(--font-weight-medium);color:var(--text-muted);
+     text-decoration:none;white-space:nowrap;padding:calc(var(--spacing) * 0.5) calc(var(--spacing) * 1.5) var(--space-3)}
+.tab:hover,.tab.on{color:var(--text-ink)}
+.tab.on::after{content:"";position:absolute;left:0;right:0;bottom:calc(var(--rule-width) * -1);height:2px;background:var(--text-ink)}
+.tab-n{font-family:var(--face-mono);font-size:var(--text-xs);color:var(--text-faint);margin-left:var(--spacing)}
+/* Notice: raised ground, a rule under it, the level word as its mark. */
+.notice{display:flex;align-items:baseline;gap:var(--space-3);padding:var(--space-4);background:var(--surface-raised);
+        border-bottom:var(--rule-width) solid var(--rule);margin-bottom:var(--space-4)}
+.notice-mark{font-family:var(--face-mono);font-size:var(--text-xs);text-transform:uppercase;letter-spacing:var(--tracking-label);
+             color:var(--text-faint);flex-shrink:0}
+.notice-ok .notice-mark{color:var(--ok)}
+.notice-warn .notice-mark{color:var(--warn)}
+.notice-failed .notice-mark{color:var(--bad)}
+.notice-body{line-height:var(--leading-snug);overflow-wrap:anywhere;min-width:0}
+.notice-action{margin-left:auto;flex-shrink:0}
+/* Stat band: one bordered strip, a divider between figures. */
+.stat-band{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));border:var(--rule-width) solid var(--rule);
+           margin-bottom:var(--space-6)}
+.stat{display:flex;flex-direction:column;gap:var(--space-2);padding:var(--space-4);border-right:var(--rule-width) solid var(--rule)}
+.stat:last-child{border-right:none}
+.stat-label{font-family:var(--face-mono);font-size:var(--text-xs);text-transform:uppercase;letter-spacing:var(--tracking-label);
+            color:var(--text-faint)}
+.stat-value{font-family:var(--face-mono);font-size:var(--text-xl);line-height:var(--leading-tight);
+            font-weight:var(--font-weight-normal);font-variant-numeric:tabular-nums}
+.stat-value.ok{color:var(--ok)}
+.stat-sub{font-size:var(--text-xs);color:var(--text-faint)}
+/* Row: a lead beside a title and a meta line. */
+.list-row{display:grid;grid-template-columns:minmax(0,118px) minmax(0,1fr);gap:var(--space-4);
+          padding:var(--space-3) 0;border-bottom:var(--rule-width) solid var(--rule)}
+.list-row[onclick]{cursor:pointer}
+.list-title{line-height:var(--leading-snug)}
+.list-meta{font-family:var(--face-mono);font-size:var(--text-xs);color:var(--text-faint);margin-top:var(--spacing)}
+/* Dialog: a native <dialog> over the scrim. */
+dialog.dialog{background:var(--surface-raised);color:var(--text-ink);border:var(--rule-width) solid var(--rule);
+              border-radius:var(--radius);padding:var(--space-8);width:min(var(--measure-narrow), 92vw);
+              max-height:calc(100dvh - var(--space-8) * 2);overflow:auto}
+dialog.dialog.dialog-wide{width:min(var(--dialog-wide), 92vw)}
+dialog.dialog::backdrop{background:var(--scrim);backdrop-filter:blur(var(--scrim-blur))}
+.dialog-foot{display:flex;justify-content:flex-end;gap:var(--space-2);border-top:var(--rule-width) solid var(--rule);
+             margin-top:var(--space-4);padding-top:var(--space-4)}

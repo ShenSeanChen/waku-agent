@@ -139,6 +139,7 @@ const SLOT_FOR = [
   ['input[type="checkbox"]', "checkbox"],
   ['input[type="radio"]', "radio-group-item"],
   ['input:not([type]), input[type="text"], input[type="search"], input[type="password"], input[type="email"], input[type="url"], input[type="number"]', "input"],
+  [".tab", "tabs-trigger"],
   [".badge, .pill, .chip, .chip-c, .srcpill, .gwtag, .stage, .cmp-score, .cmp-q, .ma-o, .ma-test", "badge"],
 ];
 function stampSlots(root){

@@ -92,6 +92,24 @@ When you write CSS here or an inline style in `js/`:
 `evals/deterministic/test_design_system.py` enforces all of this, except
 which button level you pick.
 
+### Primitives (`js/ui.js`)
+
+Build screens from these rather than writing the markup. Each returns an
+HTML string and is named after the Waku Memory console's `components/ui`:
+
+| Function | Use it for |
+|---|---|
+| `uiCard(body, {title, action, footer, size})` | a block of related content |
+| `uiBadge(text, variant)` | a status or a value: `neutral`, `ok`, `warn`, `bad`, `live` (running), `miss`, `value` (data, normal case) |
+| `uiTable(columns, rows, {caption, empty})` | anything with rows and columns |
+| `uiTabs(items)` | switching between parts of one view |
+| `uiNotice(level, html, action)` | an explanation or a status message: `note`, `ok`, `warn`, `failed` |
+| `uiStatBand(items)` | a view's headline numbers |
+| `uiRow(lead, title, meta, {onclick})` | a list of things you can open |
+| `openDialog(html, {wide, onClose})` / `closeDialog()` | a task that needs its own space; Escape and the scrim close it |
+
+If none fits, ask before adding one: a new primitive is a design decision.
+
 ## Verifying a change (no JS test runner exists)
 
 Frontend logic is not unit-tested; verify in the browser preview:
