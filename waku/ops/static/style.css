@@ -11,7 +11,7 @@
      content's scrollbar sits at its own right edge (the "middle"), never over
      the chat dock. */
   body{background:var(--surface-bg);color:var(--text-ink);
-       font-family:var(--face-sans);font-size:var(--text-sm);line-height:1.55;
+       font-family:var(--face-sans);font-size:var(--text-sm);line-height:var(--leading-normal);
        display:flex;height:100vh;overflow:hidden}
   /* The rail — Waku Memory's console nav (components/console/console-nav.tsx):
      paper ground, mono uppercase items, a 2px amber rule on the current page.
@@ -158,7 +158,7 @@
   .mdcode-copy:hover{color:var(--accent-fg);border-color:var(--accent)}
   .mdcode-copy.copied{color:var(--ok);border-color:var(--ok);background:var(--surface-raised)}
   .mdcode pre{margin:0;padding:var(--space-3) var(--space-3);overflow-x:auto;font-family:var(--face-mono);
-              font-size:var(--text-xs);line-height:1.65;color:var(--text-muted);white-space:pre}
+              font-size:var(--text-xs);line-height:var(--leading-normal);color:var(--text-muted);white-space:pre}
   .mdcode code{font-family:var(--face-mono);background:none;border:none;padding:0;border-radius:0;font-size:var(--text-xs)}
   /* horizontal rule */
   .mdhr{border:none;border-top:1px solid var(--rule-hard);margin:var(--space-3) 0}
@@ -245,19 +245,19 @@
   .reveal:hover{border-bottom-style:solid}
   .reveal.del{color:var(--bad);border-color:var(--bad)}
   .editor{width:100%;min-height:120px;background:transparent;border:var(--rule-width) solid var(--input);border-radius:var(--radius);
-          padding:var(--space-2) var(--space-3);color:var(--text-ink);font-family:var(--face-mono);font-size:var(--text-sm);line-height:1.5;resize:vertical;outline:none}
+          padding:var(--space-2) var(--space-3);color:var(--text-ink);font-family:var(--face-mono);font-size:var(--text-sm);line-height:var(--leading-normal);resize:vertical;outline:none}
   .editor:focus{border-color:var(--accent)}
   tr .editor{min-height:52px}
   /* Button levels, from Waku Memory's button.tsx. Nothing fills: weight comes
      from the border and the label. Primary is the main action on a screen
      (Save, Send, Run); secondary is everything else. controls.css adds the
      shape, the focus ring, pressed and disabled. */
-  .save,.chatbar button,#dock-reopen,.btn,.sessbtn,.cmp-sortbtn{font-family:var(--face-mono);
+  .save,.chatbar button,#dock-reopen,.sessbtn,.cmp-sortbtn{font-family:var(--face-mono);
        font-size:var(--text-xs);font-weight:var(--font-weight-medium);text-transform:uppercase;
        letter-spacing:var(--tracking-label);cursor:pointer}
-  .save,.chatbar button,#dock-reopen,.btn{background:var(--surface-paper);color:var(--text-ink);
+  .save,.chatbar button,#dock-reopen{background:var(--surface-paper);color:var(--text-ink);
        border:var(--rule-width) solid var(--rule-hard)}
-  .save:hover,.chatbar button:hover,#dock-reopen:hover,.btn:hover{border-color:var(--accent)}
+  .save:hover,.chatbar button:hover,#dock-reopen:hover{border-color:var(--accent)}
   .save.ghost,.sessbtn,.cmp-sortbtn,#mic{background:transparent;color:var(--text-muted);
        border:var(--rule-width) solid var(--rule)}
   .save.ghost:hover,.sessbtn:hover,.cmp-sortbtn:hover,#mic:hover{border-color:var(--rule-hard);color:var(--text-ink)}
@@ -275,7 +275,7 @@
   .srcpill.apple{background:transparent;border:1px solid var(--rule-hard);color:var(--text-muted)}
   /* read-only SQL console (the Supabase-editor idea, scoped down) */
   .sqlbox{width:100%;min-height:70px;background:var(--surface-sunk);color:var(--text-ink);border:var(--rule-width) solid var(--input);
-          border-radius:var(--radius);padding:var(--space-3) var(--space-3);font-family:var(--face-mono);font-size:var(--text-xs);line-height:1.5;resize:vertical;outline:none}
+          border-radius:var(--radius);padding:var(--space-3) var(--space-3);font-family:var(--face-mono);font-size:var(--text-xs);line-height:var(--leading-normal);resize:vertical;outline:none}
   .sqlbox:focus{border-color:var(--accent)}
   .qexample{font-family:var(--face-mono);font-size:var(--text-xs);color:var(--accent-fg);cursor:pointer;border-bottom:1px dashed var(--accent)}
   /* session picker in the chat surfaces */
@@ -294,7 +294,7 @@
      hold it, parked it past the right edge of the window. It may shrink now. */
   .modelchip{margin-left:auto;display:inline-flex;align-items:center;gap:calc(var(--spacing) * 1.5);max-width:150px;min-width:0;
              background:var(--surface-raised);border:1px solid var(--rule-hard);border-radius:var(--radius);
-             color:var(--text-ink);padding:var(--spacing) var(--space-2);font-size:var(--text-xs);cursor:pointer;line-height:1.2}
+             color:var(--text-ink);padding:var(--spacing) var(--space-2);font-size:var(--text-xs);cursor:pointer;line-height:var(--leading-snug)}
   .modelchip:hover{border-color:var(--accent)}
   .modelchip .mc-dot{width:6px;height:6px;border-radius:var(--shape-circle);background:var(--ok);flex-shrink:0}
   .modelchip .mc-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
@@ -476,7 +476,7 @@
   .scatter .sc-yhit{fill:transparent;cursor:help;pointer-events:all}
   .sc-tip{position:fixed;display:none;z-index:9999;pointer-events:none;max-width:340px;
     white-space:pre-line;background:var(--surface-paper);color:var(--text-ink);border:1px solid var(--rule);
-    border-radius:var(--radius);padding:var(--space-2) var(--space-3);font-size:var(--text-xs);line-height:1.45}
+    border-radius:var(--radius);padding:var(--space-2) var(--space-3);font-size:var(--text-xs);line-height:var(--leading-normal)}
   .scatter .sc-lbl{fill:var(--text-muted);font-size:10.5px}
   
   
@@ -496,7 +496,7 @@ details.subterm > summary.subterm-h{ cursor:pointer; }
 details.subterm > summary.subterm-h::-webkit-details-marker{ display:none; }
 .subterm-t{ overflow:hidden; text-overflow:ellipsis; }
 .subterm pre{ margin:0; padding:var(--spacing) var(--space-2); border-top:1px solid var(--rule);
-  font-size:var(--text-xs); line-height:1.5; white-space:pre-wrap; word-break:break-word;
+  font-size:var(--text-xs); line-height:var(--leading-normal); white-space:pre-wrap; word-break:break-word;
   max-height:96px; overflow-y:auto; }
 
 /* Arena card diet: clamp long replies (fade + toggle), one-line model names. */
@@ -535,7 +535,7 @@ details.subterm > summary.subterm-h::-webkit-details-marker{ display:none; }
 .model-picker-search:focus{ border-bottom-color:var(--accent); }
 .model-picker-items{ padding:var(--spacing) 0; }
 .model-picker-item{ padding:calc(var(--spacing) * 1.5) var(--space-3); cursor:pointer; font-size:var(--text-xs); }
-.model-picker-item:hover,.model-picker-item.active{ background:var(--surface-raised); color:var(--accent-fg); }
+.model-picker-item:hover,.model-picker-item.active{ background:var(--surface-raised); color:var(--text-ink); }
 .model-picker-meta{ padding:var(--space-2) var(--space-3); font-size:var(--text-xs); color:var(--text-faint); border-top:1px solid var(--rule-hard); }
 
 /* Connections page: the same compact card language as Models, with config
@@ -562,7 +562,7 @@ details.subterm > summary.subterm-h::-webkit-details-marker{ display:none; }
 .connstatus.not-configured .conndot{background:var(--text-faint)}
 /* The one-line reason under the pill: what to actually do about it. */
 .connwhy{font-size:var(--text-xs);color:var(--text-faint);margin-top:calc(var(--spacing) * 0.5);font-family:var(--face-mono)}
-.conndesc{color:var(--text-muted);font-size:var(--text-xs);line-height:1.5}
+.conndesc{color:var(--text-muted);font-size:var(--text-xs);line-height:var(--leading-normal)}
 .conncard .conndesc{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;
   overflow:hidden;min-height:36px}
 .connactions{margin-top:auto}
@@ -570,7 +570,7 @@ details.subterm > summary.subterm-h::-webkit-details-marker{ display:none; }
 
 .connmodal-head{display:flex;align-items:center;gap:var(--space-3)}
 .connmodal-title{min-width:0;flex:1}
-.connmodal-title h3{font-size:var(--text-base);line-height:1.3;margin-bottom:var(--spacing)}
+.connmodal-title h3{font-size:var(--text-base);line-height:var(--leading-snug);margin-bottom:var(--spacing)}
 .connmodal-close{align-self:flex-start;background:transparent;border:1px solid var(--rule-hard);
   border-radius:var(--radius);color:var(--text-muted);cursor:pointer;font-size:var(--text-xs);padding:var(--spacing) var(--space-2)}
 .connmodal-close:hover,.connmodal-close:focus-visible{border-color:var(--accent);color:var(--accent-fg)}
@@ -584,7 +584,7 @@ details.subterm > summary.subterm-h::-webkit-details-marker{ display:none; }
 .connection-fields{margin-top:var(--space-4)}
 .conn-field{margin-bottom:var(--space-3)}
 .conn-field .fld{margin-bottom:0}
-.conn-field-help{margin-top:var(--spacing);color:var(--text-faint);font-size:var(--text-xs);line-height:1.45}
+.conn-field-help{margin-top:var(--spacing);color:var(--text-faint);font-size:var(--text-xs);line-height:var(--leading-normal)}
 .conn-check{display:flex;align-items:center;gap:var(--space-2);color:var(--text-muted);font-size:var(--text-xs);
   cursor:pointer;padding:var(--space-2) 0}
 
@@ -635,7 +635,7 @@ details.subterm > summary.subterm-h::-webkit-details-marker{ display:none; }
 .ma-pickers .fld{margin-bottom:0;flex:1 1 260px;min-width:0}
 .ma-pickers .fld select{width:100%}
 .ma-pickers .meta{flex:1 1 100%}
-.ma-ans{font-size:var(--text-xs);color:var(--text-faint);margin-top:var(--spacing);max-width:280px;line-height:1.45}
+.ma-ans{font-size:var(--text-xs);color:var(--text-faint);margin-top:var(--spacing);max-width:280px;line-height:var(--leading-normal)}
 /* Equal-height cards. `align-items:stretch` is the grid default, so every card
    already spans its row — the cards were ragged because each one sized to its
    own content. Fixing the ROW height and scrolling only the facts keeps the
@@ -649,21 +649,21 @@ details.subterm > summary.subterm-h::-webkit-details-marker{ display:none; }
 /* The scroll region. `min-height:0` is load-bearing: a flex child defaults to
    min-height:auto (its intrinsic content height), so without it the list
    refuses to shrink and pushes the card taller instead of scrolling. */
-.ma-facts{margin:0;padding-left:var(--space-4);font-size:var(--text-xs);color:var(--text-muted);line-height:1.65;
+.ma-facts{margin:0;padding-left:var(--space-4);font-size:var(--text-xs);color:var(--text-muted);line-height:var(--leading-normal);
   flex:1 1 auto;min-height:0;overflow-y:auto;overscroll-behavior:contain}
 /* An error or an "unreadable, and here's why" note fills the same space. */
 .ma-store > .ma-ans{flex:1 1 auto;min-height:0;overflow-y:auto}
 /* "showing 8 of 53 - see all" stays pinned under the scroll region. */
 .ma-store > .meta{flex:0 0 auto}
 .ma-facts li{margin:calc(var(--spacing) * 0.5) 0}
-.ma-prov{font-size:var(--text-xs);color:var(--text-faint);margin:calc(var(--spacing) * 0.5) 0 var(--space-2);font-family:var(--face-mono);line-height:1.5;
+.ma-prov{font-size:var(--text-xs);color:var(--text-faint);margin:calc(var(--spacing) * 0.5) 0 var(--space-2);font-family:var(--face-mono);line-height:var(--leading-normal);
   flex:0 0 auto}
 
 .ma-facts-meta{font-size:var(--text-xs);color:var(--text-faint);font-family:var(--face-mono);margin:var(--spacing) 0 calc(var(--spacing) * 0.5)}
 .ma-test{display:inline-block;font-family:var(--face-mono);font-size:var(--text-xs);text-transform:uppercase;
          letter-spacing:var(--tracking-label);color:var(--accent-fg);background:var(--surface-raised);
          padding:calc(var(--spacing) * 0.5) var(--space-2);border-radius:var(--shape-chip)}
-.ma-q{font-size:var(--text-xs);color:var(--text-ink);margin-top:var(--spacing);line-height:1.45;max-width:210px}
+.ma-q{font-size:var(--text-xs);color:var(--text-ink);margin-top:var(--spacing);line-height:var(--leading-normal);max-width:210px}
 
 /* Below 768 the rail becomes a row across the top (Memory's ConsoleTopNav):
    the current page stays readable without opening anything. The row scrolls
@@ -758,3 +758,39 @@ dialog.dialog::backdrop{background:var(--scrim);backdrop-filter:blur(var(--scrim
 .dbcell{display:block}
 .list-row.on{background:var(--surface-raised)}
 dialog.dialog :focus-visible{outline:var(--focus-ring-width) solid var(--accent);outline-offset:var(--focus-ring-offset)}
+
+/* ---- Button, Link, Menu (js/ui.js) — Waku Memory's button.tsx and menus -- */
+/* Nothing fills: weight comes from the border and the label. */
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:var(--control-gap);white-space:nowrap;cursor:pointer;
+     font-family:var(--face-mono);font-size:var(--text-xs);font-weight:var(--font-weight-medium);text-transform:uppercase;
+     letter-spacing:var(--tracking-label);line-height:1;padding:var(--control-pad-y) var(--control-pad-x);
+     border:var(--rule-width) solid transparent;background:transparent;color:var(--text-muted);text-decoration:none}
+.btn-sm{padding:var(--space-2) var(--space-4)}
+.btn-primary{background:var(--surface-paper);border-color:var(--rule-hard);color:var(--text-ink)}
+.btn-primary:hover{border-color:var(--accent)}
+.btn-secondary{border-color:var(--rule)}
+.btn-secondary:hover{border-color:var(--rule-hard);color:var(--text-ink)}
+.btn-tertiary:hover{color:var(--text-ink)}
+.btn-tertiary.btn-sm{padding:calc(var(--spacing) * 0.5) calc(var(--spacing) * 1.5)}
+.btn-destructive{background:var(--surface-paper);border-color:var(--rule-hard);color:var(--bad)}
+.btn-destructive:hover{border-color:var(--bad)}
+.btn-danger,.btn-danger:hover{color:var(--bad)}
+/* Link: for going somewhere. A hairline underline that turns amber on hover. */
+.link{color:var(--accent-fg);text-decoration:underline;text-decoration-thickness:var(--rule-width);
+      text-underline-offset:calc(var(--spacing) * 0.5);text-decoration-color:var(--rule-hard);cursor:pointer}
+.link:hover{text-decoration-color:var(--accent)}
+/* Menu (15B): paper, a hard rule, the hovered item one step raised, the
+   current item in accent text. Memory's DropdownMenu follows the same look. */
+.menu{position:fixed;z-index:var(--z-menu);min-width:calc(var(--spacing) * 32);max-height:70vh;overflow-y:auto;
+      background:var(--surface-paper);border:var(--rule-width) solid var(--rule-hard);border-radius:var(--radius);
+      padding:calc(var(--spacing) * 1.5)}
+.menu-label{font-family:var(--face-mono);font-size:var(--text-xs);text-transform:uppercase;letter-spacing:var(--tracking-label);
+            color:var(--text-faint);padding:var(--spacing) var(--space-2)}
+.menu-item{display:flex;align-items:baseline;gap:var(--space-2);width:100%;text-align:left;cursor:pointer;
+           background:transparent;border:var(--rule-width) solid transparent;border-radius:var(--radius);padding:var(--space-2);
+           font-family:var(--face-sans);font-size:var(--text-xs);line-height:var(--leading-snug);color:var(--text-ink)}
+.menu-item:hover,.menu-item:focus-visible{background:var(--surface-raised)}
+.menu-item.on{color:var(--accent-fg)}
+.menu-item.danger{color:var(--bad)}
+.menu-sub{margin-left:auto;padding-left:var(--space-2);font-family:var(--face-mono);color:var(--text-faint)}
+.menu-sep{height:var(--rule-width);background:var(--rule);margin:var(--spacing) 0}

@@ -14,7 +14,9 @@
   --font-weight-medium:500;
   --leading-tight:1.12;
   --leading-snug:1.3;
-  --leading-normal:1.72;
+  /* 1.55, not globals.css's 1.72: the design owner's call on 2026-09-13,
+     made first here. Waku Memory's --leading-normal is changing to match. */
+  --leading-normal:1.55;
 }
 :root,[data-theme]{
   --input:color-mix(in srgb,var(--text-ink) 48%,var(--surface-bg));
