@@ -530,6 +530,11 @@ change Waku Memory too, so the two products stay one system.
   the one exception to "nothing casts a shadow"; cards and buttons still
   have none. `type.css` sets `--shadow-md` until Waku Memory's tokens.css
   changes to the same value for its DropdownMenu, Select and Popover.
+- **Grades explain themselves on hover (19C).** The Memory race no longer
+  prints a legend of four chips under its questions. A grade chip's title
+  gives its meaning, then why that answer got it; the scoreboard's grade
+  columns carry the same meaning. The line under the table only says where
+  the questions come from.
 - **Selects look like the model chip.** Every `<select>` takes the chip's
   raised ground, hard rule, mono text and caret, so there is one dropdown
   across the dashboard. Memory's Select keeps its chevron for now.

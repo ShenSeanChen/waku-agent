@@ -601,7 +601,11 @@ function maProbe(id){
 
 // The badge variant each outcome takes — the same four words as OUTCOME_HELP.
 const OUTCOME_VARIANT = {pass: "ok", stale: "warn", invented: "bad", miss: "miss"};
-const OUTCOME_CELL = (r) => uiBadge(esc(r.outcome), OUTCOME_VARIANT[r.outcome] || "neutral", r.why || "");
+// A grade says what it means on hover, then why this answer got it: the
+// page has no legend, so the chip itself is where the reader asks.
+const OUTCOME_MEANING = Object.fromEntries(OUTCOME_HELP);
+const OUTCOME_CELL = (r) => uiBadge(esc(r.outcome), OUTCOME_VARIANT[r.outcome] || "neutral",
+  [OUTCOME_MEANING[r.outcome], r.why].filter(Boolean).join(" — "));
 
 function maResultsHtml(){
   if (!maRun.rows.length && !maRun.running && !maRun.error) return "";
@@ -640,7 +644,7 @@ function maResultsHtml(){
                  : `<span class="meta">waiting</span>`;
   };
   const board = maRun.board ? uiTable(
-    ["store", "pass", "stale", "invented", "miss", "tokens"],
+    ["store", ...["pass", "stale", "invented", "miss"].map(o => `<span title="${esc(OUTCOME_MEANING[o])}">${o}</span>`), "tokens"],
     maRun.board.map(b => [`<code>${esc(b.contestant)}</code>`, b.pass, b.stale, b.invented, b.miss,
                           `<span class="meta">${b.tokens}</span>`])) : "";
   const grid = uiTable(["probe", ...names.map(n => esc(n))], probes.map((p, i) => {
@@ -865,11 +869,7 @@ function maAsksHtml(track){
           : '<span class="meta">—</span>']))}
     <div class="meta" style="margin-top:var(--space-2)">${memoryArenaFixture.is_example
       ? `Example probes. Point <code>WAKU_MEMORY_PROBES</code> at your own file.`
-      : `From <code>${esc(memoryArenaFixture.source)}</code>`}
-      &nbsp;·&nbsp; ${uiBadge("pass", "ok")} right
-      ${uiBadge("stale", "warn")} gave a superseded answer
-      ${uiBadge("invented", "bad")} made it up
-      ${uiBadge("miss", "miss")} said it did not know</div>`;
+      : `From <code>${esc(memoryArenaFixture.source)}</code>`}</div>`;
 }
 
 
