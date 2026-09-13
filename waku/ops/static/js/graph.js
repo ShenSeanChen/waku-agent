@@ -104,14 +104,11 @@ function graphPanel(d){
   const wf = (g.workflows || []).find(w => w && w.name === showing)
              || (g.workflows || [])[0];
   const tot = g.stats.quick + g.stats.full;
-  const seg = (cls, n, label, pct) =>
-    `<div class="${cls}" style="width:${pct}%">${pct >= 14 ? `${n} ${label}` : ""}</div>`;
-  const split = !tot
-    ? `<div class="meta" style="margin:6px 0 10px">no graph turns yet — every message will route here once it's on</div>`
-    : `<div class="splitbar">
-        ${seg("seg-skip", g.stats.quick, "quick", Math.round(g.stats.quick / tot * 100))}
-        ${seg("seg-ret", g.stats.full, "full", 100 - Math.round(g.stats.quick / tot * 100))}
-      </div><div class="meta" style="margin:6px 0 10px">${g.stats.quick} answered by the small model alone — the loop never woke</div>`;
+  // The same figures-over-bar as the retrieval gate (render.js splitFigures).
+  const split = splitFigures("Quick", g.stats.quick, "Full", g.stats.full, `of ${tot} graph turns`)
+    + `<div class="meta" style="margin:calc(var(--spacing) * 1.5) 0 var(--space-2)">${!tot
+      ? "no graph turns yet — every message will route here once it's on"
+      : `${g.stats.quick} answered by the small model alone — the loop never woke`}</div>`;
   // The flag gates TRIAGE — the per-message door — and nothing else. `waku
   // gather` is a routine you start yourself and runs regardless, so the old
   // copy ("off = every turn runs the classic loop") was quietly false the
@@ -130,7 +127,7 @@ function graphPanel(d){
     : "live — nodes light up as a turn flows through";
   return `<div class="card" style="cursor:pointer" onclick="location.hash='graph'">
     ${g.enabled ? split : ""}${wf ? graphSVG(wf) : ""}
-    <div class="meta" style="margin-top:8px">${when} · click for the full story</div></div>`;
+    <div class="meta" style="margin-top:var(--space-2)">${when} · click for the full story</div></div>`;
 }
 
 // --- live animation: same machinery as the loop's STAGE map. hot() lights
@@ -294,12 +291,12 @@ function graphCol(name){
   const pct = Math.round((n.ms || 0) / slowest * 100);
   const waited = slowest - (n.ms || 0);
   return `<div class="cmp-col"><div class="cmp-h"><b>${esc(name)}</b>
-      <span class="chip">${n.ms}ms</span></div>
+      ${uiBadge(`${n.ms}ms`, "value")}</div>
     <div class="wavebar"><i style="width:${pct}%"></i></div>
     <div class="meta">${waited > 20 && peers.length > 1
       ? `waited ${(waited/1000).toFixed(1)}s at the barrier`
       : (peers.length > 1 ? "set the pace for this wave" : "")}</div>
-    <div class="meta">${(n.keys || []).map(k => `<span class="chip">${esc(k)}</span>`).join(" ")}</div>
+    <div class="meta">${(n.keys || []).map(k => uiBadge(esc(k), "value")).join(" ")}</div>
   </div>`;
 }
 
@@ -310,20 +307,20 @@ function graphRunPanel(){
   let h = `<h2>Run it — watch the wave <span class="meta" style="font-weight:400">
     the chart shows the shape; these cards show it happening</span></h2>
     <div class="card">${btn}
-    <span class="meta" style="margin-left:10px">fetches GitHub, the web, your calendar and your
+    <span class="meta" style="margin-left:var(--space-2)">fetches GitHub, the web, your calendar and your
     memory — together. Proposes only: the digest lands in the outbox.</span>`;
-  if (R.error) h += `<div class="meta" style="color:var(--bad);margin-top:10px">${esc(R.error)}</div>`;
+  if (R.error) h += `<div class="meta" style="color:var(--bad);margin-top:var(--space-2)">${esc(R.error)}</div>`;
   R.waves.forEach((w, i) => {
     const done = w.nodes.filter(n => (R.nodes[n] || {}).ms != null);
     const slowest = done.length ? Math.max(...done.map(n => R.nodes[n].ms)) : 0;
     const sum = done.reduce((a, n) => a + R.nodes[n].ms, 0);
-    h += `<div class="meta" style="margin:14px 0 6px">wave ${i + 1} · ${w.nodes.length}
+    h += `<div class="meta" style="margin:var(--space-3) 0 calc(var(--spacing) * 1.5)">wave ${i + 1} · ${w.nodes.length}
       node${w.nodes.length > 1 ? "s" : ""}${slowest ? ` · ${(slowest/1000).toFixed(1)}s`
       + (w.nodes.length > 1 ? ` (in sequence it would be ${(sum/1000).toFixed(1)}s)` : "") : ""}</div>
       <div class="cmp-grid">${w.nodes.map(graphCol).join("")}</div>`;
   });
-  if (R.totalMs) h += `<div class="meta" style="margin-top:12px">finished in
+  if (R.totalMs) h += `<div class="meta" style="margin-top:var(--space-3)">finished in
     ${(R.totalMs/1000).toFixed(1)}s${R.draft ? ` · saved to <code>${esc(R.draft)}</code>` : ""}</div>`;
-  if (R.digest) h += `<div class="card" style="margin-top:10px">${renderMarkdown(R.digest)}</div>`;
+  if (R.digest) h += `<div class="card" style="margin-top:var(--space-2)">${renderMarkdown(R.digest)}</div>`;
   return h + `</div>`;
 }

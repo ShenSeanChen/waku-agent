@@ -55,15 +55,15 @@ function modelRow(m, st){
   const price = m.free ? "free" : (m.price_out != null ? `$${m.price_in}/$${m.price_out} per M` : "");
   const tags = [price, m.context ? Math.round(m.context/1000) + "k ctx" : ""]
                .filter(Boolean).join(" · ");
-  return `<div class="tool" style="display:flex;align-items:center;gap:8px;padding:6px 8px">
+  return `<div class="tool" style="display:flex;align-items:center;gap:var(--space-2);padding:calc(var(--spacing) * 1.5) var(--space-2)">
     <a class="pinstar ${isPinned?"on":""}" title="${isPinned?"pinned to Your models — click to remove":"pin to Your models (shows in chat switcher)"}"
        onclick="pinModel('${esc(st.provider)}','${esc(m.id)}','${isPinned?"unpin":"pin"}')">${isPinned?"★":"☆"}</a>
     <code style="flex:1;word-break:break-all">${esc(m.id)}</code>
     <span class="meta" style="margin:0;white-space:nowrap">${esc(tags)}</span>
-    ${m.reasoning ? `<span class="srcpill apple" title="thinks out loud before answering: fine for the loop, a poor fit for the gate's tiny token budget">reasoning</span>` : ""}
-    ${curGate ? `<span class="srcpill">GATE</span>`
+    ${m.reasoning ? uiBadge("reasoning", "neutral", "thinks out loud before answering: fine for the loop, a poor fit for the gate's tiny token budget") : ""}
+    ${curGate ? uiBadge("gate", "ok")
               : `<a class="reveal" data-id="${esc(m.id)}" onclick="switchModel(this.dataset.id,true)" title="use as the gate/summary model">gate</a>`}
-    ${cur ? `<span class="srcpill" style="background:var(--good-soft);color:var(--good)">CURRENT</span>`
+    ${cur ? uiBadge("current", "ok")
           : (m.tools === false ? `<span class="meta" style="margin:0" title="the loop needs tool calling">chat-only</span>`
                                : `<button class="save" data-id="${esc(m.id)}" onclick="switchModel(this.dataset.id)">use</button>`)}
   </div>`;
@@ -103,7 +103,7 @@ function renderCatalog(){
         onchange="catFilter.tools=this.checked;renderCatalogList()"> tool-capable only</label>
     </div>
     <div id="cat-list"></div>
-    <div class="meta" id="free-switch-msg" style="margin-top:6px"></div>`;
+    <div class="meta" id="free-switch-msg" style="margin-top:calc(var(--spacing) * 1.5)"></div>`;
   renderCatalogList();
 }
 
@@ -118,21 +118,21 @@ function renderCatalogList(){
                              && (!catFilter.tools || m.tools));
   let h = "";
   if (!q && !catFilter.free && !catFilter.tools){
-    h += `<div class="meta" style="margin:4px 0">Suggested picks: transparent heuristics from catalog metadata (tools, price, context), not a quality leaderboard</div>`;
-    h += `<div class="meta" style="margin:6px 0 2px"><b>For the loop</b> (needs tool calling; free first, biggest context)</div>`;
+    h += `<div class="meta" style="margin:var(--spacing) 0">Suggested picks: transparent heuristics from catalog metadata (tools, price, context), not a quality leaderboard</div>`;
+    h += `<div class="meta" style="margin:calc(var(--spacing) * 1.5) 0 calc(var(--spacing) * 0.5)"><b>For the loop</b> (needs tool calling; free first, biggest context)</div>`;
     h += loopPicks(all).map(m => modelRow(m, st)).join("");
-    h += `<div class="meta" style="margin:10px 0 2px"><b>For the gate</b> (cheap, terse, non-reasoning)</div>`;
+    h += `<div class="meta" style="margin:var(--space-2) 0 calc(var(--spacing) * 0.5)"><b>For the gate</b> (cheap, terse, non-reasoning)</div>`;
     h += gatePicks(all).map(m => modelRow(m, st)).join("");
-    h += `<div class="meta" style="margin:12px 0 2px"><b>Everything</b> (${all.length} models, by vendor)</div>`;
+    h += `<div class="meta" style="margin:var(--space-3) 0 calc(var(--spacing) * 0.5)"><b>Everything</b> (${all.length} models, by vendor)</div>`;
   } else {
-    h += `<div class="meta" style="margin:4px 0">${shown.length} of ${all.length} models</div>`;
+    h += `<div class="meta" style="margin:var(--spacing) 0">${shown.length} of ${all.length} models</div>`;
   }
   const vendors = {};
   shown.forEach(m => (vendors[m.id.split("/")[0]] ??= []).push(m));
   const expand = q || catFilter.free || catFilter.tools;
   h += Object.keys(vendors).sort().map(v => `
     <details ${expand ? "open" : ""}><summary><code>${esc(v)}</code>
-      <span class="meta" style="margin-left:6px">${vendors[v].length}${vendors[v].some(m=>m.free) ? " · has free" : ""}</span></summary>
+      <span class="meta" style="margin-left:calc(var(--spacing) * 1.5)">${vendors[v].length}${vendors[v].some(m=>m.free) ? " · has free" : ""}</span></summary>
       ${vendors[v].map(m => modelRow(m, st)).join("")}
     </details>`).join("");
   list.innerHTML = h;
@@ -163,7 +163,7 @@ function yourModelsCard(st){
     <div class="pinrow ${(p.provider===st.provider && p.model===st.model)?"on":""}">
       <span class="mm-prov">${esc(p.provider)}</span>
       <code style="flex:1;word-break:break-all">${esc(p.model)}</code>
-      ${p.default ? `<span class="srcpill" title="this provider's default model">default</span>`
+      ${p.default ? uiBadge("default", "value", "this provider's default model")
                   : `<a class="reveal" onclick="pinModel('${esc(p.provider)}','${esc(p.model)}','default')" title="make this ${esc(p.provider)}'s default">make default</a>`}
       <a class="reveal" onclick="pinModel('${esc(p.provider)}','${esc(p.model)}','unpin')" title="remove from your list">remove</a>
     </div>`).join("") || `<div class="meta">No models pinned yet — add one below.</div>`;
@@ -182,7 +182,7 @@ function yourModelsCard(st){
         <select id="add-model"><option value="">loading models…</option></select>
         <button class="save" onclick="addPinnedModel()">Add</button>
       </div>
-      <div class="meta" style="margin-top:6px" id="add-msg">Pick a provider, choose a model, then Add.</div>
+      <div class="meta" style="margin-top:calc(var(--spacing) * 1.5)" id="add-msg">Pick a provider, choose a model, then Add.</div>
     </div>`;
 }
 
@@ -238,16 +238,15 @@ function modelsGrid(d){
     : providerCardStatus(p, st) === "configured" ? 2 : 3;
   const providers = (d.providers || []).slice()
     .sort((a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name));
-  return `<div class="provgrid">` + providers.map(p => providerCard(p, st)).join("") +
-    `</div><div id="prov-modal-root"></div>`;
+  return `<div class="provgrid">` + providers.map(p => providerCard(p, st)).join("") + `</div>`;
 }
 
 function providerCard(p, st){
   const status = providerCardStatus(p, st);
   const current = p.key === st.provider;
-  const dot = status === "enabled" ? "var(--good)" : status === "configured" ? "var(--accent)" : "var(--bad)";
+  const dot = status === "enabled" ? "var(--ok)" : status === "configured" ? "var(--accent)" : "var(--bad)";
   return `<div class="provcard" data-provider="${esc(p.key)}">
-    ${current ? `<span class="srcpill prov-current" style="background:var(--good-soft);color:var(--good)">current</span>` : ""}
+    ${current ? `<span class="prov-current">${uiBadge("current", "ok")}</span>` : ""}
     <img class="provlogo" src="/static/logos/${esc(p.key)}.svg" alt="" onerror="this.style.display='none'">
     <div class="provname">${esc(p.name)}</div>
     <div class="provstatus"><span class="provdot" style="background:${dot}"></span>${status}</div>
@@ -277,14 +276,12 @@ function openProviderModal(provider){
   const f = (p.fields || [])[0] || {};
   const baseField = (p.fields || []).find(field => field.name.endsWith("_BASE_URL"));
   const selectedBaseUrl = current && st.base_url ? st.base_url : (baseField?.value || "");
-  const root = document.getElementById("prov-modal-root");
-  root.innerHTML = `<div class="provmodal-back" onclick="closeProviderModal()">
-    <div class="provmodal${current ? " provmodal-models" : ""}" onclick="event.stopPropagation()">
+  const d = openDialog(`
       <div class="u" style="display:flex;justify-content:space-between;align-items:center">
         <b>${esc(p.name)}</b><a class="reveal" onclick="closeProviderModal()">✕</a></div>
       <label class="fld"><span>API key <span class="meta">(${esc(f.name || "")})</span>
-        ${f.configured ? `<span class="srcpill" style="background:var(--good-soft);color:var(--good)">set ····${esc(f.last4 || "")}</span>`
-                       : `<span class="srcpill apple">not set</span>`}</span>
+        ${f.configured ? uiBadge("set ····" + esc(f.last4 || ""), "ok")
+                       : uiBadge("not set", "neutral")}</span>
         <input type="password" id="pm-key" placeholder="${f.configured ? "key on file — blank keeps it" : "paste key"}"></label>
       ${baseField ? `<label class="fld"><span>Base URL <span class="meta">(select the API key's region)</span></span>
         <select id="pm-base-url" onfocus="markEditing()">
@@ -296,19 +293,22 @@ function openProviderModal(provider){
       ${current ? `
       ${renderModelPicker("pm-model", "Main model (runs the loop; needs tool calling)", st.model || "")}
       ${renderModelPicker("pm-small-model", "Gate / summary model", st.small_model || "")}` : ""}
-      <div style="display:flex;gap:8px;margin-top:10px">
-        <button class="save" id="pm-save" onclick="saveProviderModal('${esc(provider)}')">Save</button>
-        ${!current ? `<button class="save ghost" id="pm-make-current" onclick="makeCurrentProvider('${esc(provider)}')">Set as current provider</button>` : ""}
-      </div>
       <span class="meta" id="pm-msg"></span>
-    </div></div>`;
+      <div class="dialog-foot">
+        ${!current ? `<button class="save ghost" id="pm-make-current" onclick="makeCurrentProvider('${esc(provider)}')">Set as current provider</button>` : ""}
+        <button class="save" id="pm-save" onclick="saveProviderModal('${esc(provider)}')">Save</button>
+      </div>`,
+    {wide: true, label: `${p.name} provider`, onClose: () => { editing = false; }});
+  // Escape inside an open model list closes that list, not the whole dialog.
+  d.addEventListener("keydown", e => {
+    if (e.key === "Escape" && d.querySelector(".model-picker-list.open")) e.preventDefault();
+  });
   if (current) loadModalModels(provider);
 }
 
 function closeProviderModal(){
   editing = false;
-  const root = document.getElementById("prov-modal-root");
-  if (root) root.innerHTML = "";
+  closeDialog();
 }
 
 // Populate both modal pickers from one request: this provider's live catalog,

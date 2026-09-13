@@ -6,13 +6,14 @@ const money = n => "$" + (n < 0.01 ? n.toFixed(4) : n.toFixed(2));
 const secs = ms => ms==null ? "—" : (ms/1000).toFixed(1)+"s";
 
 const gateBadge = g => !g ? "" :
-  `<span class="badge ${g.decision==="retrieve"?"retrieve":""}">gate · ${esc(g.decision)}</span><span class="meta" style="margin:0">${esc(g.reason||"")}</span>`;
+  uiBadge("gate · " + esc(g.decision), g.decision === "retrieve" ? "live" : "neutral")
+  + `<span class="meta" style="margin:0">${esc(g.reason||"")}</span>`;
 
 // A tool call renders as a status row (dot + one-line summary); the raw output
 // hides behind a disclosure so an ugly osascript error never floods the page.
 const toolRow = x => `<div class="tool ${x.status||"ok"}">
   <div class="tool-head"><span class="dot ${x.status||"ok"}"></span><code>${esc(x.tool)}</code>
-    ${x.summary?`<span style="color:var(--ink2)">${esc(x.summary)}</span>`:""}</div>
+    ${x.summary?`<span style="color:var(--text-muted)">${esc(x.summary)}</span>`:""}</div>
   ${x.output!==undefined?`<details><summary>args &amp; raw output</summary>
     <pre>${esc(x.tool)}(${esc(JSON.stringify(x.args,null,1))})\n\n${esc(x.output)}</pre>
   </details>`:""}
@@ -33,30 +34,46 @@ function histItem(m){
 
 const turnCard = t => `<div class="card">
   <div class="u">${esc(t.user_message)}</div>
-  <div class="meta" style="margin-top:4px">${gateBadge(t.gate)}</div>
+  <div class="meta" style="margin-top:var(--spacing)">${gateBadge(t.gate)}</div>
   ${(t.tools||[]).map(toolRow).join("")}
   <div class="r">${renderMarkdown(t.reply)}</div>
   <div class="meta">${esc((t.ts||"").replace("T"," ").slice(0,19))} · ${secs(t.latency_ms)} · ${t.iterations??"?"} iter · ${money(t.cost||0)}${t.consolidation?` · consolidated ${t.consolidation.new_facts} fact(s)`:""}</div>
 </div>`;
 
-const table = (heads, rows) => rows.length
-  ? `<div class="card" style="padding:4px 8px"><table><tr>${heads.map(h=>`<th>${h}</th>`).join("")}</tr>${rows.join("")}</table></div>`
-  : `<div class="card empty">nothing here yet</div>`;
+// uiTable takes rows as arrays of cell HTML. A row may still arrive as a
+// "<tr><td>…</td></tr>" string; parse it into its cells (a <td class> is kept
+// as a span) so either shape renders the same table.
+const rowCells = r => {
+  if (typeof r !== "string") return r;
+  const t = document.createElement("template");
+  t.innerHTML = `<table><tbody>${r}</tbody></table>`;
+  return [...t.content.querySelectorAll("td")].map(td =>
+    td.className ? `<span class="${td.className}">${td.innerHTML}</span>` : td.innerHTML);
+};
+const table = (heads, rows) => uiTable(heads, rows.map(rowCells), {empty: "nothing here yet"});
+
+// Two figures over a thin bar in the chart ramp. Shared by the retrieval gate
+// (skip / retrieve) and the graph panel (quick / full); a and b are counts.
+// With no turns yet the figures read "—" over an empty bar.
+function splitFigures(aLabel, a, bLabel, b, ofText){
+  const tot = a + b;
+  const aPct = tot ? Math.round(a / tot * 100) : 0, bPct = tot ? 100 - aPct : 0;
+  const fig = (label, pct) =>
+    `<div><span class="stat-label">${label}</span><b class="gate-fig">${tot ? pct + "%" : "—"}</b></div>`;
+  return `<div class="gate-figs">${fig(aLabel, aPct)}${fig(bLabel, bPct)}${
+      tot && ofText ? `<span class="gate-of">${ofText}</span>` : ""}</div>`
+    + `<div class="thinbar">${tot
+      ? `<i style="flex:${aPct};background:var(--chart-1)"></i><i style="flex:${bPct};background:var(--chart-3)"></i>`
+      : ""}</div>`;
+}
 
 const gateSplit = s => {
-  if (!(s.gate_skips + s.gate_retrieves))
-    return `<div class="splitbar"><div class="seg-skip" style="width:100%;opacity:.35"></div></div>
-      <div class="meta" style="margin-top:6px">no turns yet — send a message and the gate starts deciding</div>`;
   const tot = s.gate_skips + s.gate_retrieves;
-  const skipPct = Math.round(s.gate_skips/tot*100), retPct = 100-skipPct;
-  // only label a segment when it's wide enough to fit the text — otherwise a
-  // 0%/tiny segment spills its label past the bar (the "0 retri" bug).
-  const seg = (cls, n, label, pct) =>
-    `<div class="${cls}" style="width:${pct}%">${pct>=14?`${n} ${label}`:""}</div>`;
-  return `<div class="splitbar">
-    ${seg("seg-skip", s.gate_skips, "skipped", skipPct)}
-    ${seg("seg-ret", s.gate_retrieves, "retrieved", retPct)}
-  </div><div class="meta" style="margin-top:6px">the retrieval gate skipped memory on ${skipPct}% of turns — that's latency and bias saved</div>`;
+  const figs = splitFigures("Skip", s.gate_skips, "Retrieve", s.gate_retrieves, `of ${tot} turns`);
+  if (!tot)
+    return figs + `<div class="meta" style="margin-top:calc(var(--spacing) * 1.5)">no turns yet — send a message and the gate starts deciding</div>`;
+  const skipPct = Math.round(s.gate_skips/tot*100);
+  return figs + `<div class="meta" style="margin-top:calc(var(--spacing) * 1.5)">the retrieval gate skipped memory on ${skipPct}% of turns — that's latency and bias saved</div>`;
 };
 
 // --- Chat gateway: type here, watch the harness run (turns kept in memory)
@@ -67,17 +84,18 @@ const CHAT = [];
 // every stage is done and the strip carries the .tele class (hidden by the
 // stats toggle). (.stages is flexbox, so inter-span whitespace is irrelevant.)
 function stagesRow(t, live){
-  const gateCls = live ? (t.gate ? "done" : "on") : "done";
-  const replyCls = live ? (t.stream ? "on" : "") : "done";
+  // A stage that is running is "live", a finished one "ok", one not reached yet "neutral".
+  const gateVariant = live && !t.gate ? "live" : "ok";
+  const replyVariant = live ? (t.stream ? "live" : "neutral") : "ok";
   const tools = (t.tools||[]).map(x => toolChip(x.tool)).join("");
   // graph chip first — the front door. A quick graph turn has NO gate stage
   // (memory retrieval never ran), so the gate chip is honest and disappears.
   const graph = (t.graph && t.graph.route)
-    ? `<span class="stage done">graph · ${esc(t.graph.route)}</span>` : "";
+    ? uiBadge("graph · " + esc(t.graph.route), "ok") : "";
   const gate = (t.graph && t.graph.route === "quick") ? ""
-    : `<span class="stage ${gateCls}">gate${t.gate?` · ${esc(t.gate.decision)}`:""}</span>`;
+    : uiBadge(`gate${t.gate?` · ${esc(t.gate.decision)}`:""}`, gateVariant);
   return `<div class="stages${live?"":" tele"}">`
-    + graph + gate + tools + `<span class="stage ${replyCls}">reply</span></div>`;
+    + graph + gate + tools + uiBadge("reply", replyVariant) + `</div>`;
 }
 // The per-turn telemetry footer: seconds · iterations · model · consolidation.
 const teleFooter = t => `<div class="meta tele">${secs(t.latency_ms)} · ${t.iterations??"?"} iter${
@@ -86,10 +104,10 @@ const teleFooter = t => `<div class="meta tele">${secs(t.latency_ms)} · ${t.ite
 const chatTurnCard = t => `<div class="card">
   <button class="msg-copy" onclick="copyMsg(this)" data-text="${esc(t.reply)}" title="Copy reply">Copy</button>
   ${(t.gate||t.graph)?`${stagesRow(t, false)}
-    <div class="meta tele" style="margin:0 0 6px">${esc((t.gate&&t.gate.reason)||(t.graph&&t.graph.reason)||"")}</div>`:""}
+    <div class="meta tele" style="margin:0 0 calc(var(--spacing) * 1.5)">${esc((t.gate&&t.gate.reason)||(t.graph&&t.graph.reason)||"")}</div>`:""}
   ${nodesRow(t)}
   ${(t.tools||[]).length?`<div class="tele">${(t.tools||[]).map(toolRow).join("")}</div>`:""}
-  <div class="r" style="margin-top:8px">${renderMarkdown(t.reply)}</div>
+  <div class="r" style="margin-top:var(--space-2)">${renderMarkdown(t.reply)}</div>
   ${teleFooter(t)}
 </div>`;
 
@@ -100,21 +118,21 @@ const chatTurnCard = t => `<div class="card">
 const nodesRow = m => {
   const names = Object.keys(m.nodes || {});
   if (!names.length) return "";
-  return `<div class="cmp-stats" style="margin:0 0 6px">` + names.map(n => {
+  return `<div class="cmp-stats" style="margin:0 0 calc(var(--spacing) * 1.5)">` + names.map(n => {
     const s = m.nodes[n];
-    const cls = s.status === "running" ? "chip live" : s.status === "error" ? "chip err" : "chip";
+    const variant = s.status === "running" ? "live" : s.status === "error" ? "bad" : "value";
     const suffix = s.status === "running" ? "" : s.ms != null ? ` ${s.ms}ms` : "";
-    return `<span class="${cls}">${esc(n)}${suffix}</span>`;
+    return uiBadge(esc(n) + suffix, variant);
   }).join("") + `</div>`;
 };
 
 const streamingCard = m => `<div class="card">
   ${stagesRow(m, true)}
   ${nodesRow(m)}
-  ${m.gate&&m.gate.reason?`<div class="meta" style="margin:0 0 6px">${esc(m.gate.reason)}</div>`:""}
+  ${m.gate&&m.gate.reason?`<div class="meta" style="margin:0 0 calc(var(--spacing) * 1.5)">${esc(m.gate.reason)}</div>`:""}
   ${(m.tools||[]).map(toolRow).join("")}
   ${m.stream
-     ? `<div class="r" style="margin-top:8px">${renderMarkdown(m.stream)}<span class="caret"></span></div>`
+     ? `<div class="r" style="margin-top:var(--space-2)">${renderMarkdown(m.stream)}<span class="caret"></span></div>`
      : `<div class="meta" style="margin:0">thinking&hellip;${m.started?` ${Math.round((Date.now()-m.started)/1000)}s`:""}${
          m.started && Date.now()-m.started > 20000
          ? `<br>still waiting: slow models (free tiers especially) can queue for a while; this errors out at the WAKU_LLM_TIMEOUT limit instead of hanging forever`
@@ -132,7 +150,7 @@ const historicalCard = m => `<div class="card">
 
 function renderChatLog(){
   if (!CHAT.length)
-    return `<div class="empty" style="padding:6px 2px">Message Waku here from any tab. Open Overview to watch it flow through the harness, or the Gateway tab to see every channel's messages together.</div>`;
+    return `<div class="empty" style="padding:calc(var(--spacing) * 1.5) calc(var(--spacing) * 0.5)">Message Waku here from any tab. Open Overview to watch it flow through the harness, or the Gateway tab to see every channel's messages together.</div>`;
   return CHAT.map(m => m.role==="user"
       ? `<div class="bubble">${esc(m.text)}</div>`
       : m.pending ? streamingCard(m)

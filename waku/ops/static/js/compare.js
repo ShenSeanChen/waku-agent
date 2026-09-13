@@ -295,14 +295,15 @@ function compareCol(res){
   if (res.error){
     const why = compareErrorReason(res.error);
     return `<div class="cmp-col err"><div class="cmp-h"><span class="mm-prov">${esc(res.provider)}</span> <code>${esc(res.model)}</code>${cutoffTag(res.cutoff)}
-      <span class="srcpill apple">error</span></div>
+      ${uiBadge("error", "bad")}</div>
       ${why?`<div class="meta" style="color:var(--bad)"><b>${esc(why)}</b></div>`:""}
       <div class="meta" style="opacity:.7">${esc(res.error)}</div></div>`;
   }
   const tools = (res.tools||[]).map(t => t.tool === "delegate_task"
     ? `<span class="stage done subagent" title="the loop spawned a pi sub-agent on ${esc(res.model)} to write &amp; run the code">delegate_task → pi · ${esc(res.model)}</span>`
     : toolChip(t.tool)).join("");
-  const gateBadgeHtml = `<span class="badge ${res.gate&&res.gate.decision==="retrieve"?"retrieve":""}">gate · ${esc(res.gate?res.gate.decision:"…")}</span>`;
+  const decision = res.gate ? res.gate.decision : "…";
+  const gateBadgeHtml = uiBadge("gate · " + esc(decision), decision === "retrieve" ? "live" : "neutral");
   if (res.streaming){
     return `<div class="cmp-col">
       <div class="cmp-h"><span class="mm-prov">${esc(res.provider)}</span> <code>${esc(res.model)}</code>${cutoffTag(res.cutoff)}
@@ -314,19 +315,22 @@ function compareCol(res){
     </div>`;
   }
   const c = res.completion;
-  const completionBadge = c ? `<span class="cmp-score ${c.passed?"pass":"fail"}" title="${esc(c.why||"")}">${c.passed?"solved":"failed"}${c.passed?"":" · "+esc(c.why||"")}</span>` : "";
+  const completionBadge = c ? (c.passed
+    ? uiBadge("solved", "ok", c.why || "")
+    : uiBadge("failed · " + esc(c.why || ""), "bad", c.why || "")) : "";
   const q = res.quality;
-  const qualityBadge = q && q.score!=null ? `<span class="cmp-q ${q.score>=7?"hi":q.score>=4?"mid":"lo"}" title="graded ${q.score}/10 by ${esc(q.judge||"referee")} — ${esc(q.reason||"")}">${q.score}/10</span>` : "";
+  const qualityBadge = q && q.score!=null
+    ? uiBadge(`${q.score} / 10`, "value", `graded ${q.score}/10 by ${q.judge||"referee"} — ${q.reason||""}`) : "";
   // per-card grade button — grade just this card if the referee skipped it (429)
   const gradeBtn = `<a class="reveal cmp-grade1" title="grade this card with the referee" onclick="gradeCard('${esc(res.spec)}')">${res._grading?"grading…":(q&&q.score!=null?"re-grade":"grade")}</a>`;
   return `<div class="cmp-col${c?(c.passed?" solved":" failed"):""}">
     <div class="cmp-h"><span class="mm-prov">${esc(res.provider)}</span> <code>${esc(res.model)}</code>${cutoffTag(res.cutoff)}${completionBadge}${qualityBadge}${gradeBtn}</div>
     <div class="cmp-stats">
       ${gateBadgeHtml}
-      <span class="chip ${compareState.sortBy==="latency"?"sorted":""}">${secs(res.latency_ms)}</span>
-      <span class="chip">${res.iterations??"?"} iter</span>
-      <span class="chip ${compareState.sortBy==="cost"?"money":""}">${money(res.cost_usd||0)}</span>
-      <span class="chip ${compareState.sortBy==="tokens"?"sorted":""}">${(res.tokens_in||0)+(res.tokens_out||0)} tok</span>
+      ${uiBadge(secs(res.latency_ms), "value")}
+      ${uiBadge(`${res.iterations??"?"} iter`, "value")}
+      ${uiBadge(money(res.cost_usd||0), "value")}
+      ${uiBadge(`${(res.tokens_in||0)+(res.tokens_out||0)} tok`, "value")}
     </div>
     ${tools?`<div class="stages" style="flex-wrap:wrap">${tools}</div>`:""}
     ${res.sub?subPane(res.sub, false, res.spec):""}
@@ -378,7 +382,7 @@ function modelArenaView(d){
     const regradeBtn = (done.length && !compareState.running)
       ? `<a class="reveal" style="margin-left:auto;font-size:var(--text-xs)" title="Re-run the referee on every model in this run (fills a skipped/429'd grade, or re-scores)" onclick="regradeCompare()">${compareState.regrading?"re-grading…":"re-grade run"}</a>` : "";
     const clearBtn = (order.length && !compareState.running)
-      ? `<a class="reveal" style="${regradeBtn?"":"margin-left:auto;"}font-size:12px" onclick="clearCards()">clear cards</a>` : "";
+      ? `<a class="reveal" style="${regradeBtn?"":"margin-left:auto;"}font-size:var(--text-xs)" onclick="clearCards()">clear cards</a>` : "";
     // Prominent, tab-like sort buttons — the selected one is highlighted.
     const sortBar = (done.length || clearBtn) ? `<div class="cmp-sortbar">${done.length
       ? `sort by ${sorters.map(([k, label]) => `<button class="cmp-sortbtn ${compareState.sortBy === k ? "on" : ""}" onclick="setCompareSort('${k}')">${label}</button>`).join("")}`
@@ -405,7 +409,7 @@ function modelArenaView(d){
       return `<div class="cmp-col"><div class="cmp-h"><span class="mm-prov">${esc(s.split(":")[0])}</span> <code>${esc(s.split(":").slice(1).join(":"))}</code></div>
         <div class="meta">racing… <span class="caret"></span></div></div>`;
     }).join("");
-    grid = `${summary ? `<div class="meta" style="margin:2px 0 6px">${summary}</div>` : ""}${sortBar}<div class="cmp-grid">${cols}</div>`
+    grid = `${summary ? `<div class="meta" style="margin:calc(var(--spacing) * 0.5) 0 calc(var(--spacing) * 1.5)">${summary}</div>` : ""}${sortBar}<div class="cmp-grid">${cols}</div>`
       + (compareState.raceError ? `<div class="meta" style="color:var(--bad)">${esc(compareState.raceError)}</div>` : "");
   }
 
@@ -591,7 +595,9 @@ function maProbe(id){
   return null;
 }
 
-const OUTCOME_CELL = (r) => `<span class="ma-o ma-${r.outcome}" title="${esc(r.why||"")}">${r.outcome}</span>`;
+// The badge variant each outcome takes — the same four words as OUTCOME_HELP.
+const OUTCOME_VARIANT = {pass: "ok", stale: "warn", invented: "bad", miss: "miss"};
+const OUTCOME_CELL = (r) => uiBadge(esc(r.outcome), OUTCOME_VARIANT[r.outcome] || "neutral", r.why || "");
 
 function maResultsHtml(){
   if (!maRun.rows.length && !maRun.running && !maRun.error) return "";
@@ -612,47 +618,43 @@ function maResultsHtml(){
   // not been asked anything yet.
   const cell = (p, n, first) => {
     const r = maRun.rows.find(x => x.probe === p && x.contestant === n);
-    if (r) return `<td>${OUTCOME_CELL(r)}
+    if (r) return `${OUTCOME_CELL(r)}
       <div class="ma-facts-meta">${(r.ms/1000).toFixed(1)}s &middot; ${r.tokens} tok${
         r.calls ? " in " + r.calls + (r.calls === 1 ? " call" : " calls") : ""} &middot; ${
         r.retrieved === true ? "searched memory" : r.retrieved === false ? "no lookup" : "gate unknown"}</div>
-      <div class="ma-ans">${esc((r.answer||"").slice(0,140))}</div></td>`;
-    if (!maRun.running) return `<td class="meta">—</td>`;
+      <div class="ma-ans">${esc((r.answer||"").slice(0,140))}</div>`;
+    if (!maRun.running) return `<span class="meta">—</span>`;
     const seeded = (maRun.seeded || {})[n];
-    if (seeded === undefined) return `<td class="meta">queued</td>`;
+    if (seeded === undefined) return `<span class="meta">queued</span>`;
     // "seeding 4/8" reads like a progress bar for something the viewer has not
     // been shown. "told 4 of 8" names the actual event: this store has now been
     // told four of the eight facts it is about to be questioned on.
     if (seeded < seedTotal) return first
-      ? `<td class="meta">being told ${seeded} of ${seedTotal}<span class="caret"></span></td>`
-      : `<td class="meta"></td>`;
-    return first ? `<td class="meta">asking<span class="caret"></span></td>`
-                 : `<td class="meta">waiting</td>`;
+      ? `<span class="meta">being told ${seeded} of ${seedTotal}<span class="caret"></span></span>`
+      : "";
+    return first ? `<span class="meta">asking<span class="caret"></span></span>`
+                 : `<span class="meta">waiting</span>`;
   };
-  const board = maRun.board ? `<div class="card" style="padding:4px 8px"><div class="tablescroll"><table>
-      <tr><th>store</th><th>pass</th><th>stale</th><th>invented</th><th>miss</th><th>tokens</th></tr>
-      ${maRun.board.map(b=>`<tr><td><code>${esc(b.contestant)}</code></td>
-        <td>${b.pass}</td><td>${b.stale}</td><td>${b.invented}</td><td>${b.miss}</td>
-        <td class="meta">${b.tokens}</td></tr>`).join("")}
-    </table></div></div>` : "";
-  return `<h2 style="margin-top:22px">Results${maRun.running?' <span class="meta" style="font-weight:400">— running…</span>':""}</h2>
+  const board = maRun.board ? uiTable(
+    ["store", "pass", "stale", "invented", "miss", "tokens"],
+    maRun.board.map(b => [`<code>${esc(b.contestant)}</code>`, b.pass, b.stale, b.invented, b.miss,
+                          `<span class="meta">${b.tokens}</span>`])) : "";
+  const grid = uiTable(["probe", ...names.map(n => esc(n))], probes.map((p, i) => {
+    const any = maRun.rows.find(x => x.probe === p);
+    const fx = maProbe(p);
+    const leaked = (maRun.leaked || []).includes(p);
+    const probeCell = `${uiBadge(esc((any && any.test) || (fx && fx.test) || ""), "neutral")}${
+        leaked ? " " + uiBadge("leaked", "bad", "The no-memory control answered this correctly, so this question did not require the store in this run.") : ""}
+      <div class="ma-q">${esc((any && any.question) || (fx && fx.question) || p)}</div>
+      <div class="ma-facts-meta">${fx ? (fx.expect_refusal
+          ? "must decline" : "wants: " + esc((fx.expect_any||[]).join(" / "))) : ""}${
+        fx && (fx.stale_any||[]).length ? " &middot; not: " + esc(fx.stale_any.join(" / ")) : ""}</div>`;
+    return [probeCell, ...names.map(n => cell(p, n, i === 0))];
+  }));
+  return `<h2 style="margin-top:var(--space-6)">Results${maRun.running?' <span class="meta" style="font-weight:400">— running…</span>':""}</h2>
     ${maRun.error?`<div class="card" style="color:var(--bad)">${esc(maRun.error)}</div>`:""}
     ${board}
-    <div class="card" style="padding:4px 8px"><div class="tablescroll"><table>
-      <tr><th>probe</th>${names.map(n=>`<th>${esc(n)}</th>`).join("")}</tr>
-      ${probes.map((p, i)=>{
-        const any = maRun.rows.find(x => x.probe === p);
-        const fx = maProbe(p);
-        const leaked = (maRun.leaked || []).includes(p);
-        return `<tr>
-          <td><span class="ma-test">${esc((any && any.test) || (fx && fx.test) || "")}</span>${
-            leaked ? ' <span class="ma-o ma-invented" title="The no-memory control answered this correctly, so this question did not require the store in this run.">leaked</span>' : ""}
-            <div class="ma-q">${esc((any && any.question) || (fx && fx.question) || p)}</div>
-            <div class="ma-facts-meta">${fx ? (fx.expect_refusal
-                ? "must decline" : "wants: " + esc((fx.expect_any||[]).join(" / "))) : ""}${
-              fx && (fx.stale_any||[]).length ? " &middot; not: " + esc(fx.stale_any.join(" / ")) : ""}</div>
-          </td>${names.map(n=>cell(p, n, i === 0)).join("")}</tr>`;}).join("")}
-    </table></div></div>`;
+    ${grid}`;
 }
 
 async function maSeeAll(store){
@@ -699,7 +701,7 @@ function memoryArenaView(){
   // a title= on the control it was describing: the reader who needs it hovers,
   // and the reader who does not gets the vertical space back for store cards.
   // On this page that space is the scarcest thing there is.
-  const picker = `<div class="ma-race ma-pickers" style="margin-bottom:10px">
+  const picker = `<div class="ma-race ma-pickers" style="margin-bottom:var(--space-2)">
       <label class="fld" style="margin:0">Questions
         <select onchange="pickProbeFile(this.value)"
                 title="Drop a JSON file in .waku/probes/ to add your own question sets.">
@@ -714,7 +716,7 @@ function memoryArenaView(){
     </div>`;
   const race = `<div class="card">
     ${picker}
-    <div class="cmp-picks" style="margin-bottom:10px">${chips}</div>
+    <div class="cmp-picks" style="margin-bottom:var(--space-2)">${chips}</div>
     <div class="ma-race">
       <button class="save ghost" onclick="seedMemoryArena()"
               title="Telling never changes, so it is its own button — do it once and ask as many times as you like."
@@ -807,7 +809,7 @@ function maStoresHtml(){
   if (!Array.isArray(maStores)) return head;
   const cards = maStores.map(s => `<div class="card ma-store">
       <div class="ma-store-h"><code>${esc(s.store)}</code>
-        ${s.error ? `<span class="ma-o ma-invented">error</span>`
+        ${s.error ? uiBadge("error", "bad", s.error)
                   : `<span class="meta">${s.count} fact${s.count===1?"":"s"}</span>`}</div>
       <div class="ma-prov">${s.kind === "arena"
         ? `this race's own copy &middot; <code>.waku-arena/</code>`
@@ -823,7 +825,7 @@ function maStoresHtml(){
           ? `<ul class="ma-facts">${s.facts.map(f=>`<li>${f.subject
               ? `<b>${esc(f.subject)}</b> — ` : ""}${esc(f.content)}</li>`).join("")}</ul>${
               s.count > s.facts.length
-                ? `<div class="meta" style="margin-top:6px">showing ${s.facts.length} of ${s.count}
+                ? `<div class="meta" style="margin-top:calc(var(--spacing) * 1.5)">showing ${s.facts.length} of ${s.count}
                      &middot; <a class="reveal" onclick="maSeeAll('${esc(s.store)}')">see all</a></div>`
                 : ""}`
           : `<div class="meta">empty</div>`}
@@ -845,33 +847,27 @@ function maStoresHtml(){
 // buried the thing anyone actually wants: the question, and what counts as
 // right. Hover a row for the reasoning.
 function maAsksHtml(track){
-  return `<h2 style="margin-top:22px">What they get asked
+  return `<h2 style="margin-top:var(--space-6)">What they get asked
       <span class="meta" style="font-weight:400">— ${track.seed.length} facts in, ${track.probes.length} questions</span></h2>
-    ${/* ONE table, two sections. They were two cards, which read as two
-          unrelated lists — and they are the opposite of unrelated: the second
-          only means anything BECAUSE of the first. A section row inside a
-          single table says "same subject, two halves" in a way two cards with
-          a gap between them cannot, and it saves a card's worth of height on
-          a page where that is the scarce resource. */""}
-    <div class="card" style="padding:4px 8px"><div class="tablescroll"><table>
-      <tr><th>told</th><th></th><th></th></tr>
-      ${track.seed.map(s=>`<tr><td class="meta" colspan="3">${esc(s)}</td></tr>`).join("")}
-      <tr><th>then asked</th><th>right answer</th><th>wrong answer</th></tr>
-      ${track.probes.map(p=>`<tr title="${esc(p.note||"")}">
-        <td>${esc(p.question)}</td>
-        <td><span class="ma-expect">${p.expect_refusal ? "must decline"
-            : esc((p.expect_any||[]).join(" / "))}</span></td>
-        <td>${(p.stale_any||[]).length ? `<span class="ma-forbid">${esc(p.stale_any.join(" / "))}</span>`
-            : p.expect_refusal ? `<span class="ma-forbid">any specific answer</span>`
-            : '<span class="meta">—</span>'}</td></tr>`).join("")}
-    </table></div></div>
-    <div class="meta" style="margin-top:8px">${memoryArenaFixture.is_example
+    ${/* Two tables, back to back with no card between them: what is told,
+          then what is asked. They were two cards once, which read as two
+          unrelated lists — and the second only means anything BECAUSE of the
+          first. The note on each probe is its question's hover title. */""}
+    ${uiTable(["told"], track.seed.map(s => [`<span class="meta">${esc(s)}</span>`]))}
+    ${uiTable(["then asked", "right answer", "wrong answer"], track.probes.map(p => [
+      `<span title="${esc(p.note||"")}">${esc(p.question)}</span>`,
+      `<span class="ma-expect">${p.expect_refusal ? "must decline"
+          : esc((p.expect_any||[]).join(" / "))}</span>`,
+      (p.stale_any||[]).length ? `<span class="ma-forbid">${esc(p.stale_any.join(" / "))}</span>`
+          : p.expect_refusal ? `<span class="ma-forbid">any specific answer</span>`
+          : '<span class="meta">—</span>']))}
+    <div class="meta" style="margin-top:var(--space-2)">${memoryArenaFixture.is_example
       ? `Example probes. Point <code>WAKU_MEMORY_PROBES</code> at your own file.`
       : `From <code>${esc(memoryArenaFixture.source)}</code>`}
-      &nbsp;·&nbsp; <span class="ma-o ma-pass">pass</span> right
-      <span class="ma-o ma-stale">stale</span> gave a superseded answer
-      <span class="ma-o ma-invented">invented</span> made it up
-      <span class="ma-o ma-miss">miss</span> said it did not know</div>`;
+      &nbsp;·&nbsp; ${uiBadge("pass", "ok")} right
+      ${uiBadge("stale", "warn")} gave a superseded answer
+      ${uiBadge("invented", "bad")} made it up
+      ${uiBadge("miss", "miss")} said it did not know</div>`;
 }
 
 
@@ -943,11 +939,13 @@ function costQualityScatter(agg){
   const py = y => H - B - (y / 10) * (H - T - B);
   const gr = [0,2,4,6,8,10].map(v => `<line x1="${L}" y1="${py(v)}" x2="${W-R}" y2="${py(v)}" class="sc-grid"/>
     <text x="${L-6}" y="${py(v)+3}" class="sc-tick" text-anchor="end">${v}</text>`).join("");
+  // One hue, stepped by grade (Memory's chart rule): the colour only ranks, so
+  // the label says the number outright — grade (or completion %) and cost.
+  const fill = y => y >= 8 ? "var(--chart-1)" : y >= 6 ? "var(--chart-2)" : y >= 4 ? "var(--chart-3)" : "var(--chart-4)";
   const dots = pts.sort((a,b)=>a.x-b.x).map(p => {
-    const good = p.y >= 7, mid = p.y >= 4;
-    const cls = good ? "hi" : mid ? "mid" : "lo";
-    return `<circle cx="${px(p.x).toFixed(1)}" cy="${py(p.y).toFixed(1)}" r="5" class="sc-dot ${cls}"/>
-      <text x="${(px(p.x)+9).toFixed(1)}" y="${(py(p.y)+3).toFixed(1)}" class="sc-lbl">${esc(p.a.model)} · ${money(p.x)}</text>`;
+    const score = useQ ? p.y.toFixed(1) : `${Math.round(p.y * 10)}%`;
+    return `<circle cx="${px(p.x).toFixed(1)}" cy="${py(p.y).toFixed(1)}" r="5" class="sc-dot" style="fill:${fill(p.y)}"/>
+      <text x="${(px(p.x)+9).toFixed(1)}" y="${(py(p.y)+3).toFixed(1)}" class="sc-lbl">${esc(p.a.model)} · ${score} · ${money(p.x)}</text>`;
   }).join("");
   // Hover the y-axis label to read the criteria (native SVG <title> tooltip).
   const yCriteria = useQ
@@ -958,8 +956,8 @@ function costQualityScatter(agg){
       + "0     ignores it, or claims an action it didn't take"
     : "Completion — fraction of the task's checklist met (right tool, right args, enough calls). Deterministic, no judge.";
   const yLabel = useQ ? "referee grade" : "completion";
-  return `<div class="card" style="padding:12px 14px;margin-top:14px">
-    <div class="meta" style="margin-bottom:4px">Cost vs ${useQ?"quality (referee grade)":"completion"} — cheap &amp; good is top-left</div>
+  return `<div class="card" style="padding:var(--space-3);margin-top:var(--space-3)">
+    <div class="meta" style="margin-bottom:var(--spacing)">Cost vs ${useQ?"quality (referee grade)":"completion"} — cheap &amp; good is top-left</div>
     <svg viewBox="0 0 ${W} ${H}" class="scatter" preserveAspectRatio="xMidYMid meet">
       <line x1="${L}" y1="${T}" x2="${L}" y2="${H-B}" class="sc-axis"/>
       <line x1="${L}" y1="${H-B}" x2="${W-R}" y2="${H-B}" class="sc-axis"/>
@@ -979,34 +977,39 @@ function compareHistoryHtml(){
   // ascending first, click again to flip (arrow shows the active column + dir).
   const bs = compareState.boardSort || (compareState.boardSort = {key: "total_cost_usd", dir: "asc"});
   const arrow = k => bs.key === k ? (bs.dir === "asc" ? " ▲" : " ▼") : "";
-  const th = (k, label) => `<th class="cmp-th ${bs.key===k?"on":""}" onclick="setBoardSort('${k}')">${label}${arrow(k)}</th>`;
+  // uiTable wraps each label in its own <th>, so a sortable label is a span
+  // carrying the click and the cmp-th look.
+  const th = (k, label, title = "") => `<span class="cmp-th ${bs.key===k?"on":""}" onclick="setBoardSort('${k}')"${title ? ` title="${esc(title)}"` : ""}>${label}${arrow(k)}</span>`;
+  const meta = v => `<span class="meta">${v}</span>`;
   const rows = [...agg].sort((x, y) => ((x[bs.key] ?? 0) - (y[bs.key] ?? 0)) * (bs.dir === "asc" ? 1 : -1));
+  const columns = ["model",
+    `<span title="knowledge cutoff — when each model's world knowledge ends; it cannot know releases after this date">cutoff</span>`,
+    th("cases_passed", "solved"),
+    th("quality_avg", "grade", "referee's mean 0-10 grade on the replies (correctness, honesty, concision) — referee is not a racing model"),
+    th("runs", "races"), "ok", th("total_latency_ms", "total time"), th("total_tokens_in", "in tok"),
+    th("total_tokens_out", "out tok"), th("total_tokens", "total tok"),
+    `<span title="list price per million tokens, input / output">rate $/M</span>`, th("total_cost_usd", "total cost")];
   const scoreboard = agg.length ? `
-    <h2 style="margin-top:22px;display:flex;align-items:center;gap:10px">Scoreboard
+    <h2 style="margin-top:var(--space-6);display:flex;align-items:center;gap:var(--space-2)">Scoreboard
       <span class="meta" style="font-weight:400">— totals across ${raceCount} race${raceCount===1?"":"s"}</span>
       <a class="reveal" style="margin-left:auto;font-size:var(--text-xs)" onclick="clearCompareHistory()">clear all</a></h2>
     ${costQualityScatter(agg)}
-    <div class="card" style="padding:4px 8px"><div class="tablescroll"><table>
-      <tr><th>model</th><th title="knowledge cutoff — when each model's world knowledge ends; it cannot know releases after this date">cutoff</th>${th("cases_passed","solved")}<th class="cmp-th ${bs.key==="quality_avg"?"on":""}" onclick="setBoardSort('quality_avg')" title="referee's mean 0-10 grade on the replies (correctness, honesty, concision) — referee is not a racing model">grade${arrow("quality_avg")}</th>${th("runs","races")}<th>ok</th>${th("total_latency_ms","total time")}${th("total_tokens_in","in tok")}${th("total_tokens_out","out tok")}${th("total_tokens","total tok")}<th title="list price per million tokens, input / output">rate $/M</th>${th("total_cost_usd","total cost")}</tr>
-      ${rows.map(a=>`<tr>
-        <td><span class="mm-prov">${esc(a.provider)}</span> <code>${esc(a.model)}</code></td>
-        <td class="meta">${a.cutoff?esc(a.cutoff):"—"}</td>
-        <td>${a.cases_scored?`<span class="cmp-score ${a.cases_passed===a.cases_scored?"pass":(a.cases_passed?"part":"fail")}">${a.cases_passed}/${a.cases_scored}</span>`:'<span class="meta">—</span>'}</td>
-        <td>${a.quality_avg!=null?`<span class="cmp-q ${a.quality_avg>=7?"hi":a.quality_avg>=4?"mid":"lo"}">${a.quality_avg}</span>`:'<span class="meta">—</span>'}</td>
-        <td class="meta">${a.runs}</td><td class="meta">${a.ok}/${a.runs}</td>
-        <td class="meta">${secs(a.total_latency_ms)}</td>
-        <td class="meta">${a.total_tokens_in}</td><td class="meta">${a.total_tokens_out}</td>
-        <td class="meta">${a.total_tokens}</td>
-        <td class="meta">${a.rate_in!=null?`$${a.rate_in}/$${a.rate_out}`:"—"}</td>
-        <td class="meta" style="color:var(--good)">${money(a.total_cost_usd)}</td></tr>`).join("")}
-    </table></div></div>` : "";
+    ${uiTable(columns, rows.map(a => [
+      `<span class="mm-prov">${esc(a.provider)}</span> <code>${esc(a.model)}</code>`,
+      meta(a.cutoff ? esc(a.cutoff) : "—"),
+      a.cases_scored ? uiBadge(`${a.cases_passed}/${a.cases_scored}`,
+        a.cases_passed === a.cases_scored ? "ok" : a.cases_passed ? "warn" : "bad") : meta("—"),
+      a.quality_avg != null ? uiBadge(a.quality_avg, "value") : meta("—"),
+      meta(a.runs), meta(`${a.ok}/${a.runs}`), meta(secs(a.total_latency_ms)),
+      meta(a.total_tokens_in), meta(a.total_tokens_out), meta(a.total_tokens),
+      meta(a.rate_in != null ? `$${a.rate_in}/$${a.rate_out}` : "—"),
+      `<span class="meta" style="color:var(--ok)">${money(a.total_cost_usd)}</span>`]))}` : "";
   const recent = hist.length ? `
-    <h2 style="margin-top:18px">Recent races <span class="meta" style="font-weight:400">— click to reopen</span></h2>
-    <div class="card">${hist.map((run,i)=>`
-      <div class="pinrow" style="cursor:pointer" onclick="openCompareRun(${i})">
-        <code style="flex:1;word-break:break-all">${esc((run.message||"").slice(0,90))}</code>
-        <span class="meta" style="white-space:nowrap">${(run.results||[]).length} models · ${esc((run.ts||"").slice(0,16).replace("T"," "))}</span>
-        <a class="reveal del" style="margin-left:8px;font-size:var(--text-sm)" title="delete just this run" onclick="event.stopPropagation(); deleteCompareRun('${esc(run.ts||"")}')">×</a>
-      </div>`).join("")}</div>` : "";
+    <h2 style="margin-top:var(--space-4)">Recent races <span class="meta" style="font-weight:400">— click to reopen</span></h2>
+    ${uiCard(hist.map((run, i) => uiRow(
+      esc((run.ts||"").slice(0,16).replace("T"," ")),
+      `<code style="word-break:break-all">${esc((run.message||"").slice(0,90))}</code>`,
+      `${(run.results||[]).length} models <a class="reveal del" style="margin-left:var(--space-2);font-size:var(--text-sm)" title="delete just this run" onclick="event.stopPropagation(); deleteCompareRun('${esc(run.ts||"")}')">×</a>`,
+      {onclick: `openCompareRun(${i})`})).join(""))}` : "";
   return scoreboard + recent;
 }

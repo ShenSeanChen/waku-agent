@@ -82,7 +82,7 @@
   .ph-row{display:flex;align-items:baseline;gap:var(--space-4)}
   .ph-actions{margin-left:auto;display:flex;gap:var(--space-2)}
   /* in-page sub-tabs (Memory pillars, Data tables) — keep each section short */
-  .subtabs{display:flex;gap:2px;flex-wrap:wrap;margin:0 0 18px;border-bottom:1px solid var(--line)}
+
   .subtab{padding:8px 14px;font-size:var(--text-sm);color:var(--ink2);cursor:pointer;text-decoration:none;
           border-bottom:2px solid transparent;white-space:nowrap}
   .subtab:hover{color:var(--ink)}
@@ -94,9 +94,8 @@
   .scrolly th{position:sticky;top:0;background:var(--panel);z-index:1}
   /* aligned schema: the column header IS the indigo chip, so labels line up
      over their data (no separate, misaligned chip row). */
-  .scrolly th.dbcol{color:var(--accent-fg);background:var(--accent-soft);font-family:var(--face-mono);
-                    font-size:var(--text-xs);text-transform:none;letter-spacing:0;font-weight:var(--font-weight-medium);border-bottom:1px solid var(--line)}
-  .scrolly th.dbcol small{color:var(--ink3);font-weight:400;margin-left:5px}
+
+  
   /* No ligatures: Playfair Display SC draws fi and fl as lowercase glyphs,
      so "Graph workflows" came out as "WORKfLOWS" between the small caps. */
   h1{font-family:var(--face-display);font-size:var(--text-lg);font-weight:var(--font-weight-normal);line-height:var(--leading-snug);
@@ -105,13 +104,12 @@
   h2{font-family:var(--face-mono);font-size:var(--text-xs);text-transform:uppercase;letter-spacing:var(--tracking-label);color:var(--ink2);
      font-weight:var(--font-weight-medium);margin:28px 0 10px}
   .tiles{display:grid;grid-template-columns:repeat(auto-fill,minmax(128px,1fr));gap:10px}
-  .tile{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:12px 14px}
-  .tile b{font-family:var(--face-mono);font-size:var(--text-lg);font-weight:var(--font-weight-medium);font-variant-numeric:tabular-nums;display:block}
-  .tile span{color:var(--ink2);font-size:var(--text-xs)}
+  
+  
+  
   .map{display:flex;flex-direction:column;gap:10px;margin-top:6px}
   .lane{display:flex;align-items:stretch;gap:0;flex-wrap:wrap}
-  .lane-label{font-family:var(--face-mono);width:86px;flex-shrink:0;color:var(--ink3);font-size:var(--text-xs);text-transform:uppercase;
-              letter-spacing:var(--tracking-label);padding-top:14px}
+  
   .box{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);
        padding:10px 14px;cursor:pointer;min-width:118px;transition:border-color var(--motion-fast) var(--motion-ease)}
   .box:hover{border-color:var(--accent)}
@@ -203,10 +201,10 @@
          background:var(--accent);border-radius:var(--radius);animation:blink 1s step-start infinite}
   @keyframes blink{50%{opacity:0}}
   @media (prefers-reduced-motion:reduce){.caret{animation:none}}
-  .splitbar{display:flex;height:26px;border-radius:var(--radius);overflow:hidden;border:1px solid var(--line);margin-top:2px}
-  .splitbar div{display:flex;align-items:center;justify-content:center;font-size:var(--text-xs);font-weight:var(--font-weight-medium);color:var(--accent-ink);min-width:0;overflow:hidden;white-space:nowrap}
-  .seg-skip{background:var(--chart-1)} .seg-ret{background:var(--chart-3)}
-  .tile b.money{color:var(--good)}
+  
+  
+   
+  
   .arch{width:100%;min-width:760px;height:auto;font-family:var(--face-sans)}
   .arch .container{fill:none;stroke:var(--line2);stroke-dasharray:5 4}
   /* LLM Ops is a SEPARATE system (offline, improves the agent) — a solid
@@ -243,17 +241,16 @@
   .arch-status .live-dot{display:inline-block;width:7px;height:7px;border-radius:var(--shape-circle);
                background:var(--accent);margin-right:5px;vertical-align:middle;animation:pulse 1s ease-in-out infinite}
   @media (prefers-reduced-motion:reduce){.arch .flow.live{animation:none}.arch-status .live-dot{animation:none}}
-  .convo{display:flex;flex-direction:column;gap:8px}
+  
   .msg{border:1px solid var(--line);border-radius:var(--radius);padding:10px 13px;max-width:78%}
   .msg.user{align-self:flex-end;background:var(--surface-raised);border-color:var(--rule)}
   .msg.assistant{align-self:flex-start;background:var(--panel)}
   .msg .who{font-family:var(--face-mono);font-size:var(--text-xs);color:var(--ink3);font-weight:var(--font-weight-medium);text-transform:uppercase;letter-spacing:var(--tracking-label);margin-bottom:3px}
-  .msg .mtext{font-size:var(--text-sm);white-space:pre-wrap;color:var(--ink)}
+  
   .chip-c{display:inline-block;font-size:var(--text-xs);font-weight:var(--font-weight-medium);padding:1px 6px;border-radius:var(--shape-chip);
           background:var(--good-soft);color:var(--good);text-transform:none;letter-spacing:0;vertical-align:middle}
   .cols{display:flex;flex-wrap:wrap;gap:5px;margin-bottom:8px}
-  .col-chip{font-family:var(--face-mono);font-size:var(--text-xs);padding:2px 8px;border-radius:var(--radius);
-            background:var(--accent-soft);color:var(--accent-fg);border:1px solid var(--line)}
+  
   .dbcell{font-family:var(--face-mono);font-size:var(--text-xs);color:var(--ink2);max-width:240px;overflow:hidden;text-overflow:ellipsis}
   .reveal{color:var(--accent-fg);cursor:pointer;font-weight:500;border-bottom:1px dashed var(--accent);padding-bottom:1px}
   .reveal:hover{border-bottom-style:solid}
@@ -316,16 +313,14 @@
   .modelchip .mc-caret{color:var(--ink3);font-size:var(--text-xs);flex-shrink:0}
   .modelmenu{width:250px}
   .modelmenu .mm-h{font-family:var(--face-mono);font-size:var(--text-xs);color:var(--ink3);text-transform:uppercase;letter-spacing:var(--tracking-label);padding:5px 10px 4px}
-  .modelmenu .mm-load{padding:8px 10px;color:var(--ink3);font-size:var(--text-xs)}
+  
   .modelmenu .mm-id{font-family:var(--face-mono);font-size:var(--text-xs)}
-  .modelmenu .mm-free{font-size:var(--text-xs);color:var(--good);border:1px solid var(--good);border-radius:var(--shape-chip);
-                      padding:0 5px;margin-left:6px;vertical-align:1px}
+  
   .modelmenu .mm-f{font-size:var(--text-xs);color:var(--ink3);padding:8px 10px 4px;border-top:1px solid var(--line);margin-top:4px}
   .modelmenu .mm-f code{font-size:var(--text-xs);background:none;padding:0}
   .modelmenu .mm-f a{color:var(--accent-fg);text-decoration:none}
   .modelmenu .mm-prov{font-family:var(--face-mono);font-size:var(--text-xs);color:var(--ink3);text-transform:uppercase;letter-spacing:var(--tracking-label);margin-right:5px}
-  .modelmenu .mm-def{font-size:var(--text-xs);color:var(--accent-fg);border:1px solid var(--accent);border-radius:var(--shape-chip);
-                     padding:0 5px;margin-left:6px;vertical-align:1px}
+  
   .pinrow{display:flex;align-items:center;gap:8px;padding:6px 2px;font-size:var(--text-xs);border-bottom:1px solid var(--line)}
   .pinrow:last-of-type{border-bottom:none}
   .pinrow.on{background:var(--accent-soft);border-radius:var(--radius);padding-left:8px;padding-right:8px}
@@ -352,13 +347,12 @@
   .cat-controls input[type=text]{flex:1;min-width:160px;background:transparent;border:var(--rule-width) solid var(--input);
           border-radius:var(--radius);padding:8px 12px;color:var(--ink);font-size:var(--text-sm);outline:none}
   .cat-controls input[type=text]:focus{border-color:var(--accent)}
-  details.adv{margin:2px 0 10px}
-  details.adv>summary{cursor:pointer;font-size:var(--text-xs);color:var(--ink2)}
-  details.adv[open]>summary{margin-bottom:8px}
-  .watchhead{font-family:var(--face-mono);font-size:var(--text-xs);text-transform:uppercase;letter-spacing:var(--tracking-label);color:var(--ink2);font-weight:var(--font-weight-medium);margin-bottom:8px}
-  .chat-arch{max-width:600px;margin:0 auto 16px;border:1px solid var(--line);border-radius:var(--radius);
-             padding:8px;background:var(--panel);position:sticky;top:96px;z-index:3}
-  .chat-arch svg{min-width:0;width:100%;height:auto}
+  
+  
+  
+  
+  
+  
   .chatlog{display:flex;flex-direction:column;gap:10px}
   .bubble{align-self:flex-end;background:var(--surface-raised);color:var(--text-ink);border:var(--rule-width) solid var(--rule);padding:8px 13px;
           border-radius:var(--radius);max-width:75%;font-size:var(--text-sm)}
@@ -431,7 +425,7 @@
      scoreboard is 885px of columns in a 655px card; without this the last
      columns (total tok, rate, total cost) render past the card's right edge and
      over the page. Any table that can outgrow its card belongs in one of these. */
-  .tablescroll{overflow-x:auto;max-width:100%}
+
   .cmp-pick{display:inline-flex;align-items:center;gap:5px;font-size:var(--text-xs);color:var(--ink2);
        border:1px solid var(--line2);border-radius:var(--shape-chip);padding:4px 10px;cursor:pointer}
   .cmp-pick.on{border-color:var(--accent);color:var(--accent-fg);background:var(--accent-soft)}
@@ -456,7 +450,7 @@
      only "thinking…" for the whole thirteen seconds of a gather. */
   .chip.live{color:var(--accent-fg);border-color:var(--accent);background:var(--accent-soft)}
   .chip.err{color:var(--bad);border-color:var(--bad)}
-  .chip.sorted{color:var(--accent-fg);border-color:var(--accent);background:var(--accent-soft);font-weight:var(--font-weight-medium)}
+  
   .cmp-reply{margin-top:2px;font-size:var(--text-sm);max-height:340px;overflow-y:auto}
   .cmp-race{padding:5px 14px;font-size:var(--text-xs)}
   .cmp-th{cursor:pointer;white-space:nowrap}
@@ -471,9 +465,9 @@
   .cmp-col.failed{border-color:var(--bad)}
   .cmp-q{display:inline-block;padding:1px 8px;border-radius:var(--shape-chip);font-size:var(--text-xs);
     font-weight:var(--font-weight-medium);white-space:nowrap;vertical-align:middle}
-  .cmp-q.hi{background:var(--good-soft);color:var(--good)}
-  .cmp-q.mid{background:var(--surface-raised);color:var(--warn)}
-  .cmp-q.lo{background:var(--bad-soft);color:var(--bad)}
+  
+  
+  
   .cmp-grade1{margin-left:auto;font-size:var(--text-xs);white-space:nowrap;flex-shrink:0}
   .cmp-judge{display:inline-flex;align-items:center;gap:5px;font-size:var(--text-xs);color:var(--ink3);
     cursor:pointer;white-space:nowrap;padding:4px 8px;border-radius:var(--radius);border:1px solid var(--line)}
@@ -495,9 +489,9 @@
     white-space:pre-line;background:var(--panel);color:var(--ink);border:1px solid var(--line);
     border-radius:var(--radius);padding:8px 11px;font-size:var(--text-xs);line-height:1.45}
   .scatter .sc-lbl{fill:var(--ink2);font-size:10.5px}
-  .scatter .sc-dot.hi{fill:var(--good)}
-  .scatter .sc-dot.mid{fill:var(--warn)}
-  .scatter .sc-dot.lo{fill:var(--bad)}
+  
+  
+  
   .cmp-sortbar{display:flex;align-items:center;gap:6px;margin:2px 0 12px;font-size:var(--text-xs);color:var(--ink3)}
   .cmp-sortbtn{border-radius:var(--radius);padding:3px 12px}
 
@@ -536,11 +530,9 @@ details.subterm > summary.subterm-h::-webkit-details-marker{ display:none; }
 .provdot{ width:9px; height:9px; border-radius:var(--shape-circle); flex-shrink:0; }
 .provactions{ display:flex; gap:8px; margin-top:4px; }
 .provactions .save{ padding:5px 12px; font-size:var(--text-xs); }
-.provmodal-back{ position:fixed; inset:0; background:var(--scrim); backdrop-filter:blur(var(--scrim-blur)); z-index:60;
-  display:flex; align-items:center; justify-content:center; }
-.provmodal{ background:var(--panel); border:1px solid var(--line); border-radius:var(--radius);
-  padding:20px; width:min(520px, 92vw); max-height:90vh; overflow-y:auto; }
-.provmodal-models{ width:min(640px, 92vw); min-height:min(430px, 90vh); padding:24px; }
+
+
+
 
 .model-picker{ position:relative; }
 .model-picker-input{ display:flex; align-items:stretch; }
@@ -585,11 +577,8 @@ details.subterm > summary.subterm-h::-webkit-details-marker{ display:none; }
 .conncard .conndesc{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;
   overflow:hidden;min-height:36px}
 .connactions{margin-top:auto}
-.connmodal-back{position:fixed;inset:0;z-index:60;background:var(--scrim);backdrop-filter:blur(var(--scrim-blur));
-  display:flex;align-items:center;justify-content:center;padding:24px}
-.connmodal{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);
-  width:min(560px,100%);max-height:88vh;
-  overflow-y:auto;padding:20px;outline:none}
+
+
 .connmodal-head{display:flex;align-items:center;gap:12px}
 .connmodal-title{min-width:0;flex:1}
 .connmodal-title h3{font-size:var(--text-base);line-height:1.3;margin-bottom:3px}
@@ -599,52 +588,47 @@ details.subterm > summary.subterm-h::-webkit-details-marker{ display:none; }
 .connmodal-desc{margin:14px 0 0;font-size:var(--text-sm)}
 .connmodal-meta{display:flex;flex-wrap:wrap;gap:4px 12px;min-height:18px;margin-top:6px;
   color:var(--ink3);font-size:var(--text-xs);font-variant-numeric:tabular-nums}
-.connsetup{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;
-  margin-top:14px;padding:10px 12px;background:var(--bg);border:1px solid var(--line);
-  border-radius:var(--radius);font-size:var(--text-xs)}
-.connsetup code{overflow-wrap:anywhere}
-.connsetup a{color:var(--accent-fg);font-weight:var(--font-weight-medium);text-decoration:none}
-.connsetup a:hover{text-decoration:underline}
+
+
+
+
 .connection-fields{margin-top:18px}
 .conn-field{margin-bottom:14px}
 .conn-field .fld{margin-bottom:0}
 .conn-field-help{margin-top:5px;color:var(--ink3);font-size:var(--text-xs);line-height:1.45}
 .conn-check{display:flex;align-items:center;gap:9px;color:var(--ink2);font-size:var(--text-xs);
   cursor:pointer;padding:8px 0}
-.conn-secret-state{display:inline-flex;border-radius:var(--shape-chip);background:var(--good-soft);
-  color:var(--good);font-size:var(--text-xs);font-weight:var(--font-weight-medium);padding:1px 7px;margin-left:4px}
+
 .conn-clear{display:flex;align-items:center;gap:6px;width:max-content;margin-top:6px;
   color:var(--ink3);cursor:pointer;font-size:var(--text-xs)}
-.connmodal-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap;
-  margin-top:18px;padding-top:14px;border-top:1px solid var(--line)}
-.connmodal-actions .save{padding:7px 14px;font-size:var(--text-xs)}
+
+
 .connmodal-message{flex:1;min-width:160px;color:var(--ink3);font-size:var(--text-xs)}
 .conn-force{margin-left:6px}
-.connmodal :focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+
 @media (max-width:720px){
   .conngrid{grid-template-columns:1fr}
-  .connmodal-back{padding:10px}
-  .connmodal{max-height:94vh;padding:16px}
-  .connmodal-actions{align-items:stretch}
-  .connmodal-actions .save{flex:1}
+  
+  
+  
+  
   .connmodal-message{flex-basis:100%}
 }
 
 /* --- Memory arena: the fixture, readable before any of it has been run --- */
-.ma-seed{margin:0;padding-left:20px;font-size:var(--text-sm);color:var(--ink2);line-height:1.7}
-.ma-seed li{margin:1px 0}
-.ma-legend{display:flex;flex-wrap:wrap;gap:6px 18px;margin-top:10px;font-size:var(--text-xs)}
+
+
+
 .ma-o{font-family:var(--face-mono);font-size:var(--text-xs);padding:1px 7px;border-radius:var(--shape-chip);border:1px solid var(--line2)}
-.ma-pass{color:var(--good);border-color:var(--good)}
-.ma-stale{color:var(--warn);border-color:var(--warn)}
+
+
 /* invented is the headline failure — a confident answer to something it was
    never told. It gets the alarm colour; miss, an honest gap, deliberately does not. */
-.ma-invented{color:var(--bad);border-color:var(--bad)}
-.ma-miss{color:var(--ink3)}
+
+
 .ma-expect{color:var(--good);font-family:var(--face-mono);font-size:var(--text-xs)}
 .ma-forbid{color:var(--bad);font-family:var(--face-mono);font-size:var(--text-xs)}
-.ma-source{margin-top:10px;padding:8px 10px;border-radius:var(--radius);background:var(--accent-soft);
-           color:var(--ink2);font-size:var(--text-xs);line-height:1.6}
+
 .ma-race{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-top:12px}
 /* Questions and Model are ONE setup decision, so they belong on one line. They
    were wrapping to a line each: a bare <select> sizes itself to its longest
@@ -685,8 +669,7 @@ details.subterm > summary.subterm-h::-webkit-details-marker{ display:none; }
 .ma-facts li{margin:2px 0}
 .ma-prov{font-size:var(--text-xs);color:var(--ink3);margin:-2px 0 8px;font-family:var(--face-mono);line-height:1.5;
   flex:0 0 auto}
-.ma-warn{margin-top:10px;padding:8px 10px;border-radius:var(--radius);background:var(--accent-soft);
-         color:var(--ink2);font-size:var(--text-xs);line-height:1.6}
+
 .ma-facts-meta{font-size:var(--text-xs);color:var(--ink3);font-family:var(--face-mono);margin:4px 0 2px}
 .ma-test{display:inline-block;font-family:var(--face-mono);font-size:var(--text-xs);text-transform:uppercase;
          letter-spacing:var(--tracking-label);color:var(--accent-fg);background:var(--accent-soft);
@@ -743,7 +726,7 @@ details.subterm > summary.subterm-h::-webkit-details-marker{ display:none; }
 .notice-body{line-height:var(--leading-snug);overflow-wrap:anywhere;min-width:0}
 .notice-action{margin-left:auto;flex-shrink:0}
 /* Stat band: one bordered strip, a divider between figures. */
-.stat-band{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));border:var(--rule-width) solid var(--rule);
+.stat-band{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));border:var(--rule-width) solid var(--rule);
            margin-bottom:var(--space-6)}
 .stat{display:flex;flex-direction:column;gap:var(--space-2);padding:var(--space-4);border-right:var(--rule-width) solid var(--rule)}
 .stat:last-child{border-right:none}
@@ -761,9 +744,28 @@ details.subterm > summary.subterm-h::-webkit-details-marker{ display:none; }
 .list-meta{font-family:var(--face-mono);font-size:var(--text-xs);color:var(--text-faint);margin-top:var(--spacing)}
 /* Dialog: a native <dialog> over the scrim. */
 dialog.dialog{background:var(--surface-raised);color:var(--text-ink);border:var(--rule-width) solid var(--rule);
-              border-radius:var(--radius);padding:var(--space-8);width:min(var(--measure-narrow), 92vw);
+              border-radius:var(--radius);padding:0;width:min(var(--measure-narrow), 92vw);
               max-height:calc(100dvh - var(--space-8) * 2);overflow:auto}
 dialog.dialog.dialog-wide{width:min(var(--dialog-wide), 92vw)}
+.dialog-in{padding:var(--space-8)}
 dialog.dialog::backdrop{background:var(--scrim);backdrop-filter:blur(var(--scrim-blur))}
 .dialog-foot{display:flex;justify-content:flex-end;gap:var(--space-2);border-top:var(--rule-width) solid var(--rule);
              margin-top:var(--space-4);padding-top:var(--space-4)}
+/* The retrieval gate (render.js gateSplit): two figures over a thin bar in
+   the chart ramp — the same figure style as the stat band. */
+.gate-figs{display:flex;align-items:flex-end;gap:var(--space-8);margin-bottom:var(--space-3)}
+.gate-figs > div{display:flex;flex-direction:column;gap:var(--space-2)}
+.gate-fig{font-family:var(--face-mono);font-size:var(--text-xl);line-height:var(--leading-tight);
+          font-weight:var(--font-weight-normal);font-variant-numeric:tabular-nums}
+.gate-of{font-size:var(--text-xs);color:var(--text-faint)}
+.thinbar{display:flex;height:calc(var(--spacing) * 1.5);border-radius:var(--radius);overflow:hidden;
+         background:var(--surface-raised)}
+.thinbar i{display:block;min-width:0}
+/* Primitives inside existing views (views.js). */
+.scrolly .tbl-wrap{border:none;border-radius:0;margin:0}
+.scrolly .tbl th{position:sticky;top:0;background:var(--surface-paper);z-index:var(--z-inside)}
+.tbl th small{color:var(--text-faint);font-weight:var(--font-weight-normal);margin-left:var(--spacing);
+              text-transform:none;letter-spacing:0}
+.dbcell{display:block}
+.list-row.on{background:var(--surface-raised)}
+dialog.dialog :focus-visible{outline:var(--focus-ring-width) solid var(--accent);outline-offset:var(--focus-ring-offset)}

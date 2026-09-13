@@ -124,7 +124,7 @@ function toggleModelMenu(ev){
     `<div class="sessitem ${(p.provider===st.provider && p.model===st.model)?"on":""}"
           onclick="switchTo('${esc(p.provider)}','${esc(p.model)}')">
        <span class="mm-prov">${esc(p.provider)}</span> <span class="mm-id">${esc(p.model)}</span>${
-       p.default?'<span class="mm-def">default</span>':""}</div>`
+       p.default ? uiBadge("default", "value") : ""}</div>`
   ).join("") : `<div class="sessitem">No models pinned yet.</div>`;
   const menu = document.createElement("div");
   menu.className = "sessmenu modelmenu"; menu.id = "modelmenu";

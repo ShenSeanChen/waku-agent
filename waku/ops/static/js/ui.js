@@ -19,11 +19,16 @@ function uiBadge(text, variant = "neutral", title = ""){
 }
 
 // Table — columns: [labelHtml, …]; rows: [[cellHtml, …], …]. Cells are HTML,
-// so a caller can put a badge or a link in one.
+// so a caller can put a badge or a link in one. A row can also be
+// {id, cells}, for code that finds its row by id (editFact in memory.js).
 function uiTable(columns, rows, {caption = "", empty = "nothing yet"} = {}){
   if (!rows.length) return uiCard(`<span class="empty">${empty}</span>`);
   const head = `<tr>${columns.map(c => `<th>${c}</th>`).join("")}</tr>`;
-  const body = rows.map(r => `<tr>${r.map(c => `<td>${c}</td>`).join("")}</tr>`).join("");
+  const body = rows.map(r => {
+    const cells = Array.isArray(r) ? r : r.cells;
+    const id = Array.isArray(r) || !r.id ? "" : ` id="${esc(r.id)}"`;
+    return `<tr${id}>${cells.map(c => `<td>${c}</td>`).join("")}</tr>`;
+  }).join("");
   return `<div class="tbl-wrap"><table class="tbl">${head}${body}</table></div>${caption ? `<div class="tbl-caption">${caption}</div>` : ""}`;
 }
 
@@ -52,17 +57,19 @@ function uiRow(lead, title, meta = "", {onclick = "", cls = ""} = {}){
 
 // Dialog — one native <dialog> at a time. Escape closes it natively, and a
 // click on the scrim closes it too. onClose runs after it closes, however
-// that happened, so a caller can tidy up in one place.
-let _dialogClose = null;
+// that happened, so a caller can tidy up in one place. Each dialog keeps its
+// own onClose: the close event of a dialog being replaced fires after the
+// next one has opened, so a shared variable would hand it the wrong one.
+// The content sits in .dialog-in, which carries the padding, so a click that
+// lands on the <dialog> element itself can only be a click on the scrim.
 function openDialog(html, {wide = false, onClose = null, label = ""} = {}){
   closeDialog();
   const d = document.createElement("dialog");
   d.className = "dialog" + (wide ? " dialog-wide" : "");
   if (label) d.setAttribute("aria-label", label);
-  d.innerHTML = html;
-  d.addEventListener("click", e => { if (e.target === d) closeDialog(); });
-  d.addEventListener("close", () => { d.remove(); const f = _dialogClose; _dialogClose = null; if (f) f(); });
-  _dialogClose = onClose;
+  d.innerHTML = `<div class="dialog-in">${html}</div>`;
+  d.addEventListener("click", e => { if (e.target === d) d.close(); });
+  d.addEventListener("close", () => { d.remove(); if (onClose) onClose(); });
   document.body.appendChild(d);
   d.showModal();
   const first = d.querySelector("input,select,textarea,button");
