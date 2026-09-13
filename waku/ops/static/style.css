@@ -318,9 +318,12 @@
   
   
   
-  .chatlog{display:flex;flex-direction:column;gap:var(--space-2)}
+  /* Chat (17C): your message is a rounded bubble whose corner nearest you
+     stays square; Waku's reply has no box, so the two sides read apart. */
+  .chatlog{display:flex;flex-direction:column;gap:var(--space-4)}
   .bubble{align-self:flex-end;background:var(--surface-raised);color:var(--text-ink);border:var(--rule-width) solid var(--rule);padding:var(--space-2) var(--space-3);
-          border-radius:var(--radius);max-width:75%;font-size:var(--text-sm)}
+          border-radius:var(--shape-bubble);border-bottom-right-radius:var(--radius);max-width:75%;font-size:var(--text-sm)}
+  .chatlog .card.reply{background:transparent;border-color:transparent;padding:0;margin:0}
   .chatbar{display:flex;gap:var(--space-2);padding:var(--space-3) 0;border-top:1px solid var(--rule);
            background:var(--surface-bg);position:sticky;bottom:0;min-width:0}
   /* the chat side-dock: chat from any tab, watch the harness in main */
@@ -343,10 +346,8 @@
               width:24px;height:24px;cursor:pointer;font-size:var(--text-base);line-height:1}
   #dock-close:hover{color:var(--text-ink)}
   #dock .chatlog{flex:1;overflow-y:auto;padding:var(--space-3) calc(var(--spacing) * 0.5)}
-  /* The dock is paper, like the rail: the two tool columns frame the page.
-     Its reply cards take the page ground so they still read as cards. */
+  /* The dock is paper, like the rail: the two tool columns frame the page. */
   #dock .chatbar{padding:var(--space-3) 0 var(--space-4);background:var(--surface-paper)}
-  #dock .card{background:var(--surface-bg)}
   #dock-reopen{display:none;position:fixed;bottom:16px;right:16px;z-index:20;
                border-radius:var(--radius);padding:var(--space-2) var(--space-4)}
   body.dock-closed #dock,body.dock-closed #dock-resizer{display:none}

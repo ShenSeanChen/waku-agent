@@ -195,13 +195,19 @@ def test_one_tracking_value():
     assert not found, f"letter-spacing is --tracking-label or 0: {found}"
 
 
-SHAPES = {"0", "var(--radius)", "var(--shape-chip)", "var(--shape-circle)", "var(--shape-pill)"}
+SHAPES = {"0", "var(--radius)", "var(--shape-chip)", "var(--shape-circle)", "var(--shape-pill)",
+          "var(--shape-bubble)"}
 
 
 def test_corners_come_from_tokens():
     found = [(f, s, v) for f, s, p, v in _declarations()
              if p == "border-radius" and not set(v.split()) <= SHAPES]
     assert not found, f"border-radius must be --radius or a --shape-* token: {found[:10]}"
+
+
+def test_bubble_shape_is_only_the_chat_bubble():
+    found = [(f, s) for f, s, p, v in _declarations() if "--shape-bubble" in v and ".bubble" not in s]
+    assert not found, f"--shape-bubble is for the chat bubble only: {found}"
 
 
 def test_one_duration():

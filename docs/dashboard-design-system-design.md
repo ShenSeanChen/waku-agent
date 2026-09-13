@@ -520,6 +520,11 @@ change Waku Memory too, so the two products stay one system.
 - **Headline figures.** The stat band and the gate figures are
   `--text-lg` (20px), not `--text-xl` (a PR 3 follow-up). Memory's stat
   band changes to match.
+- **Chat messages (17C).** Your message is a bubble with `--shape-bubble`
+  (12px) corners, the bottom-right one at `--radius`. Waku's reply has no
+  box and sits on the dock's ground, so the two sides read apart. The token
+  lives in `type.css` and is the dashboard's own: Waku Memory has no chat
+  screen.
 
 Until the Memory changes land, `type.css` and `SOURCE.md` record that
 `--leading-normal` is ahead of `globals.css`.

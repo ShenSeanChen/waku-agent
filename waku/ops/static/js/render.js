@@ -112,7 +112,7 @@ const chatTurnCard = t => uiCard(`
   ${nodesRow(t)}
   ${(t.tools||[]).length?`<div class="tele">${(t.tools||[]).map(toolRow).join("")}</div>`:""}
   <div class="r" style="margin-top:var(--space-2)">${renderMarkdown(t.reply)}</div>
-  ${teleFooter(t)}`);
+  ${teleFooter(t)}`, {cls: "reply"});
 
 // While a turn runs we stream it live: stages light up as the harness reaches
 // them, and the reply text appears token by token (with a blinking caret).
@@ -139,7 +139,7 @@ const streamingCard = m => uiCard(`
      : `<div class="meta" style="margin:0">thinking&hellip;${m.started?` ${Math.round((Date.now()-m.started)/1000)}s`:""}${
          m.started && Date.now()-m.started > 20000
          ? `<br>still waiting: slow models (free tiers especially) can queue for a while; this errors out at the WAKU_LLM_TIMEOUT limit instead of hanging forever`
-         : ""}</div>`}`);
+         : ""}</div>`}`, {cls: "reply"});
 
 // Messages loaded from history (a switched/opened conversation) have no live
 // latency/iteration data, and their stored form carries an internal
@@ -147,7 +147,7 @@ const streamingCard = m => uiCard(`
 const stripTools = t => (t || "").replace(/\s*\[tools used:[\s\S]*\]\s*$/, "").trim();
 const historicalCard = m => uiCard(`
   ${msgCopy(stripTools(m.reply))}
-  <div class="r">${renderMarkdown(stripTools(m.reply))}</div>`);
+  <div class="r">${renderMarkdown(stripTools(m.reply))}</div>`, {cls: "reply"});
 
 function renderChatLog(){
   if (!CHAT.length)

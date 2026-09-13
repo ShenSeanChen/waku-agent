@@ -17,6 +17,9 @@
   /* 1.55, not globals.css's 1.72: the design owner's call on 2026-09-13,
      made first here. Waku Memory's --leading-normal is changing to match. */
   --leading-normal:1.55;
+  /* The chat bubble's corner. The dashboard's own: Waku Memory has no chat
+     screen, so its tokens do not have this shape. */
+  --shape-bubble:calc(var(--spacing) * 3);
 }
 :root,[data-theme]{
   --input:color-mix(in srgb,var(--text-ink) 48%,var(--surface-bg));

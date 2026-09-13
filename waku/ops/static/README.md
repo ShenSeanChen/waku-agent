@@ -74,7 +74,7 @@ When you write CSS here or an inline style in `js/`:
   `--rule*`, `--accent*`, `--ok`/`--warn`/`--bad`, `--chart-1…5`), size
   (`--text-xs|sm|base|lg|xl|2xl`), weight (400 or 500), face
   (`--face-sans|mono|display`), corner (`--radius`, or `--shape-chip` for a
-  badge and `--shape-circle` for a dot), duration (`--motion-fast`). No
+  badge, `--shape-circle` for a dot, `--shape-bubble` for your chat message), duration (`--motion-fast`). No
   shadows: separate things with a 1px `--rule`.
 - **Amber is a surface, not a text colour.** Amber text uses `--accent-fg`.
   Text on an amber fill uses `--accent-ink`.
