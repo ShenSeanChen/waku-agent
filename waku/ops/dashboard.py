@@ -891,6 +891,12 @@ def events_since(cursor):
     return {"events": out, "cursor": len(lines)}
 
 
+# Content types for /static/. .woff2 is here because the dashboard serves its
+# own fonts (static/design/fonts.css) instead of fetching them.
+STATIC_TYPES = {".css": "text/css", ".js": "text/javascript", ".svg": "image/svg+xml",
+                ".html": "text/html; charset=utf-8", ".woff2": "font/woff2"}
+
+
 class Handler(BaseHTTPRequestHandler):
     def _send(self, body: bytes, ctype: str, *, no_cache: bool = False) -> None:
         self.send_response(200)
@@ -992,8 +998,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_response(404)
             self.end_headers()
             return
-        ctype = {".css": "text/css", ".js": "text/javascript", ".svg": "image/svg+xml",
-                 ".html": "text/html; charset=utf-8"}.get(target.suffix, "application/octet-stream")
+        ctype = STATIC_TYPES.get(target.suffix, "application/octet-stream")
         self._send(target.read_bytes(), ctype, no_cache=True)
 
     def do_POST(self):
