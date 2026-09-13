@@ -108,6 +108,9 @@ for its own sake is not.
 - **Gate before push**: `make gate` (deterministic must pass; judge runs with a key).
   When a live bug is found, fix it AND add a regression case to `evals/deterministic/`.
 - **No emojis** in any UI surface (dashboard, CLI output, README prose).
+- **The Waku brand is not MIT.** `waku/ops/static/design/`, the Waku mark (`waku-mark.svg`,
+  `docs/brand/`) and the names belong to AutoManus Technologies, Inc. and are listed in
+  `LICENSE-BRAND`. List any new brand file there; never copy brand files into `examples/`.
 - **No new dependencies without discussion** — the core is stdlib + anthropic/openai.
   Optional features go behind extras (`[voice]`, `[telegram]`, ...).
 - **Footprint ladder — where new capability goes.** Every registered tool ships in
