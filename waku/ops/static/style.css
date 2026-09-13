@@ -710,8 +710,11 @@ details.subterm > summary.subterm-h::-webkit-details-marker{ display:none; }
 .list-row[onclick]{cursor:pointer}
 .list-title{line-height:var(--leading-snug)}
 .list-meta{font-family:var(--face-mono);font-size:var(--text-xs);color:var(--text-faint);margin-top:var(--spacing)}
-/* Dialog: a native <dialog> over the scrim. */
-dialog.dialog{background:var(--surface-raised);color:var(--text-ink);border:var(--rule-width) solid var(--rule);
+/* Dialog: a native <dialog> over the scrim. margin:auto is what centres a
+   modal <dialog> — it is the browser's own rule, and the *{margin:0} reset at
+   the top of this file wipes it, which left every dialog in the top-left
+   corner. */
+dialog.dialog{margin:auto;background:var(--surface-raised);color:var(--text-ink);border:var(--rule-width) solid var(--rule);
               border-radius:var(--radius);padding:0;width:min(var(--measure-narrow), 92vw);
               max-height:calc(100dvh - var(--space-8) * 2);overflow:auto}
 dialog.dialog.dialog-wide{width:min(var(--dialog-wide), 92vw)}
