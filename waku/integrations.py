@@ -257,6 +257,16 @@ INTEGRATIONS: tuple[Integration, ...] = (
 
 
 def _integration_from_provider(name: str, provider: Provider) -> Integration:
+    if not provider.key_env:
+        return Integration(
+            name, "AI Providers", "OpenCode Local",
+            "Uses a local OpenCode server; provider credentials stay in OpenCode.",
+            (EnvField(provider.base_url_env, "Server URL", default=provider.base_url or "",
+                      help="Select WAKU_PROVIDER=opencode_local after starting OpenCode on loopback."),),
+            None, None, "https://opencode.ai/docs/server/", ReloadMode.AGENT,
+            lambda env: env.get("WAKU_PROVIDER") == name or bool(env.get(provider.base_url_env)),
+            lambda values: _provider_probe({"WAKU_PROVIDER": name}),
+        )
     fields = (EnvField(provider.key_env, "API Key", secret=True),)
     if provider.base_url_env and provider.endpoints:
         fields += (EnvField(provider.base_url_env, "Base URL", FieldKind.CHOICE,
@@ -364,6 +374,11 @@ def _status(integration: Integration, env: Mapping[str, str]) -> IntegrationStat
     enabled = integration.enabled(env)
     any_configured = any(_configured(field, value) for field, value in zip(integration.env, values, strict=True))
     if not enabled and not any_configured:
+        provider = PROVIDERS.get(integration.key)
+        if provider and not provider.key_env and integration.key in _health():
+            # An explicit test may have checked a keyless provider's default
+            # endpoint before the user selected or saved it.
+            return _health()[integration.key]
         message = "macOS only" if integration.key.startswith("apple_") and sys.platform != "darwin" else ""
         return IntegrationStatus(IntegrationState.NOT_CONFIGURED, message)
     missing = [field.name for field in integration.env if field.required and not env.get(field.name)]
@@ -536,7 +551,8 @@ def _provider_probe(values: Mapping[str, str]) -> None:
     # is deliberately the same non-writing check used by the existing UI.
     from waku.ops import catalog
 
-    provider = next((name for name, item in PROVIDERS.items() if item.key_env in values), "")
+    provider = values.get("WAKU_PROVIDER", "") or next(
+        (name for name, item in PROVIDERS.items() if item.key_env and item.key_env in values), "")
     if not provider:
         return
     # A Save must validate the candidate key/endpoint, never a cached result
@@ -719,6 +735,8 @@ def apply_provider(provider: str, *, key: str | None = None, model: str | None =
 
     previous = os.environ.get("WAKU_PROVIDER", "")
     selected = PROVIDERS[provider]
+    if not selected.key_env and (key or custom_key):
+        return ApplyResult(False, error="Configure provider credentials in OpenCode, not Waku")
     switching = activate and provider != previous
     updates: dict[str, str] = {"WAKU_PROVIDER": provider} if activate else {}
     if model is not None:
@@ -748,7 +766,7 @@ def apply_provider(provider: str, *, key: str | None = None, model: str | None =
     # The modal always submits its selected Base URL.  Compare effective values
     # rather than field presence so reopening and saving an unchanged provider
     # does not perform a synchronous network probe every time.
-    current_key = os.environ.get(selected.key_env, "")
+    current_key = os.environ.get(selected.key_env, "") if selected.key_env else ""
     legacy_base_url = os.environ.get("WAKU_BASE_URL", "") if provider == previous else ""
     current_base_url = legacy_base_url or selected.configured_base_url() or ""
     candidate_base_url = (
@@ -767,25 +785,33 @@ def apply_provider(provider: str, *, key: str | None = None, model: str | None =
     path = _env_path()
     contents = path.read_text(encoding="utf-8") if path.exists() else None
     before = {name: os.environ.get(name) for name in changed_updates}
+    tested = False
     try:
         # Validate a newly supplied key before persisting it.  catalog's probe
         # intentionally reads environment variables, so expose only the
         # candidate values for the duration of this non-writing request.
-        candidate_key = key or os.environ.get(selected.key_env, "")
-        if candidate_key and (key_changed or base_url_changed) and not force:
-            probe_names = {"WAKU_PROVIDER", selected.key_env}
+        candidate_key = key or current_key
+        probe_local = (not selected.key_env and base_url_changed
+                       and (provider == previous or activate))
+        if ((candidate_key and (key_changed or base_url_changed)) or probe_local) and not force:
+            probe_names = {"WAKU_PROVIDER", "WAKU_BASE_URL"}
+            if selected.key_env:
+                probe_names.add(selected.key_env)
             if selected.base_url_env:
                 probe_names.update({selected.base_url_env, "WAKU_BASE_URL"})
             probe_before = {name: os.environ.get(name) for name in probe_names}
             os.environ["WAKU_PROVIDER"] = provider
-            os.environ[selected.key_env] = candidate_key
+            if selected.key_env:
+                os.environ[selected.key_env] = candidate_key
             if selected.base_url_env and selected.base_url_env in updates:
                 os.environ[selected.base_url_env] = updates[selected.base_url_env]
                 os.environ["WAKU_BASE_URL"] = ""
             elif base_url is not None:
                 os.environ["WAKU_BASE_URL"] = base_url
             try:
-                _provider_probe({selected.key_env: candidate_key})
+                _provider_probe({selected.key_env: candidate_key} if selected.key_env else
+                                {"WAKU_PROVIDER": provider})
+                tested = True
             finally:
                 for name, old in probe_before.items():
                     if old is None:
@@ -804,11 +830,13 @@ def apply_provider(provider: str, *, key: str | None = None, model: str | None =
                                                        "to": {"provider": provider}})
         status = (IntegrationStatus(IntegrationState.ERROR, "Saved without a successful test")
                   if force else IntegrationStatus(IntegrationState.CONNECTED))
+        if not selected.key_env and not force and not tested:
+            status = IntegrationStatus(IntegrationState.CONFIGURED, "configured — not tested yet")
         record_health(provider, status)
     except Exception as exc:
         _restore(path, contents, before)
         result = _safe_error(exc, changed_updates, _find_integration(provider) or provider_integrations()[0])
-        return ApplyResult(False, error=result, can_force=bool(key or os.environ.get(selected.key_env)))
+        return ApplyResult(False, error=result, can_force=bool(candidate_key or probe_local))
     return ApplyResult(True, _current_view(provider))
 
 

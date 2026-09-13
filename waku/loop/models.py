@@ -1,10 +1,11 @@
-"""Model access — eight providers, one loop, zero framework.
+"""Model access — multiple providers, one loop, zero framework.
 
 The loop speaks one dialect: Anthropic's Messages shape (system/messages/tools
-in, content blocks out). Providers plug in two ways:
+in, content blocks out). Providers plug in three ways:
 
   anthropic wire format (native)     → Anthropic, Kimi/Moonshot, GLM/Z.ai, MiniMax
   openai wire format (thin adapter)  → OpenAI, Google Gemini, DeepSeek, OpenRouter
+  local OpenCode server             → OpenCode sessions, credentials kept in OpenCode
 
 Pick with WAKU_PROVIDER=anthropic|openai|gemini|deepseek|minimax|kimi|glm|openrouter
 and set that provider's API key in .env. Override the model ids with WAKU_MODEL /
@@ -13,6 +14,8 @@ matters most for openrouter: it's a single key in front of hundreds of models,
 so WAKU_MODEL=<vendor>/<model> (e.g. "google/gemini-3.5-flash") picks whichever
 one you want — and its defaults below are $0 ":free" ids, so it works with no
 spend at all (rate-limited). The dashboard Settings tab lists the live catalog.
+WAKU_PROVIDER=opencode_local uses a local OpenCode server without an API key in
+Waku; see docs/opencode-local.md for setup and availability constraints.
 """
 
 from __future__ import annotations
@@ -36,8 +39,8 @@ class ProviderEndpoint:
 
 @dataclass(frozen=True)
 class Provider:
-    kind: str        # 'anthropic' or 'openai' — the wire format
-    key_env: str     # which env var holds the key
+    kind: str        # 'anthropic', 'openai', or 'opencode_local'
+    key_env: str     # which env var holds the key; empty for a keyless provider
     base_url: str | None
     model: str       # default main model (the loop)
     small_model: str  # default cheap model (retrieval gate + consolidation)
@@ -157,6 +160,12 @@ PROVIDERS: dict[str, Provider] = {
     "opencode_go":  Provider("openai", "OPENCODE_GO_API_KEY",
                                "https://opencode.ai/zen/go/v1",
                                "deepseek-v4-flash", "deepseek-v4-flash"),
+    # Credentials stay in OpenCode. The selected model is never replaced with
+    # another provider/model when capacity or free-tier access is unavailable.
+    "opencode_local": Provider("opencode_local", "", "http://127.0.0.1:4096",
+                               "muse-spark-1.3-contributor-free",
+                               "muse-spark-1.3-contributor-free",
+                               base_url_env="OPENCODE_SERVER_URL"),
 }
 
 
@@ -228,6 +237,10 @@ def _belongs_elsewhere(model: str, provider_name: str) -> bool:
     when the family is one some OTHER provider actually owns, which is the case
     that produces a 400 rather than a surprise.
     """
+    # OpenCode can expose multiple vendors. A familiar family is still a valid
+    # explicit choice there, including an unqualified OpenCode model id.
+    if PROVIDERS[provider_name].kind == "opencode_local":
+        return False
     family = model.split("-")[0].lower()
     if "/" in model or not family:
         return False
@@ -246,8 +259,9 @@ def get_client(settings: Settings):
 
     # .strip() so a trailing newline/space from a copy-paste doesn't corrupt the
     # auth header (headers are latin-1; a stray non-ASCII char errors cryptically).
-    api_key = (settings.api_key or os.getenv(provider.key_env, "")).strip()
-    if not api_key:
+    api_key = ((settings.api_key or os.getenv(provider.key_env, "")).strip()
+               if provider.key_env else "")
+    if provider.key_env and not api_key:
         raise SystemExit(_no_key_message(settings.provider, provider.key_env))
     try:
         api_key.encode("latin-1")
@@ -280,8 +294,14 @@ def get_client(settings: Settings):
     settings.small_model = settings.small_model or provider.small_model
     base_url = settings.base_url or provider.configured_base_url()
 
-    # a hung network call must never freeze a turn silently
-    timeout = float(os.getenv("WAKU_LLM_TIMEOUT", "120"))
+    # Local OpenCode may queue a response longer than a hosted API call.
+    timeout = float(os.getenv("WAKU_LLM_TIMEOUT",
+                              "1800" if provider.kind == "opencode_local" else "120"))
+
+    if provider.kind == "opencode_local":
+        from waku.loop.opencode_local import OpenCodeLocalClient
+
+        return OpenCodeLocalClient(base_url=base_url, timeout=timeout)
 
     if provider.kind == "anthropic":
         import anthropic

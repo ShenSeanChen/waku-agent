@@ -23,16 +23,30 @@ def _isolate(monkeypatch, tmp_path):
 
 def test_registry_contract():
     items = integrations.registry()
-    assert len(items) == 24
+    assert len(items) == 25
     assert len({item.key for item in items}) == len(items)
     assert {item.key for item in items if item.group == "AI Providers"} == set(PROVIDERS)
     for item in items:
         assert callable(item.enabled)
         for field in item.env:
+            assert field.name
             if field.kind is integrations.FieldKind.CHOICE:
                 assert field.options
             if field.secret:
                 assert field.kind is integrations.FieldKind.TEXT
+
+
+def test_generated_env_example_handles_keyless_provider():
+    from pathlib import Path
+
+    from scripts.generate_env_example import replace_block
+
+    example = Path(__file__).resolve().parents[2] / ".env.example"
+    contents = example.read_text()
+    block = integrations.render_env_example_block()
+    assert "# OPENCODE_SERVER_URL=http://127.0.0.1:4096" in block
+    assert "# =" not in block
+    assert replace_block(contents, block) == contents
 
 
 def test_status_masking_health_persistence_and_invalidation(monkeypatch, tmp_path):

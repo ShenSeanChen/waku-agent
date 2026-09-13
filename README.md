@@ -72,6 +72,9 @@ Kimi, GLM, OpenRouter (one key, hundreds of hosted models), OpenCode Zen, or Ope
 set `WAKU_PROVIDER=`, paste the key, done. One dialect in the loop;
 a [~60-line adapter](waku/loop/models.py) handles the rest.
 
+Already use OpenCode locally? [Connect its local server](docs/opencode-local.md)
+with `WAKU_PROVIDER=opencode_local`; provider credentials stay in OpenCode.
+
 ## Watch the harness run — the dashboard
 
 ```bash
