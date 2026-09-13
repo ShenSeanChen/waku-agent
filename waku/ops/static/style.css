@@ -365,7 +365,9 @@
   .chatlog{display:flex;flex-direction:column;gap:var(--space-4)}
   .bubble{align-self:flex-end;background:var(--surface-raised);color:var(--text-ink);border:var(--rule-width) solid var(--rule);padding:var(--space-2) var(--space-3);
           border-radius:var(--shape-bubble);border-bottom-right-radius:var(--radius);max-width:75%;font-size:var(--text-sm)}
-  .chatlog .card.reply{background:transparent;border-color:transparent;padding:0;margin:0}
+  /* Waku's reply keeps its card, on the page ground so it reads against
+     the paper dock. Your message is the rounded bubble; the card is square. */
+  #dock .card{background:var(--surface-bg)}
   .chatbar{display:flex;gap:var(--space-2);padding:var(--space-3) 0;border-top:1px solid var(--rule);
            background:var(--surface-bg);position:sticky;bottom:0;min-width:0}
   /* the chat side-dock: chat from any tab, watch the harness in main */
