@@ -306,7 +306,11 @@
      already drawn, so the built-in icon and checkmark go. */
   select:open{border-color:var(--accent)}
   ::picker(select){appearance:base-select;background:var(--surface-paper);border:var(--rule-width) solid var(--rule-hard);
-    border-radius:var(--radius);padding:calc(var(--spacing) * 1.5);margin-top:calc(var(--spacing) * 1.5);box-shadow:var(--shadow-md)}
+    border-radius:var(--radius);padding:calc(var(--spacing) * 1.5);margin-block:calc(var(--spacing) * 1.5);box-shadow:var(--shadow-md);
+    position-try-order:normal}
+  /* Chrome opens the list on whichever side has more room, so a select low
+     on the page opened upward. normal keeps it below, like .menu, and flips
+     it only when it does not fit. */
   select::picker-icon{display:none}
   select option::checkmark{display:none}
   select option{padding:var(--space-2);border-radius:var(--radius);font-family:var(--face-mono);font-size:var(--text-xs);
