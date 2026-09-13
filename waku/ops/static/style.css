@@ -721,7 +721,7 @@ details.subterm > summary.subterm-h::-webkit-details-marker{ display:none; }
 .stat:last-child{border-right:none}
 .stat-label{font-family:var(--face-mono);font-size:var(--text-xs);text-transform:uppercase;letter-spacing:var(--tracking-label);
             color:var(--text-faint)}
-.stat-value{font-family:var(--face-mono);font-size:var(--text-xl);line-height:var(--leading-tight);
+.stat-value{font-family:var(--face-mono);font-size:var(--text-lg);line-height:var(--leading-tight);
             font-weight:var(--font-weight-normal);font-variant-numeric:tabular-nums}
 .stat-value.ok{color:var(--ok)}
 .stat-sub{font-size:var(--text-xs);color:var(--text-faint)}
@@ -744,7 +744,7 @@ dialog.dialog::backdrop{background:var(--scrim);backdrop-filter:blur(var(--scrim
    the chart ramp — the same figure style as the stat band. */
 .gate-figs{display:flex;align-items:flex-end;gap:var(--space-8);margin-bottom:var(--space-3)}
 .gate-figs > div{display:flex;flex-direction:column;gap:var(--space-2)}
-.gate-fig{font-family:var(--face-mono);font-size:var(--text-xl);line-height:var(--leading-tight);
+.gate-fig{font-family:var(--face-mono);font-size:var(--text-lg);line-height:var(--leading-tight);
           font-weight:var(--font-weight-normal);font-variant-numeric:tabular-nums}
 .gate-of{font-size:var(--text-xs);color:var(--text-faint)}
 .thinbar{display:flex;height:calc(var(--spacing) * 1.5);border-radius:var(--radius);overflow:hidden;
