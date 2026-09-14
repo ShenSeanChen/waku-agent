@@ -107,7 +107,7 @@ the agent, namespaced `<server>_<tool>` (and in the dashboard's Tools ▸ MCP ta
 **Node-free demo** — a tiny self-contained Python MCP server ships in the repo:
 
 ```bash
-cp examples/mcp.demo.json .waku/mcp.json   # points at examples/mcp_demo_server.py
+cp examples/mcp.demo.json .waku/mcp.json   # points at evals/fixtures/mcp_demo_server.py
 make dashboard                               # demo_word_count / demo_reverse_text appear in Tools
 ```
 
@@ -174,7 +174,7 @@ printed, and you can finish the sign-in from any machine that has one.
 Try it against the demo server, no remote host required:
 
 ```bash
-python examples/mcp_demo_server.py --http --port 8931
+python evals/fixtures/mcp_demo_server.py --http --port 8931
 # .waku/mcp.json → {"servers": [{"name": "demo", "url": "http://127.0.0.1:8931/mcp"}]}
 ```
 

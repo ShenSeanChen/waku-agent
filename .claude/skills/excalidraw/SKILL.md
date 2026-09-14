@@ -4,7 +4,7 @@ description: >
   Generate an Excalidraw whiteboard in Sean's hand-drawn video style (Excalifont,
   roughness 1, green signature, socials + watermark, source labels). Use whenever
   the user wants a whiteboard, diagram, teaching board, or "chart" for a video or
-  the docs/whiteboards gallery — anything Sean will film with.
+  the docs/whiteboards gallery or a lab/ topic — anything Sean will film with.
 ---
 
 # Excalidraw whiteboards, Sean's way
@@ -25,7 +25,7 @@ style engine, which locks the values that a from-scratch board always gets wrong
 ## How to build one
 
 ```python
-from waku.ops.whiteboard import style as S
+from scripts.whiteboard import style as S   # run from the repo root
 
 e = []
 e.append(S.text(60, 40, "Title", size=S.FS_TITLE))
@@ -44,8 +44,10 @@ S.validate(e)                       # catches broken bound-text ids
 doc = S.document(e)                 # wraps with appState + white bg
 ```
 
-Write `json.dumps(doc, indent=2)` to `docs/whiteboards/<name>.excalidraw`.
-See `waku/ops/whiteboard/build_k3_tutorial.py` for a full two-board example.
+Write `json.dumps(doc, indent=2)` to `docs/whiteboards/<name>.excalidraw` if the board
+explains Waku, or to `lab/<topic>/whiteboards/<name>.excalidraw` if it is for a video
+about another project.
+See `lab/kimi-k3/build_k3_tutorial.py` for a full two-board example.
 
 ## Palette (name → fill/stroke), meaning follows Sean's color system
 

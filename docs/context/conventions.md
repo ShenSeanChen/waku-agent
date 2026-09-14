@@ -75,28 +75,46 @@ is an architecture decision and needs a proposal (§2).
 
 ## 6. examples/ and video material
 
-`examples/` is teaching material, not product. Minimal agents and other
-people's tools shown on their own terms live there, one self-contained folder
-or file per topic, named for the topic (`memory-native/`) and never for a video
-or a date. Four rules keep it from rotting the core:
+Two folders hold material that is not the product, and each has one job.
 
-1. **Nothing under `waku/` imports from `examples/`.** This one-way rule is the
-   load-bearing one, and `evals/deterministic/test_rulebook.py` enforces it.
-2. **No new default dependencies.** Use the stdlib or an extra that already
+- **`examples/` holds short lessons about Waku itself.** Each one is a file a
+  stranger can run in one command to learn exactly one thing, like
+  `tiny_memory_agent.py`, which shows the loop's three steps with nothing else
+  in frame.
+- **`lab/` holds one folder per outside topic**: another agent, model or
+  memory product, and how Waku's agent, memory and skills connect to it. Video
+  work starts here. Every topic starts from `lab/_template/README.md`, and its
+  README keeps the six playbook headings and a `Verified against:` line.
+
+Five rules apply to both, and `evals/deterministic/test_rulebook.py` enforces
+the first three:
+
+1. **Nothing under `waku/` or `evals/` imports from `examples/` or `lab/`.** The
+   dependency runs one way, always.
+2. **`lab/` never ships.** The wheel packages only `waku/`, and the source
+   distribution excludes `lab/`.
+3. **`make gate` never depends on either folder.** A third-party SDK shipping a
+   breaking release is their problem, not a red CI. A server that a test needs
+   lives in `evals/fixtures/`.
+4. **No new default dependencies.** Use the stdlib or an extra that already
    exists, or state the `pip install` in the file's own header.
-3. **`make gate` never depends on an example.** A third-party SDK shipping a
-   breaking release is their problem, not a red CI.
-4. **Anything that uses someone else's SDK carries a dated header** naming the
+5. **Anything that uses someone else's SDK carries a dated header** naming the
    version it was verified against. A silently rotted example is worse than no
    example.
 
-Whether an example imports Waku is not the test. The test is whether a stranger
-can run it in one command and learn exactly one thing.
+**Graduation.** Lab code moves into `waku/` only through a normal PR at the
+right tier (§2) and rung (§3). The topic's "Graduation" section then says where
+the code went, and the lab keeps the experiment as the on-its-own-terms
+baseline.
 
-`docs/` holds only what explains this codebase. Material made for a video about
-another project (whiteboards, write-ups, demos) is production material, not
-reference. It is moving to a folder of its own; [status.md](../status.md)
-tracks what is left.
+**Whiteboards.** `docs/whiteboards/` holds only boards that explain this
+codebase. A board drawn for a video about another project lives in that
+topic's `lab/` folder. The drawing toolkit is `scripts/whiteboard/`, and it
+never ships.
+
+**What stays out of the repo:** video scripts, subtitles and shot-by-shot
+filming notes. A topic's "Video angle" section is a brief: the hook, the one
+surprising finding, and which board to film.
 
 ## 7. Dependencies and extras
 

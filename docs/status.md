@@ -17,7 +17,7 @@ a retrieval gate), tools, and both eval tiers. `waku`, `waku dashboard`,
 `waku voice`, `waku telegram`, `waku discord`, `waku brief` and
 `waku connect google` all start.
 
-**738 deterministic evals pass offline**, with no API key; 60 more are live
+**741 deterministic evals pass offline**, with no API key; 60 more are live
 evals that skip without one. CI runs the offline tier on every PR along with
 ruff, the skills validator, and a check that `.env.example` still matches the
 integrations registry.
@@ -39,8 +39,6 @@ Nothing here is a surprise. If you hit one of these, the issue exists.
 | GPT-5.6 tool calls fail on Chat Completions | — | #146 |
 | OpenCode Zen fails with a rate-limit error | #112 | #113 |
 | Google Calendar sign-in has no bundled OAuth client, so `waku connect google` needs your own `.waku/credentials.json` | — | — |
-| Two deterministic evals depend on `examples/` (`test_mcp_transport.py`, `test_providers.py`), against conventions §6 | — | — |
-| Video material still sits in the product: `waku/ops/whiteboard/` ships to PyPI, and the K3 and pi boards and write-ups sit in `docs/` | — | — |
 
 **Providers are the recurring theme.** Three of the items above are one
 provider or another, and there is no single place that says which providers

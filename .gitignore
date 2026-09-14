@@ -32,3 +32,6 @@ client_secret*.json
 
 # Disposable design mockups: propose, decide, implement, delete.
 docs/proposals/*.html
+
+# DeepEval writes a telemetry file here on every run
+.deepeval/
