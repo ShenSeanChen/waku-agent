@@ -124,6 +124,28 @@ def test_an_api_key_setup_needs_no_browser(signing, tmp_path):
     assert "$WAKU_MEMORY_API_KEY" in reply
 
 
+def test_status_says_how_to_connect_when_nothing_is_set_up(tmp_path):
+    assert waku_memory.status(tmp_path) == "not connected · run: waku connect waku-memory"
+
+
+def test_status_names_the_account_once_signed_in(signing, tmp_path):
+    _, token = signing
+    waku_memory.add_server(tmp_path)
+    assert waku_memory.status(tmp_path).startswith("configured · not signed in")
+    token.write_text(json.dumps({"tokens": {"access_token": "x"}}), encoding="utf-8")
+    assert waku_memory.status(tmp_path).startswith("connected · ")
+
+
+def test_waku_connections_lists_waku_memory(monkeypatch, tmp_path, capsys):
+    from waku import integrations
+
+    monkeypatch.setenv("WAKU_HOME", str(tmp_path))
+    integrations._HEALTH = None
+    integrations.cli_main()
+    out = capsys.readouterr().out
+    assert "Waku Memory" in out and "waku connect waku-memory" in out
+
+
 @pytest.fixture
 def connector(monkeypatch, tmp_path):
     calls = []

@@ -60,6 +60,30 @@ def add_server(home: Path) -> tuple[str, dict]:
     return "added", spec
 
 
+def status(home: Path) -> str:
+    """One line for `waku connections`: is Waku Memory connected, and as whom.
+    It reads files only, so listing connections never opens a browser."""
+    config = home / "mcp.json"
+    try:
+        servers = json.loads(config.read_text(encoding="utf-8")).get("servers", []) if config.exists() else []
+    except json.JSONDecodeError:
+        return f"not connected · {config} is not valid JSON"
+    spec = next((s for s in servers if s.get("url", "").rstrip("/") == URL), None)
+    if spec is None:
+        return "not connected · run: waku connect waku-memory"
+    if spec.get("auth_env"):
+        return f"configured · API key in ${spec['auth_env']}"
+    if not _has_mcp():
+        return "configured · needs the mcp extra: pip install 'waku-agent[mcp]'"
+
+    from waku.tools.mcp_cli import _auth_file, _identity
+
+    token = _auth_file(home, spec["name"])
+    if not token.exists():
+        return "configured · not signed in: run waku connect waku-memory"
+    return f"connected · {_identity(token)}"
+
+
 def connect(home: Path) -> str:
     if not _has_mcp():
         return ("Waku Memory connects over MCP, which needs an extra: "

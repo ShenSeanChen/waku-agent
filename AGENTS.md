@@ -13,6 +13,7 @@ caps it at 100 lines, so the detail lives in the files it points to.
 
 | Before you | Read |
 |---|---|
+| run Waku for the first time | [docs/getting-started.md](docs/getting-started.md) |
 | start anything non-trivial | [docs/status.md](docs/status.md): what works and what is known-broken |
 | decide how much process a change needs | [conventions §2](docs/context/conventions.md#2-how-much-process-a-change-needs) |
 | add capability (tool, gateway, provider, store) | [conventions §3](docs/context/conventions.md#3-where-new-capability-goes-the-footprint-ladder), the footprint ladder |
