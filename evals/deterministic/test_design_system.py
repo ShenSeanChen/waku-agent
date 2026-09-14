@@ -2,8 +2,8 @@
 
 design/tokens.css and design/controls.css are copies of Waku Memory's files.
 These checks keep the copies unedited, and keep style.css and the inline
-styles in js/ from writing values of their own. Read the "Design system"
-section of waku/ops/static/README.md before changing any of them."""
+styles in js/ from writing values of their own. Read docs/context/design-system.md
+before changing any of them."""
 
 from __future__ import annotations
 

@@ -1,7 +1,8 @@
 # docs — what is in here
 
-A folder with no order is a folder nobody reads. Three groups, and one
-file that comes before all of them.
+Start with [AGENTS.md](../AGENTS.md) at the repo root: it routes every kind of
+change to the one file that covers it. This folder holds those files, sorted
+into four groups.
 
 ## Start here
 
@@ -9,6 +10,16 @@ file that comes before all of them.
 deliberately not built. Rewritten whole rather than appended to, so it
 cannot become a changelog. Read it before opening a PR: most of what is
 already known-broken is listed, and half of it has a fix in flight.
+
+## The rulebook
+
+| file | what it answers |
+|---|---|
+| [context/conventions.md](context/conventions.md) | how much process a change needs, where capability goes, testing, git, scope |
+| [context/design-system.md](context/design-system.md) | how the dashboard looks, and which primitive to use |
+| [context/writing-rules.md](context/writing-rules.md) | how we write docs, UI copy and commit messages |
+| [context/gotchas.md](context/gotchas.md) | traps someone already stepped on |
+| [context/maintainers.md](context/maintainers.md) | how maintainers review, merge and release; contributors can skip it |
 
 ## Reference — how the system works
 
@@ -36,4 +47,5 @@ the hand-drawn masters; edit the builder, not the JSON.
 
 Related, and deliberately not in `docs/`: [../examples/](../examples/) is
 runnable teaching material — one folder per topic, nothing under `waku/`
-imports from it. See `CLAUDE.md` for the four rules that keep it honest.
+imports from it. [conventions §6](context/conventions.md#6-examples-and-video-material)
+has the four rules that keep it honest.
