@@ -459,6 +459,14 @@ def cli_main() -> int:
         console.print(f"  {view.name:<20} {label}{' · ' + detail if detail else ''}{checked}")
         if status.state is IntegrationState.ERROR and any(field.configured for field in view.fields):
             failed = True
+
+    # Waku Memory is not an .env field like the rows above: it is a server in
+    # mcp.json with a sign-in token beside it, so its line comes from there.
+    from waku.config import load_settings
+    from waku.tools.waku_memory import status as waku_memory_status
+
+    console.print("\n[bold]Shared memory[/bold]")
+    console.print(f"  {'Waku Memory':<20} {waku_memory_status(load_settings().home)}", markup=False)
     return int(failed)
 
 

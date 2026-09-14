@@ -19,11 +19,14 @@ CONTEXT = DOCS / "context"
 LAB = ROOT / "lab"
 LAB_TOPICS = sorted(p for p in LAB.iterdir() if p.is_dir() and not p.name.startswith(("_", ".")))
 PLAYBOOK = ("The question", "What we connect", "Run it", "What we found", "Video angle", "Graduation")
+README_CAP = 200
 RULEBOOK = [
+    ROOT / "README.md",
     ROOT / "AGENTS.md",
     ROOT / "CONTRIBUTING.md",
     DOCS / "README.md",
     DOCS / "status.md",
+    *(DOCS / name for name in ("getting-started.md", "tour.md", "evals.md", "commands.md", "roadmap.md")),
     *sorted(CONTEXT.glob("*.md")),
     ROOT / "examples" / "README.md",
     LAB / "README.md",
@@ -57,6 +60,15 @@ def test_agents_md_fits_its_cap():
     assert len(lines) <= 100, (
         f"AGENTS.md is {len(lines)} lines; push detail down into docs/context/ "
         "instead of growing it")
+
+
+def test_readme_stays_a_landing_page():
+    """The README answers what this is, why it matters and how to start. It
+    grew to 493 lines once; the long material lives in docs/ now."""
+    lines = (ROOT / "README.md").read_text(encoding="utf-8").splitlines()
+    assert len(lines) <= README_CAP, (
+        f"README.md is {len(lines)} lines (cap {README_CAP}); move the detail into docs/ "
+        "and link it from the Docs table")
 
 
 def test_claude_md_only_imports_agents_md():
@@ -166,7 +178,7 @@ def test_no_retired_waku_memory_address():
 def test_no_emoji_in_rulebook_or_readme():
     hits = [
         f"{doc.relative_to(ROOT)}:{n}"
-        for doc in (ROOT / "README.md", *RULEBOOK)
+        for doc in RULEBOOK
         for n, line in enumerate(doc.read_text(encoding="utf-8").splitlines(), 1)
         if EMOJI.search(line)
     ]
