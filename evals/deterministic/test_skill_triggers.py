@@ -92,6 +92,12 @@ MESSAGES = {
         "mock interview me",
         "what should I revise for my placement interview",
     ],
+    "waku-memory": [
+        "connect waku memory",
+        "how do I share my memory with claude code",
+        "use the same memory in codex and grok bot",
+        "export my waku skills to claude code",
+    ],
 }
 
 

@@ -121,16 +121,25 @@ def _logout(home: Path, name: str) -> int:
 
 
 def _login(home: Path, name: str) -> int:
+    ok, message = sign_in(home, name)
+    print(message)
+    return 0 if ok else 1
+
+
+def sign_in(home: Path, name: str) -> tuple[bool, str]:
     """Forget the token, then connect — which is what triggers a sign-in.
 
     Signing out first is the whole point: without it the stored token is still
     valid and the server never asks who you are, so "log in as someone else"
     would silently keep the account you were trying to leave.
+
+    Returns whether a token now exists, and the line to show. `waku connect
+    waku-memory` shows that line in the dashboard chat, where a print would
+    land in the server log instead.
     """
     names = [s["name"] for s in _servers(home)]
     if name not in names:
-        print(f"No server called '{name}' in {home}/mcp.json. Configured: {', '.join(names) or 'none'}")
-        return 1
+        return False, f"No server called '{name}' in {home}/mcp.json. Configured: {', '.join(names) or 'none'}"
 
     path = _auth_file(home, name)
     if path.exists():
@@ -152,9 +161,8 @@ def _login(home: Path, name: str) -> int:
         # browser". The sign-in may still have completed — the callback writes
         # the token whether or not anyone is still waiting — so say what to
         # check rather than what broke.
-        print("\n  Timed out waiting for the browser sign-in.")
-        print("  If you did finish it, `waku mcp` will show the account. Otherwise run this again.")
-        return 1
+        return False, ("\n  Timed out waiting for the browser sign-in.\n"
+                       "  If you did finish it, `waku mcp` will show the account. Otherwise run this again.")
     except Exception:
         # Swallowed deliberately, and only here: the token below is the thing
         # that was asked for, and it is either on disk or it is not. A
@@ -165,10 +173,8 @@ def _login(home: Path, name: str) -> int:
         bridge.close()
 
     if not path.exists():
-        print(f"\n  Sign-in did not complete — '{name}' has no token.")
-        return 1
-    print(f"\n  {name} — {_identity(path)}")
-    return 0
+        return False, f"\n  Sign-in did not complete — '{name}' has no token."
+    return True, f"\n  {name} — {_identity(path)}"
 
 
 def cli_main(argv: list[str] | None = None) -> int:

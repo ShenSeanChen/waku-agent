@@ -90,6 +90,48 @@ The target defaults to the signed-in user's `primary` calendar; set
 local database. Google failures never roll back the local event, and attendee
 notifications are suppressed (`sendUpdates=none`).
 
+## Share one memory with your other agents (Waku Memory)
+
+Waku's own memory is local. [Waku Memory](https://waku.one) is a separate,
+hosted memory that several agents share over MCP: save something in one agent,
+and recall it in another.
+
+```bash
+pip install -e '.[mcp]'
+waku connect waku-memory     # or /connect waku-memory in the dashboard chat
+```
+
+That adds Waku Memory to `.waku/mcp.json`, next to any servers already there,
+and opens your browser once to sign in. Restart Waku and its tools appear as
+`waku_memory_*`; `waku mcp` shows which account you are signed in as. A config
+still pointing at Waku Memory's old address is moved to the current one.
+
+The same memory, in your other agents:
+
+| Agent | How it connects |
+|---|---|
+| Claude Code, Codex, Hermes | the steps on [waku.one/docs](https://www.waku.one/docs) |
+| Grok Bot | Settings → Plugins → custom connector: URL `https://api.waku.one/mcp`, header `Authorization: Bearer <key>`, with a key from waku.one → Account → Keys |
+| Muse Code, or any MCP client | a remote (streamable HTTP) server at `https://api.waku.one/mcp` in its MCP settings |
+
+Grok Bot and Muse Code are not yet tested by us. Grok Bot runs in the cloud,
+and its connector form takes a URL and a header rather than a browser sign-in,
+which is why it needs a key. Keep that key in Grok Bot's own form, never in a
+file in this repo.
+
+### Carry your skills too
+
+```bash
+waku skill export --to claude,codex    # ~/.claude/skills/ and ~/.codex/skills/
+waku skill export --project            # ./.claude/skills/, which Muse Code also reads
+```
+
+Each skill folder is copied as it is. A copy you changed in the other agent is
+kept unless you pass `--force`. Skills that call Waku's own tools (a calendar
+skill calls `create_event`) arrive as instructions without those tools behind
+them. Saving skills into Waku Memory, so a cloud agent like Grok Bot can recall
+them, waits until Waku Memory has a place for skills.
+
 ## Connect MCP servers
 
 ```bash

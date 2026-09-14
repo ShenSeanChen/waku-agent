@@ -17,6 +17,7 @@ caps it at 100 lines, so the detail lives in the files it points to.
 | decide how much process a change needs | [conventions §2](docs/context/conventions.md#2-how-much-process-a-change-needs) |
 | add capability (tool, gateway, provider, store) | [conventions §3](docs/context/conventions.md#3-where-new-capability-goes-the-footprint-ladder), the footprint ladder |
 | add a skill | [CONTRIBUTING.md](CONTRIBUTING.md): no Python needed |
+| connect Waku Memory, or carry skills to another agent | [docs/integrations.md](docs/integrations.md#share-one-memory-with-your-other-agents-waku-memory) |
 | add a tool | the `new-tool` skill in `.claude/skills/new-tool/` |
 | touch the loop, memory, graph engine or a tool contract | [docs/architecture.md](docs/architecture.md), then conventions §2: it may need a proposal |
 | change how the dashboard looks | [docs/context/design-system.md](docs/context/design-system.md) |

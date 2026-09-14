@@ -16,6 +16,7 @@ from pathlib import Path
 # name -> the function that opens the browser, gets consent, and caches the token
 CONNECTORS = {
     "google": "waku.tools.google_calendar:connect",
+    "waku-memory": "waku.tools.waku_memory:connect",
 }
 
 
