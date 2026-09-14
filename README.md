@@ -360,7 +360,12 @@ Your memory is local by default and stays that way. If you want the *same*
 memory in more than one agent, point Waku at a remote MCP server and it becomes
 another set of tools — nothing about the loop changes.
 
-`.waku/mcp.json`:
+```bash
+pip install -e '.[mcp]'
+waku connect waku-memory     # or /connect waku-memory in the dashboard chat
+```
+
+That writes this into `.waku/mcp.json`, next to any servers already there:
 
 ```json
 {"servers": [{"name": "waku_memory",
@@ -368,16 +373,13 @@ another set of tools — nothing about the loop changes.
               "oauth": true}]}
 ```
 
-```bash
-pip install -e '.[mcp]'
-make run
-```
-
 A browser opens the first time, you sign in on the server's own page, and the
 token is kept in `.waku/mcp-auth/` — nothing to request, nothing to paste. That
 example is [Waku Memory](https://waku.one), which is where this pays off: write
 something in one agent and a different one can read it back. Any server that
 speaks MCP works the same way, with `auth_env` instead if it wants an API key.
+
+Carry your skills to Claude Code and Codex too: `waku skill export --to claude,codex`.
 
 Details, including the local-only demo server: **[docs/integrations.md](docs/integrations.md)**.
 
