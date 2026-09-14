@@ -10,6 +10,7 @@ imports from `lab/`, and `lab/` never ships to PyPI.
 | [kimi-k3/](kimi-k3/README.md) | What makes Kimi K3 fast and cheap, and how does it do on Waku's own tasks? |
 | [pi-agent/](pi-agent/README.md) | Who owns an agent's context: the vendor, or you? |
 | [memory-native/](memory-native/README.md) | What do mem0, Zep, LangMem and Supabase do on their own terms, before any comparison with Waku? |
+| [one-memory-every-agent/](one-memory-every-agent/README.md) | Can one memory follow you across Grok Bot, Muse Code, Claude Code, Codex and the Waku agent? |
 
 ## Start a topic
 

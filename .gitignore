@@ -35,3 +35,6 @@ docs/proposals/*.html
 
 # DeepEval writes a telemetry file here on every run
 .deepeval/
+
+# built by lab/one-memory-every-agent/build_grok_plugin.py
+lab/one-memory-every-agent/grok-plugin/
