@@ -6,8 +6,8 @@ Codex, Grok Bot and Muse Code. If each of them finds the same fact, one memory
 reaches every agent.
 
     pip install 'waku-agent[mcp]' && waku connect waku-memory      # once
-    python lab/one-memory-every-agent/check_memory.py              # save + search
-    python lab/one-memory-every-agent/check_memory.py --forget ID  # remove it afterwards
+    uv run python lab/one-memory-every-agent/check_memory.py              # save + search
+    uv run python lab/one-memory-every-agent/check_memory.py --forget ID  # remove it afterwards
 
 It writes to the Waku Memory account you connected, in the scope
 "lab:one-memory-every-agent", so the check never mixes with your real memories.
@@ -15,12 +15,19 @@ It writes to the Waku Memory account you connected, in the scope
 
 from __future__ import annotations
 
-import argparse
-import json
-import secrets
 import sys
-from datetime import UTC, datetime
-from pathlib import Path
+
+# A bare `python` on macOS is the system 3.9, which cannot import Waku at all.
+# Say so and name the command, rather than failing on the first import.
+if sys.version_info < (3, 11):
+    sys.exit("This needs Waku's own Python (3.11+). Run it with:\n"
+             "  uv run python lab/one-memory-every-agent/check_memory.py")
+
+import argparse  # noqa: E402
+import json  # noqa: E402
+import secrets  # noqa: E402
+from datetime import UTC, datetime  # noqa: E402
+from pathlib import Path  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))  # repo root, for waku/
 
@@ -86,7 +93,7 @@ def main() -> int:
         print(f'  "Search Waku Memory for {word} and quote what it says."')
         print("  Claude Code · Codex · Muse Code · Grok Bot")
         print("\nRecord each answer in the What we found table of this topic's README.")
-        print(f"Afterwards: python lab/one-memory-every-agent/check_memory.py --forget {memory_id}")
+        print(f"Afterwards: uv run python lab/one-memory-every-agent/check_memory.py --forget {memory_id}")
         return 0 if hits else 1
     finally:
         bridge.close()

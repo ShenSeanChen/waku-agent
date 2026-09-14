@@ -30,9 +30,12 @@ Verified against: waku-agent 0.1.8 connecting to Waku Memory's MCP server, 2026-
 ## Run it
 
 ```bash
-pip install 'waku-agent[mcp]' && waku connect waku-memory     # once
-python lab/one-memory-every-agent/check_memory.py              # save one fact, search it back
+uv pip install -e '.[mcp]' && uv run waku connect waku-memory    # once, in a checkout
+uv run python lab/one-memory-every-agent/check_memory.py           # save one fact, search it back
 ```
+
+Use `uv run python`, not a bare `python`: on macOS that is the system 3.9,
+and Waku needs 3.11 or newer.
 
 The script saves one fact with a unique code word, in the scope
 `lab:one-memory-every-agent` so it never mixes with your real memories. It
@@ -42,7 +45,7 @@ agents. `--forget <id>` removes the fact afterwards.
 Grok Bot gets Waku's skills as a plugin folder:
 
 ```bash
-python lab/one-memory-every-agent/build_grok_plugin.py        # writes grok-plugin/, ignored by git
+uv run python lab/one-memory-every-agent/build_grok_plugin.py    # writes grok-plugin/, ignored by git
 ```
 
 The folder holds `skills/` and a `.mcp.json` that names Waku Memory's server
