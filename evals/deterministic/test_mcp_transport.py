@@ -5,7 +5,7 @@ The connector was stdio-only until 2026-08-26: `_connect_all` built
 reached at all. This file pins the branch that fixed it.
 
 Nothing here touches the network. The stdio case spawns the demo server that
-ships in `examples/`; the HTTP case spawns that same server in
+lives in `evals/fixtures/`; the HTTP case spawns that same server in
 `streamable-http` mode on a loopback port. Both are real MCP sessions over a
 real transport — not mocks — which is the point: the two bugs this connector
 has actually had (an SDK rename, and a transport that was never implemented)
@@ -37,7 +37,7 @@ from waku.tools.mcp_client import MCPBridge, _model_safe_name
 pytest.importorskip("mcp", reason="the MCP connector is an optional extra")
 
 REPO = Path(__file__).resolve().parents[2]
-DEMO = REPO / "examples" / "mcp_demo_server.py"
+DEMO = REPO / "evals" / "fixtures" / "mcp_demo_server.py"
 
 
 def _bridge(spec: dict) -> MCPBridge:

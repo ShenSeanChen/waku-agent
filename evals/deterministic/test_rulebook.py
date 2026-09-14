@@ -10,17 +10,24 @@ from __future__ import annotations
 
 import ast
 import re
+import tomllib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 DOCS = ROOT / "docs"
 CONTEXT = DOCS / "context"
+LAB = ROOT / "lab"
+LAB_TOPICS = sorted(p for p in LAB.iterdir() if p.is_dir() and not p.name.startswith(("_", ".")))
+PLAYBOOK = ("The question", "What we connect", "Run it", "What we found", "Video angle", "Graduation")
 RULEBOOK = [
     ROOT / "AGENTS.md",
     ROOT / "CONTRIBUTING.md",
     DOCS / "README.md",
     DOCS / "status.md",
     *sorted(CONTEXT.glob("*.md")),
+    ROOT / "examples" / "README.md",
+    LAB / "README.md",
+    *(topic / "README.md" for topic in LAB_TOPICS),
 ]
 
 LINK = re.compile(r"\[[^\]]*\]\(([^)\s]+)\)")
@@ -94,19 +101,66 @@ def test_status_is_short_and_dated():
     assert re.search(r"\*\*Last updated:\*\* \d{4}-\d{2}-\d{2}", text)
 
 
-def test_waku_never_imports_examples():
-    offenders = []
-    for py in (ROOT / "waku").rglob("*.py"):
-        for node in ast.walk(ast.parse(py.read_text(encoding="utf-8"))):
-            if isinstance(node, ast.Import):
-                names = [alias.name for alias in node.names]
-            elif isinstance(node, ast.ImportFrom) and node.module:
-                names = [node.module]
-            else:
-                continue
-            if any(n == "examples" or n.startswith("examples.") for n in names):
-                offenders.append(str(py.relative_to(ROOT)))
-    assert not offenders, f"waku/ must not import examples/: {offenders}"
+def _reaches_outside(node: ast.AST) -> bool:
+    """True for an import of examples/lab, or a path literal that points there."""
+    if isinstance(node, ast.Import):
+        names = [alias.name for alias in node.names]
+    elif isinstance(node, ast.ImportFrom) and node.module:
+        names = [node.module]
+    elif isinstance(node, ast.Constant) and isinstance(node.value, str):
+        names = [node.value.replace("/", ".")]
+    else:
+        return False
+    return any(n in ("examples", "lab") or n.startswith(("examples.", "lab.")) for n in names)
+
+
+def test_product_and_evals_never_reach_into_examples_or_lab():
+    """The dependency runs one way: product code and the gate never import,
+    run or read anything in examples/ or lab/ (conventions §6, rules 1 and 3)."""
+    this = Path(__file__).resolve()
+    offenders = sorted({
+        str(py.relative_to(ROOT))
+        for top in ("waku", "evals")
+        for py in (ROOT / top).rglob("*.py")
+        if py.resolve() != this
+        for node in ast.walk(ast.parse(py.read_text(encoding="utf-8")))
+        if _reaches_outside(node)
+    })
+    assert not offenders, f"these reach into examples/ or lab/: {offenders}"
+
+
+def test_lab_topics_follow_the_playbook():
+    assert LAB_TOPICS, "lab/ has no topics"
+    problems = []
+    for topic in LAB_TOPICS:
+        readme = topic / "README.md"
+        if not readme.exists():
+            problems.append(f"{topic.name}: no README.md")
+            continue
+        text = readme.read_text(encoding="utf-8")
+        headings = {line[3:].strip() for line in text.splitlines() if line.startswith("## ")}
+        missing = [h for h in PLAYBOOK if not any(x.startswith(h) for x in headings)]
+        if missing:
+            problems.append(f"{topic.name}: missing {missing}")
+        if not re.search(r"Verified against: .+, \d{4}-\d{2}-\d{2}", text):
+            problems.append(f"{topic.name}: no 'Verified against: <tool> <version>, <date>' line")
+    assert not problems, "copy lab/_template/README.md:\n" + "\n".join(problems)
+
+
+def test_lab_never_ships():
+    build = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["tool"]["hatch"]["build"]
+    assert build["targets"]["wheel"]["packages"] == ["waku"]
+    assert "lab" in build["targets"]["sdist"]["exclude"]
+
+
+def test_no_retired_waku_memory_address():
+    """Waku Memory's MCP server is https://api.waku.one/mcp. The address before
+    it now refuses clients, so a doc that still shows it hands readers a setup
+    that cannot work."""
+    docs = [ROOT / "README.md", *DOCS.rglob("*.md"), *(ROOT / "examples").rglob("*"), *LAB.rglob("*.md")]
+    stale = [str(p.relative_to(ROOT)) for p in docs
+             if p.is_file() and "cloudfront.net" in p.read_text(encoding="utf-8", errors="ignore")]
+    assert not stale, f"use https://api.waku.one/mcp in: {stale}"
 
 
 def test_no_emoji_in_rulebook_or_readme():

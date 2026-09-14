@@ -78,8 +78,8 @@ Concretely, these get declined **even when the code is good**:
 - **A rename.** The name is tied to the videos, the PyPI package and the
   assistant's own identity. Fork it and rename freely — MIT only asks that you
   keep the attribution line.
-- **Material made for a video about another project** — whiteboards, write-ups or demos.
-  `docs/` holds what explains this codebase; see [conventions §6](docs/context/conventions.md#6-examples-and-video-material).
+- **Material about another project in `docs/` or the product** — whiteboards, write-ups or
+  demos made for a video belong in `lab/`; see [conventions §6](docs/context/conventions.md#6-examples-and-video-material).
 
 None of this is about the quality of your code. It's about what everyone who
 installs waku has to carry.

@@ -22,7 +22,7 @@ caps it at 100 lines, so the detail lives in the files it points to.
 | change how the dashboard looks | [docs/context/design-system.md](docs/context/design-system.md) |
 | change dashboard JavaScript or CSS | [waku/ops/static/README.md](waku/ops/static/README.md) |
 | write a doc, UI copy, a commit message or a SKILL.md | [docs/context/writing-rules.md](docs/context/writing-rules.md) |
-| add to `examples/` | [conventions §6](docs/context/conventions.md#6-examples-and-video-material) |
+| add a lesson to `examples/` or a topic to `lab/` | [lab/README.md](lab/README.md), then [conventions §6](docs/context/conventions.md#6-examples-and-video-material) |
 | hit something surprising | [docs/context/gotchas.md](docs/context/gotchas.md), and add it if it is missing |
 
 ## Hard rules
@@ -38,7 +38,8 @@ caps it at 100 lines, so the detail lives in the files it points to.
    OpenAI clients. Anything else goes behind an extra (`[voice]`, `[telegram]`).
 4. **Every behaviour change gets a deterministic eval** in `evals/deterministic/`
    (0/1, offline). A bug fix adds the case that would have caught it.
-5. **Nothing under `waku/` imports from `examples/`.**
+5. **Nothing under `waku/` or `evals/` imports from `examples/` or `lab/`,** and
+   `lab/` never ships to PyPI.
 6. **No emojis** in the dashboard, CLI output or docs prose.
 7. **The Waku brand is not MIT.** The design system, the Waku mark and the names
    are listed in `LICENSE-BRAND`. List any new brand file there, and never copy
@@ -60,7 +61,7 @@ The `validate` workflow runs on every PR. Each of these fails it:
 | `.env.example` out of step with the integrations registry | `scripts/generate_env_example.py` |
 | an edited design copy, a colour literal, an old token name | `evals/deterministic/test_design_system.py` |
 | a second version number | `evals/deterministic/test_version.py` |
-| this file over 100 lines, a broken rulebook link, an unindexed doc, an import from `examples/`, an emoji in the rulebook or README | `evals/deterministic/test_rulebook.py` |
+| this file over 100 lines, a broken rulebook link, an unindexed doc, an import from `examples/` or `lab/`, a lab topic without its playbook, a retired Waku Memory address, an emoji in the rulebook or README | `evals/deterministic/test_rulebook.py` |
 | any other failing deterministic eval | `pytest evals/deterministic` |
 
 Everything else in the rulebook is checked in review. The judge evals in
