@@ -415,6 +415,7 @@ The `waku` command is installed with the package; the `make` targets are equival
 | `waku voice` | talk to it — hands-free "waku waku" (or push-to-talk) |
 | `waku telegram` | message it from your phone (standalone) |
 | `waku brief` | morning briefing from Calendar + Mail + memory |
+| `waku deliberate "<task>"` | two brains (Claude Code + DeepSeek) deliberate in parallel, a Codex decider reconciles; add `--build` to build with Sonnet first |
 | `make trace` | deep trace waterfalls (Phoenix) at localhost:6006 |
 | `make eval` | deterministic evals (0/1, no judge) |
 | `make eval-judge` | LLM-as-judge evals (scored %) |

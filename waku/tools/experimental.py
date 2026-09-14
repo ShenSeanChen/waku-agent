@@ -1,31 +1,33 @@
 """Roadmap tools — the whiteboard boxes beyond the flagship task.
 
-One of them is now ALIVE: `delegate_task` (the Sub-Agents box) hands a coding
-job to pi (https://github.com/earendil-works/pi) — a minimal open-source coding
-agent by Mario Zechner — through its headless print mode (`pi -p "task"`).
-The division of labor is the teaching point: Waku is the orchestrator (memory,
-working-memory assembly, evals, the human's context) and pi is the specialist
-contractor (read/bash/edit/write, pure coding craft). Waku hires; pi codes;
-Waku's release gate can then inspect the work.
+Two of them are now ALIVE:
 
-v2 is now wired: when pi supports `--mode json` we run it that way and get its
-native event stream on stdout — one JSON object per line. Two things fall out:
+  * `delegate_task` (the Sub-Agents box) hands a coding job to a specialist
+    coding agent — pi, Claude Code, or Codex — through each one's headless
+    print mode. The division of labor is the teaching point: Waku is the
+    orchestrator (memory, working-memory assembly, evals, the human's context)
+    and the sub-agent is the specialist contractor (read/bash/edit/write, pure
+    coding craft). Waku hires; the agent codes; Waku's release gate can then
+    inspect the work.
 
-  * OBSERVABILITY — curated events (tool calls, text deltas, turn ends) are
-    relayed through the loop's observer as kind="subagent", so the dashboard
-    can show the sub-agent working live instead of a black box that returns a
-    summary. (pi's own critique of built-in sub-agents, answered.)
-  * HONEST COST — pi's per-message token usage is appended to the SAME
-    usage.jsonl ledger as the loop's own calls (kind="subagent"). Before this,
-    a delegated coding run burned tokens the arena never counted, silently
-    understating every coding score's cost.
+    Drivers:
 
-Older pi builds without --mode json fall back to the plain `-p` text path.
+      pi      pi -p <task> -a --no-session [--mode json]        (probed)
+      claude  claude -p <task> --model <m> --output-format stream-json [--effort e]
+      codex   codex exec --json -m <m> -s workspace-write <task>
 
-The other three boxes are still SKELETONS on purpose: each shows the *shape* of
-a capability and returns an honest "coming soon" (terminal/browser tools need a
-real sandbox + safety surface first). Everything here is OFF by default; set
-`WAKU_EXPERIMENTAL=1` to register these tools.
+    Each json stream is parsed into the SAME curated relays (text / tool /
+    turn_end / usage) so the dashboard shows the sub-agent working and the
+    permanent usage.jsonl ledger sees its spend, whichever agent is driving.
+    The raw event stream is always preserved next to the transcript.
+
+  * The other three boxes are still SKELETONS on purpose: each shows the *shape*
+    of a capability and returns an honest "coming soon" (terminal/browser tools
+    need a real sandbox + safety surface first).
+
+Everything here is OFF by default; set `WAKU_EXPERIMENTAL=1` to register these
+tools. The `agent`/`model`/`effort` parameters on delegate_task carry the
+per-call brain: model ids are the caller's own, never hardcoded here.
 """
 
 from __future__ import annotations
@@ -45,6 +47,8 @@ from waku.tools._env import delegate_env as _delegate_env
 from waku.tools.registry import Tool
 
 PI_INSTALL_HINT = "npm install -g --ignore-scripts @earendil-works/pi-coding-agent"
+CLAUDE_INSTALL_HINT = "npm install -g @anthropic-ai/claude-code"
+CODEX_INSTALL_HINT = "npm install -g @openai/codex"
 
 # Does this pi understand --mode json? Checked once per process (via --help so
 # no model call is made); None = not probed yet.
@@ -83,14 +87,18 @@ def _project_pi_flags() -> list[str]:
     return flags
 
 
-def _record_subagent_usage(settings: Settings, tin: int, tout: int) -> None:
+def _record_subagent_usage(settings: Settings, tin: int, tout: int,
+                           provider: str = "", model: str = "") -> None:
     """Append the sub-agent's spend to the SAME permanent ledger the loop uses
     (see Tracer._record_usage — tokens are the ground truth, dollars are
-    derived). kind="subagent" so the ledger stays auditable line by line."""
+    derived). kind="subagent" so the ledger stays auditable line by line.
+    `provider`/`model` override the loop's own when the sub-agent runs on a
+    different brain (claude/codex) than the loop."""
     if not (tin or tout):
         return
     record = {"ts": datetime.now(UTC).isoformat(timespec="milliseconds"),
-              "provider": settings.provider, "model": settings.model or "",
+              "provider": provider or settings.provider,
+              "model": model or settings.model or "",
               "kind": "subagent", "in": tin, "out": tout}
     path = settings.home / "usage.jsonl"
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -98,14 +106,20 @@ def _record_subagent_usage(settings: Settings, tin: int, tout: int) -> None:
         f.write(json.dumps(record) + "\n")
 
 
-def _run_pi_json(cmd: list, workdir: Path, timeout: int, notify):
-    """Run pi in --mode json, relaying curated events through `notify` as they
-    stream. Returns (returncode, reply_text, stderr, raw_lines, tin, tout,
-    cost) — returncode None means we killed it at the deadline.
+def _run_json_stream(cmd: list, workdir: Path, timeout: int, notify, agent: str,
+                     parse) -> tuple:
+    """Run a coding agent in JSON-stream mode, relaying curated events through
+    `notify` as they stream. Returns (returncode, reply_text, stderr, raw_lines,
+    tin, tout, cost) — returncode None means we killed it at the deadline.
 
-    A reader thread feeds a queue so the deadline holds even if pi goes silent
-    mid-line (a blocking readline can't be interrupted; a queue.get(timeout)
-    can)."""
+    `parse(event) -> dict | None` maps ONE json line to update keys:
+      delta (text to relay + fallback reply) · tools (list of tool names)
+      text (final reply, overwrites) · usage {"in","out"} · cost (float)
+      turn_end (True → relay the turn_end marker with tokens-so-far)
+
+    A reader thread feeds a queue so the deadline holds even if the agent goes
+    silent mid-line (a blocking readline can't be interrupted; a queue.get with
+    a timeout can)."""
     proc = subprocess.Popen(cmd, cwd=workdir, stdin=subprocess.DEVNULL,
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
                             env=_delegate_env())
@@ -115,7 +129,7 @@ def _run_pi_json(cmd: list, workdir: Path, timeout: int, notify):
     def _pump_stdout():
         for ln in proc.stdout:
             lines.put(ln)
-        lines.put(None)  # sentinel: stdout closed, pi is done
+        lines.put(None)  # sentinel: stdout closed, agent is done
 
     def _pump_stderr():
         stderr_parts.append(proc.stderr.read() or "")
@@ -125,6 +139,7 @@ def _run_pi_json(cmd: list, workdir: Path, timeout: int, notify):
 
     deadline = time.monotonic() + timeout
     raw, reply, tin, tout, cost = [], "", 0, 0, 0.0
+    deltas: list[str] = []
     while True:
         remaining = deadline - time.monotonic()
         if remaining <= 0:
@@ -134,40 +149,162 @@ def _run_pi_json(cmd: list, workdir: Path, timeout: int, notify):
             line = lines.get(timeout=min(0.5, remaining))
         except queue.Empty:
             continue
-        if line is None:  # stdout closed — pi is done
+        if line is None:  # stdout closed — agent is done
             break
         raw.append(line)
         try:
             ev = json.loads(line)
         except json.JSONDecodeError:
             continue
-        kind = ev.get("type", "")
-        if kind == "message_update":
-            delta = (ev.get("assistantMessageEvent") or {})
-            if delta.get("type") == "text_delta" and delta.get("delta"):
-                notify("subagent", {"agent": "pi", "type": "text", "delta": delta["delta"]})
-        elif kind == "message_end":
-            msg = ev.get("message") or {}
-            if msg.get("role") != "assistant":
-                continue
-            usage = msg.get("usage") or {}
-            tin += int(usage.get("input", 0) or 0)
-            tout += int(usage.get("output", 0) or 0)
-            cost += float(((usage.get("cost") or {}).get("total", 0)) or 0)
-            texts, tools_called = [], []
-            for c in msg.get("content") or []:
-                if c.get("type") == "text":
-                    texts.append(c.get("text", ""))
-                elif c.get("type") == "toolCall":
-                    tools_called.append(c.get("name", "?"))
-            if texts:
-                reply = "\n".join(t for t in texts if t)
-            for name in tools_called:
-                notify("subagent", {"agent": "pi", "type": "tool", "tool": name})
-        elif kind == "turn_end":
-            notify("subagent", {"agent": "pi", "type": "turn_end",
+        upd = parse(ev) or {}
+        if upd.get("delta"):
+            deltas.append(upd["delta"])
+            notify("subagent", {"agent": agent, "type": "text", "delta": upd["delta"]})
+        for name in upd.get("tools") or []:
+            notify("subagent", {"agent": agent, "type": "tool", "tool": name})
+        if "text" in upd:
+            reply = upd["text"]
+        u = upd.get("usage") or {}
+        tin += int(u.get("in", 0) or 0)
+        tout += int(u.get("out", 0) or 0)
+        cost += float(upd.get("cost", 0) or 0)
+        if upd.get("turn_end"):
+            notify("subagent", {"agent": agent, "type": "turn_end",
                                 "tokens_in": tin, "tokens_out": tout})
+    if not reply and deltas:  # no explicit final text → reconstruct from deltas
+        reply = "".join(deltas)
     return proc.wait(), reply, "".join(stderr_parts), raw, tin, tout, cost
+
+
+def _parse_pi_event(ev: dict) -> dict | None:
+    """pi's --mode json protocol → the curated update shape."""
+    kind = ev.get("type", "")
+    if kind == "message_update":
+        delta = (ev.get("assistantMessageEvent") or {})
+        if delta.get("type") == "text_delta" and delta.get("delta"):
+            return {"delta": delta["delta"]}
+    elif kind == "message_end":
+        msg = ev.get("message") or {}
+        if msg.get("role") != "assistant":
+            return None
+        usage = msg.get("usage") or {}
+        upd = {"usage": {"in": usage.get("input", 0) or 0, "out": usage.get("output", 0) or 0},
+               "cost": float((usage.get("cost") or {}).get("total", 0) or 0),
+               "tools": [c.get("name", "?") for c in msg.get("content") or []
+                         if c.get("type") == "toolCall"]}
+        texts = [c.get("text", "") for c in msg.get("content") or [] if c.get("type") == "text"]
+        if texts:
+            upd["text"] = "\n".join(t for t in texts if t)
+        return upd
+    elif kind == "turn_end":
+        return {"turn_end": True}
+    return None
+
+
+def _parse_claude_event(ev: dict) -> dict | None:
+    """Claude Code --output-format stream-json → the curated update shape.
+
+    assistant events carry the working text/tool deltas; the result event is
+    the terminal message and carries the final text + usage + cost."""
+    kind = ev.get("type", "")
+    if kind == "assistant":
+        content = (ev.get("message") or {}).get("content") or []
+        upd: dict = {}
+        for c in content:
+            if c.get("type") == "text" and c.get("text"):
+                upd["delta"] = c["text"]
+            elif c.get("type") == "tool_use":
+                upd.setdefault("tools", []).append(c.get("name", "?"))
+        return upd or None
+    if kind == "result":
+        usage = ev.get("usage") or {}
+        return {"text": ev.get("result", "") or "",
+                "usage": {"in": usage.get("input_tokens", 0) or 0,
+                          "out": usage.get("output_tokens", 0) or 0},
+                "cost": float(ev.get("total_cost_usd", 0) or 0),
+                "turn_end": True}
+    return None
+
+
+def _parse_codex_event(ev: dict) -> dict | None:
+    """Codex `--json` (JSONL) → the curated update shape. Tolerant: the final
+    assistant message supplies the reply, any usage-bearing event supplies the
+    tokens, and a terminal event closes the turn. Raw lines are preserved
+    regardless, so an unrecognized schema still leaves a complete record."""
+    kind = ev.get("type", "")
+    item = ev.get("item") or {}
+    if (kind in ("item.completed", "item.started")
+            and item.get("type") in ("message", "agent_message")
+            and item.get("role") == "assistant"):
+        upd: dict = {}
+        texts = []
+        for c in item.get("content") or []:
+            t = c.get("type")
+            if t in ("output_text", "text") and c.get("text"):
+                texts.append(c["text"])
+            elif t in ("function_call", "tool_call", "local_shell_call"):
+                upd.setdefault("tools", []).append(c.get("name") or c.get("call_id") or "?")
+        if texts:
+            upd["text"] = "\n".join(texts)
+        return upd or None
+    usage = ev.get("usage") or {}
+    tin = usage.get("input_tokens", 0) or usage.get("input", 0) or 0
+    tout = usage.get("output_tokens", 0) or usage.get("output", 0) or 0
+    if tin or tout:
+        return {"usage": {"in": tin, "out": tout}}
+    if kind in ("turn_context", "turn.completed", "run.completed", "session.completed"):
+        return {"turn_end": True}
+    return None
+
+
+def _pi_cmd(exe: str, settings: Settings, task: str, model: str, effort: str) -> list[str]:
+    """pi runs on the SAME brain the loop is using by default, so the sub-agent's
+    coding is this model's coding (that's the point of a per-model comparison).
+    An explicit `model` wins. pi natively speaks every provider we pin."""
+    from waku.ops.coding_eval import PI_PROVIDER, _key_for
+    cmd = [exe]
+    pi_prov = PI_PROVIDER.get(settings.provider)
+    if pi_prov and (model or settings.model):
+        cmd += ["--provider", pi_prov, "--model", model or settings.model]
+        key = _key_for(settings.provider)
+        if key:
+            cmd += ["--api-key", key]
+    if _pi_supports_json(exe):
+        cmd += ["--mode", "json"]
+    cmd += _project_pi_flags()   # the repo's own extensions + skills ride along
+    cmd += ["-p", task, "-a", "--no-session"]  # headless; stdin=DEVNULL downstream
+    return cmd
+
+
+def _claude_cmd(exe: str, settings: Settings, task: str, model: str, effort: str) -> list[str]:
+    cmd = [exe, "-p", task, "--output-format", "stream-json"]
+    if model:
+        cmd += ["--model", model]
+    if effort:
+        cmd += ["--effort", effort]   # low | medium | high | xhigh | max
+    return cmd
+
+
+def _codex_cmd(exe: str, settings: Settings, task: str, model: str, effort: str) -> list[str]:
+    # -s workspace-write: the agent may edit its workspace (the repo/cwd) but
+    # nothing else; --skip-git-repo-check so a scratch workspace still runs.
+    cmd = [exe, "exec", "--json", "-s", "workspace-write", "--skip-git-repo-check"]
+    if model:
+        cmd += ["-m", model]
+    cmd += [task]
+    return cmd
+
+
+# agent name → how to find, launch, and parse it. `stream` is a callable over
+# the resolved binary: pi probes for --mode json, claude/codex always stream.
+_DRIVERS = {
+    "pi": {"bin": "pi", "hint": PI_INSTALL_HINT, "cmd": _pi_cmd,
+           "parse": _parse_pi_event, "stream": _pi_supports_json},
+    "claude": {"bin": "claude", "hint": CLAUDE_INSTALL_HINT, "cmd": _claude_cmd,
+               "parse": _parse_claude_event, "stream": lambda _exe: True, "provider": "anthropic"},
+    "codex": {"bin": "codex", "hint": CODEX_INSTALL_HINT, "cmd": _codex_cmd,
+              "parse": _parse_codex_event, "stream": lambda _exe: True, "provider": "openai"},
+}
 
 # Still-skeleton boxes: name → what it will do, and its box on the whiteboard.
 PLANNED = [
@@ -184,22 +321,28 @@ PLANNED = [
 
 
 def make_delegate_tool(settings: Settings) -> Tool:
-    """The Sub-Agents box, wired for real: delegate a coding task to pi.
+    """The Sub-Agents box, wired for real: delegate a coding task to pi, Claude
+    Code, or Codex.
 
     Same honesty contract as every Waku tool — the return string says exactly
-    what happened (done / failed / timed out / pi not installed), short enough
-    for the voice gateway to speak. The full pi transcript goes to the outbox.
-    """
+    what happened (done / failed / timed out / agent not installed), short enough
+    for the voice gateway to speak. The full transcript goes to the outbox (or
+    the workspace, for a scratch task)."""
 
-    def delegate_task(task: str = "", cwd: str = "", timeout_seconds: int = 0,
+    def delegate_task(task: str = "", agent: str = "pi", model: str = "",
+                      effort: str = "", cwd: str = "", timeout_seconds: int = 0,
                       _notify=None) -> str:
         notify = _notify or (lambda kind, ev: None)
         if not task.strip():
             return ("delegate_task needs a 'task' — a plain-English description of the "
                     "coding job, e.g. 'fix the failing test in this repo'.")
-        pi_bin = shutil.which("pi")
-        if not pi_bin:
-            return f"pi isn't installed, so I can't delegate. Install it with: {PI_INSTALL_HINT}"
+        agent = (agent or "pi").strip().lower()
+        drv = _DRIVERS.get(agent)
+        if drv is None:
+            return f"Unknown agent '{agent}' — pick one of: {', '.join(_DRIVERS)}."
+        exe = shutil.which(drv["bin"])
+        if not exe:
+            return f"{agent} isn't installed, so I can't delegate. Install it with: {drv['hint']}"
 
         from waku.tools import workspace
         if cwd:
@@ -210,40 +353,25 @@ def make_delegate_tool(settings: Settings) -> Tool:
         else:
             # Repo-less task: land it in a dated, documented workspace folder so
             # the scripts survive and are traceable (not a temp dir), then auto-run.
-            workdir = workspace.new_run_folder(settings.model or settings.provider, task)
+            workdir = workspace.new_run_folder(model or settings.model or agent, task)
             in_workspace = True
 
         timeout = int(timeout_seconds) or int(os.getenv("WAKU_DELEGATE_TIMEOUT", "300"))
-        # Run pi on the SAME brain the loop is using, so the sub-agent's coding is
-        # this model's coding (that's the point of a per-model comparison). pi
-        # natively speaks every provider we pin; fall back to pi's own default if
-        # this provider isn't mappable. -a/--no-session = headless; stdin=DEVNULL
-        # so pi never blocks on a TTY it doesn't have under the server.
-        from waku.ops.coding_eval import PI_PROVIDER, _key_for
-        cmd = [pi_bin]
-        pi_prov = PI_PROVIDER.get(settings.provider)
-        if pi_prov and settings.model:
-            cmd += ["--provider", pi_prov, "--model", settings.model]
-            key = _key_for(settings.provider)
-            if key:
-                cmd += ["--api-key", key]
-        json_mode = _pi_supports_json(pi_bin)
-        if json_mode:
-            cmd += ["--mode", "json"]
-        cmd += _project_pi_flags()   # the repo's own extensions + skills ride along
-        cmd += ["-p", task, "-a", "--no-session"]
+        cmd = drv["cmd"](exe, settings, task, model, effort)
+        stream = bool(drv["stream"](exe))
 
         raw_events: list[str] = []
         cost = 0.0
-        if json_mode:
+        if stream:
             try:
-                code, reply, stderr, raw_events, tin, tout, cost = _run_pi_json(
-                    cmd, workdir, timeout, notify)
+                code, reply, stderr, raw_events, tin, tout, cost = _run_json_stream(
+                    cmd, workdir, timeout, notify, agent, drv["parse"])
             except OSError as exc:
-                return f"Couldn't launch pi: {exc}"
-            _record_subagent_usage(settings, tin, tout)   # the arena's cost now sees pi
+                return f"Couldn't launch {agent}: {exc}"
+            _record_subagent_usage(settings, tin, tout,
+                                   provider=drv.get("provider", ""), model=model)
             if code is None:
-                return (f"pi was still working after {timeout}s so I stopped it — try a smaller "
+                return (f"{agent} was still working after {timeout}s so I stopped it — try a smaller "
                         f"task, or raise WAKU_DELEGATE_TIMEOUT.")
             stdout_text = reply
         else:
@@ -252,18 +380,19 @@ def make_delegate_tool(settings: Settings) -> Tool:
                                         capture_output=True, text=True, timeout=timeout,
                                         check=False, env=_delegate_env())
             except subprocess.TimeoutExpired:
-                return (f"pi was still working after {timeout}s so I stopped it — try a smaller "
+                return (f"{agent} was still working after {timeout}s so I stopped it — try a smaller "
                         f"task, or raise WAKU_DELEGATE_TIMEOUT.")
             except OSError as exc:
-                return f"Couldn't launch pi: {exc}"
+                return f"Couldn't launch {agent}: {exc}"
             code, stdout_text, stderr = result.returncode, result.stdout, result.stderr
 
-        # Full pi transcript alongside the work (workspace) or in the outbox;
-        # in json mode the raw event stream is preserved too (pi-events.jsonl).
-        transcript = (workdir / "pi-transcript.log") if in_workspace else (
+        # Full transcript alongside the work (workspace) or in the outbox; in
+        # json mode the raw event stream is preserved too (<agent>-events.jsonl).
+        tname = f"{agent}-transcript.log"
+        transcript = (workdir / tname) if in_workspace else (
             settings.home / "outbox" / f"delegate-{datetime.now():%Y%m%d-%H%M%S}.log")
         transcript.parent.mkdir(parents=True, exist_ok=True)
-        transcript.write_text(f"$ {' '.join(cmd[:-4])} -p {task!r}   (cwd: {workdir})\n\n"
+        transcript.write_text(f"$ {' '.join(cmd)}   (cwd: {workdir})\n\n"
                               f"--- reply ---\n{stdout_text}\n--- stderr ---\n{stderr}",
                               encoding="utf-8")
         if raw_events:
@@ -272,21 +401,21 @@ def make_delegate_tool(settings: Settings) -> Tool:
 
         if code != 0:
             err = (stderr or stdout_text).strip()[-200:] or "no output"
-            return f"pi hit an error: {err} (full log: {transcript})"
-        summary = (stdout_text or "").strip()[-500:] or "(pi finished but printed nothing)"
+            return f"{agent} hit an error: {err} (full log: {transcript})"
+        summary = (stdout_text or "").strip()[-500:] or f"({agent} finished but printed nothing)"
         if cost:
             summary += f"\n(sub-agent spend: ~${cost:.4f}, logged to usage.jsonl)"
 
         if not in_workspace:
-            return f"pi finished the delegated task in {workdir}.\n{summary}\n(full log: {transcript})"
+            return f"{agent} finished the delegated task in {workdir}.\n{summary}\n(full log: {transcript})"
 
         # Scratch task: document the run (dated MANIFEST) and auto-run the script,
         # feeding the run result back into the loop so the model can react to it.
         files = workspace.created_files(workdir)
         run = workspace.autorun(workdir)
-        workspace.write_manifest(workdir, settings.provider, settings.model or "(default)", task, files, run)
+        workspace.write_manifest(workdir, settings.provider, model or settings.model or agent, task, files, run)
         made = ", ".join(p.name for p in files[:6]) or "no files"
-        lines = [f"pi finished. Files saved to {workdir} ({made}).", summary]
+        lines = [f"{agent} finished. Files saved to {workdir} ({made}).", summary]
         if run is not None:
             entry, code, out, secs = run
             verdict = "still running (interactive)" if code is None else ("ran clean" if code == 0 else f"exited {code}")
@@ -296,24 +425,31 @@ def make_delegate_tool(settings: Settings) -> Tool:
     return Tool(
         name="delegate_task",
         description=("Delegate a CODING task (fixing tests, multi-file edits, writing "
-                     "programs) to pi, a specialist coding agent running locally on this "
-                     "machine. Give it a self-contained task and, when the work targets an "
-                     "existing project, that project's absolute path as cwd. Use this for "
-                     "real programming work instead of describing code in chat."),
+                     "programs) to a specialist coding agent running locally on this "
+                     "machine: pi, Claude Code, or Codex. Give it a self-contained task "
+                     "and, when the work targets an existing project, that project's "
+                     "absolute path as cwd. Use this for real programming work instead "
+                     "of describing code in chat."),
         input_schema={
             "type": "object",
             "properties": {
                 "task": {"type": "string",
                          "description": "Plain-English description of the coding job, self-contained"},
+                "agent": {"type": "string", "enum": ["pi", "claude", "codex"],
+                          "description": "Which coding agent to hire (default pi)"},
+                "model": {"type": "string",
+                          "description": "Model id for the sub-agent (claude/codex); pi uses the loop's model"},
+                "effort": {"type": "string",
+                           "description": "Reasoning effort (claude: low|medium|high|xhigh|max)"},
                 "cwd": {"type": "string",
                         "description": "Absolute path of the repo/directory to work in; omit for a scratch sandbox"},
                 "timeout_seconds": {"type": "integer",
-                                    "description": "Max seconds to let pi work (default 300)"},
+                                    "description": "Max seconds to let the sub-agent work (default 300)"},
             },
             "required": ["task"],
         },
         fn=delegate_task,
-        wants_notify=True,   # streams pi's live events through the loop's observer
+        wants_notify=True,   # streams the sub-agent's live events through the loop's observer
     )
 
 
@@ -328,7 +464,7 @@ def _stub(name: str, description: str, box: str) -> Tool:
 
 def make_tools(settings: Settings) -> list[Tool]:
     """Experimental tools, registered only when WAKU_EXPERIMENTAL=1: the live
-    pi delegation plus the remaining skeletons."""
+    delegation (pi/claude/codex) plus the remaining skeletons."""
     return [make_delegate_tool(settings)] + [
         _stub(p["name"], p["description"], p["box"]) for p in PLANNED
     ]

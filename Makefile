@@ -31,6 +31,9 @@ brief:          ## morning briefing from calendar + mail + memory (as a LOOP)
 gather:         ## same job as a GRAPH: 4 sources in parallel, then one digest
 	$(PY) -m waku gather
 
+deliberate:     ## two brains deliberate, a decider decides: waku deliberate "<task>" [--build]
+	$(PY) -m waku deliberate $(TASK)
+
 # The server holds dashboard.py in memory: static JS/CSS reload on refresh, but
 # Python routes do NOT. After pulling a change that touches dashboard.py (or any
 # imported module), stop this and re-run it, or the UI shows stale backend data.

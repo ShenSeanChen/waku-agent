@@ -13,6 +13,8 @@
   waku brief                 morning briefing (calendar + mail + memory) — as a LOOP
   waku gather                same job as a GRAPH: github, web, calendar and
                              memory fetched together, then one digest
+  waku deliberate "<task>"   two brains deliberate, a decider decides (S6-S8);
+                             add --build to build with Sonnet then review (S9)
   waku skill install <url>   install a community skill
 """
 
@@ -76,6 +78,10 @@ def main() -> None:
         from waku.ops.gather import main as gather_main
 
         gather_main()
+    elif args[0] == "deliberate":
+        from waku.ops.deliberate import main as deliberate_main
+
+        deliberate_main(args[1:])
     elif args[0] == "mcp":
         from waku.tools.mcp_cli import cli_main as mcp_main
 

@@ -34,7 +34,10 @@ from waku.tools._env import delegate_env as _delegate_env
 WORKSPACE_ENV = "WAKU_WORKSPACE"          # root dir; default ./waku_workspace
 AUTORUN_ENV = "WAKU_DELEGATE_AUTORUN"     # "0"/"false"/"no" to disable auto-run
 RUN_TIMEOUT = int(os.getenv("WAKU_AUTORUN_TIMEOUT", "30"))
-_OURS = {"MANIFEST.md", "run.log", "pi-transcript.log"}
+_OURS = {"MANIFEST.md", "run.log",
+         "pi-transcript.log", "pi-transcript-events.jsonl",
+         "claude-transcript.log", "claude-transcript-events.jsonl",
+         "codex-transcript.log", "codex-transcript-events.jsonl"}
 _ENTRY_PREFS = ("main.py", "app.py", "run.py", "game.py")
 
 
