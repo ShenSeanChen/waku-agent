@@ -1,8 +1,6 @@
 """The deliberation graph — two brains think in parallel, a decider chooses.
 
-One graph serves two jobs (design and review), so the review pass follows the
-SAME shape as the design pass — the same pair of brains, the same decider,
-only the prompts differ:
+This file is ONE ROUND of the debate:
 
     START ── brain_a ──┐
           └─ brain_b ──┴─► decide → END
@@ -10,8 +8,14 @@ only the prompts differ:
 brain_a (a coding agent: Claude Code) and brain_b (a direct model call:
 DeepSeek) hold DIFFERENT lenses — architect vs product/systems reviewer — so
 their disagreement is real, not cosmetic. The engine runs them in one wave
-(they share no dependencies). `decide` waits on both and reconciles the two
-positions into ONE output: an ADR in design mode, a verdict in review mode.
+(they share no dependencies); `decide` waits on both.
+
+The LOOP lives in the runner (waku/ops/deliberate.py): it runs this round up
+to N times (default 3), feeding each round's synthesis back to the brains so
+they converge, and the decider only makes the FINAL call on the last round.
+Keeping the loop in the runner keeps this graph the same legible fan-out →
+fan-in shape the engine and dashboard already understand; a round is the atom,
+the runner is the repeat.
 
 Two rules this file obeys:
 
@@ -21,8 +25,8 @@ Two rules this file obeys:
 
 2. A DEAD BRAIN MUST NOT KILL THE DELIBERATION. A node that raises fires no
    edges, so `decide`'s dependencies would never complete and the run would
-   produce nothing. The BINDER (waku/ops/deliberate.py) wraps each brain so it
-   returns honest text instead of raising — the gather lesson, applied here.
+   produce nothing. The BINDER wraps each brain so it returns honest text
+   instead of raising — the gather lesson, applied here.
 """
 
 from __future__ import annotations
@@ -31,7 +35,7 @@ from collections.abc import Callable
 
 from waku.graph.engine import END, START, Graph, Node
 
-# --- design mode (S6–S8): two positions → one decision -----------------------
+# --- design mode: round 1 (independent positions) ----------------------------
 
 BRAIN_A_PROMPT = """\
 You are the SOFTWARE ARCHITECT on a two-person team. For the task below, give
@@ -51,20 +55,7 @@ Be concrete and decisive.
 Task:
 {task}"""
 
-DECIDE_PROMPT = """\
-Two specialists considered this task and reached these positions.
-
-POSITION A (software architect):
-{position_a}
-
-POSITION B (product and systems reviewer):
-{position_b}
-
-Synthesize ONE decision: the recommendation, what both agree on, where they
-disagree and which side you take, and the residual risk. Be decisive — no
-"on the other hand" without a call."""
-
-# --- review mode (S9): two reviews → one verdict -----------------------------
+# --- review mode: round 1 -----------------------------------------------------
 
 REVIEW_PROMPT = """\
 You are the {lens} reviewing work just produced for this task. List what is
@@ -77,8 +68,29 @@ Task:
 Work to review:
 {work}"""
 
-VERDICT_PROMPT = """\
-Two reviewers considered this work and reached these positions.
+# --- debate rounds 2+ (shared by design and review) ---------------------------
+
+BRAIN_REVISE_PROMPT = """\
+You are the {lens} on a two-person team, deliberation round {round} of {max_rounds}.
+Below is your prior position, the other specialist's prior position, and the
+team's last synthesis. Revise your position: converge where the disagreement
+was resolvable, hold your ground where it was not, and be concrete.
+
+{context}
+
+Your prior position:
+{own}
+
+The other specialist's prior position:
+{other}
+
+Last synthesis:
+{critique}"""
+
+# --- decider: intermediate rounds vs the final round (shared) -----------------
+
+SYNTHESIS_PROMPT = """\
+Two specialists considered this task and reached these positions.
 
 POSITION A (software architect):
 {position_a}
@@ -86,8 +98,22 @@ POSITION A (software architect):
 POSITION B (product and systems reviewer):
 {position_b}
 
-Issue ONE verdict: APPROVE or REQUEST CHANGES, then the top concrete changes
-required (numbered), then a one-line justification. Be decisive."""
+Synthesize where they agree and disagree, and name what is still unresolved —
+the critique the team will use to converge next round. Do NOT make the final
+decision yet."""
+
+FINAL_PROMPT = """\
+The two specialists deliberated for {rounds} rounds. Their final positions:
+
+POSITION A (software architect):
+{position_a}
+
+POSITION B (product and systems reviewer):
+{position_b}
+
+This is the FINAL round — issue the single, final decision: the recommendation,
+what they converged on, where they still disagree and which side you take, and
+the residual risk. Be decisive."""
 
 
 def build_deliberation_graph(*, brain_a_fn: Callable[[dict], str],

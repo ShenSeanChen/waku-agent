@@ -1,8 +1,12 @@
 """`python -m waku deliberate "<task>"` — the two-brain deliberation, run as a graph.
 
 S6–S8 (design) and S9 (build + review) share ONE graph: two brains hold
-different lenses in parallel, a decider reconciles them. This file is the ONE
-place real callables meet the pure workflow in
+different lenses in parallel, a decider reconciles them. The graph is ONE
+round; this file runs it up to `WAKU_DELIBERATE_MAX_ROUNDS` times (default 3),
+feeding each round's synthesis back to the brains so they converge, and the
+decider only makes the FINAL call on the last round.
+
+This file is the ONE place real callables meet the pure workflow in
 waku/graph/workflows/deliberate.py — mirroring ops/gather.py — so a reviewer
 only has to read one function to know what a deliberation is allowed to touch.
 
@@ -13,6 +17,7 @@ The brains are wired through env (the caller's own model ids), never hardcoded:
     WAKU_DELIBERATE_BRAIN_B          DeepSeek model for brain B (default "deepseek-v4-pro")
     WAKU_DELIBERATE_DECIDER          Codex model for the decider (default "astra")
     WAKU_DELIBERATE_DECIDER_EFFORT   its reasoning effort (default "high")
+    WAKU_DELIBERATE_MAX_ROUNDS       how many rounds before the final decision (default 3)
     WAKU_BUILD_MODEL                 Claude Code model for the S9 build (default "sonnet")
 
 brain_a (Claude Code) and decide (Codex) are `delegate_task` calls — the same
@@ -33,9 +38,10 @@ from waku.graph import run_graph
 from waku.graph.workflows.deliberate import (
     BRAIN_A_PROMPT,
     BRAIN_B_PROMPT,
-    DECIDE_PROMPT,
+    BRAIN_REVISE_PROMPT,
+    FINAL_PROMPT,
     REVIEW_PROMPT,
-    VERDICT_PROMPT,
+    SYNTHESIS_PROMPT,
     build_deliberation_graph,
 )
 
@@ -88,18 +94,43 @@ def _safe(fn, label: str):
     return run
 
 
-def _prompt(kind: str, state: dict) -> str:
-    """Format the right prompt for one brain, given the mode.
-
-    Review mode (state has `work`) labels each brain with its lens; design mode
-    passes the task only."""
+def _context(state: dict) -> str:
+    """The task-and-work block shared by every brain prompt."""
     task = state.get("task", "")
     work = state.get("work", "")
-    if work:
-        return REVIEW_PROMPT.format(lens=_LENSES.get(kind, ""), task=task, work=work)
-    if kind == "brain_a":
-        return BRAIN_A_PROMPT.format(task=task)
-    return BRAIN_B_PROMPT.format(task=task)
+    return f"Task:\n{task}" + (f"\n\nWork to review:\n{work}" if work else "")
+
+
+def _brain_prompt(kind: str, state: dict) -> str:
+    """The right prompt for one brain, given the round and mode.
+
+    Round 1: independent positions (design) or first-pass review (review).
+    Round 2+: revise against the prior positions and the last synthesis."""
+    lens = _LENSES.get(kind, "")
+    if int(state.get("round", 1)) <= 1:
+        if state.get("work"):
+            return REVIEW_PROMPT.format(lens=lens, task=state.get("task", ""),
+                                        work=state.get("work", ""))
+        template = BRAIN_A_PROMPT if kind == "brain_a" else BRAIN_B_PROMPT
+        return template.format(task=state.get("task", ""))
+
+    own_key = "position_a" if kind == "brain_a" else "position_b"
+    other_key = "position_b" if kind == "brain_a" else "position_a"
+    return BRAIN_REVISE_PROMPT.format(
+        lens=lens, round=state.get("round", 1), max_rounds=state.get("max_rounds", 3),
+        context=_context(state),
+        own=state.get(own_key, ""), other=state.get(other_key, ""),
+        critique=state.get("decision", ""))
+
+
+def _decide_prompt(state: dict) -> str:
+    """The decider's prompt: intermediate rounds synthesize + critique; the last
+    round issues the final decision."""
+    positions = {"position_a": state.get("position_a", ""),
+                 "position_b": state.get("position_b", "")}
+    if int(state.get("round", 1)) >= int(state.get("max_rounds", 3)):
+        return FINAL_PROMPT.format(rounds=state.get("max_rounds", 3), **positions)
+    return SYNTHESIS_PROMPT.format(**positions)
 
 
 def _build_bound_graph(waku: Waku):
@@ -110,17 +141,14 @@ def _build_bound_graph(waku: Waku):
     decider_effort = _env("WAKU_DELIBERATE_DECIDER_EFFORT", "high")
 
     def brain_a(state: dict) -> str:
-        return _delegate(waku, state, _prompt("brain_a", state),
+        return _delegate(waku, state, _brain_prompt("brain_a", state),
                          agent="claude", model=brain_a_model, effort=brain_a_effort)
 
     def brain_b(state: dict) -> str:
-        return _direct_brain(waku, _prompt("brain_b", state))
+        return _direct_brain(waku, _brain_prompt("brain_b", state))
 
     def decide(state: dict) -> str:
-        template = VERDICT_PROMPT if state.get("work") else DECIDE_PROMPT
-        prompt = template.format(position_a=state.get("position_a", ""),
-                                 position_b=state.get("position_b", ""))
-        return _delegate(waku, state, prompt,
+        return _delegate(waku, state, _decide_prompt(state),
                          agent="codex", model=decider_model, effort=decider_effort)
 
     return build_deliberation_graph(
@@ -130,12 +158,24 @@ def _build_bound_graph(waku: Waku):
     )
 
 
+def _run_rounds(graph, state: dict, max_rounds: int, observer=None) -> dict:
+    """Run one round of the graph up to `max_rounds` times, carrying the state
+    forward so each round's brains see the prior positions + synthesis. The
+    decider finalizes on the last round (its prompt changes)."""
+    for r in range(1, max_rounds + 1):
+        state["round"] = r
+        state["max_rounds"] = max_rounds
+        state = run_graph(graph, state, observer=observer)
+    return state
+
+
 def run_deliberation(waku: Waku | None = None, task: str = "", work: str = "",
-                     observer=None) -> dict:
+                     observer=None, max_rounds: int | None = None) -> dict:
     """Run one deliberation to completion. Returns the final state; never raises.
 
     `work` present → review mode (S9); absent → design mode (S6–S8). The state
-    carries `decision` (the reconciled output) and per-node `errors` if any."""
+    carries `decision` (the final call, from the last round) and per-round
+    `errors` if any. `max_rounds` defaults to WAKU_DELIBERATE_MAX_ROUNDS (3)."""
     own = waku is None
     waku = waku or Waku()
     try:
@@ -144,19 +184,21 @@ def run_deliberation(waku: Waku | None = None, task: str = "", work: str = "",
             if observer:
                 observer(kind, ev)
 
-        return run_graph(_build_bound_graph(waku), {"task": task, "work": work},
-                         observer=notify)
+        rounds = max_rounds if max_rounds is not None else int(
+            _env("WAKU_DELIBERATE_MAX_ROUNDS", "3"))
+        return _run_rounds(_build_bound_graph(waku), {"task": task, "work": work},
+                           rounds, observer=notify)
     finally:
         if own:
             waku.close()
 
 
 def run_build_review(waku: Waku | None = None, task: str = "", cwd: str = "",
-                     observer=None) -> dict:
+                     observer=None, max_rounds: int | None = None) -> dict:
     """S9: Sonnet builds the thing, then the deliberation graph reviews it.
 
     The build is one delegate_task call on Sonnet (Claude Code) in `cwd`; its
-    summary becomes `work` for the review-mode deliberation."""
+    summary becomes `work` for the review-mode deliberation (same bounded loop)."""
     own = waku is None
     waku = waku or Waku()
     try:
@@ -166,7 +208,8 @@ def run_build_review(waku: Waku | None = None, task: str = "", cwd: str = "",
         tool = experimental.make_delegate_tool(waku.settings)
         summary = tool.fn(task=task, agent="claude", model=build_model, cwd=cwd,
                           _notify=(observer or (lambda k, e: None)))
-        return run_deliberation(waku, task=task, work=summary, observer=observer)
+        return run_deliberation(waku, task=task, work=summary, observer=observer,
+                                max_rounds=max_rounds)
     finally:
         if own:
             waku.close()

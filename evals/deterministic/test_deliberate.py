@@ -117,19 +117,90 @@ def test_safe_returns_honest_text_on_failure():
 
 
 def test_review_prompt_labels_each_lens():
-    from waku.ops.deliberate import _prompt
+    from waku.ops.deliberate import _brain_prompt
 
-    a = _prompt("brain_a", {"task": "T", "work": "W"})
-    b = _prompt("brain_b", {"task": "T", "work": "W"})
+    a = _brain_prompt("brain_a", {"task": "T", "work": "W"})
+    b = _brain_prompt("brain_b", {"task": "T", "work": "W"})
     assert "SOFTWARE ARCHITECT" in a and "T" in a and "W" in a
     assert "PRODUCT AND SYSTEMS REVIEWER" in b
 
 
 def test_design_prompt_passes_task_only():
-    from waku.ops.deliberate import _prompt
+    from waku.ops.deliberate import _brain_prompt
 
-    assert "SOFTWARE ARCHITECT" in _prompt("brain_a", {"task": "T", "work": ""})
-    assert "PRODUCT AND SYSTEMS REVIEWER" in _prompt("brain_b", {"task": "T", "work": ""})
+    assert "SOFTWARE ARCHITECT" in _brain_prompt("brain_a", {"task": "T", "work": ""})
+    assert "PRODUCT AND SYSTEMS REVIEWER" in _brain_prompt("brain_b", {"task": "T", "work": ""})
+
+
+def test_brain_prompt_revises_after_round_one():
+    from waku.ops.deliberate import _brain_prompt
+
+    state = {"task": "T", "work": "", "round": 2, "max_rounds": 3,
+             "position_a": "prior A", "position_b": "prior B", "decision": "critique"}
+    a = _brain_prompt("brain_a", state)
+    assert "SOFTWARE ARCHITECT" in a and "round 2 of 3" in a
+    assert "prior A" in a and "prior B" in a and "critique" in a
+    assert "PRODUCT AND SYSTEMS REVIEWER" in _brain_prompt("brain_b", state)
+
+
+def test_decider_finalizes_only_on_last_round():
+    from waku.ops.deliberate import _decide_prompt
+
+    base = {"position_a": "A", "position_b": "B", "max_rounds": 3}
+    mid = _decide_prompt({**base, "round": 1})
+    fin = _decide_prompt({**base, "round": 3})
+    assert "FINAL round" in fin
+    assert "FINAL round" not in mid
+    assert "Do NOT make the final" in mid
+
+
+def test_run_rounds_loops_to_the_cap_and_finalizes():
+    from waku.ops.deliberate import _run_rounds
+
+    calls: list[tuple[str, int]] = []
+
+    def brain_a(state):
+        calls.append(("a", state.get("round")))
+        return f"A{state.get('round')}"
+
+    def brain_b(state):
+        calls.append(("b", state.get("round")))
+        return f"B{state.get('round')}"
+
+    def decide(state):
+        calls.append(("d", state.get("round")))
+        r = state.get("round")
+        return "FINAL" if r >= state.get("max_rounds", 3) else "provisional"
+
+    g = build_deliberation_graph(brain_a_fn=brain_a, brain_b_fn=brain_b, decide_fn=decide)
+    state = _run_rounds(g, {}, max_rounds=3)
+    assert state["decision"] == "FINAL"
+    assert state["round"] == 3
+    assert len(calls) == 9                      # 3 nodes × 3 rounds
+    assert calls.count(("a", 1)) == 1 and calls.count(("a", 3)) == 1
+    assert calls.count(("d", 3)) == 1
+
+
+def test_run_rounds_brains_see_prior_positions():
+    from waku.ops.deliberate import _run_rounds
+
+    seen: dict[int, tuple] = {}
+
+    def brain_a(state):
+        seen[state.get("round")] = (state.get("position_a"), state.get("position_b"),
+                                    state.get("decision"))
+        return f"A{state.get('round')}"
+
+    def brain_b(state):
+        return f"B{state.get('round')}"
+
+    def decide(state):
+        return "provisional" if state.get("round") < state.get("max_rounds", 3) else "FINAL"
+
+    g = build_deliberation_graph(brain_a_fn=brain_a, brain_b_fn=brain_b, decide_fn=decide)
+    _run_rounds(g, {}, max_rounds=3)
+    assert seen[2] == ("A1", "B1", "provisional")   # round 2 saw round 1's output
+    assert seen[3] == ("A2", "B2", "provisional")   # round 3 saw round 2's output
 
 
 def test_the_topology_matches_the_graph_that_runs():
