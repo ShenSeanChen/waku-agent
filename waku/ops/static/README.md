@@ -55,68 +55,11 @@ Data flows one way: `refresh()` (main.js) fetches `/api/data` into the global
 - **No emojis in UI** (project rule). Known pre-existing exception: the `★`/`☆`
   pin stars in `models.js` (typographic dingbats, not colour emoji) — left as-is.
 
-## Design system (read before changing how anything looks)
+## Design system
 
-The dashboard uses the Waku Memory design system. The values live in
-`design/`:
-
-- `tokens.css` and `controls.css` are **copies** of Waku Memory's files. Do
-  not edit them here — a test checks their hashes. To change a token, change
-  it in Waku Memory, then run `python scripts/sync_design.py <path to
-  waku-memory-frontend>`. `design/SOURCE.md` says which commit they came from.
-- `type.css` holds the type scale, the two weights, the line heights and the
-  field border. `fonts.css` loads the three fonts from `fonts/`. Nothing is
-  fetched from the network.
-
-When you write CSS here or an inline style in `js/`:
-
-- **Every value comes from a token.** Colour (`--text-*`, `--surface-*`,
-  `--rule*`, `--accent*`, `--ok`/`--warn`/`--bad`, `--chart-1…5`), size
-  (`--text-xs|sm|base|lg|xl|2xl`), weight (400 or 500), face
-  (`--face-sans|mono|display`), corner (`--radius`, or `--shape-chip` for a
-  badge, `--shape-circle` for a dot, `--shape-bubble` for your chat message), duration (`--motion-fast`). No
-  shadows: separate things with a 1px `--rule`. The one exception is a floating
-  menu (`openMenu`, and a select's open list), which takes `--shadow-md`.
-  Use a native `<select>` for a choice in a form: style.css draws its open
-  list as the menu, so it needs no JavaScript.
-- **Amber is a surface, not a text colour.** Amber text uses `--accent-fg`.
-  Text on an amber fill uses `--accent-ink`.
-- **Buttons never fill.** Four levels, all from `uiButton`: *primary* (the
-  main action — paper ground, `--rule-hard` border, ink label: Save, Send),
-  *secondary* (transparent, `--rule` border, muted label), *tertiary* (text
-  only), *destructive* (`--bad` label). Hover moves the border. controls.css
-  adds the focus ring, pressed and disabled.
-- **Labels** are uppercase `--face-mono` at `--tracking-label`.
-- **Controls get `data-slot` automatically** (`stampSlots` in `util.js`).
-  Use native `<button>`, `<input>`, `<select>`; don't fake them with `<div>`.
-- **Use the token names.** The old short names (`--ink2`, `--line`, …) are
-  gone, and a test fails if one comes back.
-- **Spacing** is `--space-2|3|4|6|8` (8–32px) between things, and
-  `calc(var(--spacing) * 0.5|1|1.5)` (2–6px) inside one control.
-
-`evals/deterministic/test_design_system.py` enforces all of this, except
-which button level you pick.
-
-### Primitives (`js/ui.js`)
-
-Build screens from these rather than writing the markup. Each returns an
-HTML string and is named after the Waku Memory console's `components/ui`:
-
-| Function | Use it for |
-|---|---|
-| `uiCard(body, {title, action, footer, size})` | a block of related content |
-| `uiBadge(text, variant)` | a status or a value: `neutral`, `ok`, `warn`, `bad`, `live` (running), `miss`, `value` (data, normal case) |
-| `uiTable(columns, rows, {caption, empty})` | anything with rows and columns |
-| `uiTabs(items)` | switching between parts of one view |
-| `uiNotice(level, html, action)` | an explanation or a status message: `note`, `ok`, `warn`, `failed` |
-| `uiStatBand(items)` | a view's headline numbers |
-| `uiRow(lead, title, meta, {onclick})` | a list of things you can open |
-| `openDialog(html, {wide, onClose})` / `closeDialog()` | a task that needs its own space; Escape and the scrim close it |
-| `uiButton(label, {level, size, onclick, danger, cls, attrs})` | any action: `primary` (the main one), `secondary`, `tertiary` (text only — row actions such as edit), `destructive`; `danger` makes a tertiary delete red |
-| `uiLink(label, href)` | going to another tab — never for an action |
-| `openMenu(trigger, html)` / `closeMenu()` with `uiMenuLabel`, `uiMenuItem`, `uiMenuSep` | a short list of choices under a button; outside click and Escape close it |
-
-If none fits, ask before adding one: a new primitive is a design decision.
+How the dashboard looks, the token rules and the `js/ui.js` primitives are in
+[docs/context/design-system.md](../../../docs/context/design-system.md). Read it
+before changing how anything looks.
 
 ## Verifying a change (no JS test runner exists)
 

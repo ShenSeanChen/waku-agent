@@ -294,7 +294,7 @@ def scoreboard(results: list[dict]) -> list[dict]:
 
 
 def render(rows: list[dict]) -> str:
-    """The table, for a terminal and for a thumbnail. No emojis (CLAUDE.md)."""
+    """The table, for a terminal and for a thumbnail. No emojis (AGENTS.md)."""
     head = f"{'contestant':<24}{'pass':>6}{'stale':>7}{'invented':>10}{'miss':>6}{'tokens':>9}"
     lines = [head, "-" * len(head)]
     for r in rows:

@@ -112,7 +112,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
     if not args.yes:
         # Safety gate: this destroys live memory/calendar/traces. Refuse unless the
-        # human explicitly confirms with --yes. See CLAUDE.md ("Never wipe runtime
+        # human explicitly confirms with --yes. See AGENTS.md ("Never wipe runtime
         # data without asking first"). It backs up, but restoring is a hassle.
         print("REFUSING to run: demo_seed clears .waku (memory, calendar, chat, traces"
               + (", AND spend" if args.reset_spend else "") + ").")

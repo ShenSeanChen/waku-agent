@@ -182,7 +182,7 @@ you are timing your own race conditions and calling it recall.
 ## Adding another one
 
 Keep the five beats and the same three sentences, or it stops being
-comparable. And per `CLAUDE.md`: no new default dependencies, nothing in
+comparable. And per `docs/context/conventions.md`: no new default dependencies, nothing in
 `waku/` may import from here, `make gate` must not depend on it, and put the
 SDK version you verified against in the file header — these libraries move fast
 enough that a silently rotted example is worse than no example.
