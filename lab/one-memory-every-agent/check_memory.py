@@ -2,7 +2,7 @@
 
 The Waku agent saves a fact with a unique code word through its own MCP
 connection, searches it back, and prints the question to ask Claude Code,
-Codex, Grok Bot and Muse Code. If each of them finds the same fact, one memory
+Codex, Grok Bot and Muse. If each of them finds the same fact, one memory
 reaches every agent.
 
     pip install 'waku-agent[mcp]' && waku connect waku-memory      # once
@@ -91,7 +91,7 @@ def main() -> int:
 
         print("\nNow ask each of the other agents the same question:")
         print(f'  "Search Waku Memory for {word} and quote what it says."')
-        print("  Claude Code · Codex · Muse Code · Grok Bot")
+        print("  Claude Code · Codex · Grok Bot · Muse")
         print("\nRecord each answer in the What we found table of this topic's README.")
         print(f"Afterwards: uv run python lab/one-memory-every-agent/check_memory.py --forget {memory_id}")
         return 0 if hits else 1
