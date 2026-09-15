@@ -1,8 +1,10 @@
 """Draw the "one memory, five agents" board in Sean's style.
 
-Waku Memory sits in the middle. Each agent saves to it (solid arrow, labelled
-with how it connects) and recalls from it (dashed arrow back). Skills travel
-separately, as SKILL.md folders, with a plugin folder for Grok Bot.
+Grok Bot and Muse sit on top, each inside the cloud computer it runs in, and
+reach Waku Memory differently: Grok Bot over MCP with a key header, Muse
+through a connector it builds to the web API. Each agent saves (solid arrow,
+labelled with how it connects) and recalls (dashed arrow back). Skills travel
+separately, as SKILL.md folders.
 
 Run:  python lab/one-memory-every-agent/build_board.py
 """
@@ -31,26 +33,34 @@ def build() -> list:
     e: list = []
     e.append(S.text(60, 40, "One memory, five agents", size=S.FS_TITLE))
     e.append(S.underline(64, 110, 520))
-    e.append(S.text(64, 130, "Waku Memory is one hosted MCP server: save in any agent, recall in every other",
+    e.append(S.text(64, 130, "Grok Bot and Muse keep your memory in their own VM. One memory every agent can reach:",
                     size=S.FS_HEADER, color=S.PAL["grey"][1]))
     e += S.socials_block(2150, 44)
 
     mx, my, mw, mh = MEM
-    e += S.labeled_box(mx, my, mw, mh, "Waku Memory\nhosted MCP server\napi.waku.one/mcp",
+    e += S.labeled_box(mx, my, mw, mh, "Waku Memory\nhosted, yours to see and export\napi.waku.one/mcp",
                        color="green", fill="chip", size=S.FS_HEADER)
 
-    # Grok Bot, inside the cloud it runs in
-    e += S.boundary(1030, 150, 440, 230, "runs in xAI's cloud", color="blue")
-    _agent(e, 1100, 215, "Grok Bot\n(Grok 4.6)")
-    e += S.labeled_arrow(1220, 345, 1220, my, "connector + API key")
-    e.append(S.arrow(1330, my, 1330, 345, dashed=True))
+    # Grok Bot: many Bots, one shared computer
+    e += S.boundary(700, 180, 440, 200, "one VM, shared by every Bot", color="blue")
+    _agent(e, 770, 235, "Grok Bot\n(xAI)")
+    e.append(S.arrow(990, 365, 1100, my))
+    e.append(S.text(830, 410, "MCP + key header", size=S.FS_SMALL))
+    e.append(S.arrow(1160, my, 1050, 365, dashed=True))
 
-    # left: the Waku agent and Claude Code; right: Codex and Muse Code
+    # Muse: one agent, guarded by Sentinel
+    e += S.boundary(1320, 180, 460, 200, "Muse VM + Sentinel", color="blue")
+    _agent(e, 1400, 235, "Muse\n(Meta, muse.ai)")
+    e.append(S.arrow(1470, 365, 1360, my))
+    e.append(S.text(1250, 400, "POST /imports", size=S.FS_SMALL))
+    e.append(S.arrow(1420, my, 1580, 365, dashed=True))
+    e.append(S.text(1530, 425, "GET /memories?q=", size=S.FS_SMALL))
+
+    # the three that sign in through the browser
     sides = [
         (120, 250, "Waku agent\n(your laptop)", "waku connect waku-memory", mx, my + 25, my + 90),
         (120, 700, "Claude Code", "npx waku-memory setup", mx, my + 105, my + 160),
-        (2080, 250, "Codex", "capture enable", mx + mw, my + 25, my + 90),
-        (2080, 700, "Muse Code\n(Muse Spark)", "MCP in settings.json", mx + mw, my + 105, my + 160),
+        (2080, 700, "Codex", "capture enable", mx + mw, my + 105, my + 160),
     ]
     for ax, ay, label, how, edge_x, save_y, recall_y in sides:
         _agent(e, ax, ay, label)
@@ -60,18 +70,15 @@ def build() -> list:
 
     e.append(S.annotate(150, 460, "solid = save\ndashed = recall"))
 
-    # skills travel as files, not through memory (yet)
+    # skills travel as files to the agents that read SKILL.md
     sx, sy, sw, sh = 1050, 900, 400, 120
     e += S.labeled_box(sx, sy, sw, sh, "Waku skills\nSKILL.md folders")
-    e += S.labeled_arrow(sx, sy + 40, 420, 800, "waku skill export")
-    e += S.labeled_arrow(sx + sw, sy + 40, 2080, 800, "--project (.claude/skills)")
-    e += S.labeled_box(1560, 190, 330, 110, "Grok plugin folder\nskills/ + .mcp.json")
-    e.append(S.arrow(sx + sw - 40, sy, 1740, 300, dashed=True))
-    e += S.labeled_arrow(1560, 245, 1400, 265, "marketplace")
+    e += S.labeled_arrow(sx, sy + 40, 420, 800, "waku skill export --to claude")
+    e += S.labeled_arrow(sx + sw, sy + 40, 2080, 800, "--to codex")
 
-    e.append(S.red_note(120, 930, "local memory is not Waku Memory:\nnothing syncs up on its own"))
-    e.append(S.source_label(120, 1030, "Grok Bot connectors take a URL + header, no OAuth sign-in (posterly guide, 2026-09)"))
-    e.append(S.source_label(120, 1054, "Muse Code reads .claude/skills (codersera guide, 2026-09); Waku Memory MCP: waku.one/docs, 2026-09-14"))
+    e.append(S.red_note(120, 930, "neither Grok Bot nor Muse exports your memory:\nit stays in the vendor's VM"))
+    e.append(S.source_label(120, 1030, "Grok Bot: one VM for all Bots, custom MCP needs a public URL (docs.x.ai, 2026-09); MCP sign-in never runs (imogen-server #27, 2026-09-07)"))
+    e.append(S.source_label(120, 1054, "Muse: MEMORY.md in its VM, no MCP, Sentinel approves actions (Meta, 2026-09-08)"))
     e.append(S.watermark(120, 1090))
     return e
 
