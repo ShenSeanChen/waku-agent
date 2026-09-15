@@ -33,6 +33,12 @@ EXPECTED_ENDPOINTS = {
         ("China", "https://api.moonshot.cn/anthropic",
          "https://api.moonshot.cn/v1/models"),
     ],
+    "siliconflow": [
+        ("China", "https://api.siliconflow.cn/v1",
+         "https://api.siliconflow.cn/v1/models"),
+        ("Global", "https://api.siliconflow.com/v1",
+         "https://api.siliconflow.com/v1/models"),
+    ],
 }
 
 
@@ -79,6 +85,31 @@ def test_client_uses_provider_specific_base_url(
     assert captured["base_url"] == selected_url
 
 
+def test_openai_compat_client_uses_siliconflow_region(monkeypatch, tmp_path):
+    """SiliconFlow is the first openai-wire provider with China/Global endpoints.
+    The Anthropic stub above does not cover OpenAICompatClient."""
+    captured = {}
+    selected_url = "https://api.siliconflow.com/v1"
+
+    class StubOpenAICompatClient:
+        def __init__(self, *, api_key, base_url, timeout):
+            captured.update(api_key=api_key, base_url=base_url, timeout=timeout)
+
+    monkeypatch.setenv("SILICONFLOW_API_KEY", "test-key")
+    monkeypatch.setenv("SILICONFLOW_BASE_URL", selected_url)
+    monkeypatch.delenv("WAKU_BASE_URL", raising=False)
+    monkeypatch.setattr(models, "OpenAICompatClient", StubOpenAICompatClient)
+
+    client = models.get_client(Settings(
+        provider="siliconflow", api_key="", base_url=None, model="",
+        small_model="", home=tmp_path,
+    ))
+
+    assert isinstance(client, StubOpenAICompatClient)
+    assert captured["api_key"] == "test-key"
+    assert captured["base_url"] == selected_url
+
+
 @pytest.mark.parametrize(
     ("provider_name", "base_url_env", "selected_url", "catalog_url"),
     [
@@ -86,6 +117,8 @@ def test_client_uses_provider_specific_base_url(
          "https://api.minimax.io/anthropic/v1/models"),
         ("kimi", "MOONSHOT_BASE_URL", "https://api.moonshot.cn/anthropic",
          "https://api.moonshot.cn/v1/models"),
+        ("siliconflow", "SILICONFLOW_BASE_URL", "https://api.siliconflow.com/v1",
+         "https://api.siliconflow.com/v1/models"),
     ],
 )
 def test_catalog_follows_selected_provider_region(

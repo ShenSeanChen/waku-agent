@@ -97,7 +97,7 @@ def test_the_error_names_the_env_file_in_play():
 
 
 def test_the_error_mentions_the_other_providers():
-    """Waku speaks to eleven providers. Naming one made it look like a
+    """Waku speaks to every listed provider. Naming one made it look like a
     single-vendor tool to anyone who hit this on their first run — which is
     everyone who hits it."""
     msg = models._no_key_message("anthropic", "ANTHROPIC_API_KEY")
