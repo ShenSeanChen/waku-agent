@@ -33,6 +33,7 @@ PRICING = {
     "xai": (3.0, 15.0),   # Grok — rough est; keyed users get exact from the catalog
     "opencode_zen": (0.435, 0.87),   # rough est (matching deepseek — same underlying model)
     "opencode_go": (0.435, 0.87),    # rough est
+    "groq": (0.25, 0.70),            # rough est (open-weight hosts; see MODEL_PRICING)
     # openrouter fallback for paid models when the live catalog is unreachable
     # (rough mid-catalog guess). ":free" ids and catalog-priced models never
     # hit this: see price_for().
@@ -75,6 +76,10 @@ MODEL_PRICING = {
     "deepseek-v4-flash": (0.15, 0.30),
     # free tier on opencode_zen
     "deepseek-v4-flash-free": (0.0, 0.0),
+    # Groq — console.groq.com/docs/models (open-weight Llama line)
+    "llama-3.3-70b-versatile": (0.59, 0.79),
+    "meta-llama/llama-4-maverick-17b-128e-instruct": (0.20, 0.60),
+    "meta-llama/llama-4-scout-17b-16e-instruct": (0.11, 0.34),
 }
 
 
@@ -108,6 +113,10 @@ MODEL_CUTOFF = {
     # OpenCode / deepseek
     "deepseek-v4-flash": "2026-04",
     "deepseek-v4-flash-free": "2026-04",
+    # Groq open-weight models — published model-card cutoffs
+    "llama-3.3-70b-versatile": "2024-12",
+    "meta-llama/llama-4-maverick-17b-128e-instruct": "2024-08",
+    "meta-llama/llama-4-scout-17b-16e-instruct": "2024-08",
 }
 
 

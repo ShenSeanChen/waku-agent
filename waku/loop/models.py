@@ -157,6 +157,16 @@ PROVIDERS: dict[str, Provider] = {
     "opencode_go":  Provider("openai", "OPENCODE_GO_API_KEY",
                                "https://opencode.ai/zen/go/v1",
                                "deepseek-v4-flash", "deepseek-v4-flash"),
+    # Groq — OpenAI-compatible endpoint in front of open-weight models (Llama,
+    # gpt-oss, Qwen), one card, no billing for most personal use. The catalog
+    # (GET {base_url}/models) is the authoritative menu — these defaults are
+    # starting points. Versatile is the reliable chat workhorse; scout is the
+    # cheap fast gate. Brands of both the newer Llama 4 line are namespaced
+    # "meta-llama/..." on Groq (the docs' own ids), the 3.3 line is not.
+    "groq":      Provider("openai", "GROQ_API_KEY", "https://api.groq.com/openai/v1",
+                           "llama-3.3-70b-versatile", "meta-llama/llama-4-scout-17b-16e-instruct",
+                           flagship="meta-llama/llama-4-maverick-17b-128e-instruct",
+                           fast="meta-llama/llama-4-scout-17b-16e-instruct"),
 }
 
 
@@ -176,6 +186,7 @@ KEY_URLS = {
     "xai": "https://console.x.ai",
     "opencode_zen": "https://opencode.ai/zen",
     "opencode_go": "https://opencode.ai/zen",
+    "groq": "https://console.groq.com/keys",
 }
 
 
