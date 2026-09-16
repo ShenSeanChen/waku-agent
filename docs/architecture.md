@@ -8,14 +8,15 @@ now with a file path on every box.
 flowchart TB
     subgraph GW["Gateway Interface — waku/gateway/"]
         CLI["cli.py (default)"]
-        TG["telegram.py (optional)"]
+        VOICE["voice.py (wake word)"]
+        TG["telegram.py · discord.py · whatsapp.py (optional)"]
     end
 
     subgraph RUN["Ephemeral Agent Run — everything here is rebuilt per turn"]
         WM["Working Memory — runtime/session.py<br/>SOUL.md + memory context + chat history"]
         subgraph LOOP["The Loop — loop/agent.py"]
             LLM["LLM call<br/>(loop/models.py)"]
-            TOOLS["Tools — tools/<br/>create_event · save_note · send_message"]
+            TOOLS["Tools — tools/<br/>calendar · notes · messages · search · MCP · …"]
             LLM -->|tool calls| TOOLS -->|results| LLM
         end
         WM --> LLM
@@ -52,6 +53,71 @@ flowchart TB
 
     RUN -.->|every event| TRACE
 ```
+
+## The short version
+
+```mermaid
+flowchart LR
+  GW["Gateway<br/>cli · telegram · voice · dashboard"] --> WM["Working memory<br/>SOUL.md + memory + history"]
+  WM --> LLM
+  subgraph LOOP["The Loop — loop/agent.py"]
+    LLM["LLM"] -->|tool call| TOOLS["Tools<br/>create_event · list_events<br/>search_web · save_note · …"]
+    TOOLS -->|result| LLM
+  end
+  LLM -->|reply| REPLY["Reply"] --> GW
+  GATE{{"Retrieval gate<br/>does this turn need memory?"}} -. only if needed .-> WM
+  MEM[("Memory — state.db<br/>SQLite + FTS5<br/>semantic · episodic · procedural")] --> GATE
+  REPLY -. save chat .-> MEM
+  MEM -->|every N chats| CONS["Consolidate → facts"] --> MEM
+  REPLY --> OPS["LLM Ops<br/>trace → eval → gate → release"]
+  OPS -. improved prompt/config .-> WM
+  WM -.- WATERMARK["waku-agent · Sean's AI Stories · @ShenSeanChen"]:::wm
+  classDef wm fill:none,stroke:none,color:#9aa0aa,font-size:11px;
+```
+
+> _Architecture of **waku-agent** — built on the series
+> ([@ShenSeanChen](https://github.com/ShenSeanChen)). Code is MIT; **this diagram is licensed CC BY-NC-SA 4.0** —
+> reuse it with credit to the channel, not for commercial resale._
+
+### MEMORY.md vs state.db
+
+Some assistants (e.g. Hermes) keep long-term memory as a single `MEMORY.md`
+markdown file. Waku keeps the *queryable* source in `state.db` (the `facts` and
+`episodes` tables, keyword-searchable via FTS5) **and** regenerates a readable
+`.waku/MEMORY.md` mirror after every turn — so you get both: a real file you
+can open, backed by a sturdy database. The dashboard's **Memory** tab is the
+friendly view; the **Data** tab shows the raw `state.db` tables.
+
+## Which file is which
+
+- `waku/gateway/` — how text gets in and out: `cli.py`, `voice.py` (wake word),
+  `telegram.py`, `discord.py` and `whatsapp.py`, started by `runner.py` and
+  `supervisor.py`. Gateways only move text.
+- `waku/runtime/session.py` — working memory for one turn: SOUL.md, memory
+  context and chat history.
+- `waku/loop/agent.py` — the loop. `loop/models.py` — pluggable providers over
+  two wire formats.
+- `waku/graph/` — the engine, node factories and `workflows/` (triage): opt-in
+  structure around the loop. The loop never changes, a graph node can be a loop
+  turn, and every failure fails open to the plain loop.
+- `waku/tools/` — what the agent can call: `calendar.py`, `google_calendar.py`,
+  `apple.py`, `notes.py`, `messages.py`, `search.py`, `github.py`,
+  `workspace.py`, `memory_admin.py`, the MCP client and `experimental.py`.
+  `registry.py` decides which are on.
+- `waku/memory/` — semantic (FTS5), episodic and procedural (SKILL.md) memory,
+  plus `retrieval_gate.py` (hero 1: does this turn need memory?) and
+  `consolidation.py` (every N exchanges).
+- `waku/ops/` — tracing (JSONL + OTel), the dashboard (localhost:7777),
+  `release_gate.py`, and `compare_history.py` (the Compare arena's own JSONL
+  scoreboard, never `state.db`).
+- `waku/ops/static/` — the dashboard frontend. Read
+  [context/design-system.md](context/design-system.md) before changing how
+  anything looks.
+- `evals/deterministic/` (0/1, pytest) and `evals/judge/` (DeepEval, scored).
+  The two never mix.
+- `examples/` — teaching material, not product; one folder per topic.
+- `.waku/` — runtime state: `state.db`, `calendar.ics`, `outbox/`, `traces/`.
+  Gitignored.
 
 ## Design decisions worth stealing
 

@@ -90,6 +90,48 @@ The target defaults to the signed-in user's `primary` calendar; set
 local database. Google failures never roll back the local event, and attendee
 notifications are suppressed (`sendUpdates=none`).
 
+## Share one memory with your other agents (Waku Memory)
+
+Waku's own memory is local. [Waku Memory](https://waku.one) is a separate,
+hosted memory that several agents share over MCP: save something in one agent,
+and recall it in another.
+
+```bash
+pip install -e '.[mcp]'
+waku connect waku-memory     # or /connect waku-memory in the dashboard chat
+```
+
+That adds Waku Memory to `.waku/mcp.json`, next to any servers already there,
+and opens your browser once to sign in. Restart Waku and its tools appear as
+`waku_memory_*`; `waku mcp` shows which account you are signed in as. A config
+still pointing at Waku Memory's old address is moved to the current one.
+
+The same memory, in your other agents:
+
+| Agent | How it connects |
+|---|---|
+| Claude Code, Codex, Hermes | the steps on [waku.one/docs](https://www.waku.one/docs) |
+| Grok Bot | Settings → Plugins → custom connector: URL `https://api.waku.one/mcp`, header `Authorization: Bearer <key>`, with a key from waku.one → Account → Keys |
+| Muse Code, or any MCP client | a remote (streamable HTTP) server at `https://api.waku.one/mcp` in its MCP settings |
+
+Grok Bot and Muse Code are not yet tested by us. Grok Bot runs in the cloud,
+and its connector form takes a URL and a header rather than a browser sign-in,
+which is why it needs a key. Keep that key in Grok Bot's own form, never in a
+file in this repo.
+
+### Carry your skills too
+
+```bash
+waku skill export --to claude,codex    # ~/.claude/skills/ and ~/.codex/skills/
+waku skill export --project            # ./.claude/skills/, which Muse Code also reads
+```
+
+Each skill folder is copied as it is. A copy you changed in the other agent is
+kept unless you pass `--force`. Skills that call Waku's own tools (a calendar
+skill calls `create_event`) arrive as instructions without those tools behind
+them. Saving skills into Waku Memory, so a cloud agent like Grok Bot can recall
+them, waits until Waku Memory has a place for skills.
+
 ## Connect MCP servers
 
 ```bash
@@ -107,9 +149,77 @@ the agent, namespaced `<server>_<tool>` (and in the dashboard's Tools ▸ MCP ta
 **Node-free demo** — a tiny self-contained Python MCP server ships in the repo:
 
 ```bash
-cp examples/mcp.demo.json .waku/mcp.json   # points at examples/mcp_demo_server.py
+cp examples/mcp.demo.json .waku/mcp.json   # points at evals/fixtures/mcp_demo_server.py
 make dashboard                               # demo_word_count / demo_reverse_text appear in Tools
 ```
 
 Same pattern scales to any server, yours or a vendor's — no changes to Waku's code.
+
+### Remote servers (Streamable HTTP)
+
+A server that is already running somewhere else is named by `url` instead of
+`command`. This is the MCP spec's transport for remote servers; the older
+HTTP+SSE transport is deprecated and is not supported.
+
+```json
+{"servers": [{"name": "waku_memory",
+              "url": "https://your-host/mcp",
+              "auth_env": "WAKU_MEMORY_API_KEY"}]}
+```
+
+`auth_env` names an **environment variable**; its value is sent as
+`Authorization: Bearer <value>`. The credential never goes in `mcp.json` —
+that file gets pasted into bug reports, and a bearer token in one is a leaked
+credential. If the variable is not exported, Waku says so by name rather than
+connecting anonymously and letting the server's 401 look like an outage.
+
+### Signing in instead of holding a key
+
+A server that speaks MCP's authorization spec needs no key at all. Say so, and
+Waku opens your browser on first use:
+
+```json
+{"servers": [{"name": "waku_memory",
+              "url": "https://your-host/mcp",
+              "oauth": true}]}
+```
+
+Nothing is issued out of band and nothing is pasted anywhere. Waku registers
+itself with the server, catches the redirect on `127.0.0.1:41765`, and keeps
+the result in `.waku/mcp-auth/<server>.json`, written `0600` — one file per
+server, so a corrupt one costs a single connection rather than all of them.
+Delete that file to sign out.
+
+`oauth` and `auth_env` are two answers to one question, so naming both is
+refused rather than resolved by precedence.
+
+### Which account am I signed in as?
+
+```bash
+waku mcp                      # every server, and the account each knows you as
+waku mcp login waku_memory    # sign in again — as someone else, or after expiry
+waku mcp logout waku_memory   # forget the token
+```
+
+Two agents pointed at the same server as two different people look exactly
+like a broken server: you write something in one and the other cannot find it.
+`waku mcp` prints the email, so the mismatch is visible in one line instead of
+inferred from missing memories.
+
+`login` signs out first on purpose. Without that the stored token is still
+valid, the server never asks who you are, and "sign in as someone else"
+silently keeps the account you were trying to leave.
+
+Headless or over SSH there is no browser to open: the authorization URL is
+printed, and you can finish the sign-in from any machine that has one.
+
+Try it against the demo server, no remote host required:
+
+```bash
+python evals/fixtures/mcp_demo_server.py --http --port 8931
+# .waku/mcp.json → {"servers": [{"name": "demo", "url": "http://127.0.0.1:8931/mcp"}]}
+```
+
+Requires `mcp>=2.1` (`pip install -e '.[mcp]'`). The 1.x SDK spelled this
+transport differently and the remote branch does not work on it.
 

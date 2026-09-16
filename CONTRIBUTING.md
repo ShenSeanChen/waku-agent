@@ -9,11 +9,20 @@ are genuinely welcome. The project will get bigger; the one thing it must never 
 the file you touched and follow what it does. New capability is great — complexity that hides
 how the system works is what we push back on.
 
+**The rules live in [AGENTS.md](AGENTS.md).** It is short, it routes you to the one file that
+covers your kind of change, and it lists exactly what CI blocks. If you work with a coding
+agent, it reads AGENTS.md on its own.
+
 ## The easiest contribution: a skill (no Python needed)
 
 1. Copy [`skills/TEMPLATE.md`](skills/TEMPLATE.md) to `skills/community/<your-skill>/SKILL.md`
 2. Fill in `name` + `description` (the Agent Skills frontmatter) and the body
-3. Test locally: `python scripts/validate_skills.py`, then chat — your skill loads when it matches
+3. Test locally: `python scripts/validate_skills.py`, then chat — your skill loads when it matches.
+   CI also checks that it does **not** load on everyday messages, and does not take over
+   another skill's messages (`evals/deterministic/test_skill_triggers.py`). Skills load on
+   shared words, so describe yours with words specific to its domain (*DAU*, *interview*,
+   *standup*), not question words like *why / what / should / for* — those appear in almost
+   every message anyone sends.
 4. Open a PR. CI runs the same validator.
 
 Anyone can then try your skill instantly:
@@ -33,43 +42,21 @@ Good places to add real value:
 - **Tools** (`waku/tools/`): a new capability the agent can call. Follow `calendar.py` and the
   `new-tool` skill — schema, safe execution, honest output, and a deterministic eval.
 
-Two rules that keep contributions safe to merge:
+Before you write code, find two things:
 
-- **Test what you add.** Every behavior change gets a deterministic eval in
-  `evals/deterministic/` (0/1, no network). If you found a bug, add the case that catches it.
-- **Heavy or optional deps go behind an extra** (`[voice]`, `[telegram]`, `[voice-neural]`, …),
-  never in the default install. No new core dependency without discussion.
+- **Your tier.** A bug fix is just a PR. A new tool, gateway or dashboard view needs a short
+  plan on the issue first. Anything that changes the loop, memory, the graph engine or the
+  tool contract needs a proposal. See [conventions §2](docs/context/conventions.md#2-how-much-process-a-change-needs).
+- **Your rung.** Where new capability goes is [the footprint ladder](docs/context/conventions.md#3-where-new-capability-goes-the-footprint-ladder).
+  If you're unsure which rung you're on, open an issue and ask before writing code. That
+  conversation is cheaper than a rejected PR.
 
-Run the gate before pushing: `make gate` (deterministic must pass; judge evals run if you have
-a key). `make lint` too. CI runs the gate on every PR — it must be green to merge.
+## Sending a PR
 
-## Where does my change go? — the footprint ladder
-
-The core is a narrow waist; capability belongs at the edges. Every tool waku
-registers is sent to the model on **every single call**, so the bar for adding
-one is deliberately high. Start at the top of this ladder and only move down
-when the rung above genuinely can't do it:
-
-1. **Extend something that already exists.** A new provider is usually one
-   `PROVIDERS` row. A new memory backend matches an existing interface.
-2. **A skill** — `skills/community/<name>/SKILL.md`. Markdown, no Python, no new
-   context cost until the model actually needs it. This is the easiest and most
-   underrated contribution; see above.
-3. **A CLI + a README.** waku can already run any program on your machine. A
-   command-line tool with docs beside it costs nothing until it's used.
-4. **A tool behind an extra** — `waku/tools/`, heavy deps gated by
-   `[voice]`/`[notion]`/`[gcal]`-style extras, off by default.
-5. **A gateway** — `waku/gateway/`, one file. Gateways only move text: in via
-   `waku.respond()`, out again. No memory, no tools, no loop logic.
-6. **A new core tool — last resort.** It has to earn its place in every prompt.
-
-One thing the ladder deliberately has no rung for: **a new top-level package**
-(like `waku/graph/`). That's not a contribution size, it's an architecture
-decision — it needs a written design doc and a maintainer yes before any code
-(see `docs/agent-graphs-design.md` for the precedent and the bar it had to clear).
-
-If you're unsure which rung you're on, open an issue and ask before writing
-code. That conversation is cheaper than a rejected PR.
+- Run `make gate` and `make lint` before you push.
+- CI runs ruff, the skills validator, the `.env.example` check and every deterministic eval.
+  The judge evals need an API key, so CI does not run them; `make gate` does, if you have a key.
+- The PR template asks how you tested your change. The review will ask too.
 
 ## Scope — what we'll say no to, kindly
 
@@ -80,41 +67,22 @@ tested on their own. When we say no, we'll explain why — and forking is always
 
 Concretely, these get declined **even when the code is good**:
 
+- **Anything that breaks a hard rule in [AGENTS.md](AGENTS.md)** — a new core dependency, a
+  behavior change with no deterministic eval, hidden network calls or secrets.
 - **Speculative infrastructure** — an abstraction with no second caller yet. Add
   the second use case first; the right shape is obvious then and guessed now.
-- **A new core dependency.** The default install is stdlib plus the two API
-  clients. Heavy or optional things go behind an extra.
 - **Anything that costs every user context** for a feature some users want —
-  that's what the ladder above is for.
-- **A behavior change with no deterministic eval.** If it can break, pin it.
-- **Hidden network calls, reading `.env` or secrets, or running code at install
-  time.** waku runs on people's own machines with their own keys.
+  that's what the footprint ladder is for.
 - **A "fix" that removes the thing it secures** — e.g. sandboxing a tool by
   making it not work.
 - **A rename.** The name is tied to the videos, the PyPI package and the
   assistant's own identity. Fork it and rename freely — MIT only asks that you
   keep the attribution line.
-- **A whiteboard that isn't about this codebase.** See below.
+- **Material about another project in `docs/` or the product** — whiteboards, write-ups or
+  demos made for a video belong in `lab/`; see [conventions §6](docs/context/conventions.md#6-examples-and-video-material).
 
 None of this is about the quality of your code. It's about what everyone who
 installs waku has to carry.
-
-### Whiteboards: only the ones that explain waku
-
-`docs/whiteboards/` holds editable `.excalidraw` sources, and the bar for a new
-one is simple:
-
-> **A whiteboard belongs here if it explains THIS codebase. Everything else is
-> video production and stays on the maintainer's machine.**
-
-The reason is that the folder had drifted: five of its six charts were about
-*other* projects — Kimi K3, pi, Claude Code — and made up 1.8 MB of a 2 MB
-directory. Someone forking waku to build their own agent has no use for a chart
-about a model they aren't running, and the repo shouldn't ask them to clone it.
-
-Charts that explain waku's own architecture, its loop, or its graph engine are
-welcome and genuinely useful. Charts drawn for a video about something else are
-not part of the software.
 
 ## What you can expect from us
 
@@ -127,13 +95,9 @@ not part of the software.
   maintainer to approve the run. If it seems stuck, say so on the PR; that
   delay is ours, not yours.
 
-## A note on safety
-
-Because Waku runs on people's own machines with their own keys, PRs must never add hidden
-network calls, read or transmit secrets/`.env`, or run code at install time. Keep it local,
-keep it legible.
-
 ## Community
 
 Questions, show-and-tell, pair-debugging: [Discord](https://discord.gg/ebbdvSCXqu). By
-contributing you agree your work is licensed under the repo's MIT license.
+contributing you agree your work is licensed under the repo's MIT license. The brand assets
+listed in [LICENSE-BRAND](LICENSE-BRAND) — the design system and the Waku mark — are not
+MIT and are not open for reuse outside waku-agent.
