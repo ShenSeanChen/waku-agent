@@ -33,6 +33,9 @@ PRICING = {
     "xai": (3.0, 15.0),   # Grok — rough est; keyed users get exact from the catalog
     "opencode_zen": (0.435, 0.87),   # rough est (matching deepseek — same underlying model)
     "opencode_go": (0.435, 0.87),    # rough est
+    # A local server can serve paid models too. Only the exact Muse free id
+    # below, or an explicit zero rate in its catalog, has a known zero price.
+    "opencode_local": (3.0, 15.0),   # rough est for an unknown model
     # openrouter fallback for paid models when the live catalog is unreachable
     # (rough mid-catalog guess). ":free" ids and catalog-priced models never
     # hit this: see price_for().
@@ -75,6 +78,8 @@ MODEL_PRICING = {
     "deepseek-v4-flash": (0.15, 0.30),
     # free tier on opencode_zen
     "deepseek-v4-flash-free": (0.0, 0.0),
+    # OpenCode Zen's contributor tier; availability is provider-controlled.
+    "muse-spark-1.3-contributor-free": (0.0, 0.0),
 }
 
 
@@ -108,6 +113,7 @@ MODEL_CUTOFF = {
     # OpenCode / deepseek
     "deepseek-v4-flash": "2026-04",
     "deepseek-v4-flash-free": "2026-04",
+    "muse-spark-1.3-contributor-free": None,
 }
 
 
@@ -129,6 +135,15 @@ def price_for(provider: str, model: str) -> tuple[float, float]:
     """$/M tokens (in, out) for one call: the catalog's per-model price when
     known, $0 for ":free" ids, a known MODEL_PRICING id, else the provider-level
     PRICING estimate."""
+    if provider == "opencode_local":
+        # Local catalogs use provider-qualified rates so OpenCode's rates
+        # cannot reprice another provider's calls with the same id.
+        if f"opencode_local:{model}" in _price_cache:
+            return _price_cache[f"opencode_local:{model}"]
+        model = model.removeprefix("opencode/")
+        if f"opencode_local:{model}" in _price_cache:
+            return _price_cache[f"opencode_local:{model}"]
+        return MODEL_PRICING.get(model, PRICING[provider])
     if model in _price_cache:
         return _price_cache[model]
     if model.endswith(":free"):

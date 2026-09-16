@@ -38,6 +38,7 @@ def home(tmp_path, monkeypatch):
     # so WAKU_PROVIDER must also be tracked to prevent leaking into later
     # tests (test_tool_trigger would inherit a stale provider and crash).
     monkeypatch.delenv("WAKU_PROVIDER", raising=False)
+    monkeypatch.delenv("OPENCODE_SERVER_URL", raising=False)
     return tmp_path
 
 
@@ -169,10 +170,11 @@ def test_known_catalog_providers_can_list(home):
     from waku.loop.models import PROVIDERS
 
     CAN_LIST = {"anthropic", "openai", "openrouter", "gemini", "deepseek", "minimax",
-                "kimi", "xai", "opencode_zen", "opencode_go"}
+                "kimi", "xai", "opencode_zen", "opencode_go", "opencode_local"}
     for name in CAN_LIST:
         prov = PROVIDERS[name]
-        can_list = bool(prov.catalog_url) or (prov.kind == "openai" and bool(prov.base_url))
+        can_list = bool(prov.catalog_url) or (
+            prov.kind in ("openai", "opencode_local") and bool(prov.base_url))
         assert can_list, f"{name} lost its catalog source (add catalog_url)"
 
 

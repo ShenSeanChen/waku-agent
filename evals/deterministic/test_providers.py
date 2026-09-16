@@ -14,12 +14,14 @@ import pytest
 
 from waku.config import Settings
 from waku.loop.models import PROVIDERS, OpenAICompatClient, get_client
+from waku.loop.opencode_local import OpenCodeLocalClient
 
 
 @pytest.fixture(autouse=True)
 def fake_keys(monkeypatch):
     for provider in PROVIDERS.values():
-        monkeypatch.setenv(provider.key_env, "fake-key-for-tests")
+        if provider.key_env:
+            monkeypatch.setenv(provider.key_env, "fake-key-for-tests")
     # a stray custom-endpoint override must not leak into these checks
     monkeypatch.delenv("WAKU_API_KEY", raising=False)
     monkeypatch.delenv("WAKU_BASE_URL", raising=False)
@@ -30,14 +32,15 @@ def test_get_client_builds_the_right_wire(name):
     provider = PROVIDERS[name]
     settings = Settings(provider=name, model="", small_model="", api_key="", base_url=None)
     client = get_client(settings)
-    expected = anthropic.Anthropic if provider.kind == "anthropic" else OpenAICompatClient
+    expected = {"anthropic": anthropic.Anthropic, "openai": OpenAICompatClient,
+                "opencode_local": OpenCodeLocalClient}[provider.kind]
     assert isinstance(client, expected)
     # defaults must be filled in so the loop never sends model=""
     assert settings.model == provider.model
     assert settings.small_model == provider.small_model
 
 
-@pytest.mark.parametrize("name", list(PROVIDERS))
+@pytest.mark.parametrize("name", [name for name, p in PROVIDERS.items() if p.key_env])
 def test_missing_key_exits_with_the_key_name(name, monkeypatch):
     monkeypatch.delenv(PROVIDERS[name].key_env, raising=False)
     settings = Settings(provider=name, model="", small_model="", api_key="", base_url=None)

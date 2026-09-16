@@ -257,7 +257,8 @@ async function testConnection(key){
 }
 async function saveProvider(provider){
   const info = (D.providers || []).find(x => x.key === provider);
-  const field = info && info.fields[0] && document.getElementById(`provider-${provider}-${info.fields[0].name}`);
+  const keyField = (info?.fields || []).find(field => field.secret);
+  const field = keyField && document.getElementById(`provider-${provider}-${keyField.name}`);
   const payload = {provider};
   if (field && field.value) payload.key = field.value;
   // Models are global fields for the *current* provider. Switching cards must
