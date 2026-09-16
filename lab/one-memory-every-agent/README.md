@@ -98,8 +98,16 @@ This table is filled in from real runs only.
 - **The objection to raise yourself:** why hand your memory to a third company?
   Because you can see it, edit it and export it, which neither vendor offers.
   Others sell shared memory too (Mem0's OpenMemory, MIND's Grok plugin).
-- **Board:** [whiteboards/one-memory-every-agent.excalidraw](whiteboards/one-memory-every-agent.excalidraw),
-  drawn by `build_board.py`.
+- **Boards**, each drawn from code so a fact change is a one-line edit:
+  - [harness-jobs.excalidraw](whiteboards/harness-jobs.excalidraw) (`build_harness_jobs.py`):
+    what a personal agent harness is for. Six jobs, and the five parts every
+    job needs. The last part, memory, is the one you cannot take with you.
+  - [grok-vs-muse.excalidraw](whiteboards/grok-vs-muse.excalidraw) (`build_grok_vs_muse.py`):
+    the two system designs side by side. Solid boxes are what the vendor
+    documents; dashed boxes are our inference, because neither company
+    publishes how memory is stored or how the agent plans.
+  - [one-memory-every-agent.excalidraw](whiteboards/one-memory-every-agent.excalidraw) (`build_board.py`):
+    the fix, with every agent reaching one memory.
 
 ## Graduation
 
