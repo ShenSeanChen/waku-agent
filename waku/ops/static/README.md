@@ -6,7 +6,9 @@ files to change the UI; edit `dashboard.py` to change the server/API.
 
 - `index.html` — the shell (sidebar nav, `<main>`, chat dock) + the ordered
   `<script>` tags.
-- `style.css` — one flat file, `:root` design tokens at the top, light + dark.
+- `style.css` — one flat file of rules; every value comes from the tokens in
+  `design/` (see "Design system" below).
+- `design/`, `fonts/` — the Waku Memory design system and its three fonts.
 - `js/` — the app, split by concern (below).
 
 ## The files (`js/`), in load order
@@ -17,7 +19,8 @@ runs the bootstrap and must load last**.
 
 | file | what lives here |
 |------|-----------------|
-| `util.js`    | `esc`, markdown renderer, core globals (`D`, `editing`), `postJSON`, `reveal` |
+| `util.js`    | `esc`, markdown renderer, core globals (`D`, `editing`), `postJSON`, `reveal`, `stampSlots` |
+| `theme.js`   | the system / light / dark toggle (`cycleTheme`), stored as `waku-theme` like the Memory console |
 | `memory.js`  | inline Memory / SOUL / skill editing actions |
 | `models.js`  | `applyModel` (the one `/api/settings` writer), model picker / catalog / pins |
 | `render.js`  | formatters + chat card renderers (`stagesRow`/`teleFooter`) + chatlog + streaming + `sendChat` |
@@ -51,6 +54,12 @@ Data flows one way: `refresh()` (main.js) fetches `/api/data` into the global
   stop — the whole point is that this reads and runs with nothing installed.
 - **No emojis in UI** (project rule). Known pre-existing exception: the `★`/`☆`
   pin stars in `models.js` (typographic dingbats, not colour emoji) — left as-is.
+
+## Design system
+
+How the dashboard looks, the token rules and the `js/ui.js` primitives are in
+[docs/context/design-system.md](../../../docs/context/design-system.md). Read it
+before changing how anything looks.
 
 ## Verifying a change (no JS test runner exists)
 

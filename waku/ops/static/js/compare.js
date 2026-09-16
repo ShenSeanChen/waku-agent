@@ -254,7 +254,7 @@ function compareErrorReason(err){
 // not low capability (a model can't know about releases after its cutoff).
 // Server-supplied (MODEL_CUTOFF in dashboard.py); absent = vendor unpublished.
 function cutoffTag(cutoff){
-  return cutoff ? ` <span class="meta" style="font-size:11px;white-space:nowrap"
+  return cutoff ? ` <span class="meta" style="font-size:var(--text-xs);white-space:nowrap"
     title="knowledge cutoff — this model's world knowledge ends here; it cannot know releases after this date">knows to ${esc(cutoff)}</span>` : "";
 }
 // The sub-agent's receipt: pi working inside this card. Live = a small
@@ -289,49 +289,54 @@ function replyBlock(res){
   const long = r.length > 400 || (r.match(/\n/g)||[]).length > 8;
   if (!long) return `<div class="r cmp-reply">${renderMarkdown(res.reply||"")}</div>`;
   return `<div class="r cmp-reply ${res.replyOpen?"":"clamped"}">${renderMarkdown(res.reply||"")}</div>
-    <a class="reveal cmp-more" onclick="const r=compareState.results['${esc(res.spec)}']; if(r){r.replyOpen=!r.replyOpen; render();}">${res.replyOpen?"show less":"show full reply"}</a>`;
+    ${uiButton(res.replyOpen?"show less":"show full reply", {level: "tertiary", size: "sm", cls: "cmp-more",
+      onclick: `const r=compareState.results['${esc(res.spec)}']; if(r){r.replyOpen=!r.replyOpen; render();}`})}`;
 }
 function compareCol(res){
   if (res.error){
     const why = compareErrorReason(res.error);
-    return `<div class="cmp-col err"><div class="cmp-h"><span class="mm-prov">${esc(res.provider)}</span> <code>${esc(res.model)}</code>${cutoffTag(res.cutoff)}
-      <span class="srcpill apple">error</span></div>
+    return uiCard(`<div class="cmp-h"><span class="mm-prov">${esc(res.provider)}</span> <code>${esc(res.model)}</code>${cutoffTag(res.cutoff)}
+      ${uiBadge("error", "bad")}</div>
       ${why?`<div class="meta" style="color:var(--bad)"><b>${esc(why)}</b></div>`:""}
-      <div class="meta" style="opacity:.7">${esc(res.error)}</div></div>`;
+      <div class="meta" style="opacity:.7">${esc(res.error)}</div>`, {cls: "cmp-col err", size: "sm"});
   }
   const tools = (res.tools||[]).map(t => t.tool === "delegate_task"
     ? `<span class="stage done subagent" title="the loop spawned a pi sub-agent on ${esc(res.model)} to write &amp; run the code">delegate_task → pi · ${esc(res.model)}</span>`
     : toolChip(t.tool)).join("");
-  const gateBadgeHtml = `<span class="badge ${res.gate&&res.gate.decision==="retrieve"?"retrieve":""}">gate · ${esc(res.gate?res.gate.decision:"…")}</span>`;
+  const decision = res.gate ? res.gate.decision : "…";
+  const gateBadgeHtml = uiBadge("gate · " + esc(decision), decision === "retrieve" ? "live" : "neutral");
   if (res.streaming){
-    return `<div class="cmp-col">
+    return uiCard(`
       <div class="cmp-h"><span class="mm-prov">${esc(res.provider)}</span> <code>${esc(res.model)}</code>${cutoffTag(res.cutoff)}
         <span class="live-dot"></span></div>
       <div class="cmp-stats">${gateBadgeHtml}</div>
       ${tools?`<div class="stages" style="flex-wrap:wrap">${tools}</div>`:""}
       ${res.sub?subPane(res.sub, true):""}
-      <div class="meta">${(res.tools||[]).length?"running tools…":"thinking…"} <span class="caret"></span></div>
-    </div>`;
+      <div class="meta">${(res.tools||[]).length?"running tools…":"thinking…"} <span class="caret"></span></div>`,
+      {cls: "cmp-col", size: "sm"});
   }
   const c = res.completion;
-  const completionBadge = c ? `<span class="cmp-score ${c.passed?"pass":"fail"}" title="${esc(c.why||"")}">${c.passed?"solved":"failed"}${c.passed?"":" · "+esc(c.why||"")}</span>` : "";
+  const completionBadge = c ? (c.passed
+    ? uiBadge("solved", "ok", c.why || "")
+    : uiBadge("failed · " + esc(c.why || ""), "bad", c.why || "")) : "";
   const q = res.quality;
-  const qualityBadge = q && q.score!=null ? `<span class="cmp-q ${q.score>=7?"hi":q.score>=4?"mid":"lo"}" title="graded ${q.score}/10 by ${esc(q.judge||"referee")} — ${esc(q.reason||"")}">${q.score}/10</span>` : "";
+  const qualityBadge = q && q.score!=null
+    ? uiBadge(`${q.score} / 10`, "value", `graded ${q.score}/10 by ${q.judge||"referee"} — ${q.reason||""}`) : "";
   // per-card grade button — grade just this card if the referee skipped it (429)
-  const gradeBtn = `<a class="reveal cmp-grade1" title="grade this card with the referee" onclick="gradeCard('${esc(res.spec)}')">${res._grading?"grading…":(q&&q.score!=null?"re-grade":"grade")}</a>`;
-  return `<div class="cmp-col${c?(c.passed?" solved":" failed"):""}">
+  const gradeBtn = uiButton(res._grading?"grading…":(q&&q.score!=null?"re-grade":"grade"), {level: "tertiary", size: "sm",
+    cls: "cmp-grade1", title: "grade this card with the referee", onclick: `gradeCard('${esc(res.spec)}')`});
+  return uiCard(`
     <div class="cmp-h"><span class="mm-prov">${esc(res.provider)}</span> <code>${esc(res.model)}</code>${cutoffTag(res.cutoff)}${completionBadge}${qualityBadge}${gradeBtn}</div>
     <div class="cmp-stats">
       ${gateBadgeHtml}
-      <span class="chip ${compareState.sortBy==="latency"?"sorted":""}">${secs(res.latency_ms)}</span>
-      <span class="chip">${res.iterations??"?"} iter</span>
-      <span class="chip ${compareState.sortBy==="cost"?"money":""}">${money(res.cost_usd||0)}</span>
-      <span class="chip ${compareState.sortBy==="tokens"?"sorted":""}">${(res.tokens_in||0)+(res.tokens_out||0)} tok</span>
+      ${uiBadge(secs(res.latency_ms), "value")}
+      ${uiBadge(`${res.iterations??"?"} iter`, "value")}
+      ${uiBadge(money(res.cost_usd||0), "value")}
+      ${uiBadge(`${(res.tokens_in||0)+(res.tokens_out||0)} tok`, "value")}
     </div>
     ${tools?`<div class="stages" style="flex-wrap:wrap">${tools}</div>`:""}
     ${res.sub?subPane(res.sub, false, res.spec):""}
-    ${replyBlock(res)}
-  </div>`;
+    ${replyBlock(res)}`, {cls: "cmp-col" + (c ? (c.passed ? " solved" : " failed") : ""), size: "sm"});
 }
 
 // The Arena runs two races, and they are the same machine with a different
@@ -353,7 +358,7 @@ function modelArenaView(d){
     const spec = `${p.provider}:${p.model}`, on = compareState.picked.has(spec);
     return `<label class="cmp-pick ${on?"on":""}"><input type="checkbox" ${on?"checked":""}
       onchange="toggleCompareModel('${esc(spec)}')"> <span class="mm-prov">${esc(p.provider)}</span> ${esc(p.model)}</label>`;
-  }).join("") : `<div class="meta">No models pinned yet — star some in <a class="reveal" onclick="location.hash='#models'">Models</a>.</div>`;
+  }).join("") : `<div class="meta">No models pinned yet — star some in ${uiLink("Models", "#models")}.</div>`;
   const n = compareState.picked ? compareState.picked.size : 0;
 
   // One column per raced model, in order. Each shows "racing…" until its result
@@ -376,12 +381,16 @@ function modelArenaView(d){
     // on every model in THIS run (the cards below); "clear cards" just dismisses
     // the columns. Both act on the current run.
     const regradeBtn = (done.length && !compareState.running)
-      ? `<a class="reveal" style="margin-left:auto;font-size:12px" title="Re-run the referee on every model in this run (fills a skipped/429'd grade, or re-scores)" onclick="regradeCompare()">${compareState.regrading?"re-grading…":"re-grade run"}</a>` : "";
+      ? uiButton(compareState.regrading?"re-grading…":"re-grade run", {level: "tertiary", size: "sm", onclick: "regradeCompare()",
+          title: "Re-run the referee on every model in this run (fills a skipped/429'd grade, or re-scores)",
+          attrs: `style="margin-left:auto"`}) : "";
     const clearBtn = (order.length && !compareState.running)
-      ? `<a class="reveal" style="${regradeBtn?"":"margin-left:auto;"}font-size:12px" onclick="clearCards()">clear cards</a>` : "";
+      ? uiButton("clear cards", {level: "tertiary", size: "sm", onclick: "clearCards()",
+          attrs: regradeBtn ? "" : `style="margin-left:auto"`}) : "";
     // Prominent, tab-like sort buttons — the selected one is highlighted.
     const sortBar = (done.length || clearBtn) ? `<div class="cmp-sortbar">${done.length
-      ? `sort by ${sorters.map(([k, label]) => `<button class="cmp-sortbtn ${compareState.sortBy === k ? "on" : ""}" onclick="setCompareSort('${k}')">${label}</button>`).join("")}`
+      ? `sort by ${sorters.map(([k, label]) => uiButton(label, {level: "secondary", size: "sm",
+          cls: compareState.sortBy === k ? "cmp-sortbtn on" : "cmp-sortbtn", onclick: `setCompareSort('${k}')`})).join("")}`
       : ""}${regradeBtn}${clearBtn}</div>` : "";
     // Only a progress line while the race is still running; once every column is
     // in, the sort tabs + cards + scoreboard say it all (no redundant summary).
@@ -402,10 +411,10 @@ function modelArenaView(d){
     const cols = shown.map(s => {
       const r = results[s];
       if (r) return compareCol(r);
-      return `<div class="cmp-col"><div class="cmp-h"><span class="mm-prov">${esc(s.split(":")[0])}</span> <code>${esc(s.split(":").slice(1).join(":"))}</code></div>
-        <div class="meta">racing… <span class="caret"></span></div></div>`;
+      return uiCard(`<div class="cmp-h"><span class="mm-prov">${esc(s.split(":")[0])}</span> <code>${esc(s.split(":").slice(1).join(":"))}</code></div>
+        <div class="meta">racing… <span class="caret"></span></div>`, {cls: "cmp-col", size: "sm"});
     }).join("");
-    grid = `${summary ? `<div class="meta" style="margin:2px 0 6px">${summary}</div>` : ""}${sortBar}<div class="cmp-grid">${cols}</div>`
+    grid = `${summary ? `<div class="meta" style="margin:calc(var(--spacing) * 0.5) 0 calc(var(--spacing) * 1.5)">${summary}</div>` : ""}${sortBar}<div class="cmp-grid">${cols}</div>`
       + (compareState.raceError ? `<div class="meta" style="color:var(--bad)">${esc(compareState.raceError)}</div>` : "");
   }
 
@@ -413,7 +422,7 @@ function modelArenaView(d){
   // 5s refresh from re-triggering); loadCompareHistory re-renders when it lands.
   if (compareState.history === undefined){ compareState.history = []; setTimeout(loadCompareHistory, 0); }
 
-  return `<div class="card">
+  return uiCard(`
     <div class="cmp-controls">
       <span class="meta cmp-blurb">One message, every brain at once — same harness, isolated homes, real receipts (gate · latency · cost · tools). Compare, don't guess.</span>
       <label class="cmp-judge ${compareState.apple?"on":""}" style="margin-left:auto" title="Write create_event results to your REAL Apple Calendar (the 'Waku' calendar). Off by default so a race doesn't spam duplicates — when on, EACH model writes its own event (use 1-2 models).">
@@ -425,13 +434,12 @@ function modelArenaView(d){
         <select onchange="setJudgeModel(this.value)" onclick="event.stopPropagation()" ${compareState.judge?"":"disabled"}>
           ${JUDGES.map(j=>`<option value="${j.spec}" ${(compareState.judgeModel||"openai:gpt-5.6-sol")===j.spec?"selected":""}>${esc(j.label)}</option>`).join("")}
         </select></label>
-      <button class="save cmp-race" onclick="runCompare()" ${(!n||compareState.running)?"disabled":""}>
-        ${compareState.running?"Racing…":`Race ${n} model${n===1?"":"s"}`}</button>
+      ${uiButton(compareState.running?"Racing…":`Race ${n} model${n===1?"":"s"}`, {level: "primary", cls: "cmp-race",
+        onclick: "runCompare()", attrs: (!n||compareState.running) ? "disabled" : ""})}
     </div>
     <textarea id="cmp-msg" class="cmp-input" rows="2" onfocus="markEditing()"
       oninput="compareState.message=this.value">${esc(compareState.message)}</textarea>
-    <div class="cmp-picks">${chips}</div>
-  </div>${grid}${compareHistoryHtml()}`;
+    <div class="cmp-picks">${chips}</div>`) + grid + compareHistoryHtml();
 }
 
 // --- Memory arena -----------------------------------------------------------
@@ -591,7 +599,13 @@ function maProbe(id){
   return null;
 }
 
-const OUTCOME_CELL = (r) => `<span class="ma-o ma-${r.outcome}" title="${esc(r.why||"")}">${r.outcome}</span>`;
+// The badge variant each outcome takes — the same four words as OUTCOME_HELP.
+const OUTCOME_VARIANT = {pass: "ok", stale: "warn", invented: "bad", miss: "miss"};
+// A grade says what it means on hover, then why this answer got it: the
+// page has no legend, so the chip itself is where the reader asks.
+const OUTCOME_MEANING = Object.fromEntries(OUTCOME_HELP);
+const OUTCOME_CELL = (r) => uiBadge(esc(r.outcome), OUTCOME_VARIANT[r.outcome] || "neutral",
+  [OUTCOME_MEANING[r.outcome], r.why].filter(Boolean).join(" — "));
 
 function maResultsHtml(){
   if (!maRun.rows.length && !maRun.running && !maRun.error) return "";
@@ -612,47 +626,43 @@ function maResultsHtml(){
   // not been asked anything yet.
   const cell = (p, n, first) => {
     const r = maRun.rows.find(x => x.probe === p && x.contestant === n);
-    if (r) return `<td>${OUTCOME_CELL(r)}
+    if (r) return `${OUTCOME_CELL(r)}
       <div class="ma-facts-meta">${(r.ms/1000).toFixed(1)}s &middot; ${r.tokens} tok${
         r.calls ? " in " + r.calls + (r.calls === 1 ? " call" : " calls") : ""} &middot; ${
         r.retrieved === true ? "searched memory" : r.retrieved === false ? "no lookup" : "gate unknown"}</div>
-      <div class="ma-ans">${esc((r.answer||"").slice(0,140))}</div></td>`;
-    if (!maRun.running) return `<td class="meta">—</td>`;
+      <div class="ma-ans">${esc((r.answer||"").slice(0,140))}</div>`;
+    if (!maRun.running) return `<span class="meta">—</span>`;
     const seeded = (maRun.seeded || {})[n];
-    if (seeded === undefined) return `<td class="meta">queued</td>`;
+    if (seeded === undefined) return `<span class="meta">queued</span>`;
     // "seeding 4/8" reads like a progress bar for something the viewer has not
     // been shown. "told 4 of 8" names the actual event: this store has now been
     // told four of the eight facts it is about to be questioned on.
     if (seeded < seedTotal) return first
-      ? `<td class="meta">being told ${seeded} of ${seedTotal}<span class="caret"></span></td>`
-      : `<td class="meta"></td>`;
-    return first ? `<td class="meta">asking<span class="caret"></span></td>`
-                 : `<td class="meta">waiting</td>`;
+      ? `<span class="meta">being told ${seeded} of ${seedTotal}<span class="caret"></span></span>`
+      : "";
+    return first ? `<span class="meta">asking<span class="caret"></span></span>`
+                 : `<span class="meta">waiting</span>`;
   };
-  const board = maRun.board ? `<div class="card" style="padding:4px 8px"><div class="tablescroll"><table>
-      <tr><th>store</th><th>pass</th><th>stale</th><th>invented</th><th>miss</th><th>tokens</th></tr>
-      ${maRun.board.map(b=>`<tr><td><code>${esc(b.contestant)}</code></td>
-        <td>${b.pass}</td><td>${b.stale}</td><td>${b.invented}</td><td>${b.miss}</td>
-        <td class="meta">${b.tokens}</td></tr>`).join("")}
-    </table></div></div>` : "";
-  return `<h2 style="margin-top:22px">Results${maRun.running?' <span class="meta" style="font-weight:400">— running…</span>':""}</h2>
-    ${maRun.error?`<div class="card" style="color:var(--bad)">${esc(maRun.error)}</div>`:""}
+  const board = maRun.board ? uiTable(
+    ["store", ...["pass", "stale", "invented", "miss"].map(o => `<span title="${esc(OUTCOME_MEANING[o])}">${o}</span>`), "tokens"],
+    maRun.board.map(b => [`<code>${esc(b.contestant)}</code>`, b.pass, b.stale, b.invented, b.miss,
+                          `<span class="meta">${b.tokens}</span>`])) : "";
+  const grid = uiTable(["probe", ...names.map(n => esc(n))], probes.map((p, i) => {
+    const any = maRun.rows.find(x => x.probe === p);
+    const fx = maProbe(p);
+    const leaked = (maRun.leaked || []).includes(p);
+    const probeCell = `${uiBadge(esc((any && any.test) || (fx && fx.test) || ""), "neutral")}${
+        leaked ? " " + uiBadge("leaked", "bad", "The no-memory control answered this correctly, so this question did not require the store in this run.") : ""}
+      <div class="ma-q">${esc((any && any.question) || (fx && fx.question) || p)}</div>
+      <div class="ma-facts-meta">${fx ? (fx.expect_refusal
+          ? "must decline" : "wants: " + esc((fx.expect_any||[]).join(" / "))) : ""}${
+        fx && (fx.stale_any||[]).length ? " &middot; not: " + esc(fx.stale_any.join(" / ")) : ""}</div>`;
+    return [probeCell, ...names.map(n => cell(p, n, i === 0))];
+  }));
+  return `<h2 style="margin-top:var(--space-6)">Results${maRun.running?' <span class="meta" style="font-weight:400">— running…</span>':""}</h2>
+    ${maRun.error?uiCard(`<div style="color:var(--bad)">${esc(maRun.error)}</div>`):""}
     ${board}
-    <div class="card" style="padding:4px 8px"><div class="tablescroll"><table>
-      <tr><th>probe</th>${names.map(n=>`<th>${esc(n)}</th>`).join("")}</tr>
-      ${probes.map((p, i)=>{
-        const any = maRun.rows.find(x => x.probe === p);
-        const fx = maProbe(p);
-        const leaked = (maRun.leaked || []).includes(p);
-        return `<tr>
-          <td><span class="ma-test">${esc((any && any.test) || (fx && fx.test) || "")}</span>${
-            leaked ? ' <span class="ma-o ma-invented" title="The no-memory control answered this correctly, so this question did not require the store in this run.">leaked</span>' : ""}
-            <div class="ma-q">${esc((any && any.question) || (fx && fx.question) || p)}</div>
-            <div class="ma-facts-meta">${fx ? (fx.expect_refusal
-                ? "must decline" : "wants: " + esc((fx.expect_any||[]).join(" / "))) : ""}${
-              fx && (fx.stale_any||[]).length ? " &middot; not: " + esc(fx.stale_any.join(" / ")) : ""}</div>
-          </td>${names.map(n=>cell(p, n, i === 0)).join("")}</tr>`;}).join("")}
-    </table></div></div>`;
+    ${grid}`;
 }
 
 async function maSeeAll(store){
@@ -673,11 +683,11 @@ async function maSeeAll(store){
 function memoryArenaView(){
   if (memoryArenaFixture === undefined){
     setTimeout(loadMemoryArena, 0);
-    return `<div class="card empty">loading…</div>`;
+    return uiCard("loading…", {cls: "empty"});
   }
   if (memoryArenaFixture === null){
-    return `<div class="card empty">The probe file lives in <code>evals/memory_arena.json</code>,
-      which a packaged install does not ship. Run Waku from a clone to see it.</div>`;
+    return uiCard(`The probe file lives in <code>evals/memory_arena.json</code>,
+      which a packaged install does not ship. Run Waku from a clone to see it.`, {cls: "empty"});
   }
   const track = memoryArenaFixture.tracks[(maTrack && memoryArenaFixture.tracks[maTrack])
     ? maTrack : Object.keys(memoryArenaFixture.tracks)[0]];
@@ -699,7 +709,7 @@ function memoryArenaView(){
   // a title= on the control it was describing: the reader who needs it hovers,
   // and the reader who does not gets the vertical space back for store cards.
   // On this page that space is the scarcest thing there is.
-  const picker = `<div class="ma-race ma-pickers" style="margin-bottom:10px">
+  const picker = `<div class="ma-race ma-pickers" style="margin-bottom:var(--space-2)">
       <label class="fld" style="margin:0">Questions
         <select onchange="pickProbeFile(this.value)"
                 title="Drop a JSON file in .waku/probes/ to add your own question sets.">
@@ -712,22 +722,21 @@ function memoryArenaView(){
             m.spec===maModelSpec()?"selected":""}>${esc(m.spec)} — $${m.price_in}/$${m.price_out} per M</option>`).join("")}
         </select></label>` : ""}
     </div>`;
-  const race = `<div class="card">
+  const busy = (maRun.running || !picks.length) ? "disabled" : "";
+  const race = uiCard(`
     ${picker}
-    <div class="cmp-picks" style="margin-bottom:10px">${chips}</div>
+    <div class="cmp-picks" style="margin-bottom:var(--space-2)">${chips}</div>
     <div class="ma-race">
-      <button class="save ghost" onclick="seedMemoryArena()"
-              title="Telling never changes, so it is its own button — do it once and ask as many times as you like."
-              ${maRun.running||!picks.length?"disabled":""}>
-        ${maRun.running && maRun.seedOnly ? "Telling…"
-          : `Tell ${picks.length} store${picks.length===1?"":"s"}`}</button>
-      <button class="save" onclick="runMemoryArena()"
-              title="Asks the same questions of every store and scores the answers. Tells anything not yet told. Each store runs in its own copy; your real memory is never touched."
-              ${maRun.running||!picks.length?"disabled":""}>
-        ${maRun.running && !maRun.seedOnly ? "Asking…"
-          : `Ask ${picks.length} store${picks.length===1?"":"s"}`}</button>
+      ${uiButton(maRun.running && maRun.seedOnly ? "Telling…"
+          : `Tell ${picks.length} store${picks.length===1?"":"s"}`, {level: "secondary", onclick: "seedMemoryArena()",
+        title: "Telling never changes, so it is its own button — do it once and ask as many times as you like.",
+        attrs: busy})}
+      ${uiButton(maRun.running && !maRun.seedOnly ? "Asking…"
+          : `Ask ${picks.length} store${picks.length===1?"":"s"}`, {level: "primary", onclick: "runMemoryArena()",
+        title: "Asks the same questions of every store and scores the answers. Tells anything not yet told. Each store runs in its own copy; your real memory is never touched.",
+        attrs: busy})}
       ${maRun.running ? `<span class="meta">${esc(maRun.log)}</span>` : ""}
-    </div></div>`;
+    </div>`);
   // ORDER MATTERS, and it used to be wrong: race, results, stores, asks. The
   // questions were dead last, so you could start a race — and film one —
   // without ever having seen what the stores get told or asked. A benchmark
@@ -794,20 +803,20 @@ async function loadMemoryStores(){
 }
 
 function maStoresHtml(){
-  const btn = `<button class="save ghost" onclick="loadMemoryStores()"
-    ${maStores === "loading" ? "disabled" : ""}>${maStores === "loading" ? "reading…" : "Read stores"}</button>`;
+  const btn = uiButton(maStores === "loading" ? "reading…" : "Read stores", {level: "secondary", size: "sm",
+    onclick: "loadMemoryStores()", attrs: maStores === "loading" ? "disabled" : ""});
   // The heading carries the button. This used to be a whole card wrapping one
   // control and a paragraph — a card's worth of vertical space to say "press
   // this". On a page where the useful content is five store cards further
   // down, that is the most expensive furniture on screen.
   const head = `<h2 class="ma-head">What each store is holding ${btn}
-    <button class="save ghost" onclick="cleanMemoryStores()"
-      title="Deletes only what this race wrote: its .waku-arena copies and its waku-arena partition. Your own memory and the waku partition are never named, so they cannot be reached.">Clean</button>
+    ${uiButton("Clean", {level: "secondary", size: "sm", onclick: "cleanMemoryStores()",
+      title: "Deletes only what this race wrote: its .waku-arena copies and its waku-arena partition. Your own memory and the waku partition are never named, so they cannot be reached."})}
     <span class="meta">${maClean || "what each made of the SAME facts &middot; live call, on demand"}</span></h2>`;
   if (!Array.isArray(maStores)) return head;
-  const cards = maStores.map(s => `<div class="card ma-store">
+  const cards = maStores.map(s => uiCard(`
       <div class="ma-store-h"><code>${esc(s.store)}</code>
-        ${s.error ? `<span class="ma-o ma-invented">error</span>`
+        ${s.error ? uiBadge("error", "bad", s.error)
                   : `<span class="meta">${s.count} fact${s.count===1?"":"s"}</span>`}</div>
       <div class="ma-prov">${s.kind === "arena"
         ? `this race's own copy &middot; <code>.waku-arena/</code>`
@@ -823,11 +832,10 @@ function maStoresHtml(){
           ? `<ul class="ma-facts">${s.facts.map(f=>`<li>${f.subject
               ? `<b>${esc(f.subject)}</b> — ` : ""}${esc(f.content)}</li>`).join("")}</ul>${
               s.count > s.facts.length
-                ? `<div class="meta" style="margin-top:6px">showing ${s.facts.length} of ${s.count}
-                     &middot; <a class="reveal" onclick="maSeeAll('${esc(s.store)}')">see all</a></div>`
+                ? `<div class="meta" style="margin-top:calc(var(--spacing) * 1.5)">showing ${s.facts.length} of ${s.count}
+                     &middot; ${uiButton("see all", {level: "tertiary", size: "sm", onclick: `maSeeAll('${esc(s.store)}')`})}</div>`
                 : ""}`
-          : `<div class="meta">empty</div>`}
-    </div>`).join("");
+          : `<div class="meta">empty</div>`}`, {cls: "ma-store"})).join("");
   // This used to carry a warning that the counts were NOT a comparison —
   // because sqlite was the live agent, with weeks of real use, sitting beside
   // stores that had only ever seen one benchmark run. The warning was correct
@@ -845,33 +853,23 @@ function maStoresHtml(){
 // buried the thing anyone actually wants: the question, and what counts as
 // right. Hover a row for the reasoning.
 function maAsksHtml(track){
-  return `<h2 style="margin-top:22px">What they get asked
+  return `<h2 style="margin-top:var(--space-6)">What they get asked
       <span class="meta" style="font-weight:400">— ${track.seed.length} facts in, ${track.probes.length} questions</span></h2>
-    ${/* ONE table, two sections. They were two cards, which read as two
-          unrelated lists — and they are the opposite of unrelated: the second
-          only means anything BECAUSE of the first. A section row inside a
-          single table says "same subject, two halves" in a way two cards with
-          a gap between them cannot, and it saves a card's worth of height on
-          a page where that is the scarce resource. */""}
-    <div class="card" style="padding:4px 8px"><div class="tablescroll"><table>
-      <tr><th>told</th><th></th><th></th></tr>
-      ${track.seed.map(s=>`<tr><td class="meta" colspan="3">${esc(s)}</td></tr>`).join("")}
-      <tr><th>then asked</th><th>right answer</th><th>wrong answer</th></tr>
-      ${track.probes.map(p=>`<tr title="${esc(p.note||"")}">
-        <td>${esc(p.question)}</td>
-        <td><span class="ma-expect">${p.expect_refusal ? "must decline"
-            : esc((p.expect_any||[]).join(" / "))}</span></td>
-        <td>${(p.stale_any||[]).length ? `<span class="ma-forbid">${esc(p.stale_any.join(" / "))}</span>`
-            : p.expect_refusal ? `<span class="ma-forbid">any specific answer</span>`
-            : '<span class="meta">—</span>'}</td></tr>`).join("")}
-    </table></div></div>
-    <div class="meta" style="margin-top:8px">${memoryArenaFixture.is_example
+    ${/* Two tables, back to back with no card between them: what is told,
+          then what is asked. They were two cards once, which read as two
+          unrelated lists — and the second only means anything BECAUSE of the
+          first. The note on each probe is its question's hover title. */""}
+    ${uiTable(["told"], track.seed.map(s => [`<span class="meta">${esc(s)}</span>`]))}
+    ${uiTable(["then asked", "right answer", "wrong answer"], track.probes.map(p => [
+      `<span title="${esc(p.note||"")}">${esc(p.question)}</span>`,
+      `<span class="ma-expect">${p.expect_refusal ? "must decline"
+          : esc((p.expect_any||[]).join(" / "))}</span>`,
+      (p.stale_any||[]).length ? `<span class="ma-forbid">${esc(p.stale_any.join(" / "))}</span>`
+          : p.expect_refusal ? `<span class="ma-forbid">any specific answer</span>`
+          : '<span class="meta">—</span>']))}
+    <div class="meta" style="margin-top:var(--space-2)">${memoryArenaFixture.is_example
       ? `Example probes. Point <code>WAKU_MEMORY_PROBES</code> at your own file.`
-      : `From <code>${esc(memoryArenaFixture.source)}</code>`}
-      &nbsp;·&nbsp; <span class="ma-o ma-pass">pass</span> right
-      <span class="ma-o ma-stale">stale</span> gave a superseded answer
-      <span class="ma-o ma-invented">invented</span> made it up
-      <span class="ma-o ma-miss">miss</span> said it did not know</div>`;
+      : `From <code>${esc(memoryArenaFixture.source)}</code>`}</div>`;
 }
 
 
@@ -943,11 +941,13 @@ function costQualityScatter(agg){
   const py = y => H - B - (y / 10) * (H - T - B);
   const gr = [0,2,4,6,8,10].map(v => `<line x1="${L}" y1="${py(v)}" x2="${W-R}" y2="${py(v)}" class="sc-grid"/>
     <text x="${L-6}" y="${py(v)+3}" class="sc-tick" text-anchor="end">${v}</text>`).join("");
+  // One hue, stepped by grade (Memory's chart rule): the colour only ranks, so
+  // the label says the number outright — grade (or completion %) and cost.
+  const fill = y => y >= 8 ? "var(--chart-1)" : y >= 6 ? "var(--chart-2)" : y >= 4 ? "var(--chart-3)" : "var(--chart-4)";
   const dots = pts.sort((a,b)=>a.x-b.x).map(p => {
-    const good = p.y >= 7, mid = p.y >= 4;
-    const cls = good ? "hi" : mid ? "mid" : "lo";
-    return `<circle cx="${px(p.x).toFixed(1)}" cy="${py(p.y).toFixed(1)}" r="5" class="sc-dot ${cls}"/>
-      <text x="${(px(p.x)+9).toFixed(1)}" y="${(py(p.y)+3).toFixed(1)}" class="sc-lbl">${esc(p.a.model)} · ${money(p.x)}</text>`;
+    const score = useQ ? p.y.toFixed(1) : `${Math.round(p.y * 10)}%`;
+    return `<circle cx="${px(p.x).toFixed(1)}" cy="${py(p.y).toFixed(1)}" r="5" class="sc-dot" style="fill:${fill(p.y)}"/>
+      <text x="${(px(p.x)+9).toFixed(1)}" y="${(py(p.y)+3).toFixed(1)}" class="sc-lbl">${esc(p.a.model)} · ${score} · ${money(p.x)}</text>`;
   }).join("");
   // Hover the y-axis label to read the criteria (native SVG <title> tooltip).
   const yCriteria = useQ
@@ -958,8 +958,8 @@ function costQualityScatter(agg){
       + "0     ignores it, or claims an action it didn't take"
     : "Completion — fraction of the task's checklist met (right tool, right args, enough calls). Deterministic, no judge.";
   const yLabel = useQ ? "referee grade" : "completion";
-  return `<div class="card" style="padding:12px 14px;margin-top:14px">
-    <div class="meta" style="margin-bottom:4px">Cost vs ${useQ?"quality (referee grade)":"completion"} — cheap &amp; good is top-left</div>
+  return uiCard(`
+    <div class="meta" style="margin-bottom:var(--spacing)">Cost vs ${useQ?"quality (referee grade)":"completion"} — cheap &amp; good is top-left</div>
     <svg viewBox="0 0 ${W} ${H}" class="scatter" preserveAspectRatio="xMidYMid meet">
       <line x1="${L}" y1="${T}" x2="${L}" y2="${H-B}" class="sc-axis"/>
       <line x1="${L}" y1="${H-B}" x2="${W-R}" y2="${H-B}" class="sc-axis"/>
@@ -968,7 +968,7 @@ function costQualityScatter(agg){
       <text x="14" y="${(T+(H-B-T)/2).toFixed(0)}" class="sc-tick sc-ylabel" text-anchor="middle" transform="rotate(-90 14 ${(T+(H-B-T)/2).toFixed(0)})">${yLabel} →</text>
       <rect class="sc-yhit" x="0" y="${T}" width="26" height="${H-B-T}" data-tip="${esc(yCriteria)}"
         onmouseenter="showScatterTip(event)" onmousemove="moveScatterTip(event)" onmouseleave="hideScatterTip()"/>
-    </svg></div>`;
+    </svg>`);
 }
 function compareHistoryHtml(){
   const agg = boardAggregate();
@@ -979,34 +979,41 @@ function compareHistoryHtml(){
   // ascending first, click again to flip (arrow shows the active column + dir).
   const bs = compareState.boardSort || (compareState.boardSort = {key: "total_cost_usd", dir: "asc"});
   const arrow = k => bs.key === k ? (bs.dir === "asc" ? " ▲" : " ▼") : "";
-  const th = (k, label) => `<th class="cmp-th ${bs.key===k?"on":""}" onclick="setBoardSort('${k}')">${label}${arrow(k)}</th>`;
+  // uiTable wraps each label in its own <th>, so a sortable label is a span
+  // carrying the click and the cmp-th look.
+  const th = (k, label, title = "") => `<span class="cmp-th ${bs.key===k?"on":""}" onclick="setBoardSort('${k}')"${title ? ` title="${esc(title)}"` : ""}>${label}${arrow(k)}</span>`;
+  const meta = v => `<span class="meta">${v}</span>`;
   const rows = [...agg].sort((x, y) => ((x[bs.key] ?? 0) - (y[bs.key] ?? 0)) * (bs.dir === "asc" ? 1 : -1));
+  const columns = ["model",
+    `<span title="knowledge cutoff — when each model's world knowledge ends; it cannot know releases after this date">cutoff</span>`,
+    th("cases_passed", "solved"),
+    th("quality_avg", "grade", "referee's mean 0-10 grade on the replies (correctness, honesty, concision) — referee is not a racing model"),
+    th("runs", "races"), "ok", th("total_latency_ms", "total time"), th("total_tokens_in", "in tok"),
+    th("total_tokens_out", "out tok"), th("total_tokens", "total tok"),
+    `<span title="list price per million tokens, input / output">rate $/M</span>`, th("total_cost_usd", "total cost")];
   const scoreboard = agg.length ? `
-    <h2 style="margin-top:22px;display:flex;align-items:center;gap:10px">Scoreboard
+    <h2 style="margin-top:var(--space-6);display:flex;align-items:center;gap:var(--space-2)">Scoreboard
       <span class="meta" style="font-weight:400">— totals across ${raceCount} race${raceCount===1?"":"s"}</span>
-      <a class="reveal" style="margin-left:auto;font-size:12px" onclick="clearCompareHistory()">clear all</a></h2>
+      ${uiButton("clear all", {level: "tertiary", size: "sm", onclick: "clearCompareHistory()", attrs: `style="margin-left:auto"`})}</h2>
     ${costQualityScatter(agg)}
-    <div class="card" style="padding:4px 8px"><div class="tablescroll"><table>
-      <tr><th>model</th><th title="knowledge cutoff — when each model's world knowledge ends; it cannot know releases after this date">cutoff</th>${th("cases_passed","solved")}<th class="cmp-th ${bs.key==="quality_avg"?"on":""}" onclick="setBoardSort('quality_avg')" title="referee's mean 0-10 grade on the replies (correctness, honesty, concision) — referee is not a racing model">grade${arrow("quality_avg")}</th>${th("runs","races")}<th>ok</th>${th("total_latency_ms","total time")}${th("total_tokens_in","in tok")}${th("total_tokens_out","out tok")}${th("total_tokens","total tok")}<th title="list price per million tokens, input / output">rate $/M</th>${th("total_cost_usd","total cost")}</tr>
-      ${rows.map(a=>`<tr>
-        <td><span class="mm-prov">${esc(a.provider)}</span> <code>${esc(a.model)}</code></td>
-        <td class="meta">${a.cutoff?esc(a.cutoff):"—"}</td>
-        <td>${a.cases_scored?`<span class="cmp-score ${a.cases_passed===a.cases_scored?"pass":(a.cases_passed?"part":"fail")}">${a.cases_passed}/${a.cases_scored}</span>`:'<span class="meta">—</span>'}</td>
-        <td>${a.quality_avg!=null?`<span class="cmp-q ${a.quality_avg>=7?"hi":a.quality_avg>=4?"mid":"lo"}">${a.quality_avg}</span>`:'<span class="meta">—</span>'}</td>
-        <td class="meta">${a.runs}</td><td class="meta">${a.ok}/${a.runs}</td>
-        <td class="meta">${secs(a.total_latency_ms)}</td>
-        <td class="meta">${a.total_tokens_in}</td><td class="meta">${a.total_tokens_out}</td>
-        <td class="meta">${a.total_tokens}</td>
-        <td class="meta">${a.rate_in!=null?`$${a.rate_in}/$${a.rate_out}`:"—"}</td>
-        <td class="meta" style="color:var(--good)">${money(a.total_cost_usd)}</td></tr>`).join("")}
-    </table></div></div>` : "";
+    ${uiTable(columns, rows.map(a => [
+      `<span class="mm-prov">${esc(a.provider)}</span> <code>${esc(a.model)}</code>`,
+      meta(a.cutoff ? esc(a.cutoff) : "—"),
+      a.cases_scored ? uiBadge(`${a.cases_passed}/${a.cases_scored}`,
+        a.cases_passed === a.cases_scored ? "ok" : a.cases_passed ? "warn" : "bad") : meta("—"),
+      a.quality_avg != null ? uiBadge(a.quality_avg, "value") : meta("—"),
+      meta(a.runs), meta(`${a.ok}/${a.runs}`), meta(secs(a.total_latency_ms)),
+      meta(a.total_tokens_in), meta(a.total_tokens_out), meta(a.total_tokens),
+      meta(a.rate_in != null ? `$${a.rate_in}/$${a.rate_out}` : "—"),
+      `<span class="meta" style="color:var(--ok)">${money(a.total_cost_usd)}</span>`]))}` : "";
   const recent = hist.length ? `
-    <h2 style="margin-top:18px">Recent races <span class="meta" style="font-weight:400">— click to reopen</span></h2>
-    <div class="card">${hist.map((run,i)=>`
-      <div class="pinrow" style="cursor:pointer" onclick="openCompareRun(${i})">
-        <code style="flex:1;word-break:break-all">${esc((run.message||"").slice(0,90))}</code>
-        <span class="meta" style="white-space:nowrap">${(run.results||[]).length} models · ${esc((run.ts||"").slice(0,16).replace("T"," "))}</span>
-        <a class="reveal del" style="margin-left:8px;font-size:14px" title="delete just this run" onclick="event.stopPropagation(); deleteCompareRun('${esc(run.ts||"")}')">×</a>
-      </div>`).join("")}</div>` : "";
+    <h2 style="margin-top:var(--space-4)">Recent races <span class="meta" style="font-weight:400">— click to reopen</span></h2>
+    ${uiCard(hist.map((run, i) => uiRow(
+      esc((run.ts||"").slice(0,16).replace("T"," ")),
+      `<code style="word-break:break-all">${esc((run.message||"").slice(0,90))}</code>`,
+      `${(run.results||[]).length} models ${uiButton("×", {level: "tertiary", size: "sm", danger: true, title: "delete just this run",
+        onclick: `event.stopPropagation(); deleteCompareRun('${esc(run.ts||"")}')`,
+        attrs: `aria-label="delete just this run" style="margin-left:var(--space-2)"`})}`,
+      {onclick: `openCompareRun(${i})`})).join(""))}` : "";
   return scoreboard + recent;
 }

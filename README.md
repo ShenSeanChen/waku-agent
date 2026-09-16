@@ -21,14 +21,16 @@ Built by [seanchen.io](https://seanchen.io).
 ![waku-agent architecture — the whiteboard](docs/architecture-whiteboard.png)
 
 > The system-design whiteboard from the series.
-> Every box maps to a file — see [the whiteboard maps to the code](#the-whiteboard-maps-to-the-code).
+> Every box maps to a file — see [the architecture](docs/architecture.md).
 
 **▶ [Watch the 20-min code walkthrough](https://www.youtube.com/watch?v=rvRyBhILrls&list=PLE9hy4A7ZTmpGq7GHf5tgGFWh2277AeDR&index=42)** — the loop, the memory pillars, the evals, the Telegram gateway and the "Waku Waku" wake word, live.
+
+**[Waku Memory](https://www.waku.one)** — the same memory in Claude Code, Codex, Grok Bot and this agent: [waku.one](https://www.waku.one) · [docs](https://www.waku.one/docs)
 
 [YouTube](https://www.youtube.com/@SeanAIStories) · [X](https://x.com/ShenSeanChen) · [LinkedIn](https://linkedin.com/in/shen-sean-chen) · [Instagram](https://www.instagram.com/sean_ai_stories) · [TikTok](https://www.tiktok.com/@sean_ai_stories) · [Discord](https://discord.gg/ebbdvSCXqu) ·
 [哔哩哔哩](https://space.bilibili.com/479332937) · [小红书](https://www.xiaohongshu.com/user/profile/5cf02cfb0000000005014371) · [抖音](https://www.douyin.com/user/MS4wLjABAAAAWCkd62_e8q4n-S34LIL04HsYN3m03l8MFdVYZToojP8)
 
-### ☕️ [Buy me a coffee](https://buy.stripe.com/5kA176bA895ggog4gh) — it keeps this repo (and the videos) coming
+### [Buy me a coffee](https://buy.stripe.com/5kA176bA895ggog4gh) — it keeps this repo (and the videos) coming
 
 ## Quickstart
 
@@ -50,18 +52,6 @@ cp .env.example .env                    # pick a provider, paste ONE key
 uv run waku                             # talk to your Waku in the terminal
 uv run waku dashboard                   # …or the browser cockpit → localhost:7777
 ```
-
-`uv run waku …` needs **no venv activation**. Three ways to run it:
-
-| Command | When |
-|---|---|
-| `uv run waku dashboard` | quick start, zero activation (recommended) |
-| `source .venv/bin/activate` → `waku dashboard` | activate once, bare `waku` all session |
-| `uv tool install .` → `waku dashboard` | install `waku` **globally**, forever |
-
-`waku` and `waku dashboard` are two doors into the **same** Waku. The dashboard is a tiny web
-server on *your* machine — chat in the browser, that process runs the turn. Nothing leaves your
-laptop. Set `TELEGRAM_BOT_TOKEN` and it starts your bot too. (`make dashboard` works as well.)
 
 **Now try it.** *"Remember that Alex prefers morning meetings."* Quit. Restart.
 *"Book a catch-up with Alex on Friday."* → it remembers, and books 9am. Your memory is one
@@ -307,170 +297,51 @@ is a unit test — 0 or 1, no model judges it (`make eval`). *"Was the reply hel
 is a judged score with a threshold (`make eval-judge`). Conflating the two is the most
 common eval mistake; here they're separate suites you can diff. `make gate` runs both
 as a release gate.
+New to it? **[Getting started](docs/getting-started.md)** walks the whole setup, with a check
+at the end of every step.
 
-## Eval, tracing & catching bugs
+## Connect Waku Memory
 
-Three commands, two kinds of eval — the LLM-Ops half of the system:
-
-```bash
-make eval          # deterministic: "did the right tool fire?" — 0 or 1, no model judges it
-make eval-judge    # LLM-as-judge: "was the reply helpful?" — a scored %, needs a key
-make gate          # the release gate: deterministic must pass 100%, judge must clear threshold
-```
-
-Deterministic tests are plain pytest in [`evals/deterministic/`](evals/deterministic); judged
-ones use DeepEval in [`evals/judge/`](evals/judge). Keeping them apart is the whole point —
-conflating "did it do the thing" (a unit test) with "was it any good" (a scored judgement) is
-the most common eval mistake.
-
-**Where the results show:** the terminal, and the dashboard's **Ops** tab — the release-gate
-verdict, an **eval-history** table (one row per `make gate`, so you can see it grow), the actual
-per-turn gate decisions, and the raw traces inline.
-
-**The bug workflow (this is the discipline you show on camera):** when you catch a bug by using
-the thing live, you fix it AND add a deterministic case so it can never come back. A real example
-from this repo: the agent didn't know the current *time* and asked for it before scheduling
-"in 30 minutes" → fixed in [`session.py`](waku/runtime/session.py), locked forever by
-[`test_working_memory.py`](evals/deterministic/test_working_memory.py). Run `make gate` → green →
-the eval history records the run.
-
-**Spend is permanent:** every LLM call's tokens are appended to `.waku/usage.jsonl` — an
-append-only ledger that a demo reset never wipes. The **Ops** tab shows the all-time cost, tokens,
-and a per-day / per-provider breakdown (dollar cost is estimated from tokens, which are the ground
-truth). So the number you show on camera is your real running total, not a per-session guess.
-
-**Tracing is always on:** every turn appends readable lines to `.waku/traces/<date>.jsonl`
-(zero setup) — a trace is just "what happened, in order." For span-waterfall views:
+Waku's own memory is local. **[Waku Memory](https://www.waku.one)** is the hosted memory you
+share across agents: save something in Claude Code, recall it here.
 
 ```bash
-pip install -e '.[tracing]'
-make trace                                            # Phoenix at localhost:6006
-OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317 make run
+pip install 'waku-agent[mcp]'           # in a checkout: uv pip install -e '.[mcp]'
+waku connect waku-memory                # or /connect waku-memory in the dashboard chat
+waku skill export --to claude,codex     # carry Waku's skills to Claude Code and Codex too
 ```
 
-Langfuse cloud speaks the same OTel toggle.
+Your browser opens once to sign in. To connect Claude Code, Codex, Hermes or Grok Bot to the
+same memory, see [integrations](docs/integrations.md#share-one-memory-with-your-other-agents-waku-memory).
 
-## Connect it to your life
+## What's inside
 
-Voice, Telegram, Apple Calendar and Mail, Google Calendar, MCP servers — each
-one is opt-in, behind its own extra, and none of them change the loop. Setup
-for all of them: **[docs/integrations.md](docs/integrations.md)**.
+| Pillar | In one line | Read more |
+|---|---|---|
+| **Harness** | gateways (terminal, dashboard, voice, Telegram, Discord, WhatsApp) and tools around one loop | [architecture](docs/architecture.md) |
+| **Loop** | ~95 lines of plain Python: reason, act, repeat, with two ways to stop | [the tour](docs/tour.md#the-loop) |
+| **Memory** | semantic, episodic and procedural (skills); a gate decides *whether* to remember, consolidation decides *what* to keep | [the tour](docs/tour.md#the-retrieval-gate) |
+| **Eval / LLM-Ops** | deterministic tests and LLM-as-judge side by side, a release gate, a trace for every turn | [evals](docs/evals.md) |
 
-## Share memory across agents — a remote MCP server
+**How is this different from ChatGPT or Claude Desktop?** Those are products you *use*. This is a
+codebase you *own*: the loop, the memory schema, the gate and the eval harness are all yours to
+read and change. Versus the big open-source assistants (OpenClaw, Hermes)? Same architecture,
+1/100th the code.
 
-Your memory is local by default and stays that way. If you want the *same*
-memory in more than one agent, point Waku at a remote MCP server and it becomes
-another set of tools — nothing about the loop changes.
+## Docs
 
-`.waku/mcp.json`:
-
-```json
-{"servers": [{"name": "waku_memory",
-              "url": "https://d1o2fv4416yi84.cloudfront.net/mcp",
-              "oauth": true}]}
-```
-
-```bash
-pip install -e '.[mcp]'
-make run
-```
-
-A browser opens the first time, you sign in on the server's own page, and the
-token is kept in `.waku/mcp-auth/` — nothing to request, nothing to paste. That
-example is [Waku Memory](https://waku.one), which is where this pays off: write
-something in one agent and a different one can read it back. Any server that
-speaks MCP works the same way, with `auth_env` instead if it wants an API key.
-
-Details, including the local-only demo server: **[docs/integrations.md](docs/integrations.md)**.
-
-## It manages its own memory
-
-The agent has tools to keep itself useful — no black box:
-- **manage_memory** — correct or forget a fact when you say it's wrong.
-- **update_soul** — save a standing preference you give it (lives in `SOUL.md`).
-- **create_skill** — when you teach it a repeatable workflow, it offers to save it
-  as a skill (written to `.waku/skills/`, live the same session).
-
-You can also edit any of this by hand on the dashboard's Memory tab (edit/delete
-facts, rewrite `SOUL.md`) or in Settings (switch provider/model, paste keys — BYOK,
-kept in your local `.env`, never sent to the browser).
-
-## Add skills — yours or the community's
-
-Skills are procedural memory: markdown instructions loaded only when relevant.
-
-```bash
-python -m waku skill install https://github.com/<someone>/<repo>/blob/main/skills/<skill>/SKILL.md
-```
-
-**Contribute one — it's just a markdown file.** Copy [`skills/TEMPLATE.md`](skills/TEMPLATE.md),
-PR it into [`skills/community/`](skills/community). CI validates the frontmatter.
-See [CONTRIBUTING.md](CONTRIBUTING.md).
-
-## Every command
-
-The `waku` command is installed with the package; the `make` targets are equivalent aliases.
-
-| Command | Does |
+| Read | For |
 |---|---|
-| `waku` | chat in the terminal |
-| `waku dashboard` | the live cockpit at localhost:7777 (+ Telegram if `TELEGRAM_BOT_TOKEN` is set) |
-| `waku voice` | talk to it — hands-free "waku waku" (or push-to-talk) |
-| `waku telegram` | message it from your phone (standalone) |
-| `waku brief` | morning briefing from Calendar + Mail + memory |
-| `make trace` | deep trace waterfalls (Phoenix) at localhost:6006 |
-| `make eval` | deterministic evals (0/1, no judge) |
-| `make eval-judge` | LLM-as-judge evals (scored %) |
-| `make gate` | the release gate — both eval suites must pass |
-
-## Roadmap — the whiteboard boxes beyond the flagship task
-
-These live in [`waku/tools/experimental.py`](waku/tools/experimental.py), OFF by default —
-`WAKU_EXPERIMENTAL=1` registers them.
-
-**Sub-Agents is now LIVE.** `delegate_task` hands a coding job to
-[pi](https://github.com/earendil-works/pi) — Mario Zechner's minimal open-source coding agent —
-through its headless print mode (`pi -p "task"`). Waku stays the orchestrator (memory, context,
-evals); pi is the specialist contractor (read/bash/edit/write). Try it:
-
-```bash
-npm install -g --ignore-scripts @earendil-works/pi-coding-agent
-WAKU_EXPERIMENTAL=1 uv run waku
-# "have pi fix the failing test in ~/my-project"
-```
-
-The full pi transcript lands in `.waku/outbox/delegate-*.log`; tune the budget with
-`WAKU_DELEGATE_TIMEOUT` (default 300s).
-
-The rest are still deliberate **skeletons** — the intent is drawn so the diagram maps to
-something, but nothing is over-promised (they report "coming soon", and the dashboard's
-**Tools** tab lists them under **Coming soon**):
-
-| Whiteboard box | Tool | Status |
-|---|---|---|
-| Sub-Agents | `delegate_task` | **live** — delegates coding tasks to pi |
-| Graph workflows | [`waku/graph/`](waku/graph) | **live** behind `WAKU_GRAPH_WORKFLOWS=1` — [triage-first turns](#graph-workflows--when-a-turn-needs-shape) |
-| Terminal tool | `run_command` | skeleton — needs a real sandbox + safety surface first |
-| Browser tool | `browse_web` | skeleton — `search_web` already covers read-only lookups |
-| Cron Job | `schedule_task` | skeleton — `make brief` + a system cron line covers it today |
-
-The point of a teaching repo is a readable core; these come alive one at a time, tested.
-
-## Upgrade paths (when you outgrow the defaults)
-
-| Default (zero setup) | Upgrade | How |
-|---|---|---|
-| SQLite FTS5 keyword memory | Supabase pgvector semantic search | `WAKU_SEMANTIC_STORE=supabase` + [sql/init_supabase.sql](sql/init_supabase.sql) — the exact schema from [launch-rag](https://github.com/ShenSeanChen/launch-rag)/[launch-agentic-rag](https://github.com/ShenSeanChen/launch-agentic-rag) |
-| Mock calendar (ICS + SQLite) | Apple / Google Calendar | `WAKU_APPLE_CALENDAR=1` (macOS) or `WAKU_GOOGLE_CALENDAR=1` with `pip install -e '.[gcal]'` — the tool schema stays |
-| Hand-built memory pillars | mem0 / Zep / LangMem | `pip install -e '.[arena]'` and set `WAKU_SEMANTIC_STORE` — then race them against each other in the Arena's Memory tab. [Where to see your memories in each provider's own console](docs/memory-backends-playbook.md) |
-
-## Related repos (the building blocks)
-
-[launch-rag](https://github.com/ShenSeanChen/launch-rag) ·
-[launch-agentic-rag](https://github.com/ShenSeanChen/launch-agentic-rag) ·
-[launch-agent-skills](https://github.com/ShenSeanChen/launch-agent-skills) ·
-[launch-mcp-demo](https://github.com/ShenSeanChen/launch-mcp-demo) ·
-[launch-DeepResearch-Backend](https://github.com/ShenSeanChen/launch-DeepResearch-Backend)
+| [Getting started](docs/getting-started.md) | installing, the first run, connecting Waku Memory |
+| [The tour](docs/tour.md) | the dashboard, things to try, the loop, graph workflows, skills |
+| [Architecture](docs/architecture.md) | every box on the whiteboard, and the file behind it |
+| [Integrations](docs/integrations.md) | voice, Telegram, calendars, MCP servers, Waku Memory |
+| [Commands](docs/commands.md) | every `waku` and `make` command |
+| [Evals & tracing](docs/evals.md) | the two kinds of eval, the release gate, traces and spend |
+| [Roadmap](docs/roadmap.md) | what is live, what is still a skeleton, upgrade paths |
+| [Whiteboards](docs/README.md#whiteboards) | the editable system-design charts from the videos |
+| [lab/](lab/README.md) | Waku meets other agents and models: the video experiments |
+| [AGENTS.md](AGENTS.md) · [CONTRIBUTING.md](CONTRIBUTING.md) | the rules, and how to send a PR |
 
 ## Community
 
@@ -488,5 +359,6 @@ never build the same thing.
 - **[launch-mvp-stripe-nextjs-supabase](https://github.com/ShenSeanChen/launch-mvp-stripe-nextjs-supabase)** — NextJS + Supabase + Stripe, everything you need to ship a SaaS.
 - **[AutoManus.io](https://automanus.io)** — my AI startup: a sales lead manager for made-to-order products. It embeds where conversations already happen (WhatsApp, email, web chat) to capture inbound, automate follow-ups and kill CRM busywork. Pre-seed backed by Character VC. ([AutoManus Discord](https://discord.gg/SxXATg9rSK))
 
-MIT — see [LICENSE](LICENSE). Built by [@ShenSeanChen](https://github.com/ShenSeanChen)
+Code is MIT — see [LICENSE](LICENSE). The Waku name, mark and design system belong to
+AutoManus Technologies, Inc. and are not MIT — see [LICENSE-BRAND](LICENSE-BRAND). Built by [@ShenSeanChen](https://github.com/ShenSeanChen)
 ([YouTube](https://www.youtube.com/@SeanAIStories) · [X](https://x.com/ShenSeanChen)).

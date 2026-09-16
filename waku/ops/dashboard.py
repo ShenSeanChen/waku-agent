@@ -181,6 +181,17 @@ def _run_command(command: tuple[str, str], emit) -> None:
     """
     name, arg = command
     start = datetime.now(UTC)
+    if name == "connect":
+        # Signing in opens YOUR browser and waits for you to click Allow. The
+        # dashboard runs on your machine, so it does that in-process: no shell,
+        # no terminal. ThreadingHTTPServer keeps the wait to this one request.
+        from waku.config import load_settings
+        from waku.connect import connect as connect_integration
+        from waku.connect import usage as connect_usage
+
+        reply = connect_integration(arg, load_settings().home) if arg else connect_usage()
+        emit("done", {"reply": reply, "tools": [], "iterations": 0, "latency_ms": 0, "gate": None})
+        return
     if name in ("graphs", "help", "?"):
         emit("done", {"reply": commands.describe(), "tools": [], "iterations": 0,
                       "latency_ms": 0, "gate": None})
@@ -880,6 +891,12 @@ def events_since(cursor):
     return {"events": out, "cursor": len(lines)}
 
 
+# Content types for /static/. .woff2 is here because the dashboard serves its
+# own fonts (static/design/fonts.css) instead of fetching them.
+STATIC_TYPES = {".css": "text/css", ".js": "text/javascript", ".svg": "image/svg+xml",
+                ".html": "text/html; charset=utf-8", ".woff2": "font/woff2"}
+
+
 class Handler(BaseHTTPRequestHandler):
     def _send(self, body: bytes, ctype: str, *, no_cache: bool = False) -> None:
         self.send_response(200)
@@ -981,8 +998,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_response(404)
             self.end_headers()
             return
-        ctype = {".css": "text/css", ".js": "text/javascript", ".svg": "image/svg+xml",
-                 ".html": "text/html; charset=utf-8"}.get(target.suffix, "application/octet-stream")
+        ctype = STATIC_TYPES.get(target.suffix, "application/octet-stream")
         self._send(target.read_bytes(), ctype, no_cache=True)
 
     def do_POST(self):

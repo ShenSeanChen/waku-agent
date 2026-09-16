@@ -3,7 +3,7 @@
     {
       "name": "demo",
       "command": "python",
-      "args": ["examples/mcp_demo_server.py"]
+      "args": ["evals/fixtures/mcp_demo_server.py"]
     }
   ]
 }
