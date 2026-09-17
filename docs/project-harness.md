@@ -35,6 +35,9 @@ So the harness does not force the project into an agent framework; it accretes
 *around* the project. For Qamata, `PLAN.md`, `PROGRESS.md`, `architecture/`,
 `decisions/` and `reviews/` stay exactly where they are; the map points into them.
 
+The harness also holds the project's **team** — its roles and their role-scoped
+skills — defined as data, not kernel code. See [docs/project-roles.md](project-roles.md).
+
 ## 3. `project.toml` — the schema
 
 One file at the harness root. Identity, then a map, then the controls. TOML,
@@ -56,6 +59,7 @@ irreversible = ["settle", "prod_deploy", "push_main"]
 
 # [[map]] blocks define the knowledge map, see §4
 # [[watches]] blocks define assumptions to monitor, see §6
+# [[roles]] blocks define the team, see docs/project-roles.md
 ```
 
 The directory skeleton from `new-project` (§7) is a **default for greenfield
