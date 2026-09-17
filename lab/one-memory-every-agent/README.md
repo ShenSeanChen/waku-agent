@@ -1,8 +1,9 @@
 # One memory, every agent
 
 Grok Bot and Meta's Muse are personal agents that live on their own cloud
-computers and remember you. Both keep that memory inside their own walls: you
-cannot export it, and neither can hand it to the other. This topic connects
+computers and remember you. Muse lets you download its memory files, and
+Grok Bot's docs don't say how its memory is stored; neither one shares memory
+live with the other agents you use. This topic connects
 both of them, together with Claude Code, Codex and the Waku agent, to one
 memory, Waku Memory, and checks which of them can find a fact that another one
 saved.
@@ -20,12 +21,12 @@ Waku agent?
 | Claude Code | `npx waku-memory setup` ([waku.one/docs](https://www.waku.one/docs)) | `waku skill export --to claude` |
 | Codex | `npx waku-memory capture enable` ([waku.one/docs](https://www.waku.one/docs)) | `waku skill export --to codex` |
 | Grok Bot | Settings → Plugins → custom MCP connector: URL `https://api.waku.one/mcp`, header `Authorization: Bearer <key>` | its own: record a task on screen and it becomes a skill |
-| Muse ([muse.ai](https://muse.ai)) | No MCP. Ask Muse to build a custom connector to Waku Memory's web API with a key: search is `GET /memories?q=…`, and saving is `POST /imports`, which Waku Memory turns into memories in the background | none exposed |
+| Muse ([muse.ai](https://muse.ai)) | Meta doesn't mention MCP; Muse builds its own custom connectors. Ask it to build one to Waku Memory's web API with a key: search is `GET /memories?q=…`, and saving is `POST /imports`, which Waku Memory turns into memories in the background | none exposed |
 
-Grok Bot's connector form takes a URL and headers, and its MCP sign-in never
-runs (a public issue, 2026-09-07), so it needs a Waku Memory key from waku.one
-→ Account → Keys. Muse has no MCP at all, which makes its row the real
-experiment: can an agent build its own connector to a memory it has never
+Grok's connector docs allow custom MCP servers at public URLs, and a public
+issue (2026-09-07) reports the sign-in flow not running, so use a Waku Memory
+key from waku.one → Account → Keys. Meta doesn't mention MCP for Muse, which
+makes its row the real experiment: can an agent build its own connector to a memory it has never
 seen? Claude Code, Codex and the Waku agent sign in through the browser.
 
 Verified against: waku-agent 0.1.8 connecting to Waku Memory's MCP server, 2026-09-14. Grok Bot and Muse have not been run yet.
@@ -37,20 +38,20 @@ Verified against: waku-agent 0.1.8 connecting to Waku Memory's MCP server, 2026-
 | Inbox and daily digest | a "chief of staff" routine across Slack, email and calendar | a Gmail connector with read/send permissions you set; Sentinel approves each send |
 | Web research and errands | a browser on the shared computer; one sign-in is shared by every Bot | a browser sub-agent that sees a simplified page and cannot run JavaScript; PYMNTS gave it 3 errands and it completed 0 |
 | Recurring work | routines on a schedule or an event, up to 50 per Bot | turns long-term goals into plans; no routines documented |
-| Buying things | not a focus: its official workflows stop before anything is sent | Stripe Link single-use cards, and it asks every time |
+| Buying things | no buying example; purchases are listed as needing your approval | Stripe Link single-use cards, and it asks every time |
 | Who it is for | 8 official use cases, all work: sales, recruiting, ads, incidents | life: recipes from saved reels, dinner parties, bills |
 | Teaching it | record 10 minutes of your screen and it becomes a skill; shareable templates | no skills exposed; it builds its own connectors to public web APIs |
-| Security | one VM for all your Bots: "isolate personalities, not compute" | a VM per user, plus Sentinel, a separate agent that approves every action; the agent only sees stand-in credentials |
-| Memory | kept per Bot, with no view, no edit and no export; deleting a Bot wipes its memory but keeps its files | a MEMORY.md file in the VM that you can read, and a "forget" skill, but no export; Meta says it "may still remember" what you deleted |
-| Outside tools | custom MCP servers: public URLs only, with a key header | no MCP; custom connectors to public web APIs |
-| Where and what it costs | desktop and mobile; bundled with SuperGrok and Cursor plans | US only; free, with paid tiers |
+| Security | one VM for all your Bots: "isolate personalities and workspaces, not compute" | a VM per user; Sentinel, a separate agent outside the agent's container on the same machine, approves actions; the agent only sees surrogate tokens |
+| Memory | keeps working preferences, facts and summaries; how it is stored is not documented; deleting a Bot keeps shared files and sign-ins | memory files (MEMORY.md) you can read, edit and download; a "forget" skill; Meta says it may still remember what you deleted |
+| Outside tools | account-wide connectors; Grok's connector docs allow custom MCP at public URLs | MCP not mentioned; it builds custom connectors |
+| Where and what it costs | desktop and mobile; xAI's pages disagree on which plans include it | rolling out in the US; free, with paid tiers |
 
 Sources, read 2026-09-15: [xAI, Introducing Grok Bot](https://x.ai/news/introducing-grok-bot) (2026-08-11) ·
 [Grok Bot docs](https://docs.x.ai/grok-bot/bots) · [Grok Bot use cases](https://docs.x.ai/grok-bot/use-cases) ·
 [Vellum teardown](https://www.vellum.ai/blog/official-grok-bot-breakdown) (2026-08-20) ·
-[Grok MCP sign-in issue](https://github.com/ergofobe/imogen-server/issues/27) (2026-09-07) ·
+[Grok connectors](https://docs.x.ai/grok/connectors) · [Grok MCP sign-in issue, third-party](https://github.com/ergofobe/imogen-server/issues/27) (2026-09-07) ·
 [Meta, Introducing Muse](https://about.fb.com/news/2026/09/introducing-muse-personal-ai-agent/) (2026-09-08) ·
-[Meta, Muse security](https://research.meta.ai/blog/security-and-safety-for-ai-agents-our-approach-with-muse) ·
+[Meta, Muse security](https://research.meta.ai/blog/security-and-safety-for-ai-agents-our-approach-with-muse) · [How We Designed Muse](https://introducing.muse.ai/) ·
 [Meta Help, Muse memory](https://www.meta.com/help/artificial-intelligence/1047255454427887/) ·
 [PYMNTS errands test](https://www.pymnts.com/news/artificial-intelligence/2026/meta-muse-cannot-order-pizza-without-help) (2026-09-09).
 
@@ -91,12 +92,14 @@ This table is filled in from real runs only.
 
 - **Title:** Grok Bot vs Meta Muse: Who Owns What Your Agent Knows About You?
 - **Hook:** Grok Bot gives your Bots separate personalities but one computer.
-  Muse keeps what it knows about you in a text file you can read but cannot
-  take with you.
-- **The finding to test on camera:** neither agent exports its memory, so give
-  both of them one memory they can reach, and see which one can actually use it.
+  Muse keeps what it knows about you in files you can download, but a download
+  is a snapshot that stops updating.
+- **The finding to test on camera:** neither agent shares its memory live with
+  your other agents, so give both of them one memory they can reach, and see
+  which one can actually use it.
 - **The objection to raise yourself:** why hand your memory to a third company?
-  Because you can see it, edit it and export it, which neither vendor offers.
+  Because it is one memory every agent reads live. Be plain that Waku Memory
+  has no one-click export yet.
   Others sell shared memory too (Mem0's OpenMemory, MIND's Grok plugin).
 - **Boards.** These are screenshots of first drafts; the editable sources stay
   private, and the boards filmed for the video are redrawn by hand.
