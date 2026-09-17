@@ -14,6 +14,7 @@ Two of them are now ALIVE:
 
       pi      pi -p <task> -a --no-session [--mode json]        (probed)
       claude  claude -p <task> --model <m> --output-format stream-json [--effort e]
+              [--permission-mode plan|acceptEdits]   (from `sandbox`)
       codex   codex exec --json -m <m> -s workspace-write <task>
 
     Each json stream is parsed into the SAME curated relays (text / tool /
@@ -285,17 +286,26 @@ def _pi_cmd(exe: str, settings: Settings, task: str, model: str, effort: str,
     return cmd
 
 
+# The codex sandbox vocabulary → Claude Code's permission mode. Headless claude
+# (-p) has nobody to answer a permission prompt, so anything that would prompt
+# is denied; the mode is what decides what never prompts. `plan` is read-only
+# tools; `acceptEdits` auto-accepts file edits in cwd (shell commands still
+# need the caller's allowlist). No entry → no flag → claude's default.
+_CLAUDE_PERMISSION_MODE = {"read-only": "plan", "workspace-write": "acceptEdits"}
+
+
 def _claude_cmd(exe: str, settings: Settings, task: str, model: str, effort: str,
                 sandbox: str = "") -> list[str]:
     # --verbose is required: with --print, --output-format=stream-json refuses to
-    # run without it (verified against the live CLI). claude's permission model
-    # is --permission-mode/--allowedTools, not a single sandbox flag, so
-    # `sandbox` is accepted for a uniform signature but not mapped here yet.
+    # run without it (verified against the live CLI).
     cmd = [exe, "-p", task, "--output-format", "stream-json", "--verbose"]
     if model:
         cmd += ["--model", model]
     if effort:
         cmd += ["--effort", effort]   # low | medium | high | xhigh | max
+    mode = _CLAUDE_PERMISSION_MODE.get(sandbox)
+    if mode:
+        cmd += ["--permission-mode", mode]
     return cmd
 
 

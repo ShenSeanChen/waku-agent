@@ -6,8 +6,11 @@ observation contradicts a watched assumption, this does not merely log a metric
 it (`depended_on_by`), and the experiment that decides temporary vs structural.
 
 Deterministic and stdlib-only: it reads the harness's `project.toml [[watches]]`
-and evaluates each against the observations you pass. It does NOT mutate the map
-— marking items `stale` is a separate, deliberate step the owner makes.
+and evaluates each against the observations you pass. The downstream list is
+the watch's own `depended_on_by` PLUS everything the map's dependency edges
+reach from there (waku/ops/knowledge.py `downstream`) — the graph is queried,
+not just printed. It does NOT mutate the map — marking items `stale` is a
+separate, deliberate step the owner makes.
 """
 
 from __future__ import annotations
@@ -15,6 +18,8 @@ from __future__ import annotations
 import sys
 import tomllib
 from pathlib import Path
+
+from waku.ops.knowledge import downstream
 
 CONFIG = "project.toml"
 
@@ -58,20 +63,26 @@ def reconsider(project: Path, observations: dict) -> str:
         if is_fired:
             fired.append((w, value))
 
+    entries = cfg.get("map", [])
     out = [f"# {title} — reconsider", ""]
     for w, value in fired:
         metric = w.get("metric", "?")
         sym = _SYMBOLS.get(w.get("op", "lt"), w.get("op", "lt"))
         claim = w.get("claim") or w.get("id", "?")
-        downstream = w.get("depended_on_by", [])
+        direct = list(w.get("depended_on_by", []))
+        # Walk the map from the watch itself and from its direct dependents.
+        transitive = [d for d in downstream(entries, [w.get("id", ""), *direct])
+                      if d not in direct]
         out += [
             f"## Watch fired: {w.get('id', '?')}",
             f'- Claim: "{claim}"',
             f"- Observed: {metric} = {value} (expected {sym} {w.get('threshold', '?')})",
             "- Our prior assumption no longer holds.",
         ]
-        if downstream:
-            out.append(f"- Downstream (mark stale): {', '.join(downstream)}")
+        if direct:
+            out.append(f"- Downstream (mark stale): {', '.join(direct)}")
+        if transitive:
+            out.append(f"- Further downstream, via the map's edges: {', '.join(transitive)}")
         out.append("- Proposed experiment: determine whether this is temporary or structural.")
         out.append("")
 

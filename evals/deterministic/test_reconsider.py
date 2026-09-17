@@ -59,3 +59,28 @@ def test_reconsider_with_no_watches_is_honest(tmp_path):
     (tmp_path / "project.toml").write_text('name = "qamata"\n', encoding="utf-8")
     out = reconsider(tmp_path, {})
     assert "No watches recorded" in out
+
+
+def test_reconsider_walks_the_maps_edges_beyond_the_direct_dependents(tmp_path):
+    """The watch names two direct dependents; the map says the tariff feeds the
+    runbook. The briefing must name the runbook too — the graph is queried."""
+    p = tmp_path / "q"
+    p.mkdir()
+    (p / "project.toml").write_text(TOML + '''
+[[map]]
+id = "qamata.arch.tariff"
+path = "none"
+authority = "decided"
+status = "established"
+depended_on_by = ["qamata.ops.runbook"]
+
+[[map]]
+id = "qamata.ops.runbook"
+path = "none"
+authority = "working-model"
+status = "established"
+depends_on = ["qamata.arch.tariff"]
+''', encoding="utf-8")
+    out = reconsider(p, {"placement.startup_median": 41})
+    assert "Downstream (mark stale): qamata.arch.placement, qamata.arch.tariff" in out
+    assert "Further downstream, via the map's edges: qamata.ops.runbook" in out

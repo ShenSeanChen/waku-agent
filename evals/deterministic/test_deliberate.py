@@ -288,3 +288,145 @@ def test_the_topology_fans_out_and_fans_in():
     into_decide = {e["src"] for e in topo["edges"] if e["dst"] == "decide"}
     assert into_decide == {"brain_a", "brain_b"}
     assert {n["name"] for n in topo["nodes"]} == {"brain_a", "brain_b", "decide"}
+
+
+# --- loud failure: skills, quorum, degraded state, budget ---------------------
+
+def _fake_waku(harness: str = ""):
+    """Just enough of a Waku for the binder: settings.harness. No client, no db."""
+    from types import SimpleNamespace
+    return SimpleNamespace(settings=SimpleNamespace(harness=harness))
+
+
+def _roles(runtime: str = "eval") -> dict:
+    """Roles whose runtime is NOT a deliberation brain, so `_run_role` raises
+    RoleUnavailable before touching any subprocess or network."""
+    return {rid: {"id": rid, "lens": rid.upper(), "runtime": runtime,
+                  "authority": "recommend", "skills": []}
+            for rid in ("architect", "reviewer", "decider")}
+
+
+def test_a_named_skill_without_a_file_fails_before_any_brain_runs(tmp_path):
+    from waku.ops.deliberate import _build_bound_graph, _role_skills_text
+
+    with pytest.raises(FileNotFoundError, match="write-adr"):
+        _role_skills_text(str(tmp_path), "architect", ["write-adr"])
+
+    (tmp_path / "project.toml").write_text('name = "p"\n', encoding="utf-8")
+    roles = _roles()
+    roles["architect"]["skills"] = ["write-adr"]
+    with pytest.raises(FileNotFoundError, match="write-adr"):
+        _build_bound_graph(_fake_waku(str(tmp_path)), roles)
+
+
+def test_safe_records_health_per_round():
+    from waku.ops.deliberate import _safe
+
+    health: dict = {}
+    boom = _safe(lambda s: (_ for _ in ()).throw(RuntimeError("rate limited")), "brain A", health)
+    fine = _safe(lambda s: "ok", "brain A", health)
+    assert "unavailable" in boom({})
+    assert health == {"brain A": "unavailable (RuntimeError: rate limited)"}
+    assert fine({}) == "ok"
+    assert health == {}   # a later success clears the label
+
+
+def test_no_quorum_means_the_decider_does_not_run():
+    """Both brains dead → the decider is skipped, health names all three, and
+    the state carries no decision — never a verdict over two error strings."""
+    from waku.ops.deliberate import (
+        BRAIN_A_LABEL,
+        BRAIN_B_LABEL,
+        DECIDER_LABEL,
+        _build_bound_graph,
+        _run_rounds,
+    )
+
+    graph, health = _build_bound_graph(_fake_waku(), _roles("eval"))
+    state = _run_rounds(graph, {"task": "t"}, max_rounds=1, health=health)
+    assert set(health) == {BRAIN_A_LABEL, BRAIN_B_LABEL, DECIDER_LABEL}
+    assert "no quorum" in health[DECIDER_LABEL]
+    assert state["decision"].startswith("decider unavailable")
+
+
+def test_one_dead_brain_costs_a_voice_and_marks_the_run_degraded(monkeypatch):
+    from waku.ops import deliberate
+    from waku.ops.deliberate import BRAIN_B_LABEL, _build_bound_graph, _run_rounds
+
+    def run_role(waku, state, role, prompt, knowledge="", skills_text=""):
+        if role["id"] == "reviewer":
+            raise RuntimeError("429")
+        return f"{role['id']} says: {prompt[:12]}"
+
+    monkeypatch.setattr(deliberate, "_run_role", run_role)
+    graph, health = _build_bound_graph(_fake_waku(), _roles("claude"))
+    state = _run_rounds(graph, {"task": "t"}, max_rounds=1, health=health)
+    assert state["decision"].startswith("decider says")     # the decider still ran
+    assert list(health) == [BRAIN_B_LABEL]                  # and the run is marked
+    assert "429" in health[BRAIN_B_LABEL]
+
+
+def test_brains_see_the_knowledge_map_and_run_in_the_harness(tmp_path, monkeypatch):
+    """The wire: with a harness bound, every brain prompt starts with the map,
+    and a coding-agent brain is delegated with cwd = the harness."""
+    from waku.ops import deliberate
+    from waku.ops.deliberate import _build_bound_graph, _run_rounds
+
+    (tmp_path / "PLAN.md").write_text("The brokerage test binds.", encoding="utf-8")
+    (tmp_path / "project.toml").write_text(
+        'name = "q"\n[[map]]\nid = "q.doctrine"\npath = "PLAN.md"\n'
+        'authority = "source-of-truth"\nstatus = "established"\n', encoding="utf-8")
+    seen: list[tuple[str, str, str]] = []
+
+    def delegate(waku, state, prompt, agent, model, effort, sandbox="", cwd=""):
+        seen.append((agent, sandbox, cwd))
+        return prompt
+    monkeypatch.setattr(deliberate, "_delegate", delegate)
+
+    graph, health = _build_bound_graph(_fake_waku(str(tmp_path)), _roles("claude"))
+    state = _run_rounds(graph, {"task": "decide X"}, max_rounds=1, health=health)
+    assert health == {}
+    assert state["position_a"].startswith("Project knowledge map — q.")
+    assert "The brokerage test binds." in state["position_a"]
+    assert "q.doctrine [source-of-truth / established] PLAN.md" in state["decision"]
+    assert seen and all(cwd == str(tmp_path) and sb == "read-only" for _, sb, cwd in seen)
+
+
+def test_budget_stops_the_rounds_and_says_so():
+    from waku.ops.deliberate import _run_rounds
+
+    g = build_deliberation_graph(brain_a_fn=lambda s: "A", brain_b_fn=lambda s: "B",
+                                 decide_fn=lambda s: f"r{s['round']}")
+    health: dict = {}
+    state = _run_rounds(g, {}, max_rounds=3, budget_seconds=1e-9, health=health)
+    assert state["round"] == 1 and state["decision"] == "r1"
+    assert "budget" in health and "after round 1 of 3" in health["budget"]
+
+
+def test_cli_exit_codes_carry_meaning(monkeypatch, capsys):
+    """0 clean · 1 no decision · 2 degraded — the founder can script on it."""
+    from waku.ops import deliberate
+
+    class Quiet:
+        def close(self): pass
+    monkeypatch.setattr(deliberate, "Waku", lambda: Quiet())
+
+    def fake(state):
+        def run(waku, task="", record=True):
+            return state
+        return run
+
+    monkeypatch.setattr(deliberate, "run_deliberation", fake({"decision": "go", "unavailable": {}}))
+    deliberate.main(["t"])
+    assert "go" in capsys.readouterr().out
+
+    monkeypatch.setattr(deliberate, "run_deliberation",
+                        fake({"decision": "go", "unavailable": {"brain B (reviewer)": "unavailable (429)"}}))
+    with pytest.raises(SystemExit) as exc:
+        deliberate.main(["t"])
+    assert exc.value.code == 2 and "DEGRADED" in capsys.readouterr().out
+
+    monkeypatch.setattr(deliberate, "run_deliberation", fake({"decision": "", "unavailable": {}}))
+    with pytest.raises(SystemExit) as exc:
+        deliberate.main(["t"])
+    assert exc.value.code == 1

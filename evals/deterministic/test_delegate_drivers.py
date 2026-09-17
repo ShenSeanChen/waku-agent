@@ -187,3 +187,14 @@ def test_delegate_pi_default_unchanged(tmp_path, monkeypatch):
     tool = experimental.make_delegate_tool(Settings(home=tmp_path))
     out = tool.fn(task="anything", cwd=str(tmp_path / "nope"))
     assert "doesn't exist" in out  # reached pi dispatch, not the unknown-agent path
+
+
+def test_claude_cmd_maps_the_sandbox_to_a_permission_mode():
+    """The authority ladder reaches claude: read-only → plan (read-only tools),
+    workspace-write → acceptEdits. Unknown/empty → no flag, claude's default."""
+    base = ["/fake/claude", "-p", "t", "--output-format", "stream-json", "--verbose"]
+    ro = experimental._claude_cmd("/fake/claude", Settings(home="."), "t", "", "", sandbox="read-only")
+    assert ro == base + ["--permission-mode", "plan"]
+    ww = experimental._claude_cmd("/fake/claude", Settings(home="."), "t", "", "", sandbox="workspace-write")
+    assert ww == base + ["--permission-mode", "acceptEdits"]
+    assert experimental._claude_cmd("/fake/claude", Settings(home="."), "t", "", "", sandbox="") == base

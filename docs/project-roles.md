@@ -31,26 +31,32 @@ already encodes this — a role's `authority` is the highest rung it may touch.
 A role is **not a new primitive** — it is a named configuration over the ones
 that already exist:
 
-> **A role = { node kind (`tool` / `llm` / `agent`), brain (model + effort),
+> **A role = { runtime (which callable), brain (model + effort),
 > skills (loaded by id), authority ceiling (the tool gate). }**
 
-The graph already has the node factories (`tool_node`, `llm_node`, `agent_node`);
-the loop already has `agent_node` = a full `run_loop` turn. A role only names
-*which one to use, with which brain, skills, and ceiling*:
+The deliberation graph's three nodes are plain callables bound in
+`waku/ops/deliberate.py`; a role's `runtime` picks which callable that is.
+Honest table — what each runtime IS in code today:
 
-| `runtime` | The primitive it maps to | Is this the loop? |
+| `runtime` | What runs | Is this the loop? |
 |---|---|---|
-| `claude` · `codex` · `pi` | a `tool` node calling `delegate_task` — a subprocess to a coding agent | no — a subprocess, not `run_loop` |
-| `deepseek` | an `llm` node — one bare `messages.create`, no tools | no — a single call, not a loop turn |
-| `loop` | an `agent` node — a full `run_loop` turn | **yes** — THE loop |
-| `eval` | the eval gate (`release_gate.py`) | no — pytest, outside loop and graph |
+| `claude` · `codex` · `pi` | `delegate_task` — a subprocess to a coding agent, in the harness directory | no — a subprocess, not `run_loop` |
+| `deepseek` | one bare `messages.create`, no tools | no — a single call, not a loop turn |
+| `loop` | **not yet supported as a deliberation brain** — reserved for a role that should be a full `run_loop` turn (memory + tools) | would be, once wired |
+| `eval` | the eval gate (`release_gate.py`) — the tester, outside the graph | no — pytest |
 
 So most of the team does **not** run as loop turns: Architect/Engineer/Decider
 are subprocess calls, Reviewer is a bare model call, Tester is the eval gate.
-The loop is the **orchestrator + fail-open**, plus any role with `runtime: loop`.
-That is a deliberate choice — the heavy-reasoning roles are external coding
-agents — and it is faithful to the *graph* (a node may be `tool`/`llm`/`agent`)
-rather than to the *loop*, for those roles.
+The loop is the **orchestrator + fail-open**. That is a deliberate choice — the
+heavy-reasoning roles are external coding agents. It also means no role can
+use Waku's memory or tools until `loop` is wired; the roles are honest about
+that rather than claiming a node kind the code does not use.
+
+Whatever the runtime, every brain's prompt is assembled the same way, in
+authority order: **the knowledge map** (rendered by `waku/ops/knowledge.py`
+— the index with authority labels, then the authoritative bodies), then the
+role's **skills**, then the round's prompt. The map is how a role knows *why
+the project exists*; a role that never sees it is a prompt, not a team member.
 
 ## 3. The `[[roles]]` schema
 
@@ -137,12 +143,13 @@ explicitly (`skills = [...]`), so there is nothing to match. Reused: the
 `SKILL.md` format and its parser (`_parse_text` in
 `waku/memory/procedural/loader.py`). **Not** reused: `SkillLoader.match()` —
 that path is keyword-match-against-message into the *loop's* prompt, which serves
-the plain assistant, not a role's named set. Injection depends on the runtime:
+the plain assistant, not a role's named set. The bodies are prepended to the
+role's prompt (the same shape as the loop's "Relevant skill instructions"
+block), whatever the runtime.
 
-- `loop` / `deepseek` — prepend the role's skills to its prompt (the same shape
-  as the loop's "Relevant skill instructions" block).
-- `claude` / `codex` / `pi` — hand them to the coding agent via its skill flag
-  (`--skill` for claude/pi; codex resolves its own skills), or prepend to the task.
+**A named skill with no file is an error**, raised before any brain is spent.
+Name a skill only once its `SKILL.md` exists; a role that silently runs without
+the procedure it was configured with is the failure nobody notices.
 
 ## 5. Binding roles to the machinery
 

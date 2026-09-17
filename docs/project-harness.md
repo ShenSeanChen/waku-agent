@@ -148,8 +148,20 @@ When the observatory sees the median drift to 41s, `reconsider` evaluates the
 watch (`41 < 25` is false), fires it, and reasons — *our prior placement
 assumptions are invalid; this affects Placement; three documents depend on the
 old number; run an experiment to decide temporary vs structural* — naming the
-dependent items to mark `stale`. That is CTO behaviour, not a metrics dashboard.
-(`waku reconsider` reports; the `stale` marking is a deliberate owner step.)
+dependent items to mark `stale`, and everything the map's edges reach beyond
+them. That is CTO behaviour, not a metrics dashboard. (`waku reconsider`
+reports; the `stale` marking is a deliberate owner step.)
+
+**Record is real, and it is the only way the map grows from machine work.**
+With a harness bound, `waku deliberate` ends by writing its decision to
+`decisions/<date>-<slug>.md` and appending a `[[map]]` entry with
+`authority = "proposal"`, `status = "open"`, `owner = "harness"`. The owner
+promotes it by editing the authority — the machine never grants authority to
+its own output. `bring me back` then lists it under unresolved decisions. The
+other direction exists too: every brain's prompt begins with the map (the
+index with authority labels, then the authoritative bodies), rendered by
+`waku/ops/knowledge.py`. Read before, write after — those two wires are what
+make the harness a brain rather than a config file.
 
 ## 7. Lifecycle
 
