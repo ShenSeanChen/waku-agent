@@ -417,6 +417,7 @@ The `waku` command is installed with the package; the `make` targets are equival
 | `waku brief` | morning briefing from Calendar + Mail + memory |
 | `waku deliberate "<task>"` | two brains (Claude Code + DeepSeek) deliberate over 3 rounds, a Codex decider makes the final call; add `--build` to build with Sonnet first |
 | `waku new-project <name>` | stamp a project harness skeleton (one kernel, many harnesses) |
+| `waku bring-me-back [proj]` | reconstruct a project's state from its harness map |
 | `make trace` | deep trace waterfalls (Phoenix) at localhost:6006 |
 | `make eval` | deterministic evals (0/1, no judge) |
 | `make eval-judge` | LLM-as-judge evals (scored %) |

@@ -35,27 +35,27 @@ So the harness does not force the project into an agent framework; it accretes
 *around* the project. For Qamata, `PLAN.md`, `PROGRESS.md`, `architecture/`,
 `decisions/` and `reviews/` stay exactly where they are; the map points into them.
 
-## 3. `project.yaml` — the schema
+## 3. `project.toml` — the schema
 
-One file at the harness root. Identity, then a map, then the controls.
+One file at the harness root. Identity, then a map, then the controls. TOML,
+parsed by stdlib `tomllib` (Python ≥3.11) — so the harness config carries no new
+dependency.
 
-```yaml
-name: qamata
-title: Qamata
-owner: Proofs Africa
-thesis: >-
-  Governed, deterministic compute for agents and their actions — a skill-first,
-  MCP-supported execution contract with portable evidence.
-kernel: compatible-any   # a kernel version the harness requires
-created: 2026-09-14
-updated: 2026-09-14
+```toml
+name = "qamata"
+title = "Qamata"
+owner = "Proofs Africa"
+thesis = "Governed, deterministic compute for agents and their actions."
+kernel = "compatible-any"   # a kernel version the harness requires
+created = "2026-09-14"
+updated = "2026-09-14"
 
-authority:              # the ladder, see §5
-  default: recommend
-  irreversible: [settle, prod_deploy, push_main]
+[authority]                # the ladder, see §5
+default = "recommend"
+irreversible = ["settle", "prod_deploy", "push_main"]
 
-map: [...]              # the knowledge map, see §4
-watches: [...]          # assumptions to monitor, see §6
+# [[map]] blocks define the knowledge map, see §4
+# [[watches]] blocks define assumptions to monitor, see §6
 ```
 
 The directory skeleton from `new-project` (§7) is a **default for greenfield
@@ -107,7 +107,7 @@ not stated in a prompt.
 
 The farther right, the more evidence and the higher the authorization. For a
 one-person company this is *more* important, not less — the harness is the missing
-"are you sure?" counterweight. `authority.irreversible` in `project.yaml` names
+"are you sure?" counterweight. `authority.irreversible` in `project.toml` names
 the tools that can never run without the owner.
 
 ## 6. The learning loop
@@ -127,14 +127,15 @@ Three steps already exist in the kernel: **observe** (traces, OTel), **verify**
 
 Worked example — the Qamata placement assumption:
 
-```yaml
-- id: qamata.assumption.placement-startup
-  kind: assumption
-  authority: hypothesis
-  status: hypothesis
-  claim: "Provider A starts a workload in ~18s"
-  watch: metric.placement.startup_median < 25s
-  depended_on_by: [qamata.arch.placement, qamata.arch.tariff, qamata.ops.runbook-coldstart]
+```toml
+[[watches]]
+id = "qamata.assumption.placement-startup"
+kind = "assumption"
+authority = "hypothesis"
+status = "hypothesis"
+claim = "Provider A starts a workload in ~18s"
+watch = "metric.placement.startup_median < 25s"
+depended_on_by = ["qamata.arch.placement", "qamata.arch.tariff", "qamata.ops.runbook-coldstart"]
 ```
 
 When the observatory sees the median drift to 41s, the watch fires and the
@@ -163,55 +164,60 @@ watches are firing, which proposals are waiting on a decision.
 A partial map of the project as it exists today (files are real; the map is the
 new layer on top):
 
-```yaml
-map:
-  - id: qamata.doctrine
-    kind: doctrine
-    path: PLAN.md
-    authority: source-of-truth
-    status: established
-    owner: product-owner
-    depended_on_by: [qamata.arch.input-brief, qamata.sc01]
+```toml
+[[map]]
+id = "qamata.doctrine"
+kind = "doctrine"
+path = "PLAN.md"
+authority = "source-of-truth"
+status = "established"
+owner = "product-owner"
+depended_on_by = ["qamata.arch.input-brief", "qamata.sc01"]
 
-  - id: qamata.progress
-    kind: operations
-    path: PROGRESS.md
-    authority: source-of-truth
-    status: established
-    owner: maintainer
-    freshness: update-on-handoff
+[[map]]
+id = "qamata.progress"
+kind = "operations"
+path = "PROGRESS.md"
+authority = "source-of-truth"
+status = "established"
+owner = "maintainer"
+freshness = "update-on-handoff"
 
-  - id: qamata.arch.input-brief
-    kind: architecture
-    path: architecture/input-brief.md
-    authority: working-model        # subordinate to PLAN.md
-    status: established
-    owner: architect
-    depends_on: [qamata.doctrine]
+[[map]]
+id = "qamata.arch.input-brief"
+kind = "architecture"
+path = "architecture/input-brief.md"
+authority = "working-model"        # subordinate to PLAN.md
+status = "established"
+owner = "architect"
+depends_on = ["qamata.doctrine"]
 
-  - id: qamata.sc01
-    kind: decision
-    path: decisions/SC-01-first-workflow-and-offer.md
-    authority: decided
-    status: established
-    owner: product-owner
-    depends_on: [qamata.doctrine]
-    depended_on_by: [qamata.arch.v1-scope]
+[[map]]
+id = "qamata.sc01"
+kind = "decision"
+path = "decisions/SC-01-first-workflow-and-offer.md"
+authority = "decided"
+status = "established"
+owner = "product-owner"
+depends_on = ["qamata.doctrine"]
+depended_on_by = ["qamata.arch.v1-scope"]
 
-  - id: qamata.arch.v1-scope
-    kind: architecture
-    path: architecture/v1-scope.md
-    authority: proposal
-    status: deferred                  # not authorized
-    owner: architect
-    depends_on: [qamata.sc01]
+[[map]]
+id = "qamata.arch.v1-scope"
+kind = "architecture"
+path = "architecture/v1-scope.md"
+authority = "proposal"
+status = "deferred"                  # not authorized
+owner = "architect"
+depends_on = ["qamata.sc01"]
 
-  - id: qamata.arch.isolation
-    kind: architecture
-    path: none                       # an open question, not yet an ADR
-    authority: proposal
-    status: open
-    note: "VM-per-run vs container+gVisor/Firecracker — AR-01, deferred to the v1 build authorization"
+[[map]]
+id = "qamata.arch.isolation"
+kind = "architecture"
+path = "none"                       # an open question, not yet an ADR
+authority = "proposal"
+status = "open"
+note = "VM-per-run vs container+gVisor/Firecracker — AR-01, deferred to the v1 build authorization"
 ```
 
 ## 9. Build order

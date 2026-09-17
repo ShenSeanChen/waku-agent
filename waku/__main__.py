@@ -16,6 +16,7 @@
   waku deliberate "<task>"   two brains deliberate, a decider decides (S6-S8);
                              add --build to build with Sonnet then review (S9)
   waku new-project <name>    stamp a project harness skeleton (one kernel, many harnesses)
+  waku bring-me-back [proj]  reconstruct a project's state from its harness map
   waku skill install <url>   install a community skill
 """
 
@@ -87,6 +88,10 @@ def main() -> None:
         from waku.ops.new_project import main as new_project_main
 
         new_project_main(args[1:])
+    elif args[0] == "bring-me-back":
+        from waku.ops.bring_me_back import main as bmb_main
+
+        bmb_main(args[1:])
     elif args[0] == "mcp":
         from waku.tools.mcp_cli import cli_main as mcp_main
 
