@@ -67,3 +67,17 @@ def gate_from_project(project_dir: Path | str) -> AuthorityGate | None:
         return None
     return AuthorityGate(level=auth.get("default", "recommend"),
                          irreversible=auth.get("irreversible", []))
+
+
+def authority_to_sandbox(authority: str) -> str | None:
+    """The coding-agent sandbox a role's rung maps to. None = owner-gated: the
+    caller must refuse rather than auto-run.
+
+    The thinking rungs (observe/recommend/plan) get read-only — they produce
+    text, not files; `sandbox` gets workspace-write (the engineer); the top two
+    rungs never auto-run."""
+    if authority in ("observe", "recommend", "plan"):
+        return "read-only"
+    if authority == "sandbox":
+        return "workspace-write"
+    return None   # reversible / irreversible

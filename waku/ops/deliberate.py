@@ -97,13 +97,13 @@ def _resolve_roles(waku: Waku) -> dict[str, dict]:
 
 
 def _delegate(waku: Waku, state: dict, prompt: str, agent: str, model: str,
-              effort: str) -> str:
+              effort: str, sandbox: str = "") -> str:
     """One coding-agent brain = one delegate_task call on the configured CLI."""
     from waku.tools import experimental
 
     tool = experimental.make_delegate_tool(waku.settings)
     return tool.fn(task=prompt, agent=agent, model=model, effort=effort,
-                   _notify=state.get("_notify"))
+                   sandbox=sandbox, _notify=state.get("_notify"))
 
 
 def _direct_brain(waku: Waku, prompt: str, model: str = "") -> str:
@@ -118,13 +118,45 @@ def _direct_brain(waku: Waku, prompt: str, model: str = "") -> str:
     return "".join(b.text for b in resp.content if getattr(b, "type", "") == "text")
 
 
+def _role_skills_text(harness: str, role_id: str, skill_ids) -> str:
+    """The bodies of a role's skills, loaded BY ID from
+    `<harness>/skills/<role_id>/<skill-id>/SKILL.md` and joined. Reuses the
+    procedural-memory parser (the SKILL.md format + `_parse`), not
+    `SkillLoader.match` — the role names its skills; nothing is keyword-matched."""
+    if not harness or not skill_ids:
+        return ""
+    from waku.memory.procedural.loader import _parse
+
+    parts = []
+    for sid in skill_ids:
+        path = Path(harness) / "skills" / role_id / sid / "SKILL.md"
+        if not path.is_file():
+            continue
+        skill = _parse(path)
+        if skill and skill.body:
+            parts.append(skill.body)
+    return "\n\n".join(parts)
+
+
 def _run_role(waku: Waku, state: dict, role: dict, prompt: str) -> str:
-    """Run one role's brain, dispatching on its `runtime` (the node kind)."""
+    """Run one role's brain, dispatching on its `runtime` (the node kind). The
+    role's skills (by id) are prepended to the prompt first."""
+    harness = getattr(waku.settings, "harness", "") or ""
+    skills_text = _role_skills_text(harness, role.get("id", ""), role.get("skills", []))
+    if skills_text:
+        prompt = f"Relevant skill instructions:\n{skills_text}\n\n{prompt}"
     runtime = (role.get("runtime") or "loop").strip().lower()
     model = role.get("model") or ""
     effort = role.get("effort") or ""
     if runtime in ("claude", "codex", "pi"):
-        return _delegate(waku, state, prompt, agent=runtime, model=model, effort=effort)
+        from waku.tools.authority import authority_to_sandbox
+
+        sandbox = authority_to_sandbox(role.get("authority", "recommend"))
+        if sandbox is None:
+            return (f"role '{role.get('id', '?')}' needs owner approval "
+                    f"(authority '{role.get('authority')}')")
+        return _delegate(waku, state, prompt, agent=runtime, model=model,
+                         effort=effort, sandbox=sandbox)
     if runtime == "deepseek":
         return _direct_brain(waku, prompt, model=model)
     # loop and eval are not deliberation brains
@@ -267,9 +299,15 @@ def run_build_review(waku: Waku | None = None, task: str = "", cwd: str = "",
 
         roles = dict(roles) if roles else _resolve_roles(waku)
         engineer = roles.get("engineer") or _default_roles()["engineer"]
+        from waku.tools.authority import authority_to_sandbox
+
+        sandbox = authority_to_sandbox(engineer.get("authority", "sandbox"))
+        harness = getattr(waku.settings, "harness", "") or ""
+        skills_text = _role_skills_text(harness, "engineer", engineer.get("skills", []))
+        build_task = f"{skills_text}\n\n{task}" if skills_text else task
         tool = experimental.make_delegate_tool(waku.settings)
-        summary = tool.fn(task=task, agent=engineer.get("runtime", "claude"),
-                          model=engineer.get("model", ""), cwd=cwd,
+        summary = tool.fn(task=build_task, agent=engineer.get("runtime", "claude"),
+                          model=engineer.get("model", ""), sandbox=sandbox or "", cwd=cwd,
                           _notify=(observer or (lambda k, e: None)))
         return run_deliberation(waku, task=task, work=summary, observer=observer,
                                 max_rounds=max_rounds, roles=roles)

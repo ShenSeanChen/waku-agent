@@ -37,6 +37,12 @@ def test_codex_cmd_is_json_sandboxed():
     assert "-m" in cmd and "astra" in cmd and cmd[-1] == "fix tests"
 
 
+def test_codex_cmd_honours_the_sandbox_override():
+    cmd = experimental._codex_cmd("/fake/codex", Settings(home="."), "t", "m", "",
+                                  "read-only")
+    assert "read-only" in cmd and "workspace-write" not in cmd
+
+
 def test_parse_claude_event_extracts_result_usage_cost():
     ev = {"type": "result", "result": "Built it.",
           "usage": {"input_tokens": 100, "output_tokens": 20},

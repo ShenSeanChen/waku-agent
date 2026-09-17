@@ -264,10 +264,12 @@ def _parse_codex_event(ev: dict) -> dict | None:
     return None
 
 
-def _pi_cmd(exe: str, settings: Settings, task: str, model: str, effort: str) -> list[str]:
+def _pi_cmd(exe: str, settings: Settings, task: str, model: str, effort: str,
+            sandbox: str = "") -> list[str]:
     """pi runs on the SAME brain the loop is using by default, so the sub-agent's
     coding is this model's coding (that's the point of a per-model comparison).
-    An explicit `model` wins. pi natively speaks every provider we pin."""
+    An explicit `model` wins. pi natively speaks every provider we pin. (pi has
+    no sandbox flag — `sandbox` is accepted for a uniform signature, unused.)"""
     from waku.ops.coding_eval import PI_PROVIDER, _key_for
     cmd = [exe]
     pi_prov = PI_PROVIDER.get(settings.provider)
@@ -283,9 +285,12 @@ def _pi_cmd(exe: str, settings: Settings, task: str, model: str, effort: str) ->
     return cmd
 
 
-def _claude_cmd(exe: str, settings: Settings, task: str, model: str, effort: str) -> list[str]:
+def _claude_cmd(exe: str, settings: Settings, task: str, model: str, effort: str,
+                sandbox: str = "") -> list[str]:
     # --verbose is required: with --print, --output-format=stream-json refuses to
-    # run without it (verified against the live CLI).
+    # run without it (verified against the live CLI). claude's permission model
+    # is --permission-mode/--allowedTools, not a single sandbox flag, so
+    # `sandbox` is accepted for a uniform signature but not mapped here yet.
     cmd = [exe, "-p", task, "--output-format", "stream-json", "--verbose"]
     if model:
         cmd += ["--model", model]
@@ -294,10 +299,12 @@ def _claude_cmd(exe: str, settings: Settings, task: str, model: str, effort: str
     return cmd
 
 
-def _codex_cmd(exe: str, settings: Settings, task: str, model: str, effort: str) -> list[str]:
-    # -s workspace-write: the agent may edit its workspace (the repo/cwd) but
-    # nothing else; --skip-git-repo-check so a scratch workspace still runs.
-    cmd = [exe, "exec", "--json", "-s", "workspace-write", "--skip-git-repo-check"]
+def _codex_cmd(exe: str, settings: Settings, task: str, model: str, effort: str,
+               sandbox: str = "") -> list[str]:
+    # -s <sandbox> bounds what the agent may touch (read-only / workspace-write /
+    # danger-full-access); defaults to workspace-write. --skip-git-repo-check so
+    # a scratch workspace still runs.
+    cmd = [exe, "exec", "--json", "-s", sandbox or "workspace-write", "--skip-git-repo-check"]
     if model:
         cmd += ["-m", model]
     cmd += [task]
@@ -339,8 +346,8 @@ def make_delegate_tool(settings: Settings) -> Tool:
     the workspace, for a scratch task)."""
 
     def delegate_task(task: str = "", agent: str = "pi", model: str = "",
-                      effort: str = "", cwd: str = "", timeout_seconds: int = 0,
-                      _notify=None) -> str:
+                      effort: str = "", sandbox: str = "", cwd: str = "",
+                      timeout_seconds: int = 0, _notify=None) -> str:
         notify = _notify or (lambda kind, ev: None)
         if not task.strip():
             return ("delegate_task needs a 'task' — a plain-English description of the "
@@ -366,7 +373,7 @@ def make_delegate_tool(settings: Settings) -> Tool:
             in_workspace = True
 
         timeout = int(timeout_seconds) or int(os.getenv("WAKU_DELEGATE_TIMEOUT", "300"))
-        cmd = drv["cmd"](exe, settings, task, model, effort)
+        cmd = drv["cmd"](exe, settings, task, model, effort, sandbox)
         stream = bool(drv["stream"](exe))
 
         raw_events: list[str] = []

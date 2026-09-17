@@ -197,6 +197,26 @@ def test_default_roles_preserve_the_env_fallbacks():
     assert roles["engineer"]["runtime"] == "claude"
 
 
+def test_role_skills_text_loads_by_id(tmp_path):
+    from waku.ops.deliberate import _role_skills_text
+
+    d = tmp_path / "skills" / "architect" / "write-adr"
+    d.mkdir(parents=True)
+    (d / "SKILL.md").write_text(
+        "---\nname: write-adr\ndescription: Record a decision.\n---\n\n"
+        "## Instructions\nRecord context, options, decision.", encoding="utf-8")
+    text = _role_skills_text(str(tmp_path), "architect", ["write-adr"])
+    assert "Record context, options, decision" in text
+    assert "description" not in text  # frontmatter is stripped
+
+
+def test_role_skills_text_is_empty_without_harness_or_skills(tmp_path):
+    from waku.ops.deliberate import _role_skills_text
+
+    assert _role_skills_text("", "architect", ["write-adr"]) == ""
+    assert _role_skills_text(str(tmp_path), "architect", []) == ""
+
+
 def test_run_rounds_loops_to_the_cap_and_finalizes():
     from waku.ops.deliberate import _run_rounds
 

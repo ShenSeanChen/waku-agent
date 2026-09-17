@@ -88,3 +88,19 @@ def test_no_harness_means_ungated(tmp_path):
 
     app = make_waku(tmp_path / "home", client=ScriptedClient([]))
     assert app.tools.gate is None
+
+
+def test_authority_to_sandbox_maps_thinking_rungs_to_read_only():
+    from waku.tools.authority import authority_to_sandbox
+
+    assert authority_to_sandbox("observe") == "read-only"
+    assert authority_to_sandbox("recommend") == "read-only"
+    assert authority_to_sandbox("plan") == "read-only"
+
+
+def test_authority_to_sandbox_gates_the_top_rungs():
+    from waku.tools.authority import authority_to_sandbox
+
+    assert authority_to_sandbox("sandbox") == "workspace-write"
+    assert authority_to_sandbox("reversible") is None
+    assert authority_to_sandbox("irreversible") is None
