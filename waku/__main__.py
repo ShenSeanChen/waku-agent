@@ -17,6 +17,7 @@
                              add --build to build with Sonnet then review (S9)
   waku new-project <name>    stamp a project harness skeleton (one kernel, many harnesses)
   waku bring-me-back [proj]  reconstruct a project's state from its harness map
+  waku reconsider [proj] m=1  reason over falsified assumptions (the learning loop)
   waku skill install <url>   install a community skill
 """
 
@@ -92,6 +93,10 @@ def main() -> None:
         from waku.ops.bring_me_back import main as bmb_main
 
         bmb_main(args[1:])
+    elif args[0] == "reconsider":
+        from waku.ops.reconsider import main as reconsider_main
+
+        reconsider_main(args[1:])
     elif args[0] == "mcp":
         from waku.tools.mcp_cli import cli_main as mcp_main
 

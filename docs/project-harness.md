@@ -134,15 +134,18 @@ kind = "assumption"
 authority = "hypothesis"
 status = "hypothesis"
 claim = "Provider A starts a workload in ~18s"
-watch = "metric.placement.startup_median < 25s"
+metric = "placement.startup_median"   # what to observe
+op = "lt"                             # the bound that keeps the claim true
+threshold = 25.0                      # crossing it falsifies the claim
 depended_on_by = ["qamata.arch.placement", "qamata.arch.tariff", "qamata.ops.runbook-coldstart"]
 ```
 
-When the observatory sees the median drift to 41s, the watch fires and the
-harness reasons — *our prior placement assumptions are invalid; this affects
-Placement; three documents depend on the old number; run an experiment to decide
-temporary vs structural* — then marks the three dependent items `stale` and opens
-the experiment. That is CTO behaviour, not a metrics dashboard.
+When the observatory sees the median drift to 41s, `reconsider` evaluates the
+watch (`41 < 25` is false), fires it, and reasons — *our prior placement
+assumptions are invalid; this affects Placement; three documents depend on the
+old number; run an experiment to decide temporary vs structural* — naming the
+dependent items to mark `stale`. That is CTO behaviour, not a metrics dashboard.
+(`waku reconsider` reports; the `stale` marking is a deliberate owner step.)
 
 ## 7. Lifecycle
 
