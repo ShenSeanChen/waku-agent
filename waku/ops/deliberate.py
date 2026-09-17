@@ -10,26 +10,30 @@ This file is the ONE place real callables meet the pure workflow in
 waku/graph/workflows/deliberate.py — mirroring ops/gather.py — so a reviewer
 only has to read one function to know what a deliberation is allowed to touch.
 
-The brains are wired through env (the caller's own model ids), never hardcoded:
+The brains are roles (see docs/project-roles.md), read from the bound harness's
+`[[roles]]` when `WAKU_HARNESS` is set; otherwise the env-var defaults below
+apply. A role is {lens, runtime, model, effort, authority, skills}; `runtime`
+maps to a graph node kind — claude/codex/pi = a tool node (`delegate_task`),
+deepseek = an `llm` node (a bare call), loop = an agent node.
 
-    WAKU_DELIBERATE_BRAIN_A          Claude Code model for brain A (default "fable-5.1")
-    WAKU_DELIBERATE_BRAIN_A_EFFORT   its reasoning effort (default "medium")
-    WAKU_DELIBERATE_BRAIN_B          DeepSeek model for brain B (default "deepseek-v4-pro")
-    WAKU_DELIBERATE_DECIDER          Codex model for the decider (default "astra")
-    WAKU_DELIBERATE_DECIDER_EFFORT   its reasoning effort (default "high")
-    WAKU_DELIBERATE_MAX_ROUNDS       how many rounds before the final decision (default 3)
-    WAKU_BUILD_MODEL                 Claude Code model for the S9 build (default "sonnet")
+    WAKU_DELIBERATE_BRAIN_A          default architect model (claude) — "fable-5.1"
+    WAKU_DELIBERATE_BRAIN_A_EFFORT   its reasoning effort — "medium"
+    WAKU_DELIBERATE_BRAIN_B          default reviewer model (deepseek) — "deepseek-v4-pro"
+    WAKU_DELIBERATE_DECIDER          default decider model (codex) — "astra"
+    WAKU_DELIBERATE_DECIDER_EFFORT   its reasoning effort — "high"
+    WAKU_DELIBERATE_MAX_ROUNDS       rounds before the final decision — 3
+    WAKU_BUILD_MODEL                 default engineer model (claude) — "sonnet"
 
-brain_a (Claude Code) and decide (Codex) are `delegate_task` calls — the same
-sub-agent machinery pi uses. brain_b is a DIRECT DeepSeek call: no shell, no
-tools, just reasoning. A dead brain is wrapped so it returns honest text and
-the decider still runs — a broken lens costs a voice, never the whole answer.
+A dead brain is wrapped so it returns honest text and the decider still runs —
+a broken lens costs a voice, never the whole answer.
 """
 
 from __future__ import annotations
 
 import os
 import sys
+import tomllib
+from pathlib import Path
 
 from rich.console import Console
 
@@ -45,16 +49,51 @@ from waku.graph.workflows.deliberate import (
     build_deliberation_graph,
 )
 
-# Which lens each parallel brain holds — distinct on purpose, so the two
-# positions can genuinely disagree instead of parroting each other.
-_LENSES = {
-    "brain_a": "SOFTWARE ARCHITECT",
-    "brain_b": "PRODUCT AND SYSTEMS REVIEWER",
-}
-
 
 def _env(name: str, default: str) -> str:
     return os.getenv(name, "").strip() or default
+
+
+def load_roles(project_dir: str | Path) -> dict[str, dict]:
+    """Read `[[roles]]` from a harness's project.toml into {id: role}. Empty when
+    there is no harness or no roles block."""
+    path = Path(project_dir) / "project.toml"
+    if not path.is_file():
+        return {}
+    cfg = tomllib.loads(path.read_text(encoding="utf-8"))
+    return {r["id"]: r for r in cfg.get("roles", []) if r.get("id")}
+
+
+def _default_roles() -> dict[str, dict]:
+    """The env-var defaults, expressed as roles — what a no-harness run uses."""
+    return {
+        "architect": {"id": "architect", "lens": "SOFTWARE ARCHITECT",
+                      "runtime": "claude",
+                      "model": _env("WAKU_DELIBERATE_BRAIN_A", "fable-5.1"),
+                      "effort": _env("WAKU_DELIBERATE_BRAIN_A_EFFORT", "medium"),
+                      "authority": "recommend", "skills": []},
+        "reviewer": {"id": "reviewer", "lens": "PRODUCT AND SYSTEMS REVIEWER",
+                     "runtime": "deepseek",
+                     "model": _env("WAKU_DELIBERATE_BRAIN_B", "deepseek-v4-pro"),
+                     "authority": "recommend", "skills": []},
+        "decider": {"id": "decider", "lens": "DECIDER", "runtime": "codex",
+                    "model": _env("WAKU_DELIBERATE_DECIDER", "astra"),
+                    "effort": _env("WAKU_DELIBERATE_DECIDER_EFFORT", "high"),
+                    "authority": "recommend", "skills": []},
+        "engineer": {"id": "engineer", "lens": "ENGINEER", "runtime": "claude",
+                     "model": _env("WAKU_BUILD_MODEL", "sonnet"),
+                     "authority": "sandbox", "skills": []},
+    }
+
+
+def _resolve_roles(waku: Waku) -> dict[str, dict]:
+    """Roles from the bound harness, else the env-var defaults."""
+    harness = getattr(waku.settings, "harness", "") or ""
+    if harness:
+        loaded = load_roles(harness)
+        if loaded:
+            return loaded
+    return _default_roles()
 
 
 def _delegate(waku: Waku, state: dict, prompt: str, agent: str, model: str,
@@ -67,16 +106,30 @@ def _delegate(waku: Waku, state: dict, prompt: str, agent: str, model: str,
                    _notify=state.get("_notify"))
 
 
-def _direct_brain(waku: Waku, prompt: str) -> str:
+def _direct_brain(waku: Waku, prompt: str, model: str = "") -> str:
     """One reasoning brain = one direct DeepSeek call. No shell, no tools."""
     from waku.config import Settings
     from waku.loop.models import get_client
 
-    model = _env("WAKU_DELIBERATE_BRAIN_B", "deepseek-v4-pro")
+    model = model or _env("WAKU_DELIBERATE_BRAIN_B", "deepseek-v4-pro")
     client = get_client(Settings(provider="deepseek", model=model))
     resp = client.messages.create(model=model, max_tokens=3000,
                                   messages=[{"role": "user", "content": prompt}])
     return "".join(b.text for b in resp.content if getattr(b, "type", "") == "text")
+
+
+def _run_role(waku: Waku, state: dict, role: dict, prompt: str) -> str:
+    """Run one role's brain, dispatching on its `runtime` (the node kind)."""
+    runtime = (role.get("runtime") or "loop").strip().lower()
+    model = role.get("model") or ""
+    effort = role.get("effort") or ""
+    if runtime in ("claude", "codex", "pi"):
+        return _delegate(waku, state, prompt, agent=runtime, model=model, effort=effort)
+    if runtime == "deepseek":
+        return _direct_brain(waku, prompt, model=model)
+    # loop and eval are not deliberation brains
+    return (f"role '{role.get('id', '?')}' has runtime '{runtime}', which is not a "
+            "deliberation brain (claude/codex/pi/deepseek)")
 
 
 def _safe(fn, label: str):
@@ -101,18 +154,17 @@ def _context(state: dict) -> str:
     return f"Task:\n{task}" + (f"\n\nWork to review:\n{work}" if work else "")
 
 
-def _brain_prompt(kind: str, state: dict) -> str:
+def _brain_prompt(kind: str, state: dict, lens: str) -> str:
     """The right prompt for one brain, given the round and mode.
 
     Round 1: independent positions (design) or first-pass review (review).
     Round 2+: revise against the prior positions and the last synthesis."""
-    lens = _LENSES.get(kind, "")
     if int(state.get("round", 1)) <= 1:
         if state.get("work"):
             return REVIEW_PROMPT.format(lens=lens, task=state.get("task", ""),
                                         work=state.get("work", ""))
         template = BRAIN_A_PROMPT if kind == "brain_a" else BRAIN_B_PROMPT
-        return template.format(task=state.get("task", ""))
+        return template.format(lens=lens, task=state.get("task", ""))
 
     own_key = "position_a" if kind == "brain_a" else "position_b"
     other_key = "position_b" if kind == "brain_a" else "position_a"
@@ -123,12 +175,13 @@ def _brain_prompt(kind: str, state: dict) -> str:
         critique=state.get("decision", ""))
 
 
-def _decide_prompt(state: dict) -> str:
+def _decide_prompt(state: dict, lens_a: str, lens_b: str) -> str:
     """The decider's prompt: intermediate rounds synthesize + critique; the last
     round issues the final call. Design mode calls it a "decision"; review mode
     calls it a "verdict"."""
     positions = {"position_a": state.get("position_a", ""),
-                 "position_b": state.get("position_b", "")}
+                 "position_b": state.get("position_b", ""),
+                 "lens_a": lens_a, "lens_b": lens_b}
     call = "verdict" if state.get("work") else "decision"
     if int(state.get("round", 1)) >= int(state.get("max_rounds", 3)):
         return FINAL_PROMPT.format(rounds=state.get("max_rounds", 3),
@@ -136,23 +189,25 @@ def _decide_prompt(state: dict) -> str:
     return SYNTHESIS_PROMPT.format(call=call, **positions)
 
 
-def _build_bound_graph(waku: Waku):
-    """The pure workflow, wired to this machine and these brains."""
-    brain_a_model = _env("WAKU_DELIBERATE_BRAIN_A", "fable-5.1")
-    brain_a_effort = _env("WAKU_DELIBERATE_BRAIN_A_EFFORT", "medium")
-    decider_model = _env("WAKU_DELIBERATE_DECIDER", "astra")
-    decider_effort = _env("WAKU_DELIBERATE_DECIDER_EFFORT", "high")
+def _build_bound_graph(waku: Waku, roles: dict | None = None):
+    """The pure workflow, wired to this machine and these roles."""
+    roles = dict(roles) if roles else _resolve_roles(waku)
+    architect = roles.get("architect") or {}
+    reviewer = roles.get("reviewer") or {}
+    decider = roles.get("decider") or {}
 
     def brain_a(state: dict) -> str:
-        return _delegate(waku, state, _brain_prompt("brain_a", state),
-                         agent="claude", model=brain_a_model, effort=brain_a_effort)
+        return _run_role(waku, state, architect,
+                         _brain_prompt("brain_a", state, architect.get("lens", "")))
 
     def brain_b(state: dict) -> str:
-        return _direct_brain(waku, _brain_prompt("brain_b", state))
+        return _run_role(waku, state, reviewer,
+                         _brain_prompt("brain_b", state, reviewer.get("lens", "")))
 
     def decide(state: dict) -> str:
-        return _delegate(waku, state, _decide_prompt(state),
-                         agent="codex", model=decider_model, effort=decider_effort)
+        return _run_role(waku, state, decider,
+                         _decide_prompt(state, architect.get("lens", ""),
+                                        reviewer.get("lens", "")))
 
     return build_deliberation_graph(
         brain_a_fn=_safe(brain_a, "brain A (architect)"),
@@ -173,12 +228,14 @@ def _run_rounds(graph, state: dict, max_rounds: int, observer=None) -> dict:
 
 
 def run_deliberation(waku: Waku | None = None, task: str = "", work: str = "",
-                     observer=None, max_rounds: int | None = None) -> dict:
+                     observer=None, max_rounds: int | None = None,
+                     roles: dict | None = None) -> dict:
     """Run one deliberation to completion. Returns the final state; never raises.
 
     `work` present → review mode (S9); absent → design mode (S6–S8). The state
     carries `decision` (the final call, from the last round) and per-round
-    `errors` if any. `max_rounds` defaults to WAKU_DELIBERATE_MAX_ROUNDS (3)."""
+    `errors` if any. `max_rounds` defaults to WAKU_DELIBERATE_MAX_ROUNDS (3).
+    `roles` override the bound harness (or the env-var defaults)."""
     own = waku is None
     waku = waku or Waku()
     try:
@@ -189,7 +246,7 @@ def run_deliberation(waku: Waku | None = None, task: str = "", work: str = "",
 
         rounds = max_rounds if max_rounds is not None else int(
             _env("WAKU_DELIBERATE_MAX_ROUNDS", "3"))
-        return _run_rounds(_build_bound_graph(waku), {"task": task, "work": work},
+        return _run_rounds(_build_bound_graph(waku, roles), {"task": task, "work": work},
                            rounds, observer=notify)
     finally:
         if own:
@@ -197,22 +254,25 @@ def run_deliberation(waku: Waku | None = None, task: str = "", work: str = "",
 
 
 def run_build_review(waku: Waku | None = None, task: str = "", cwd: str = "",
-                     observer=None, max_rounds: int | None = None) -> dict:
-    """S9: Sonnet builds the thing, then the deliberation graph reviews it.
+                     observer=None, max_rounds: int | None = None,
+                     roles: dict | None = None) -> dict:
+    """S9: the engineer role builds, then the deliberation graph reviews it.
 
-    The build is one delegate_task call on Sonnet (Claude Code) in `cwd`; its
+    The build is one delegate_task call on the engineer role in `cwd`; its
     summary becomes `work` for the review-mode deliberation (same bounded loop)."""
     own = waku is None
     waku = waku or Waku()
     try:
         from waku.tools import experimental
 
-        build_model = _env("WAKU_BUILD_MODEL", "sonnet")
+        roles = dict(roles) if roles else _resolve_roles(waku)
+        engineer = roles.get("engineer") or _default_roles()["engineer"]
         tool = experimental.make_delegate_tool(waku.settings)
-        summary = tool.fn(task=task, agent="claude", model=build_model, cwd=cwd,
+        summary = tool.fn(task=task, agent=engineer.get("runtime", "claude"),
+                          model=engineer.get("model", ""), cwd=cwd,
                           _notify=(observer or (lambda k, e: None)))
         return run_deliberation(waku, task=task, work=summary, observer=observer,
-                                max_rounds=max_rounds)
+                                max_rounds=max_rounds, roles=roles)
     finally:
         if own:
             waku.close()
@@ -242,7 +302,7 @@ def main(argv: list[str] | None = None) -> None:
     waku = Waku()
     try:
         if build:
-            console.print("[dim]building with Sonnet, then reviewing…[/dim]")
+            console.print("[dim]building with the engineer, then reviewing…[/dim]")
             state = run_build_review(waku, task=task, cwd=cwd)
         else:
             console.print("[dim]two brains deliberate, the decider decides…[/dim]")

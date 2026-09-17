@@ -52,6 +52,17 @@ irreversible = []      # tools that never run without the owner, e.g. ["settle",
 # id = "qamata.assumption.placement-startup"
 # claim = "Provider A starts a workload in ~18s"
 # watch = "metric.placement.startup_median < 25s"
+
+# Add a [[roles]] block per team member (docs/project-roles.md), with its skills
+# under skills/<role>/SKILL.md:
+#
+# [[roles]]
+# id = "architect"
+# lens = "SOFTWARE ARCHITECT"
+# runtime = "claude"          # claude | codex | pi | deepseek | loop | eval
+# model = "fable-5.1"
+# authority = "recommend"
+# skills = ["write-adr"]
 """
 
 README = """# {title} — project harness

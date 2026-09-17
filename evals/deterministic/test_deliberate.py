@@ -119,8 +119,8 @@ def test_safe_returns_honest_text_on_failure():
 def test_review_prompt_labels_each_lens():
     from waku.ops.deliberate import _brain_prompt
 
-    a = _brain_prompt("brain_a", {"task": "T", "work": "W"})
-    b = _brain_prompt("brain_b", {"task": "T", "work": "W"})
+    a = _brain_prompt("brain_a", {"task": "T", "work": "W"}, "SOFTWARE ARCHITECT")
+    b = _brain_prompt("brain_b", {"task": "T", "work": "W"}, "PRODUCT AND SYSTEMS REVIEWER")
     assert "SOFTWARE ARCHITECT" in a and "T" in a and "W" in a
     assert "PRODUCT AND SYSTEMS REVIEWER" in b
 
@@ -128,8 +128,15 @@ def test_review_prompt_labels_each_lens():
 def test_design_prompt_passes_task_only():
     from waku.ops.deliberate import _brain_prompt
 
-    assert "SOFTWARE ARCHITECT" in _brain_prompt("brain_a", {"task": "T", "work": ""})
-    assert "PRODUCT AND SYSTEMS REVIEWER" in _brain_prompt("brain_b", {"task": "T", "work": ""})
+    assert "SOFTWARE ARCHITECT" in _brain_prompt("brain_a", {"task": "T", "work": ""}, "SOFTWARE ARCHITECT")
+    assert "PRODUCT AND SYSTEMS REVIEWER" in _brain_prompt("brain_b", {"task": "T", "work": ""}, "PRODUCT AND SYSTEMS REVIEWER")
+
+
+def test_brain_prompt_uses_the_roles_lens_not_a_hardcoded_one():
+    from waku.ops.deliberate import _brain_prompt
+
+    out = _brain_prompt("brain_a", {"task": "T", "work": ""}, "CHIEF ARCHITECT")
+    assert "CHIEF ARCHITECT" in out and "SOFTWARE ARCHITECT" not in out
 
 
 def test_brain_prompt_revises_after_round_one():
@@ -137,29 +144,57 @@ def test_brain_prompt_revises_after_round_one():
 
     state = {"task": "T", "work": "", "round": 2, "max_rounds": 3,
              "position_a": "prior A", "position_b": "prior B", "decision": "critique"}
-    a = _brain_prompt("brain_a", state)
+    a = _brain_prompt("brain_a", state, "SOFTWARE ARCHITECT")
     assert "SOFTWARE ARCHITECT" in a and "round 2 of 3" in a
     assert "prior A" in a and "prior B" in a and "critique" in a
-    assert "PRODUCT AND SYSTEMS REVIEWER" in _brain_prompt("brain_b", state)
+    assert "PRODUCT AND SYSTEMS REVIEWER" in _brain_prompt("brain_b", state, "PRODUCT AND SYSTEMS REVIEWER")
 
 
 def test_decider_finalizes_only_on_last_round():
     from waku.ops.deliberate import _decide_prompt
 
     base = {"position_a": "A", "position_b": "B", "max_rounds": 3}
-    mid = _decide_prompt({**base, "round": 1})
-    fin = _decide_prompt({**base, "round": 3})
+    mid = _decide_prompt({**base, "round": 1}, "SOFTWARE ARCHITECT", "PRODUCT AND SYSTEMS REVIEWER")
+    fin = _decide_prompt({**base, "round": 3}, "SOFTWARE ARCHITECT", "PRODUCT AND SYSTEMS REVIEWER")
     assert "FINAL round" in fin
     assert "FINAL round" not in mid
     assert "Do NOT make the final" in mid
+    assert "SOFTWARE ARCHITECT" in fin and "PRODUCT AND SYSTEMS REVIEWER" in fin
 
 
 def test_decider_says_verdict_in_review_mode():
     from waku.ops.deliberate import _decide_prompt
 
     base = {"position_a": "A", "position_b": "B", "max_rounds": 3, "work": "the build"}
-    fin = _decide_prompt({**base, "round": 3})
+    fin = _decide_prompt({**base, "round": 3}, "SOFTWARE ARCHITECT", "PRODUCT AND SYSTEMS REVIEWER")
     assert "final verdict" in fin and "final decision" not in fin
+
+
+def test_load_roles_reads_the_roles_block(tmp_path):
+    from waku.ops.deliberate import load_roles
+
+    (tmp_path / "project.toml").write_text(
+        '[[roles]]\nid = "architect"\nlens = "CHIEF ARCHITECT"\nruntime = "claude"\n'
+        'model = "fable-5.1"\nskills = ["write-adr"]\n', encoding="utf-8")
+    roles = load_roles(tmp_path)
+    assert roles["architect"]["lens"] == "CHIEF ARCHITECT"
+    assert roles["architect"]["skills"] == ["write-adr"]
+
+
+def test_load_roles_is_empty_without_a_harness(tmp_path):
+    from waku.ops.deliberate import load_roles
+
+    assert load_roles(tmp_path) == {}
+
+
+def test_default_roles_preserve_the_env_fallbacks():
+    from waku.ops.deliberate import _default_roles
+
+    roles = _default_roles()
+    assert roles["architect"]["runtime"] == "claude"
+    assert roles["reviewer"]["runtime"] == "deepseek"
+    assert roles["decider"]["runtime"] == "codex"
+    assert roles["engineer"]["runtime"] == "claude"
 
 
 def test_run_rounds_loops_to_the_cap_and_finalizes():

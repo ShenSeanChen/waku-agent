@@ -38,7 +38,7 @@ from waku.graph.engine import END, START, Graph, Node
 # --- design mode: round 1 (independent positions) ----------------------------
 
 BRAIN_A_PROMPT = """\
-You are the SOFTWARE ARCHITECT on a two-person team. For the task below, give
+You are the {lens} on a two-person team. For the task below, give
 your independent position: the load-bearing choices, the boundaries and seams,
 the trade-offs (isolation, cost, latency, correctness), and a clear
 recommendation. Be concrete and decisive.
@@ -47,7 +47,7 @@ Task:
 {task}"""
 
 BRAIN_B_PROMPT = """\
-You are the PRODUCT AND SYSTEMS REVIEWER on a two-person team. For the task
+You are the {lens} on a two-person team. For the task
 below, give your independent position: the requirements and risks, the
 operational and cost consequences, what could fail, and a clear recommendation.
 Be concrete and decisive.
@@ -92,10 +92,10 @@ Last synthesis:
 SYNTHESIS_PROMPT = """\
 Two specialists considered this task and reached these positions.
 
-POSITION A (software architect):
+POSITION A ({lens_a}):
 {position_a}
 
-POSITION B (product and systems reviewer):
+POSITION B ({lens_b}):
 {position_b}
 
 Synthesize where they agree and disagree, and name what is still unresolved —
@@ -105,10 +105,10 @@ the critique the team will use to converge next round. Do NOT make the final
 FINAL_PROMPT = """\
 The two specialists deliberated for {rounds} rounds. Their final positions:
 
-POSITION A (software architect):
+POSITION A ({lens_a}):
 {position_a}
 
-POSITION B (product and systems reviewer):
+POSITION B ({lens_b}):
 {position_b}
 
 This is the FINAL round — issue the single, final {call}: the recommendation,
