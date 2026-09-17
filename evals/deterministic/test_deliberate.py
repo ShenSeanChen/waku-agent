@@ -154,6 +154,14 @@ def test_decider_finalizes_only_on_last_round():
     assert "Do NOT make the final" in mid
 
 
+def test_decider_says_verdict_in_review_mode():
+    from waku.ops.deliberate import _decide_prompt
+
+    base = {"position_a": "A", "position_b": "B", "max_rounds": 3, "work": "the build"}
+    fin = _decide_prompt({**base, "round": 3})
+    assert "final verdict" in fin and "final decision" not in fin
+
+
 def test_run_rounds_loops_to_the_cap_and_finalizes():
     from waku.ops.deliberate import _run_rounds
 

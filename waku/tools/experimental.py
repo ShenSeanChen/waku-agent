@@ -227,11 +227,18 @@ def _parse_claude_event(ev: dict) -> dict | None:
 
 
 def _parse_codex_event(ev: dict) -> dict | None:
-    """Codex `--json` (JSONL) → the curated update shape. Tolerant: the final
-    assistant message supplies the reply, any usage-bearing event supplies the
-    tokens, and a terminal event closes the turn. Raw lines are preserved
-    regardless, so an unrecognized schema still leaves a complete record."""
+    """Codex `--json` (JSONL) → the curated update shape.
+
+    The error + lifecycle events (thread.started, turn.started, error,
+    turn.failed) are verified against the live CLI; the success-path message and
+    tool shapes (item.*) remain best-effort. Raw lines are preserved regardless,
+    so an unrecognized event still leaves a complete record."""
     kind = ev.get("type", "")
+    if kind == "error":
+        return {"text": ev.get("message", "codex error")}
+    if kind == "turn.failed":
+        err = (ev.get("error") or {}).get("message") or "codex turn failed"
+        return {"text": err, "turn_end": True}
     item = ev.get("item") or {}
     if (kind in ("item.completed", "item.started")
             and item.get("type") in ("message", "agent_message")
@@ -252,7 +259,7 @@ def _parse_codex_event(ev: dict) -> dict | None:
     tout = usage.get("output_tokens", 0) or usage.get("output", 0) or 0
     if tin or tout:
         return {"usage": {"in": tin, "out": tout}}
-    if kind in ("turn_context", "turn.completed", "run.completed", "session.completed"):
+    if kind in ("turn.completed", "thread.completed", "turn_context", "run.completed"):
         return {"turn_end": True}
     return None
 
@@ -277,7 +284,9 @@ def _pi_cmd(exe: str, settings: Settings, task: str, model: str, effort: str) ->
 
 
 def _claude_cmd(exe: str, settings: Settings, task: str, model: str, effort: str) -> list[str]:
-    cmd = [exe, "-p", task, "--output-format", "stream-json"]
+    # --verbose is required: with --print, --output-format=stream-json refuses to
+    # run without it (verified against the live CLI).
+    cmd = [exe, "-p", task, "--output-format", "stream-json", "--verbose"]
     if model:
         cmd += ["--model", model]
     if effort:
@@ -368,8 +377,16 @@ def make_delegate_tool(settings: Settings) -> Tool:
                     cmd, workdir, timeout, notify, agent, drv["parse"])
             except OSError as exc:
                 return f"Couldn't launch {agent}: {exc}"
+            # Honest attribution: pi runs on the loop's brain (provider/model
+            # default to settings); claude/codex run their own, and with no
+            # explicit model we record "(default)" rather than mis-credit the
+            # loop's model as the sub-agent's.
+            ledger_provider = drv.get("provider", "")
+            ledger_model = model
+            if ledger_provider and not ledger_model:
+                ledger_model = "(default)"
             _record_subagent_usage(settings, tin, tout,
-                                   provider=drv.get("provider", ""), model=model)
+                                   provider=ledger_provider, model=ledger_model)
             if code is None:
                 return (f"{agent} was still working after {timeout}s so I stopped it — try a smaller "
                         f"task, or raise WAKU_DELEGATE_TIMEOUT.")

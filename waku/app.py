@@ -28,7 +28,16 @@ class Waku:
         from waku.memory import Memory
 
         self.memory = Memory(self.conn, self.settings, self.client)
-        self.tools = build_registry(self.conn, self.settings, self.memory)
+
+        # A project harness (WAKU_HARNESS) binds the authority ladder: its
+        # project.toml [authority] becomes the tool gate. No harness → ungated.
+        gate = None
+        harness = getattr(self.settings, "harness", "") or ""
+        if harness:
+            from waku.tools.authority import gate_from_project
+
+            gate = gate_from_project(harness)
+        self.tools = build_registry(self.conn, self.settings, self.memory, gate=gate)
         self.mcp_bridge = getattr(self.tools, "mcp_bridge", None)
         self.session = Session(self.settings, memory=self.memory)
         self.tracer = Tracer(self.settings)

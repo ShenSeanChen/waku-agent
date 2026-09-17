@@ -8,4 +8,4 @@ Four pillars, one module each:
   ops      → waku/ops + evals/              (trace → eval → gate → release)
 """
 
-__version__ = "0.1.8"
+__version__ = "0.2.0"

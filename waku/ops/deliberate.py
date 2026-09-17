@@ -125,12 +125,15 @@ def _brain_prompt(kind: str, state: dict) -> str:
 
 def _decide_prompt(state: dict) -> str:
     """The decider's prompt: intermediate rounds synthesize + critique; the last
-    round issues the final decision."""
+    round issues the final call. Design mode calls it a "decision"; review mode
+    calls it a "verdict"."""
     positions = {"position_a": state.get("position_a", ""),
                  "position_b": state.get("position_b", "")}
+    call = "verdict" if state.get("work") else "decision"
     if int(state.get("round", 1)) >= int(state.get("max_rounds", 3)):
-        return FINAL_PROMPT.format(rounds=state.get("max_rounds", 3), **positions)
-    return SYNTHESIS_PROMPT.format(**positions)
+        return FINAL_PROMPT.format(rounds=state.get("max_rounds", 3),
+                                   call=call, **positions)
+    return SYNTHESIS_PROMPT.format(call=call, **positions)
 
 
 def _build_bound_graph(waku: Waku):

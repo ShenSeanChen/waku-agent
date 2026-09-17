@@ -20,7 +20,7 @@ def test_claude_cmd_is_headless_stream_json():
     cmd = experimental._claude_cmd("/fake/claude", Settings(home="."), "review this",
                                    "fable-5.1", "medium")
     assert cmd == ["/fake/claude", "-p", "review this",
-                   "--output-format", "stream-json",
+                   "--output-format", "stream-json", "--verbose",
                    "--model", "fable-5.1", "--effort", "medium"]
 
 
@@ -64,6 +64,14 @@ def test_parse_codex_event_extracts_message_and_usage():
     usage = experimental._parse_codex_event(
         {"type": "turn_context", "usage": {"input_tokens": 30, "output_tokens": 5}})
     assert usage == {"usage": {"in": 30, "out": 5}}
+
+
+def test_parse_codex_error_surfaces_the_message():
+    assert experimental._parse_codex_event({"type": "error", "message": "usage limit"}) == {
+        "text": "usage limit"}
+    upd = experimental._parse_codex_event(
+        {"type": "turn.failed", "error": {"message": "usage limit"}})
+    assert upd["text"] == "usage limit" and upd["turn_end"] is True
 
 
 def _install_fake(tmp_path, name, body):
@@ -153,6 +161,18 @@ def test_delegate_claude_not_installed(tmp_path, monkeypatch):
     tool = experimental.make_delegate_tool(Settings(home=tmp_path))
     out = tool.fn(task="anything", agent="claude")
     assert experimental.CLAUDE_INSTALL_HINT in out and "isn't installed" in out
+
+
+def test_claude_without_explicit_model_records_default_not_loop_model(tmp_path, monkeypatch):
+    """The ledger must not mis-credit the loop's model as the sub-agent's: a
+    claude/codex run with no explicit model records "(default)"."""
+    fake = _install_fake(tmp_path, "claude", FAKE_CLAUDE)
+    monkeypatch.setattr(experimental.shutil, "which", lambda _: str(fake))
+    home = tmp_path / "home"
+    tool = experimental.make_delegate_tool(Settings(home=home, provider="kimi", model="kimi-k3"))
+    tool.fn(task="build it", agent="claude")
+    rec = json.loads((home / "usage.jsonl").read_text().strip().splitlines()[-1])
+    assert rec["provider"] == "anthropic" and rec["model"] == "(default)"
 
 
 def test_delegate_pi_default_unchanged(tmp_path, monkeypatch):

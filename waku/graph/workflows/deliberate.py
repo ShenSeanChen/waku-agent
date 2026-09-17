@@ -100,7 +100,7 @@ POSITION B (product and systems reviewer):
 
 Synthesize where they agree and disagree, and name what is still unresolved —
 the critique the team will use to converge next round. Do NOT make the final
-decision yet."""
+{call} yet."""
 
 FINAL_PROMPT = """\
 The two specialists deliberated for {rounds} rounds. Their final positions:
@@ -111,7 +111,7 @@ POSITION A (software architect):
 POSITION B (product and systems reviewer):
 {position_b}
 
-This is the FINAL round — issue the single, final decision: the recommendation,
+This is the FINAL round — issue the single, final {call}: the recommendation,
 what they converged on, where they still disagree and which side you take, and
 the residual risk. Be decisive."""
 

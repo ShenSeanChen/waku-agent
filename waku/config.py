@@ -63,6 +63,11 @@ class Settings:
     # it writes. Local-first means you can always look.
     home: Path = field(default_factory=lambda: Path(os.getenv("WAKU_HOME", ".waku")))
 
+    # --- Project harness (optional): bind Waku to a project's knowledge map,
+    # authority ladder and skills (see docs/project-harness.md). Empty = no
+    # harness — classic personal Waku, ungated and project-agnostic.
+    harness: str = field(default_factory=lambda: os.getenv("WAKU_HARNESS", ""))
+
     # --- Loop guardrails
     max_iterations: int = field(default_factory=lambda: int(os.getenv("WAKU_MAX_ITERATIONS", "10")))
     # Headroom matters for REASONING models (kimi-k3, gpt-5.x, gemini-*-pro):

@@ -69,3 +69,22 @@ def test_gate_from_project_reads_the_authority_table(tmp_path):
 
 def test_gate_from_project_is_none_without_a_harness(tmp_path):
     assert gate_from_project(tmp_path) is None
+
+
+def test_waku_harness_binds_the_gate(tmp_path):
+    from evals.helpers import ScriptedClient, make_waku
+
+    harness = tmp_path / "harness"
+    harness.mkdir()
+    (harness / "project.toml").write_text(
+        '[authority]\ndefault = "observe"\n', encoding="utf-8")
+    app = make_waku(tmp_path / "home", client=ScriptedClient([]), harness=str(harness))
+    assert app.tools.gate is not None
+    assert app.tools.gate.allow("delegate_task")[0] is False   # observe < sandbox
+
+
+def test_no_harness_means_ungated(tmp_path):
+    from evals.helpers import ScriptedClient, make_waku
+
+    app = make_waku(tmp_path / "home", client=ScriptedClient([]))
+    assert app.tools.gate is None
