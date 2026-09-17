@@ -11,8 +11,9 @@ from waku.tools import calendar, memory_admin, messages, notes, search
 from waku.tools.registry import ToolRegistry
 
 
-def build_registry(conn: sqlite3.Connection, settings: Settings, memory=None) -> ToolRegistry:
-    registry = ToolRegistry()
+def build_registry(conn: sqlite3.Connection, settings: Settings, memory=None,
+                   gate=None) -> ToolRegistry:
+    registry = ToolRegistry(gate=gate)
     registry.register(
         calendar.make_tool(
             conn,

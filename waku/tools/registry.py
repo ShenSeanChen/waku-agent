@@ -35,8 +35,12 @@ class Tool:
 
 
 class ToolRegistry:
-    def __init__(self) -> None:
+    def __init__(self, gate=None) -> None:
         self._tools: dict[str, Tool] = {}
+        # Optional authority gate (waku/tools/authority.py): when set, execute()
+        # refuses any tool the current level does not permit. None = ungated,
+        # which is the default and the only behaviour the classic Waku needs.
+        self.gate = gate
 
     def register(self, tool: Tool) -> None:
         self._tools[tool.name] = tool
@@ -46,10 +50,15 @@ class ToolRegistry:
 
     def execute(self, name: str, args: dict[str, Any], notify=None) -> str:
         """Run one tool call safely: the model observes errors as text instead
-        of crashing the loop (execute_tool_safely pattern)."""
+        of crashing the loop (execute_tool_safely pattern). The authority gate
+        (when set) refuses before the function runs — surface, never override."""
         tool = self._tools.get(name)
         if tool is None:
             return f"Error: unknown tool '{name}'"
+        if self.gate is not None:
+            allowed, why = self.gate.allow(name)
+            if not allowed:
+                return f"Refused: {why}"
         try:
             if tool.wants_notify:
                 return tool.fn(**args, _notify=notify or (lambda kind, ev: None))
