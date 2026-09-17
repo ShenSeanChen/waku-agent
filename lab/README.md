@@ -19,8 +19,9 @@ imports from `lab/`, and `lab/` never ships to PyPI.
 2. Fill in all six sections and keep their headings.
    `evals/deterministic/test_rulebook.py` checks the headings and the
    `Verified against:` line.
-3. Keep the topic's code, its boards (`whiteboards/`) and any long write-up
-   (`write-up.md`) in the same folder.
+3. Keep the topic's code and any long write-up (`write-up.md`) in the same
+   folder. Boards go in as PNG screenshots, in `screenshots/`; their editable
+   `.excalidraw` sources and the scripts that draw them stay out of the repo.
 
 The rules, including when lab code graduates into `waku/`, are in
 [conventions §6](../docs/context/conventions.md#6-examples-and-video-material).

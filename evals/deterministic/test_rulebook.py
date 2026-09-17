@@ -194,3 +194,17 @@ def test_ci_table_names_real_checks():
     assert paths, "the CI table names no checks"
     missing = [p for p in paths if not (ROOT / p).exists()]
     assert not missing, f"the CI table names checks that do not exist: {missing}"
+
+
+# Topics whose board sources reached main before sources went private.
+BOARD_SOURCES_PREDATE_RULE = {"kimi-k3", "pi-agent"}
+
+
+def test_lab_topics_commit_screenshots_not_board_sources():
+    """A board drawn for a video stays private: its .excalidraw source and the
+    script that draws it live outside the repo, and the topic commits PNG
+    screenshots (conventions §6)."""
+    leaked = [str(p.relative_to(ROOT)) for topic in LAB_TOPICS
+              if topic.name not in BOARD_SOURCES_PREDATE_RULE
+              for p in topic.rglob("*.excalidraw")]
+    assert not leaked, f"keep board sources out of the repo; commit a PNG in screenshots/ instead: {leaked}"

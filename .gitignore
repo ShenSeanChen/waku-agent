@@ -38,3 +38,8 @@ docs/proposals/*.html
 
 # built by lab/one-memory-every-agent/build_grok_plugin.py
 lab/one-memory-every-agent/grok-plugin/
+
+# board sources for videos stay private (conventions §6); commit PNG screenshots
+lab/**/*.excalidraw
+!lab/kimi-k3/**/*.excalidraw
+!lab/pi-agent/**/*.excalidraw
