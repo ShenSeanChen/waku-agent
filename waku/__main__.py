@@ -15,6 +15,7 @@
                              memory fetched together, then one digest
   waku deliberate "<task>"   two brains deliberate, a decider decides (S6-S8);
                              add --build to build with Sonnet then review (S9)
+  waku new-project <name>    stamp a project harness skeleton (one kernel, many harnesses)
   waku skill install <url>   install a community skill
 """
 
@@ -82,6 +83,10 @@ def main() -> None:
         from waku.ops.deliberate import main as deliberate_main
 
         deliberate_main(args[1:])
+    elif args[0] == "new-project":
+        from waku.ops.new_project import main as new_project_main
+
+        new_project_main(args[1:])
     elif args[0] == "mcp":
         from waku.tools.mcp_cli import cli_main as mcp_main
 
