@@ -18,7 +18,7 @@ deepseek = one bare model call. Those callables are bound into the graph's
 nodes; `loop` and `eval` are not deliberation brains.
 
 With a harness bound, two more things happen — the wires that make the harness
-a brain rather than a config file (waku/ops/knowledge.py):
+a brain rather than a config file (waku/runtime/knowledge.py):
 
   * every brain prompt starts with the KNOWLEDGE MAP — the index with authority
     labels, then the authoritative bodies — and the coding-agent brains run in
@@ -63,7 +63,7 @@ from waku.graph.workflows.deliberate import (
     SYNTHESIS_PROMPT,
     build_deliberation_graph,
 )
-from waku.ops.knowledge import knowledge_context, record_decision
+from waku.runtime.knowledge import knowledge_context, record_decision
 
 BRAIN_A_LABEL = "brain A (architect)"
 BRAIN_B_LABEL = "brain B (reviewer)"

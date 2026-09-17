@@ -160,7 +160,7 @@ promotes it by editing the authority — the machine never grants authority to
 its own output. `bring me back` then lists it under unresolved decisions. The
 other direction exists too: every brain's prompt begins with the map (the
 index with authority labels, then the authoritative bodies), rendered by
-`waku/ops/knowledge.py`. Read before, write after — those two wires are what
+`waku/runtime/knowledge.py`. Read before, write after — those two wires are what
 make the harness a brain rather than a config file.
 
 ## 7. Lifecycle
@@ -170,6 +170,14 @@ make the harness a brain rather than a config file.
 conversations are, in order: *understand this project → build its model →
 identify what we don't know → establish architectural and operational controls* —
 and only then substantial autonomous execution.
+
+**Binding the loop.** With `WAKU_HARNESS` pointing at a harness, every chat
+turn — CLI, dashboard, voice, Telegram — carries the harness block in its
+system prompt: the project's name, the authority rung its tools are gated to,
+and the map's index with authority labels (`waku/runtime/session.py`). The
+index only, never the bodies: the loop has no file tool, and a map is not a
+copy. So "what is still open on Qamata?" is answerable from any gateway
+without a model ever reading PLAN.md.
 
 **`bring me back`** reconstructs state from the map: what I was trying to
 accomplish, where I left it, what changed while I was away, which decisions are

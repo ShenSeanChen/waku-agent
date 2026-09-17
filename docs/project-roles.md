@@ -53,7 +53,7 @@ use Waku's memory or tools until `loop` is wired; the roles are honest about
 that rather than claiming a node kind the code does not use.
 
 Whatever the runtime, every brain's prompt is assembled the same way, in
-authority order: **the knowledge map** (rendered by `waku/ops/knowledge.py`
+authority order: **the knowledge map** (rendered by `waku/runtime/knowledge.py`
 — the index with authority labels, then the authoritative bodies), then the
 role's **skills**, then the round's prompt. The map is how a role knows *why
 the project exists*; a role that never sees it is a prompt, not a team member.

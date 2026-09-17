@@ -4,14 +4,22 @@ The inner box on the whiteboard: everything here is rebuilt per run and thrown
 away. What persists lives in waku/memory. Working memory =
 
     system prompt (SOUL.md)            ← who Waku is
+  + the project harness (if bound)     ← which project this is, and its map
   + durable facts & episodes           ← what Waku remembers (gated!)
   + current chat history               ← this conversation
   + the user's new message
+
+The harness block is the CTO-operating-system half of the split
+(docs/project-harness.md): with WAKU_HARNESS set, every turn knows the
+project's name, its authority rung, and the knowledge map's INDEX — what is
+decided, what is open, where each thing lives. The index only, never the
+bodies: the loop has no file tool, and a map is not a copy.
 """
 
 from __future__ import annotations
 
 from waku.config import Settings
+from waku.runtime.knowledge import knowledge_context, load_map
 
 DEFAULT_SOUL = """\
 You are Waku, a personal assistant running locally on your user's laptop.
@@ -39,6 +47,35 @@ Rules:
   update_soul to save a standing preference the user gives you, and create_skill
   to save a repeatable workflow the user teaches you (only after they say yes).
 """
+
+
+def harness_block(settings: Settings) -> str:
+    """The project half of the system prompt, or '' when no harness is bound
+    (classic personal Waku). Identity, the authority rung the tools are gated
+    to, then the map index with authority labels."""
+    harness = getattr(settings, "harness", "") or ""
+    if not harness:
+        return ""
+    cfg, _ = load_map(harness)
+    if not cfg:
+        return ""
+    title = cfg.get("title") or cfg.get("name") or harness
+    lines = [(
+        f"\nYou are bound to the project harness for {title} ({harness}): you are "
+        "its CTO operating system, not only a personal assistant. Answer questions "
+        "about the project from the knowledge map below — what is decided, what is "
+        "open, where each thing lives and what authority it has. You cannot open "
+        "those files from this chat; name the path and let the user read it. Never "
+        "present a proposal as decided or history as current."
+    )]
+    auth = cfg.get("authority") or {}
+    if auth:
+        lines.append(f"Your tools are gated to the '{auth.get('default', 'recommend')}' "
+                     "rung of the authority ladder; a refused tool says so honestly.")
+    index = knowledge_context(harness, budget_chars=0)
+    if index:
+        lines += ["", index]
+    return "\n".join(lines)
 
 
 def load_soul(settings: Settings) -> str:
@@ -73,6 +110,10 @@ class Session:
                  (f"Your model: you are running on '{self.settings.model}' via the "
                  f"'{self.settings.provider}' provider, inside Waku, a local-first "
                  f"open-source agent harness (github.com/ShenSeanChen/waku-agent).")]
+
+        bound = harness_block(self.settings)
+        if bound:
+            parts.append(bound)
 
         if self.memory is not None:
             # Hero moment #1: a cheap judge decides IF we retrieve at all —

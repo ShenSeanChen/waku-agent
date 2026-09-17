@@ -16,7 +16,7 @@ import tomllib
 
 import pytest
 
-from waku.ops.knowledge import downstream, knowledge_context, record_decision
+from waku.runtime.knowledge import downstream, knowledge_context, record_decision
 
 TOML = '''\
 name = "qamata"

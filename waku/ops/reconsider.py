@@ -8,7 +8,7 @@ it (`depended_on_by`), and the experiment that decides temporary vs structural.
 Deterministic and stdlib-only: it reads the harness's `project.toml [[watches]]`
 and evaluates each against the observations you pass. The downstream list is
 the watch's own `depended_on_by` PLUS everything the map's dependency edges
-reach from there (waku/ops/knowledge.py `downstream`) — the graph is queried,
+reach from there (waku/runtime/knowledge.py `downstream`) — the graph is queried,
 not just printed. It does NOT mutate the map — marking items `stale` is a
 separate, deliberate step the owner makes.
 """
@@ -19,7 +19,7 @@ import sys
 import tomllib
 from pathlib import Path
 
-from waku.ops.knowledge import downstream
+from waku.runtime.knowledge import downstream
 
 CONFIG = "project.toml"
 
