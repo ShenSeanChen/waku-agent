@@ -67,6 +67,15 @@ def test_flags_files_drifted_since_verified(tmp_path):
     assert "PLAN.md" in out and "changed since verified" in out
 
 
+def test_section_anchor_path_resolves_to_the_file(tmp_path):
+    from waku.ops.bring_me_back import _changed_since_verified
+
+    p = _project(tmp_path)
+    # a `file#section` path must check the FILE's mtime, not the anchor string
+    assert _changed_since_verified({"path": "PLAN.md#some-section", "verified": "2999-01-01"}, p) is False
+    assert _changed_since_verified({"path": "PLAN.md#some-section", "verified": "2020-01-01"}, p) is True
+
+
 def test_missing_project_toml_is_honest(tmp_path):
     with pytest.raises(SystemExit) as exc:
         bring_me_back(tmp_path)

@@ -36,6 +36,9 @@ def _changed_since_verified(entry: dict, project: Path) -> bool:
     p = (entry.get("path") or "").strip()
     if not p or p == "none":
         return False
+    p = p.split("#", 1)[0].strip()   # a section anchor (file#section) → the file
+    if not p:
+        return False
     f = project / p
     if not f.exists():
         return True
