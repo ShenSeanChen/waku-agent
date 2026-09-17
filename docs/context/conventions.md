@@ -108,9 +108,11 @@ the code went, and the lab keeps the experiment as the on-its-own-terms
 baseline.
 
 **Whiteboards.** `docs/whiteboards/` holds only boards that explain this
-codebase. A board drawn for a video about another project lives in that
-topic's `lab/` folder. The drawing toolkit is `scripts/whiteboard/`, and it
-never ships.
+codebase. A board drawn for a video stays private: its `.excalidraw` source
+and the script that draws it live outside the repo, and the lab topic commits
+PNG screenshots only, in `screenshots/`. `lab/kimi-k3/` and `lab/pi-agent/`
+predate this rule. The drawing toolkit is `scripts/whiteboard/`, and it never
+ships.
 
 **What stays out of the repo:** video scripts, subtitles and shot-by-shot
 filming notes. A topic's "Video angle" section is a brief: the hook, the one

@@ -1,17 +1,19 @@
-"""Build the Waku plugin folder that Grok Bot's marketplace accepts.
+"""Build a Waku plugin folder in the format of xAI's plugin marketplace.
 
-xAI's plugin marketplace (github.com/xai-org/plugin-marketplace) takes a folder
-holding skills/*/SKILL.md and a .mcp.json that names remote MCP servers. Waku's
-skills are already SKILL.md folders, so the plugin is Waku's own skills plus
-Waku Memory's MCP server:
+xAI's plugin marketplace (github.com/xai-org/plugin-marketplace) serves Grok
+Build, xAI's coding agent, not Grok Bot; Grok Bot takes a custom MCP connector
+in its own settings instead. The marketplace takes a folder holding
+skills/*/SKILL.md and a .mcp.json that names remote MCP servers. Waku's skills
+are already SKILL.md folders, so the plugin is Waku's own skills plus Waku
+Memory's MCP server:
 
     python lab/one-memory-every-agent/build_grok_plugin.py
     -> lab/one-memory-every-agent/grok-plugin/   (ignored by git)
 
 Only the skills that ship with Waku go in: community skills belong to their
 authors, and the skills in your own WAKU_HOME are yours. The .mcp.json carries
-${WAKU_MEMORY_API_KEY} in place of a key and never a real one. Whether Grok Bot
-expands that variable is the open question this topic tests.
+${WAKU_MEMORY_API_KEY} in place of a key and never a real one. Whether Grok
+Build expands that variable is still untested.
 """
 
 from __future__ import annotations
