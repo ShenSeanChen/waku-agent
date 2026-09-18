@@ -280,7 +280,7 @@ function openProviderModal(provider){
   const baseField = (p.fields || []).find(field => field.name.endsWith("_BASE_URL"));
   const selectedBaseUrl = current && st.base_url ? st.base_url : (baseField?.value || "");
   const d = openDialog(`
-      <div class="u" style="display:flex;justify-content:space-between;align-items:center">
+      <div class="u dialog-head" style="display:flex;justify-content:space-between;align-items:center">
         <b>${esc(p.name)}</b>${uiButton("✕", {level: "tertiary", size: "sm", onclick: "closeProviderModal()", attrs: 'aria-label="close"'})}</div>
       <label class="fld"><span>API key <span class="meta">(${esc(f.name || "")})</span>
         ${f.configured ? uiBadge("set ····" + esc(f.last4 || ""), "ok")
