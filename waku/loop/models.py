@@ -231,9 +231,13 @@ def _belongs_elsewhere(model: str, provider_name: str) -> bool:
     family = model.split("-")[0].lower()
     if "/" in model or not family:
         return False
-    owner = {f: name for name, p in PROVIDERS.items() if "/" not in (p.model or "x")
-             for f in _families(p)}.get(family)
-    return bool(owner) and owner != provider_name
+    owners: dict[str, set[str]] = {}
+    for name, provider in PROVIDERS.items():
+        if "/" in (provider.model or "x"):
+            continue
+        for known_family in _families(provider):
+            owners.setdefault(known_family, set()).add(name)
+    return bool(owners.get(family)) and provider_name not in owners[family]
 
 
 def get_client(settings: Settings):
