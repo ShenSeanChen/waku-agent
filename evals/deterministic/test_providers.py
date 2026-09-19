@@ -292,3 +292,11 @@ def test_a_shared_family_model_stays_with_its_active_provider(monkeypatch):
     get_client(settings)
 
     assert settings.small_model == "deepseek-chat"
+
+
+def test_shared_family_accepts_each_matching_provider_and_rejects_other():
+    from waku.loop.models import _belongs_elsewhere
+
+    for provider in ("deepseek", "opencode_zen", "opencode_go"):
+        assert not _belongs_elsewhere("deepseek-chat", provider)
+    assert _belongs_elsewhere("deepseek-chat", "anthropic")
