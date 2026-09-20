@@ -37,12 +37,19 @@ def test_get_client_builds_the_right_wire(name):
     assert settings.small_model == provider.small_model
 
 
-@pytest.mark.parametrize("name", list(PROVIDERS))
+@pytest.mark.parametrize("name", [p for p in PROVIDERS if p != "ollama"])
 def test_missing_key_exits_with_the_key_name(name, monkeypatch):
     monkeypatch.delenv(PROVIDERS[name].key_env, raising=False)
     settings = Settings(provider=name, model="", small_model="", api_key="", base_url=None)
     with pytest.raises(SystemExit, match=PROVIDERS[name].key_env):
         get_client(settings)
+
+
+def test_ollama_works_without_key(monkeypatch):
+    monkeypatch.delenv("OLLAMA_API_KEY", raising=False)
+    settings = Settings(provider="ollama", model="", small_model="", api_key="", base_url=None)
+    client = get_client(settings)
+    assert isinstance(client, OpenAICompatClient)
 
 
 def test_unknown_provider_names_the_choices():

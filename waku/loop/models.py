@@ -157,6 +157,11 @@ PROVIDERS: dict[str, Provider] = {
     "opencode_go":  Provider("openai", "OPENCODE_GO_API_KEY",
                                "https://opencode.ai/zen/go/v1",
                                "deepseek-v4-flash", "deepseek-v4-flash"),
+    "ollama":       Provider("openai", "OLLAMA_API_KEY", "http://localhost:11434/v1",
+                             "deepseek-v4-flash:cloud", "deepseek-v4-flash:cloud",
+                             catalog_url="http://localhost:11434/v1/models",
+                             flagship="deepseek-v4-flash:cloud", fast="deepseek-v4-flash:cloud",
+                             base_url_env="OLLAMA_BASE_URL"),
 }
 
 
@@ -176,6 +181,7 @@ KEY_URLS = {
     "xai": "https://console.x.ai",
     "opencode_zen": "https://opencode.ai/zen",
     "opencode_go": "https://opencode.ai/zen",
+    "ollama": "https://ollama.com",
 }
 
 
@@ -228,6 +234,8 @@ def _belongs_elsewhere(model: str, provider_name: str) -> bool:
     when the family is one some OTHER provider actually owns, which is the case
     that produces a 400 rather than a surprise.
     """
+    if provider_name == "ollama":
+        return False
     family = model.split("-")[0].lower()
     if "/" in model or not family:
         return False
@@ -248,7 +256,10 @@ def get_client(settings: Settings):
     # auth header (headers are latin-1; a stray non-ASCII char errors cryptically).
     api_key = (settings.api_key or os.getenv(provider.key_env, "")).strip()
     if not api_key:
-        raise SystemExit(_no_key_message(settings.provider, provider.key_env))
+        if settings.provider == "ollama":
+            api_key = "ollama"
+        else:
+            raise SystemExit(_no_key_message(settings.provider, provider.key_env))
     try:
         api_key.encode("latin-1")
     except UnicodeEncodeError:
