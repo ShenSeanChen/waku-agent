@@ -106,7 +106,8 @@ def test_the_error_mentions_the_other_providers():
     assert "WAKU_PROVIDER" in msg
 
 
-def test_every_provider_has_somewhere_to_get_a_key():
-    """A provider in the table with no URL is a dead end for whoever picks it."""
-    missing = sorted(set(models.PROVIDERS) - set(models.KEY_URLS))
+def test_every_keyed_provider_has_somewhere_to_get_a_key():
+    """A provider requiring a key needs to say where that key comes from."""
+    keyed = {name for name, provider in models.PROVIDERS.items() if provider.key_env}
+    missing = sorted(keyed - set(models.KEY_URLS))
     assert missing == [], f"no key URL for: {missing}"

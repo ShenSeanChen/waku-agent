@@ -24,6 +24,7 @@ keeps the dependency pointing one way: settings_api -> catalog, never back.
 from __future__ import annotations
 
 import json
+import math
 import os
 from pathlib import Path
 
@@ -31,6 +32,56 @@ from waku.config import load_settings
 from waku.ops.pricing import remember_price
 
 _models_cache: dict[str, tuple[float, list]] = {}
+
+
+def _opencode_models(data: dict) -> list[dict]:
+    """Read OpenCode's /provider response without exposing credentials/options.
+
+    Only connected providers are offered. Their catalog describes access and
+    pricing; a listing does not guarantee capacity for the next request.
+    """
+    if (not isinstance(data, dict) or not isinstance(data.get("all"), list)
+            or not isinstance(data.get("connected"), list)):
+        raise TypeError("OpenCode /provider must return all and connected arrays")
+    connected = data["connected"]
+    models = []
+    for provider in data["all"]:
+        if not isinstance(provider, dict) or provider.get("id") not in connected:
+            continue
+        provider_id = provider.get("id")
+        catalog = provider.get("models")
+        if not isinstance(provider_id, str) or not isinstance(catalog, dict):
+            continue
+        for model_id, model in catalog.items():
+            if not isinstance(model, dict):
+                continue
+            model_id = model.get("id") or model_id
+            if not isinstance(model_id, str) or not model_id:
+                continue
+            mid = (model_id if provider_id == "opencode" and "/" not in model_id
+                   else f"{provider_id}/{model_id}")
+            capabilities = model.get("capabilities") or {}
+            limits = model.get("limit") or {}
+            entry = {
+                "id": mid,
+                "free": mid == "muse-spark-1.3-contributor-free",
+                "tools": capabilities.get("toolcall"),
+                "reasoning": capabilities.get("reasoning"),
+                "context": limits.get("context"),
+            }
+            try:
+                # OpenCode reports dollars per million tokens, unlike
+                # OpenRouter's per-token strings. Scope rates to this provider.
+                cost = model.get("cost") or {}
+                pin, pout = float(cost["input"]), float(cost["output"])
+                if not all(math.isfinite(p) and p >= 0 for p in (pin, pout)):
+                    raise ValueError("invalid model price")
+                remember_price(f"opencode_local:{mid}", pin, pout)
+                entry.update(price_in=pin, price_out=pout, free=pin == pout == 0)
+            except (KeyError, TypeError, ValueError):
+                pass
+            models.append(entry)
+    return models
 
 
 def _known_default_ids(prov, out: dict, is_active: bool) -> list[dict]:
@@ -49,12 +100,13 @@ def list_models(provider: str | None = None, *, use_cache: bool = True) -> dict:
     """Model ids available on a provider, for the settings model picker — the
     defaults are starting points, never the menu. Pass `provider` to list ANY
     provider's catalog (the "Your models" add-row picks a provider first);
-    without it, the ACTIVE provider is used. Three sources: an explicit
+    without it, the ACTIVE provider is used. Sources: an explicit
     Provider.catalog_url (anthropic, kimi), GET {base_url}/models on
     OpenAI-compatible endpoints (OpenRouter, Gemini, any WAKU_BASE_URL), or the
     two known defaults when no catalog exists. OpenRouter entries carry free /
     tool-support / context metadata so the picker can surface the $0
-    tool-capable models. Cached 5 minutes."""
+    tool-capable models. Local OpenCode uses GET {base_url}/provider and is
+    contacted only when selected or explicitly requested here. Cached 5 minutes."""
     import time
     import urllib.request
 
@@ -69,8 +121,9 @@ def list_models(provider: str | None = None, *, use_cache: bool = True) -> dict:
             or (prov.configured_base_url() if prov else None))
     out = {
         "provider": name,
-        "model": s.model or (prov.model if prov else ""),
-        "small_model": s.small_model or (prov.small_model if prov else ""),
+        "model": (s.model if name == s.provider else "") or (prov.model if prov else ""),
+        "small_model": ((s.small_model if name == s.provider else "")
+                        or (prov.small_model if prov else "")),
         "endpoint": base or name,
     }
     # Where can this provider's models be listed? An explicit catalog_url wins
@@ -78,7 +131,9 @@ def list_models(provider: str | None = None, *, use_cache: bool = True) -> dict:
     # anthropic itself has GET /v1/models); otherwise openai-wire endpoints get
     # {base_url}/models; otherwise fall back to the two known defaults.
     catalog_url = prov.catalog_for(base) if prov is not None else None
-    if catalog_url:
+    if prov is not None and prov.kind == "opencode_local" and base:
+        url = base.rstrip("/") + "/provider"
+    elif catalog_url:
         url = catalog_url
     elif prov is not None and prov.kind == "openai" and base:
         url = base.rstrip("/") + "/models"
@@ -96,7 +151,8 @@ def list_models(provider: str | None = None, *, use_cache: bool = True) -> dict:
             r["error"] = cerr
         return r
     # Use this provider's own key; s.api_key only holds the ACTIVE provider's.
-    key = ((s.api_key if name == s.provider else "") or os.getenv(prov.key_env, "")).strip()
+    key = (((s.api_key if name == s.provider else "") or os.getenv(prov.key_env, "")).strip()
+           if prov.key_env else "")
     # HTTP headers must be latin-1; a key with a stray non-ASCII char (a smart
     # arrow/quote or a line-break from a bad paste) would otherwise crash the
     # whole listing with an opaque codec error and silently drop back to two
@@ -112,14 +168,16 @@ def list_models(provider: str | None = None, *, use_cache: bool = True) -> dict:
     # version for Anthropic's; each server reads the header it knows.
     # Set a browser-like User-Agent: some OpenAI-compatible proxies (e.g.
     # opencode.ai) block Python-urllib/3.x with a 403 / error code 1010.
-    req = urllib.request.Request(url, headers={
-        "Authorization": f"Bearer {key}",
-        "x-api-key": key, "anthropic-version": "2023-06-01",
-        "User-Agent": "Mozilla/5.0 (compatible; Waku)",
-    })
+    headers = {"User-Agent": "Mozilla/5.0 (compatible; Waku)"}
+    if prov.key_env:
+        headers.update({"Authorization": f"Bearer {key}", "x-api-key": key,
+                        "anthropic-version": "2023-06-01"})
+    req = urllib.request.Request(url, headers=headers)
     try:
         with urllib.request.urlopen(req, timeout=10) as resp:
             data = json.loads(resp.read())
+        if prov.kind == "opencode_local":
+            local_models = _opencode_models(data)
     except Exception as exc:
         # Surface the server's actual reason (e.g. xAI's 403 "no credits"), not
         # just "HTTP Error 403" — an HTTPError carries the body on .read().
@@ -135,6 +193,10 @@ def list_models(provider: str | None = None, *, use_cache: bool = True) -> dict:
         # cache hit still shows the defaults and the reason, not a blank list.
         _models_cache[url] = (time.time() - 240, known, msg)
         return {**out, "listed": False, "models": known, "error": msg}
+    if prov.kind == "opencode_local":
+        local_models.sort(key=lambda x: (not x["free"], x["tools"] is False, x["id"]))
+        _models_cache[url] = (time.time(), local_models, None)
+        return {**out, "listed": True, "models": local_models}
     models = []
     for m in data.get("data", []):
         mid = m.get("id", "")
@@ -171,13 +233,17 @@ def _models_json() -> Path:
 
 def default_pinned_specs() -> list[str]:
     """Starter shortlist before the user has curated their own: flagship + fast
-    for every provider that has a key set (so the switcher only shows models you
-    can actually use). Flagship comes first, so it's that provider's default."""
+    for providers with a key, plus a selected/configured keyless provider.
+    This reads configuration only; it never scans for local servers.
+    Flagship comes first, so it's that provider's default."""
     from waku.loop.models import PROVIDERS
 
     specs = []
     for name, prov in PROVIDERS.items():
-        if os.getenv(prov.key_env):
+        configured = (bool(os.getenv(prov.key_env)) if prov.key_env else
+                      os.getenv("WAKU_PROVIDER") == name
+                      or bool(prov.base_url_env and os.getenv(prov.base_url_env)))
+        if configured:
             specs += [f"{name}:{m}" for m in prov.default_pair()]
     return specs
 

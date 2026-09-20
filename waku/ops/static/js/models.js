@@ -209,7 +209,7 @@ async function loadAddModels(provider){
     ? `${ms.length} models on <b>${esc(provider)}</b>. Choose one and Add — or star models in the catalog below.`
     : data.error
       ? `Couldn't list <b>${esc(provider)}</b>: <span style="color:var(--bad)">${esc(data.error)}</span> — showing its defaults only.`
-      : `No live catalog for <b>${esc(provider)}</b> (only its defaults shown). Set its API key to list more.`;
+      : `No live catalog for <b>${esc(provider)}</b> (only its defaults shown). Check its connection settings to list more.`;
 }
 
 async function addPinnedModel(){
@@ -225,12 +225,15 @@ async function pinModel(provider, model, action){
 }
 
 // --- Models page: a grid of provider cards (logo, name, status dot, actions)
-// plus an edit modal. Status is derived, never stored: unconfigured = no key,
-// configured = key set but disabled, enabled = key set and available. The
+// plus an edit modal. Keyless providers use selection/endpoint configuration;
+// keyed providers still require their key. Disabled providers stay configured. The
 // ACTIVE provider (settings.provider) can't be disabled (server guards too).
 function providerCardStatus(p, st){
-  const keySet = !!(p.fields && p.fields[0] && p.fields[0].configured);
-  if (!keySet) return "unconfigured";
+  const fields = p.fields || [], keyField = fields.find(f => f.secret);
+  const ready = keyField ? keyField.configured
+    : p.key === st.provider || fields.some(f => f.configured)
+      || p.status?.state === "connected";
+  if (!ready) return "unconfigured";
   return (st.disabled_providers || []).includes(p.key) ? "configured" : "enabled";
 }
 
@@ -276,11 +279,20 @@ function openProviderModal(provider){
   const p = (D.providers || []).find(x => x.key === provider);
   if (!p) return;
   const current = provider === st.provider;
-  const f = (p.fields || [])[0] || {};
-  const baseField = (p.fields || []).find(field => field.name.endsWith("_BASE_URL"));
+  const f = (p.fields || []).find(field => field.secret);
+  const baseField = (p.fields || []).find(field =>
+    field.name.endsWith("_BASE_URL") || field.name.endsWith("_SERVER_URL"));
   const selectedBaseUrl = current && st.base_url ? st.base_url : (baseField?.value || "");
   const d = openDialog(`
       <div class="u" style="display:flex;justify-content:space-between;align-items:center">
+        <b>${esc(p.name)}</b><a class="reveal" onclick="closeProviderModal()">✕</a></div>
+      ${f ? `<label class="fld"><span>API key <span class="meta">(${esc(f.name || "")})</span>
+        ${f.configured ? `<span class="srcpill" style="background:var(--good-soft);color:var(--good)">set ····${esc(f.last4 || "")}</span>`
+                       : `<span class="srcpill apple">not set</span>`}</span>
+        <input type="password" id="pm-key" placeholder="${f.configured ? "key on file — blank keeps it" : "paste key"}"></label>`
+        : `<p class="meta">Provider credentials are managed in OpenCode.</p>`}
+      ${baseField ? `<label class="fld"><span>${esc(baseField.label)} ${baseField.kind === "choice" ? `<span class="meta">(select the API key's region)</span>` : ""}</span>
+        ${baseField.kind === "choice" ? `<select id="pm-base-url" onfocus="markEditing()">
         <b>${esc(p.name)}</b>${uiButton("✕", {level: "tertiary", size: "sm", onclick: "closeProviderModal()", attrs: 'aria-label="close"'})}</div>
       <label class="fld"><span>API key <span class="meta">(${esc(f.name || "")})</span>
         ${f.configured ? uiBadge("set ····" + esc(f.last4 || ""), "ok")
@@ -292,7 +304,7 @@ function openProviderModal(provider){
             const label = (baseField.option_labels || [])[index];
             return `<option value="${escAttr(url)}" ${url===selectedBaseUrl?"selected":""}>${label?esc(label)+" — ":""}${esc(url)}</option>`;
           }).join("")}
-        </select></label>` : ""}
+        </select>` : `<input type="text" id="pm-base-url" value="${escAttr(selectedBaseUrl)}" onfocus="markEditing()">`}</label>` : ""}
       ${current ? `
       ${renderModelPicker("pm-model", "Main model (runs the loop; needs tool calling)", st.model || "")}
       ${renderModelPicker("pm-small-model", "Gate / summary model", st.small_model || "")}` : ""}
