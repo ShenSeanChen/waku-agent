@@ -912,6 +912,13 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == "/api/data":
             self._send(json.dumps(collect(), default=str).encode(), "application/json")
+        elif self.path == "/api/judgment-arena":
+            from waku.ops import judgment_arena, judgment_cases  # noqa: PLC0415
+            self._send(json.dumps({"suites": judgment_cases.suite_list(),
+                                   "contestants": judgment_arena.contestants(),
+                                   "runs": judgment_arena.load_runs()}).encode(),
+                       "application/json")
+            return
         elif self.path == "/api/compare/history":
             runs = compare_history.load_runs(load_settings().home)
             self._send(json.dumps(history_response(runs)).encode(), "application/json")
@@ -1052,6 +1059,37 @@ class Handler(BaseHTTPRequestHandler):
                                judge_spec=(payload.get("judge_model") or ""), apple=bool(payload.get("apple")))
             except Exception as exc:
                 emit("done", {"error": f"{type(exc).__name__}: {exc}"})
+            return
+        if self.path == "/api/judgment-arena/key":
+            from waku.ops import judgment_arena
+
+            payload = json.loads(self.rfile.read(length) or "{}")
+            out = judgment_arena.save_key(payload.get("key", ""))
+            self._send(json.dumps(out).encode(), "application/json")
+            return
+        # /api/judgment-arena/stream — the third race: same harness, same cases,
+        # same policy, and only WHO makes the judgment changes.
+        if self.path == "/api/judgment-arena/stream":
+            from waku.ops import judgment_arena
+
+            payload = json.loads(self.rfile.read(length) or "{}")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-cache")
+            self.end_headers()
+
+            def emit_judge(kind, ev):
+                try:
+                    self.wfile.write(
+                        f"data: {json.dumps({'kind': kind, **ev}, default=str)}\n\n".encode())
+                    self.wfile.flush()
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
+            try:
+                judgment_arena.race((payload.get("suite") or "").strip(),
+                                    payload.get("specs") or [], emit_judge)
+            except Exception as exc:
+                emit_judge("done", {"error": f"{type(exc).__name__}: {exc}"})
             return
         # /api/memory-arena/stream — same shape as the model race above, one dial
         # over: every contestant is the same agent on the same model, and only
