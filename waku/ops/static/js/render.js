@@ -204,11 +204,27 @@ function applyStreamEvent(pending, ev){
   }
 }
 
+// The composer is a <textarea> (index.html) so a long message wraps instead of
+// scrolling sideways. Size it to its content on every change, up to the
+// max-height in style.css. Call this anywhere .value is set from code too -
+// a textarea does not resize itself.
+function autogrow(el){
+  if (!el || el.tagName !== "TEXTAREA") return;
+  el.style.height = "auto";
+  // box-sizing is border-box globally (style.css:1) but scrollHeight excludes
+  // the border, so height alone lands 2px short and grows a scrollbar on every
+  // keystroke. Measure the border back on.
+  const cs = getComputedStyle(el);
+  const border = parseFloat(cs.borderTopWidth) + parseFloat(cs.borderBottomWidth);
+  el.style.height = (el.scrollHeight + border) + "px";
+}
+
 async function sendChat(fromInput){
   const input = fromInput || document.getElementById("msg") || document.getElementById("dmsg");
   const text = (input && input.value || "").trim();
   if (!text) return;
   input.value = "";
+  autogrow(input);          // an emptied box must shrink back to one row
   CHAT.push({role:"user", text});
   const pending = {role:"waku", pending:true, stream:"", started: Date.now()};
   CHAT.push(pending);
@@ -241,7 +257,12 @@ async function sendChat(fromInput){
 function wireDock(){
   const b = document.getElementById("dsend"), i = document.getElementById("dmsg");
   if (b) b.onclick = () => sendChat(i);
-  if (i) i.onkeydown = e => { if (e.key==="Enter") sendChat(i); };
+  // Enter sends; Shift+Enter is a real newline now that this is a textarea.
+  // preventDefault stops the sending keystroke also inserting that newline.
+  if (i) i.onkeydown = e => {
+    if (e.key === "Enter" && !e.shiftKey){ e.preventDefault(); sendChat(i); }
+  };
+  if (i) i.oninput = () => autogrow(i);
   const close = document.getElementById("dock-close"), reopen = document.getElementById("dock-reopen");
   const setClosed = v => { document.body.classList.toggle("dock-closed", v); localStorage.setItem("dockClosed", v?"1":"0"); };
   if (close) close.onclick = () => setClosed(true);
