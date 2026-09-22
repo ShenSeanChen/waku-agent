@@ -31,8 +31,10 @@ Waku registers is sent to the model on every call, so the bar for adding one
 is deliberately high. Start at the top of this ladder and move down only when
 the rung above cannot do the job:
 
-1. **Extend something that already exists.** A new provider is usually one
-   `PROVIDERS` row. A new memory backend matches an existing interface.
+1. **Extend something that already exists.** A new provider is one table in
+   `waku/providers.toml` plus a logo — see
+   [providers-registry.md](../providers-registry.md). A new memory backend
+   matches an existing interface.
 2. **A skill**: `skills/community/<name>/SKILL.md`. It is Markdown with no
    Python, and it costs no context until the model needs it.
 3. **A CLI and a README.** Waku can already run any program on your machine,
