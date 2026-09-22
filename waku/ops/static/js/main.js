@@ -36,8 +36,10 @@ function render(){
   if (view === "overview" || view === "graph"){
     // don't rebuild mid-animation or the glowing SVG gets wiped
     if (activeView !== view || !animating){ document.getElementById("view").innerHTML = VIEWS[view](D); }
-  } else if ((view === "memory" || view === "settings" || view === "database" || view === "compare" || view === "models" || view === "connections") && editing && !subChanged){
+  } else if ((view === "memory" || view === "settings" || view === "database" || view === "compare" || view === "models" || view === "connections" || view === "judgment") && editing && !subChanged){
     // don't wipe an in-progress edit on the 5s refresh — but DO switch sub-tabs
+    // ("judgment" is here for hover: rebuilding the table mid-hover destroys the
+    // element under the pointer, and a native tooltip never gets to appear)
   } else {
     editing = false;
     // Rebuilding #view innerHTML resets the scroll. On a same-view refresh (the

@@ -8,6 +8,7 @@ owner of pin persistence.
 
 from __future__ import annotations
 
+import os
 import shutil
 
 from waku.config import load_settings
@@ -70,6 +71,10 @@ def settings_info() -> dict:
         "small_model": s.small_model or (prov.small_model if prov else ""),
         "base_url": s.base_url or "",
         "custom_key_set": bool(s.api_key),
+        # Jev is not a chat provider, so it is not in PROVIDERS -- but the Models
+        # page shows a card for it, and needs to know whether a key is set.
+        # The flag only; the key itself never leaves the machine.
+        "typesafe_key_set": bool(os.getenv("TYPESAFE_API_KEY", "").strip()),
         # Ids of providers the user disabled in the Models grid; the frontend
         # derives each card's status (unconfigured / configured / enabled) and
         # hides disabled providers from the chat switcher.
