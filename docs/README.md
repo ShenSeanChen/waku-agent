@@ -31,6 +31,7 @@ into four groups.
 | [architecture.md](architecture.md) | the four pillars, and which file is which diagram box |
 | [loop-vs-graph.md](loop-vs-graph.md) | when a turn needs shape, and why the loop never changes |
 | [agent-graphs-design.md](agent-graphs-design.md) | the graph engine's design and its fail-open rule |
+| [providers-registry.md](providers-registry.md) | adding a model provider: one table in `waku/providers.toml` |
 | [memory-backends-playbook.md](memory-backends-playbook.md) | seeing your memories in each provider's own console |
 | [benchmarks.md](benchmarks.md) | what has been measured, and how |
 | [integrations.md](integrations.md) | voice, Telegram, Apple, Google Calendar, MCP, Waku Memory — all opt-in |
