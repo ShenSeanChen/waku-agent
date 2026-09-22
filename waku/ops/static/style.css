@@ -864,11 +864,6 @@ dialog.dialog :focus-visible{outline:var(--focus-ring-width) solid var(--accent)
   .ja-picker{display:flex;gap:var(--space-2);flex-wrap:wrap;margin-bottom:var(--space-3)}
   .ja-controls{display:flex;align-items:center;gap:var(--space-3);flex-wrap:wrap;
     margin-top:var(--space-3)}
-  .ja-knob{display:inline-flex;align-items:center;gap:var(--space-2);
-    font-size:var(--text-xs);color:var(--text-faint)}
-  .ja-knob select{font:inherit;color:var(--text-ink);background:var(--input);
-    border:var(--rule-width) solid var(--rule);border-radius:var(--radius);
-    padding:var(--control-pad-y) var(--control-pad-x)}
   .ja-cell{display:inline-block;min-width:7ch;text-align:center;
     font-family:var(--face-mono);font-size:var(--text-xs);white-space:nowrap}
   .ja-cell.good{color:var(--ok)}
@@ -878,15 +873,10 @@ dialog.dialog :focus-visible{outline:var(--focus-ring-width) solid var(--accent)
     text-overflow:ellipsis;white-space:nowrap;color:var(--text-faint)}
   .ja-want{font-family:var(--face-mono);font-size:var(--text-xs)}
   .cmp-pick.off{opacity:.45;cursor:not-allowed}
-  .ja-kinds{display:flex;flex-wrap:wrap;gap:var(--space-2);align-items:center;
-    margin-top:var(--space-2);font-size:var(--text-xs)}
   .ja-best{color:var(--ok);font-weight:var(--font-weight-medium)}
   .ja-folded .card-body{display:none}
   .ja-shape{margin-top:var(--space-2);color:var(--text-faint);font-size:var(--text-xs)}
   .ja-bad{color:var(--bad)}
-  .ja-policy{margin:var(--space-3) 0 0;padding:var(--space-3);overflow-x:auto;
-    background:var(--surface-raised);border-radius:var(--radius);
-    font-family:var(--face-mono);font-size:var(--text-xs);line-height:var(--leading-snug)}
   .ja-qid{font-family:var(--face-mono);font-size:var(--text-xs);color:var(--text-faint)}
   .ja-qcell{display:block}
   .ja-grid td:has([data-tip]){cursor:help}
