@@ -275,3 +275,28 @@ def test_an_unfamiliar_model_name_is_left_alone(monkeypatch):
     get_client(settings)
 
     assert settings.small_model == "moonshot-v1-8k", "a deliberate choice was overridden"
+
+
+def test_a_shared_family_model_stays_with_its_active_provider(monkeypatch):
+    """A family can belong to several providers, so one must not overwrite
+    another when the user deliberately selects a model from that family."""
+    from waku.config import Settings
+    from waku.loop.models import get_client
+
+    monkeypatch.setenv("WAKU_PROVIDER", "deepseek")
+    monkeypatch.delenv("WAKU_MODEL", raising=False)
+    monkeypatch.setenv("WAKU_SMALL_MODEL", "deepseek-chat")
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key")
+
+    settings = Settings(provider="deepseek")
+    get_client(settings)
+
+    assert settings.small_model == "deepseek-chat"
+
+
+def test_shared_family_accepts_each_matching_provider_and_rejects_other():
+    from waku.loop.models import _belongs_elsewhere
+
+    for provider in ("deepseek", "opencode_zen", "opencode_go"):
+        assert not _belongs_elsewhere("deepseek-chat", provider)
+    assert _belongs_elsewhere("deepseek-chat", "anthropic")
