@@ -38,8 +38,8 @@ def _known_default_ids(prov, out: dict, is_active: bool) -> list[dict]:
     flagship + fast + loop/gate defaults — so the showcase model (e.g. opus-4.8)
     is offered too, not just the two loop defaults — plus the active model when
     this is the active provider."""
-    ids = [*(prov.default_pair() if prov else []),
-           prov.model if prov else "", prov.small_model if prov else ""]
+    model, small_model = prov.models_now() if prov else ("", "")
+    ids = [*(prov.default_pair() if prov else []), model, small_model]
     if is_active:
         ids = [out.get("model"), out.get("small_model"), *ids]
     return [{"id": m} for m in dict.fromkeys(m for m in ids if m)]
@@ -65,23 +65,35 @@ def list_models(provider: str | None = None, *, use_cache: bool = True) -> dict:
     # WAKU_BASE_URL only applies to the provider it was set for).
     name = provider or s.provider
     prov = PROVIDERS.get(name)
-    base = ((s.base_url if name == s.provider else None)
-            or (prov.configured_base_url() if prov else None))
+    # A scoped_credentials row (the hosted free tier) never reads the global
+    # WAKU_BASE_URL override — a leftover custom endpoint must not leak into
+    # the row that always talks to the metering proxy.
+    if prov is not None and prov.scoped_credentials:
+        base = prov.configured_base_url()
+    else:
+        base = ((s.base_url if name == s.provider else None)
+                or (prov.configured_base_url() if prov else None))
+    default_model, default_small_model = prov.models_now() if prov else ("", "")
     out = {
         "provider": name,
-        "model": s.model or (prov.model if prov else ""),
-        "small_model": s.small_model or (prov.small_model if prov else ""),
+        "model": s.model or default_model,
+        "small_model": s.small_model or default_small_model,
         "endpoint": base or name,
     }
     # Where can this provider's models be listed? An explicit catalog_url wins
     # (kimi chats on the anthropic wire but lists on its OpenAI-compatible API;
     # anthropic itself has GET /v1/models); otherwise openai-wire endpoints get
-    # {base_url}/models; otherwise fall back to the two known defaults.
+    # {base_url}/models; a catalog_from_base_url row (the hosted free tier)
+    # gets {base_url}/v1/models even on the anthropic wire, because the proxy
+    # behind it speaks the OpenAI-style listing endpoint; otherwise fall back
+    # to the two known defaults.
     catalog_url = prov.catalog_for(base) if prov is not None else None
     if catalog_url:
         url = catalog_url
     elif prov is not None and prov.kind == "openai" and base:
         url = base.rstrip("/") + "/models"
+    elif prov is not None and prov.catalog_from_base_url and base:
+        url = base.rstrip("/") + "/v1/models"
     else:
         # No catalog endpoint: fall back to the provider's own known defaults
         # (flagship + fast + loop/gate), not just the active model.
@@ -96,7 +108,10 @@ def list_models(provider: str | None = None, *, use_cache: bool = True) -> dict:
             r["error"] = cerr
         return r
     # Use this provider's own key; s.api_key only holds the ACTIVE provider's.
-    key = ((s.api_key if name == s.provider else "") or os.getenv(prov.key_env, "")).strip()
+    # A scoped_credentials row never falls back to it — see the base_url note
+    # above; the same leftover-custom-key risk applies to the key.
+    key = (os.getenv(prov.key_env, "") if prov.scoped_credentials
+          else (s.api_key if name == s.provider else "") or os.getenv(prov.key_env, "")).strip()
     # HTTP headers must be latin-1; a key with a stray non-ASCII char (a smart
     # arrow/quote or a line-break from a bad paste) would otherwise crash the
     # whole listing with an opaque codec error and silently drop back to two
@@ -177,9 +192,24 @@ def default_pinned_specs() -> list[str]:
 
     specs = []
     for name, prov in PROVIDERS.items():
-        if os.getenv(prov.key_env):
+        if prov.is_visible() and os.getenv(prov.key_env):
             specs += [f"{name}:{m}" for m in prov.default_pair()]
     return specs
+
+
+def _stale_platform_pin(spec: str) -> bool:
+    """True when a saved pin names a model_env/small_model_env-backed
+    provider's model that no longer matches the current override -- e.g. a
+    platform operator changed WAKU_PLATFORM_MODEL after a user pinned the old
+    id. Opt-in: only a row that sets one of those two fields is ever checked,
+    so an ordinary provider's pins are never touched."""
+    from waku.loop.models import PROVIDERS
+
+    name, _, model = spec.partition(":")
+    prov = PROVIDERS.get(name)
+    if not prov or not (prov.model_env or prov.small_model_env):
+        return False
+    return bool(model) and model not in prov.models_now()
 
 
 def pinned_specs() -> list[str]:
@@ -189,9 +219,11 @@ def pinned_specs() -> list[str]:
     p = _models_json()
     if p.exists():
         try:
-            return json.loads(p.read_text(encoding="utf-8")).get("pinned", [])
+            saved = json.loads(p.read_text(encoding="utf-8")).get("pinned", [])
         except (json.JSONDecodeError, OSError):
-            pass
+            saved = None
+        if saved is not None:
+            return [spec for spec in saved if not _stale_platform_pin(spec)]
     return default_pinned_specs()
 
 

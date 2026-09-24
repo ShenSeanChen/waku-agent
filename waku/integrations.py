@@ -270,11 +270,23 @@ def _integration_from_provider(name: str, provider: Provider) -> Integration:
 
 
 def provider_integrations() -> tuple[Integration, ...]:
-    return tuple(_integration_from_provider(name, provider) for name, provider in PROVIDERS.items())
+    # A hidden_unless_env row (the hosted free tier) must appear in no local
+    # page or list — see Provider.is_visible().
+    return tuple(_integration_from_provider(name, provider) for name, provider in PROVIDERS.items()
+                 if provider.is_visible())
 
 
 def registry() -> tuple[Integration, ...]:
     return provider_integrations() + INTEGRATIONS
+
+
+def _env_example_provider_integrations() -> tuple[Integration, ...]:
+    """Like provider_integrations(), but for the file that gets committed:
+    .env.example must read the same on every machine, so a hidden_unless_env
+    row is skipped unconditionally — even on a host where it happens to be
+    visible right now (a tenant container generating its own copy)."""
+    return tuple(_integration_from_provider(name, provider) for name, provider in PROVIDERS.items()
+                 if not provider.hidden_unless_env)
 
 
 # T2 implementation: the cache path mirrors waku.ops.catalog's .waku storage.
@@ -420,7 +432,7 @@ def render_env_example_block() -> str:
         "WAKU_PROVIDER=anthropic",
     ]
     group = ""
-    for integration in registry():
+    for integration in _env_example_provider_integrations() + INTEGRATIONS:
         if integration.group != group:
             group = integration.group
             lines.extend(("", f"# ── {group} ──"))

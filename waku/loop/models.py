@@ -154,6 +154,14 @@ PROVIDERS: dict[str, Provider] = {name: _provider(row) for name, row in REGISTRY
 KEY_URLS: dict[str, str] = {name: row["key_url"] for name, row in REGISTRY.items()}
 
 
+def _visible_names() -> list[str]:
+    """Provider names a local user is allowed to see: every row, minus a
+    hidden_unless_env row whose endpoint isn't set. Read at call time (never
+    cached) because is_visible() depends on the environment, which a tenant
+    container sets after PROVIDERS is built."""
+    return sorted(name for name, provider in PROVIDERS.items() if provider.is_visible())
+
+
 def _no_key_message(name: str, key_env: str) -> str:
     """Say what to set, where to get it, and WHICH file we read.
 
@@ -177,7 +185,7 @@ def _no_key_message(name: str, key_env: str) -> str:
         f"  1. Get a key: {url}\n" if url else f"No API key for provider '{name}'.\n\n"
     ) + (
         f"  2. {where}\n\n"
-        f"Other providers: {', '.join(sorted(PROVIDERS))}\n"
+        f"Other providers: {', '.join(_visible_names())}\n"
         f"Switch with WAKU_PROVIDER=<name> and that provider's key."
     )
 
@@ -206,7 +214,8 @@ def _belongs_elsewhere(model: str, provider_name: str) -> bool:
     family = model.split("-")[0].lower()
     if "/" in model or not family:
         return False
-    owner = {f: name for name, p in PROVIDERS.items() if "/" not in (p.model or "x")
+    owner = {f: name for name, p in PROVIDERS.items()
+             if p.claims_families and "/" not in (p.model or "x")
              for f in _families(p)}.get(family)
     return bool(owner) and owner != provider_name
 
@@ -217,11 +226,24 @@ def get_client(settings: Settings):
     provider = PROVIDERS.get(settings.provider)
     if provider is None:
         raise SystemExit(f"Unknown WAKU_PROVIDER '{settings.provider}'. "
-                         f"Pick one of: {', '.join(PROVIDERS)}")
+                         f"Pick one of: {', '.join(_visible_names())}")
+
+    # A hidden row that isn't configured yet must never build a client — it has
+    # no endpoint to talk to, and the message needs to name the variable that
+    # would turn it on, not "no API key", which would be misleading here.
+    if not provider.is_visible():
+        raise SystemExit(
+            f"'{settings.provider}' is not configured: set {provider.base_url_env} "
+            f"to enable it."
+        )
 
     # .strip() so a trailing newline/space from a copy-paste doesn't corrupt the
     # auth header (headers are latin-1; a stray non-ASCII char errors cryptically).
-    api_key = (settings.api_key or os.getenv(provider.key_env, "")).strip()
+    # A scoped_credentials row (the hosted free tier) never falls back to
+    # WAKU_API_KEY: that global override exists for BYOK and must not outrank
+    # the platform token a tenant container was actually given.
+    api_key = (os.getenv(provider.key_env, "") if provider.scoped_credentials
+              else (settings.api_key or os.getenv(provider.key_env, ""))).strip()
     if not api_key:
         raise SystemExit(_no_key_message(settings.provider, provider.key_env))
     try:
@@ -251,9 +273,13 @@ def get_client(settings: Settings):
                 and _belongs_elsewhere(inherited, settings.provider):
             setattr(settings, attr, "")
 
-    settings.model = settings.model or provider.model
-    settings.small_model = settings.small_model or provider.small_model
-    base_url = settings.base_url or provider.configured_base_url()
+    default_model, default_small_model = provider.models_now()
+    settings.model = settings.model or default_model
+    settings.small_model = settings.small_model or default_small_model
+    # Same scoping as the key above: WAKU_BASE_URL is a global BYOK override
+    # and must not leak into a scoped_credentials row's own endpoint.
+    base_url = (provider.configured_base_url() if provider.scoped_credentials
+               else settings.base_url or provider.configured_base_url())
 
     # a hung network call must never freeze a turn silently
     timeout = float(os.getenv("WAKU_LLM_TIMEOUT", "120"))
