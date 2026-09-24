@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 import waku.ops.dashboard as dash
 
 
@@ -30,3 +32,28 @@ def test_loopback_forms_do_not_warn(monkeypatch, capsys):
         monkeypatch.setenv("WAKU_DASHBOARD_HOST", value)
         dash.bind_host()
         assert capsys.readouterr().out == "", f"{value} should not warn"
+
+
+def test_the_warning_prints_once_however_many_ports_are_busy(monkeypatch, capsys):
+    """main() walks ten ports past a busy one. The warning is about the
+    environment, which cannot change between iterations, so printing it per
+    attempt says nothing new and trains people to scroll past the one line
+    that is the whole point of letting the dashboard leave loopback."""
+    monkeypatch.setenv("WAKU_DASHBOARD_HOST", "0.0.0.0")
+    monkeypatch.setenv("WAKU_DASHBOARD_PORT", "7777")
+
+    def every_port_busy(*args, **kwargs):
+        raise OSError("address already in use")
+
+    monkeypatch.setattr(dash, "ThreadingHTTPServer", every_port_busy)
+    with pytest.raises(SystemExit):
+        dash.main()
+
+    out = capsys.readouterr().out
+    assert out.count("WAKU_DASHBOARD_HOST=0.0.0.0") == 1, (
+        f"the security warning printed {out.count('WAKU_DASHBOARD_HOST=0.0.0.0')} "
+        f"times across the port walk; it must print once"
+    )
+    assert out.count("busy, trying") == 10, (
+        "expected the walk itself to still report each busy port"
+    )

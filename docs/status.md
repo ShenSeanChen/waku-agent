@@ -17,7 +17,7 @@ a retrieval gate), tools, and both eval tiers. `waku`, `waku dashboard`,
 `waku voice`, `waku telegram`, `waku discord`, `waku brief` and
 `waku connect google` all start.
 
-**770 deterministic evals pass offline**, with no API key; 60 more are live
+**945 deterministic evals pass offline**, with no API key; 60 more are live
 evals that skip without one. CI runs the offline tier on every PR along with
 ruff, the skills validator, and a check that `.env.example` still matches the
 integrations registry.

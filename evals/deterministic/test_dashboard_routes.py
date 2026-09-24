@@ -416,6 +416,22 @@ def dashboard_route_literal_violations() -> list[str]:
                                 f"— write the route path as a literal string")
                     elif isinstance(op, (ast.In, ast.NotIn)):
                         op_word = "in" if isinstance(op, ast.In) else "not in"
+                        if side is not left:
+                            # `X in self.path` — self.path is the CONTAINER, so
+                            # this is a substring test over the URL, never a
+                            # lookup of it. It is a route check written the
+                            # wrong way round and it matches things nobody
+                            # listed: "/api" in self.path is true of
+                            # /api/anything. Always a violation — including
+                            # when X happens to be a dispatch dict, whose keys
+                            # are only collected from `self.path in X`.
+                            violations.append(
+                                f"line {node.lineno}: `{_describe(other)}` "
+                                f"{op_word} self.path — a substring test over "
+                                f"the URL, not a route check. Write "
+                                f"`self.path {op_word} (...)` against string "
+                                f"literals, or self.path.startswith(...)")
+                            continue
                         if isinstance(other, ast.Name) and other.id in dispatch_dicts:
                             # Membership against a dispatch dict. Its keys are
                             # validated and collected as routes by

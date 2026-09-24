@@ -147,4 +147,5 @@ same loop invoked as one step — no peer-to-peer agent messaging, execution
 follows the edges deterministically.) It's the readable blueprint — OpenClaw
 and Hermes are the products; this is the afternoon read that explains them.
 `hosted/` runs this same loop as a service instead; it is a deployment of
-waku, not a second architecture (conventions.md §3).
+waku, not a second architecture (conventions.md §3). Spec 001 designs it, and
+none of it exists in this repo yet.

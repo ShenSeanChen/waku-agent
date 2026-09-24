@@ -1228,9 +1228,13 @@ def main() -> None:
     # Port precedence: WAKU_DASHBOARD_PORT, then the conventional PORT (used by
     # deploy platforms and IDE preview panes), then 7777. If it's taken, walk on.
     base = int(os.getenv("WAKU_DASHBOARD_PORT") or os.getenv("PORT") or PORT)
+    # Resolved once, above the walk: the environment cannot change between
+    # iterations, and bind_host() prints the off-loopback security warning. Ten
+    # busy ports used to print it ten times, which teaches people to skip it.
+    host = bind_host()
     for port in range(base, base + 10):  # walk past a busy port instead of crashing
         try:
-            server = ThreadingHTTPServer((bind_host(), port), Handler)
+            server = ThreadingHTTPServer((host, port), Handler)
         except OSError:
             print(f"port {port} busy, trying {port + 1}…")
             continue
