@@ -101,29 +101,23 @@ def _is_str_literal(node: ast.AST | None) -> bool:
     return isinstance(node, ast.Constant) and isinstance(node.value, str)
 
 
-def _wraps_self_path(node: ast.AST | None) -> bool:
-    """True if `node` puts self.path through a RECEIVER-preserving
-    transformation — `self.path.strip()`, `self.path[1:]`,
-    `self.path + "x"` — as opposed to self.path merely appearing as an
-    ARGUMENT somewhere inside an unrelated call, e.g.
-    `parse_qs(urlparse(self.path).query).get(...)`. Only the receiver chain
-    is a plausible route-dispatch trick (compare/call the transformed path
-    directly); self.path as an argument several calls deep is ordinary,
-    unrelated use of the path string and must not be flagged. Recurses
-    through `.attr(...)` receivers, subscripts and binary ops only — never
-    through a plain call's arguments — so it stays as bounded as `routes`
-    dict-name recognition: it does not chase into helper functions."""
-    if node is None or _is_self_path(node):
-        return False
-    if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
-        recv = node.func.value
-        return _is_self_path(recv) or _wraps_self_path(recv)
-    if isinstance(node, ast.Subscript):
-        return _is_self_path(node.value) or _wraps_self_path(node.value)
-    if isinstance(node, ast.BinOp):
-        return (_is_self_path(node.left) or _wraps_self_path(node.left)
-                or _is_self_path(node.right) or _wraps_self_path(node.right))
-    return False
+def _parent_map(tree: ast.AST) -> dict[int, ast.AST]:
+    """id(child) -> parent, for every node in `tree`. Used only to describe a
+    violation (show what self.path is sitting inside); nothing here decides
+    pass/fail on its own."""
+    parents: dict[int, ast.AST] = {}
+    for parent in ast.walk(tree):
+        for child in ast.iter_child_nodes(parent):
+            parents[id(child)] = parent
+    return parents
+
+
+def _describe(node: ast.AST) -> str:
+    try:
+        text = ast.unparse(node)
+    except Exception:
+        return type(node).__name__
+    return text if len(text) <= 80 else text[:77] + "..."
 
 
 def _literal_str_container(node: ast.AST | None) -> list[ast.AST] | None:
@@ -150,18 +144,25 @@ def _ast_literal_routes(tree: ast.Module) -> set[str]:
     `self.path not in (...)`, and inside a literal tuple argument to
     `self.path.startswith((...))`. Both are genuine literal routes — just
     written in a shape the regexes don't match — so a route registered this
-    way must still show up as "found", or it could sit unpinned forever."""
+    way must still show up as "found", or it could sit unpinned forever. This
+    also covers reversed-order `"/literal" == self.path`: the regex above
+    requires `self.path ==` textually, so a route written the other way
+    round is invisible to it even though it is fully literal — the AST
+    check below looks at both sides, same as the guard does."""
     found: set[str] = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Compare):
             elements = [node.left, *node.comparators]
             for left, op, right in zip(elements, node.ops, elements[1:]):
-                if not isinstance(op, (ast.In, ast.NotIn)):
-                    continue
-                other = right if _is_self_path(left) else (left if _is_self_path(right) else None)
-                elts = _literal_str_container(other) if other is not None else None
-                if elts is not None:
-                    found |= {e.value for e in elts if _is_str_literal(e)}
+                for side, other in ((left, right), (right, left)):
+                    if not _is_self_path(side):
+                        continue
+                    if isinstance(op, ast.Eq) and _is_str_literal(other):
+                        found.add(other.value)
+                    elif isinstance(op, (ast.In, ast.NotIn)):
+                        elts = _literal_str_container(other)
+                        if elts is not None:
+                            found |= {e.value for e in elts if _is_str_literal(e)}
         elif (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
               and node.func.attr == "startswith" and _is_self_path(node.func.value)
               and node.args):
@@ -187,87 +188,90 @@ def routes_in_dashboard() -> set[str]:
 
 
 def dashboard_route_literal_violations() -> list[str]:
-    """The AST-level twin of routes_in_dashboard(). DEFAULT-DENY by
-    construction: rather than pattern-matching a fixed list of bad shapes
-    (which is how round 1's Eq-only guard let a variable, a loop, and an
-    `in`-operator tuple all through undetected), this enumerates every form
-    `self.path` legitimately takes in dashboard.py's dispatch code and fails
-    on anything else.
+    """The AST-level twin of routes_in_dashboard(). CONTROLLER RULING (A5
+    review round 2): rounds 1 and 2 both enumerated COMPARISON FORMS
+    (`self.path == ...`, then also `in`/`startswith`/wrapped-expressions) —
+    an open set. Each round closed what the last review found and the next
+    reviewer found six more (reversed `==`, an f-string, an `IfExp`, a
+    walrus, `urlparse(self.path)`, `re.match`, a `match` statement). Adding
+    shape #7 would just invite #8.
 
-    Recognised, and required to be literal-only:
-      - `self.path == "..."` (either order)
-      - `self.path in (...)` / `self.path not in (...)` — every element a
-        string literal, OR the container is the already-checked `routes` dict
-      - `self.path.startswith("...")` or `self.path.startswith((...))`
-      - a `routes` dict key
+    So this walks the closed set instead: every OCCURRENCE of `self.path` —
+    it is one specific attribute access, and ast.walk finds all of them,
+    full stop. For each occurrence, this asks only "is this sitting in one
+    of a few whitelisted, literal-only positions", and fails if not. How the
+    surrounding expression is written no longer matters: an f-string, an
+    IfExp, a walrus, or any other wrapper simply never lands self.path in a
+    whitelisted position, so it fails automatically without this guard
+    having to have been written with that shape in mind.
 
-    Anything else that touches `self.path` in a comparison or a method call is
-    a violation, not a silent pass:
-      - any other comparison operator (`!=`, `<`, `is`, a chained compare)
-      - `self.path` wrapped in another expression first — `self.path.strip()
-        == ...`, `self.path[1:] in (...)` — not recognised, so rejected
-        rather than ignored, the same way the bare-literal cases are
-      - any method call on `self.path` other than `.startswith(...)`
+    Whitelisted positions for a self.path occurrence (all require the OTHER
+    side to be a string literal, or a literal tuple/list/set of them):
+      - either side of `self.path == "..."` or `self.path != "..."`
+      - either side of `self.path in (...)` / `self.path not in (...)` — or
+        the container is the already-checked `routes` dict
+      - the receiver of `self.path.startswith(...)`
+      - the index of `routes[self.path]` (a lookup into the same dict)
+      - the argument to `urlparse(self.path).query` — reading the QUERY
+        STRING is not a route match the way reading `.path` back out would
+        be, and today's code only ever reads `.query`; `urlparse(self.path)
+        .path == "..."` (one of the six shapes this round closes) is a
+        DIFFERENT position — the parent is `.path`, not `.query` — so it is
+        deliberately NOT covered by this one and still fails
+      - the argument to `self._serve_static(self.path)` — a call to the
+        handler's own method, not a hand-off outside the class (that is
+        `_self_passed_to_helper`'s job), already reached only after
+        `self.path.startswith("/static/")` passed
+
+    Every other occurrence is a violation: an f-string, an `IfExp`, a
+    walrus, an argument to any other call (`re.match(pattern, self.path)`),
+    a subscript, a `match` subject, an unrecognised comparison operator —
+    anything at all. There is deliberately no "match statement with literal
+    cases" carve-out: dashboard.py does not use one today, and adding that
+    exception would be exactly the kind of shape-chasing this rewrite exists
+    to stop.
     """
     tree = ast.parse(_source())
     routes_dict_names = _routes_dict_names(tree)
+    parents = _parent_map(tree)
     violations: list[str] = []
-
-    def kind(node: ast.AST) -> str:
-        if _is_self_path(node):
-            return "bare"
-        return "wrapped" if _wraps_self_path(node) else "other"
+    handled: set[int] = set()  # id() of every self.path node matched to a whitelisted position
 
     for node in ast.walk(tree):
         if isinstance(node, ast.Compare):
             elements = [node.left, *node.comparators]
             for left, op, right in zip(elements, node.ops, elements[1:]):
-                lk, rk = kind(left), kind(right)
-                if lk == "other" and rk == "other":
-                    continue  # nothing here mentions self.path
-                if lk == "wrapped" or rk == "wrapped":
-                    wrapped = left if lk == "wrapped" else right
-                    violations.append(
-                        f"line {node.lineno}: self.path wrapped inside "
-                        f"`{ast.unparse(wrapped)}` before the comparison — not "
-                        f"a recognised route form; compare bare self.path "
-                        f"against a literal instead")
-                    continue
-                other = right if lk == "bare" else left
-                if isinstance(op, ast.Eq):
-                    if not _is_str_literal(other):
+                for side, other in ((left, right), (right, left)):
+                    if not _is_self_path(side):
+                        continue
+                    handled.add(id(side))
+                    if isinstance(op, (ast.Eq, ast.NotEq)):
+                        if not _is_str_literal(other):
+                            violations.append(
+                                f"line {node.lineno}: self.path compared "
+                                f"(`{type(op).__name__}`) against "
+                                f"`{_describe(other)}`, not a string literal "
+                                f"— write the route path as a literal string")
+                    elif isinstance(op, (ast.In, ast.NotIn)):
+                        op_word = "in" if isinstance(op, ast.In) else "not in"
+                        if isinstance(other, ast.Name) and other.id in routes_dict_names:
+                            continue  # membership against the routes dict, checked below
+                        elts = _literal_str_container(other)
+                        if elts is None or any(not _is_str_literal(e) for e in elts):
+                            violations.append(
+                                f"line {node.lineno}: self.path {op_word} "
+                                f"`{_describe(other)}`, not a tuple/list/set "
+                                f"of string literals — write every route "
+                                f"path as a literal string")
+                    else:
                         violations.append(
-                            f"line {node.lineno}: self.path == "
-                            f"`{ast.unparse(other)}`, not a string literal — "
-                            f"write the route path as a literal string")
-                elif isinstance(op, (ast.In, ast.NotIn)):
-                    op_word = "in" if isinstance(op, ast.In) else "not in"
-                    if isinstance(other, ast.Name) and other.id in routes_dict_names:
-                        continue  # membership against the routes dict, checked below
-                    elts = _literal_str_container(other)
-                    if elts is None or any(not _is_str_literal(e) for e in elts):
-                        violations.append(
-                            f"line {node.lineno}: self.path {op_word} "
-                            f"`{ast.unparse(other)}`, not a tuple/list/set of "
-                            f"string literals — write every route path as a "
-                            f"literal string")
-                else:
-                    violations.append(
-                        f"line {node.lineno}: self.path compared with "
-                        f"`{type(op).__name__}`, a form this guard does not "
-                        f"accept as a route check — use `==` or `in` against "
-                        f"string literals instead")
-        elif isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
-            recv = kind(node.func.value)
-            if recv == "other":
-                continue
-            if recv == "wrapped":
-                violations.append(
-                    f"line {node.lineno}: self.path wrapped inside "
-                    f"`{ast.unparse(node.func.value)}` before "
-                    f".{node.func.attr}(...) — not a recognised route form; "
-                    f"call .startswith(...) on bare self.path instead")
-                continue
+                            f"line {node.lineno}: self.path compared with "
+                            f"`{type(op).__name__}`, a form this guard does "
+                            f"not accept — use ==, !=, in, or not in against "
+                            f"string literals")
+        elif (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+              and _is_self_path(node.func.value)):
+            handled.add(id(node.func.value))
             if node.func.attr != "startswith":
                 violations.append(
                     f"line {node.lineno}: self.path.{node.func.attr}(...) — "
@@ -278,44 +282,113 @@ def dashboard_route_literal_violations() -> list[str]:
             elts = _literal_str_container(arg)
             ok = _is_str_literal(arg) or (elts is not None and all(_is_str_literal(e) for e in elts))
             if not ok:
-                shown = ast.unparse(arg) if arg is not None else "<no argument>"
+                shown = _describe(arg) if arg is not None else "<no argument>"
                 violations.append(
                     f"line {node.lineno}: self.path.startswith(`{shown}`), "
                     f"not a string literal (or tuple of them) — write every "
                     f"route path as a literal string")
+        elif (isinstance(node, ast.Subscript) and _is_self_path(node.slice)
+              and isinstance(node.value, ast.Name) and node.value.id in routes_dict_names):
+            handled.add(id(node.slice))  # routes[self.path] — the dict's keys are checked below
+        elif (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+              and node.func.id == "urlparse" and node.args and _is_self_path(node.args[0])
+              and isinstance(parents.get(id(node)), ast.Attribute)
+              and parents[id(node)].attr == "query"):
+            # urlparse(self.path).query — reading the QUERY STRING, never the
+            # path. Whitelisted only in this exact position: `.query` cannot
+            # be compared as a route match the way `.path` could, which is
+            # why urlparse(self.path).path == "..." (one of the six shapes
+            # this round closes) is deliberately NOT covered by this branch
+            # and falls through to the catch-all below.
+            handled.add(id(node.args[0]))
+        elif (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+              and isinstance(node.func.value, ast.Name) and node.func.value.id == "self"
+              and node.func.attr == "_serve_static" and node.args and _is_self_path(node.args[0])):
+            # self._serve_static(self.path) — a call to the handler's OWN
+            # method (not a hand-off outside the class; see
+            # _self_passed_to_helper for that check), already reached only
+            # after self.path.startswith("/static/") passed.
+            handled.add(id(node.args[0]))
         elif (isinstance(node, ast.Assign) and isinstance(node.value, ast.Dict)
               and any(isinstance(t, ast.Name) and t.id == "routes" for t in node.targets)):
             for key in node.value.keys:
                 if not _is_str_literal(key):
                     line = key.lineno if key is not None else node.lineno
-                    shown = ast.unparse(key) if key is not None else "**unpacked entry**"
+                    shown = _describe(key) if key is not None else "**unpacked entry**"
                     violations.append(
                         f"line {line}: routes dict key `{shown}`, not a string "
                         f"literal — write the route path as a literal string")
+
+    # Anything left over is a self.path occurrence in a context this guard
+    # doesn't recognise at all — an f-string, an IfExp, a walrus, an argument
+    # to an unrelated call, a match subject, anything.
+    for node in ast.walk(tree):
+        if _is_self_path(node) and id(node) not in handled:
+            parent = parents.get(id(node))
+            where = _describe(parent) if parent is not None else "self.path"
+            violations.append(
+                f"line {node.lineno}: self.path appears inside `{where}` "
+                f"({type(parent).__name__ if parent is not None else '?'}), "
+                f"not a recognised route-check position — compare self.path "
+                f"directly (`self.path == \"...\"`, `self.path in (...)`, "
+                f"`self.path.startswith(...)`) against literals instead")
+    return violations
+
+
+def _self_passed_to_helper(tree: ast.Module) -> list[str]:
+    """CONTROLLER RULING (A5 review round 2, cross-module case): a route
+    dispatched by a helper module never mentions `self.path` in
+    dashboard.py at all, so the walk above can't see it — a route matched
+    inside `some_helper.dispatch(self)` is invisible to it by construction.
+    This is the narrow, separate invariant that closes that last shape:
+    do_GET and do_POST may not hand bare `self` to anything outside the
+    handler class. A normal `self._send(...)` / `self.wfile.write(...)`
+    call is unaffected — there, `self` is the RECEIVER of one of the
+    handler's own methods/attributes, not a plain argument."""
+    violations: list[str] = []
+    for fn in ast.walk(tree):
+        if not (isinstance(fn, ast.FunctionDef) and fn.name in ("do_GET", "do_POST")):
+            continue
+        for node in ast.walk(fn):
+            if not isinstance(node, ast.Call):
+                continue
+            bare_self_args = [a for a in (*node.args, *(kw.value for kw in node.keywords))
+                               if isinstance(a, ast.Name) and a.id == "self"]
+            if bare_self_args:
+                violations.append(
+                    f"line {node.lineno}: {fn.name} passes bare `self` to "
+                    f"`{_describe(node.func)}(...)` — route dispatch has to "
+                    f"stay inline in dashboard.py; a helper that receives "
+                    f"self could match self.path somewhere this guard "
+                    f"cannot see")
     return violations
 
 
 def test_every_dashboard_route_comparison_is_a_string_literal():
-    """CONTROLLER RULING (A5 review round 1, C1; hardened round 2 after the
-    `in`-operator bypass got through an Eq-only version of this guard).
-    routes_in_dashboard() is fooled by indirection — a variable, a loop, an
-    `in ("/x",)` tuple, self.path wrapped in another expression — all fully
-    live and dispatchable, all invisible to a regex or a guard that only
-    checks the one form it was written for. Rather than teach the extractor
-    to chase variables (which leads to loops, then helpers, then getattr, and
-    never ends), this constrains dashboard.py's dispatch code instead, and
-    defaults to FAILING on any comparison against self.path it doesn't
-    positively recognise as literal — see dashboard_route_literal_violations
-    for the full list of recognised forms. That makes routes_in_dashboard()
-    complete by construction — there is no longer a shape of route it could
-    miss — instead of complete by effort."""
+    """CONTROLLER RULING (A5 review round 1, C1; rewritten round 3 — see
+    dashboard_route_literal_violations for the full reasoning). Two rounds
+    of enumerating comparison forms both got walked around, because that
+    set is open. This enumerates self.path OCCURRENCES instead, which is
+    closed, and fails on any occurrence that doesn't sit in one of a small
+    set of literal-only positions."""
     violations = dashboard_route_literal_violations()
     assert not violations, (
-        "dashboard.py compares self.path against something other than a "
-        "string literal (or uses a route-check form this guard doesn't "
-        "recognise), so routes_in_dashboard() cannot see it and it can reach "
-        "production unpinned. Write the route path as a literal string at "
-        "the comparison instead:\n" + "\n".join(violations))
+        "dashboard.py uses self.path somewhere this guard doesn't recognise "
+        "as a literal route check, so routes_in_dashboard() cannot see it "
+        "and it can reach production unpinned:\n" + "\n".join(violations))
+
+
+def test_dashboard_handlers_never_hand_off_self():
+    """CONTROLLER RULING (A5 review round 2, cross-module case): see
+    _self_passed_to_helper. A route dispatched from another module never
+    mentions self.path in dashboard.py, so no walk over this file's AST can
+    ever see it — this is the one shape that needs its own assertion
+    instead of being caught by the self.path walk above."""
+    violations = _self_passed_to_helper(ast.parse(_source()))
+    assert not violations, (
+        "do_GET/do_POST hands bare `self` to something outside the handler "
+        "class, which could dispatch a route this guard cannot see:\n"
+        + "\n".join(violations))
 
 
 def test_every_post_route_is_still_registered():
