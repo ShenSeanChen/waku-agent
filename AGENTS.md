@@ -63,7 +63,7 @@ The `validate` workflow runs on every PR. Each of these fails it:
 | `.env.example` out of step with the integrations registry | `scripts/generate_env_example.py` |
 | an edited design copy, a colour literal, an old token name | `evals/deterministic/test_design_system.py` |
 | a second version number | `evals/deterministic/test_version.py` |
-| this file over 100 lines, a broken rulebook link, an unindexed doc, an import from `examples/` or `lab/`, a lab topic without its playbook, a retired Waku Memory address, an emoji in the rulebook or README | `evals/deterministic/test_rulebook.py` |
+| this file over 100 lines, a broken rulebook link, an unindexed doc, an import from `examples/` or `lab/`, a lab topic without its playbook, a retired Waku Memory address, an emoji in the rulebook or README, a module-level name defined twice | `evals/deterministic/test_rulebook.py` |
 | any other failing deterministic eval | `pytest evals/deterministic` |
 
 Everything else in the rulebook is checked in review. The judge evals in

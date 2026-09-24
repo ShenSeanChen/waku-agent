@@ -208,3 +208,35 @@ def test_lab_topics_commit_screenshots_not_board_sources():
               if topic.name not in BOARD_SOURCES_PREDATE_RULE
               for p in topic.rglob("*.excalidraw")]
     assert not leaked, f"keep board sources out of the repo; commit a PNG in screenshots/ instead: {leaked}"
+
+
+def test_no_module_defines_a_top_level_name_twice():
+    """A second definition of a module-level name silently replaces the first.
+
+    Written the moment it was needed. A large edit to
+    test_dashboard_background_header.py left a duplicated 90-line block: two
+    identical copies of two helpers and two tables, plus a superseded
+    DECLARED_INTERVALS that no test referenced. Nothing failed, because the
+    second copies were identical — which is exactly why it survived review. A
+    tripwire file with dead code in it is a tripwire nobody trusts.
+
+    `ruff --select F811` does not see this: run against that file with the
+    duplication present, it exits 0.
+    """
+    offenders = []
+    for path in sorted([*ROOT.glob("waku/**/*.py"), *ROOT.glob("evals/**/*.py"),
+                        *ROOT.glob("scripts/*.py")]):
+        seen: dict[str, list[int]] = {}
+        for node in ast.parse(path.read_text(encoding="utf-8")).body:
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                seen.setdefault(node.name, []).append(node.lineno)
+            elif isinstance(node, ast.Assign):
+                for target in node.targets:
+                    if isinstance(target, ast.Name):
+                        seen.setdefault(target.id, []).append(node.lineno)
+        offenders += [f"{path.relative_to(ROOT)}: `{name}` at lines {lines}"
+                      for name, lines in seen.items() if len(lines) > 1]
+    assert not offenders, (
+        "module-level name defined more than once — the later definition wins "
+        "and the earlier one is dead:\n  " + "\n  ".join(offenders)
+    )
