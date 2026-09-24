@@ -6125,6 +6125,10 @@ gcal = [
     { name = "google-auth-oauthlib" },
     { name = "httplib2" },
 ]
+hosted = [
+    { name = "aiohttp" },
+    { name = "pyjwt", extra = ["crypto"] },
+]
 mcp = [
     { name = "mcp" },
 ]
@@ -6158,6 +6162,7 @@ whatsapp = [
 
 [package.metadata]
 requires-dist = [
+    { name = "aiohttp", marker = "extra == 'hosted'", specifier = ">=3.9" },
     { name = "anthropic", specifier = ">=0.40" },
     { name = "arize-phoenix", marker = "extra == 'tracing'", specifier = ">=7.0" },
     { name = "deepeval", marker = "extra == 'eval'", specifier = ">=2.0" },
@@ -6180,6 +6185,7 @@ requires-dist = [
     { name = "openai", specifier = ">=1.50" },
     { name = "opentelemetry-exporter-otlp", marker = "extra == 'tracing'", specifier = ">=1.27" },
     { name = "opentelemetry-sdk", marker = "extra == 'tracing'", specifier = ">=1.27" },
+    { name = "pyjwt", extras = ["crypto"], marker = "extra == 'hosted'", specifier = ">=2.8" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
     { name = "pytest", marker = "extra == 'eval'", specifier = ">=8.0" },
     { name = "python-dotenv", specifier = ">=1.0" },
@@ -6191,7 +6197,7 @@ requires-dist = [
     { name = "supabase", marker = "extra == 'supabase'", specifier = ">=2.0" },
     { name = "zep-cloud", marker = "extra == 'arena'", specifier = ">=2.0" },
 ]
-provides-extras = ["arena", "dev", "discord", "eval", "gcal", "mcp", "notion", "supabase", "telegram", "tracing", "voice", "voice-neural", "whatsapp"]
+provides-extras = ["arena", "dev", "discord", "eval", "gcal", "hosted", "mcp", "notion", "supabase", "telegram", "tracing", "voice", "voice-neural", "whatsapp"]
 
 [[package]]
 name = "wasabi"
