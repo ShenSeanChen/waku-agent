@@ -16,23 +16,43 @@ actually matters months from now: someone adds a new `setInterval(...)` poll,
 or a new fetch inside one of the functions that a poll already reaches, and
 forgets the header — silently making a tenant's container immortal again.
 
-This guard is DEFAULT-DENY over closed sets of literal tokens, and that
-shape is the whole point. The first version enumerated the ways a poller
-could be written — `setInterval(fn, ms)`, `setInterval(() => fn(true), ms)`
-— and walked one level of callee to see whether it fetched. The set of ways
-to write a poller is open: two-level indirection, an arrow bound to a const,
-a `setTimeout` that reschedules itself, a poller in a file this eval had not
-thought about. Every one of those slipped through. The same mistake cost the
-route guard in test_dashboard_routes.py five rounds and fourteen bypasses,
-and the version that finally held stopped enumerating the bad shapes and
-started walking the one closed set in the problem.
+WHAT THIS GUARD IS, AND WHAT IT IS NOT. Read this before trusting it.
 
-Here the closed sets are the literal tokens that can put a request on the
-wire or start a timer: `fetch(`, `postJSON(` and `setInterval(`. Every
-occurrence of each, in every file under js/, must resolve to a site this
-file declares. An undeclared one fails, whatever shape it is written in —
-which turns "did the author think about the header?" from a question about
-this eval's imagination into a question it cannot avoid asking.
+The tokens it walks — `fetch`, `postJSON`, `setInterval`, `setTimeout` and
+`paused` — it walks exhaustively. Every occurrence of each, in every file
+under js/, must resolve to a site declared in this file, and an undeclared
+one fails whatever shape it is written in. That is what catches the poller
+written with two levels of indirection, the one bound to a const as an
+arrow, and the one that reschedules itself with setTimeout — the three
+shapes that walked through the first version of this file, which tried to
+enumerate what a poller looks like instead.
+
+It is NOT a proof that the dashboard cannot make an unmarked request. "What
+makes a request in a browser" is not a closed set, and there is no AST
+here: this is text matching over JavaScript, deliberately, because
+static/README.md rules out a build step and a JS test runner and the core
+takes no new dependency. test_dashboard_routes.py can walk Python's `ast`
+and genuinely close its set; this file cannot, and an earlier version of
+this paragraph claimed it did while four live pollers went through.
+
+So the other transports are denied BY NAME — XMLHttpRequest, EventSource,
+WebSocket, navigator.sendBeacon, and `fetch` used as a value instead of
+called. Reaching for one fails here and forces the same deliberate
+decision a new fetch does. A named list is a blocklist, and a blocklist is
+never complete: an indirect construction (`window["Event" + "Source"]`,
+`eval`, a transport the platform grows after this was written) goes
+through. That limit is real and stated rather than papered over, because
+the next person maintaining this file will trust what it says about
+itself.
+
+EventSource is the one worth naming twice. A server-sent-events stream is
+a permanent keepalive and carries no per-request header at all, so it
+cannot be marked background under any policy — it would hold a tenant's
+container awake for as long as the tab is open.
+
+The names are matched in the raw source, comments included. A comment that
+merely mentions one of them fails too; that is the cheap half of the
+trade, and the fix is to reword the comment.
 
 Checks:
   1. every `fetch(`/`postJSON(` occurrence in js/ sits in a declared
@@ -46,13 +66,16 @@ Checks:
      site, and a declared callback that reaches a network function passes
      literal `true`. setTimeout is in the walk because a function that
      reschedules itself is a poller containing no `setInterval` at all.
+  3b. no other transport appears by name, and `fetch` is never taken as a
+     value — see the limits stated above.
   4. hiding the tab stops the timer-driven polls, and showing it again calls
      refresh(true) — not a plain refresh(), which would count as a user
      action and could wake a stopped container just by switching tabs.
-  5. the pause/resume state machine: every `paused =` write and every
-     startTimers()/stopTimers() call in js/ is a declared site, and the one
-     action the paused status line names — sending a message — actually
-     resumes. See the second half of this file.
+  5. the pause/resume state machine: every write to `paused` — plain
+     assignment only, so `paused &&= false` is refused as a form — and
+     every startTimers()/stopTimers() call in js/ is a declared site, and
+     the one action the paused status line names, sending a message,
+     actually resumes. See the second half of this file.
 """
 
 from __future__ import annotations
@@ -240,6 +263,40 @@ NETWORK_CALLERS = {
     ("views.js", "saveProvider"): "user",
 }
 
+# The other ways a browser can put bytes on the wire, denied by name. This is
+# a blocklist, which is never complete — see the limits in the module
+# docstring. It exists so that reaching for one of these fails here and forces
+# the same deliberate decision a new fetch does.
+#
+# Matched in the raw source, comments included, so a comment that names one
+# fails too. That is deliberate: stripping comments correctly needs a
+# JavaScript lexer (nested template literals defeat anything less), and the
+# cost of the cheap version is one reworded comment.
+FORBIDDEN_TRANSPORTS = {
+    "XMLHttpRequest":
+        "the pre-fetch transport; it takes headers, so route it through "
+        "fetch()/postJSON() and declare it in NETWORK_CALLERS instead",
+    "EventSource":
+        "a server-sent-events stream is a PERMANENT keepalive and carries no "
+        "per-request header at all, so it can never be marked background — an "
+        "open tab would hold a hosted tenant's container awake indefinitely",
+    "WebSocket":
+        "same as EventSource: one long-lived connection, no per-message "
+        "header the gateway reads, and no way to call it idle",
+    "sendBeacon":
+        "fire-and-forget POST with no header control and no response to check",
+}
+
+# `fetch` taken as a VALUE rather than called. `const _f = fetch; _f(url)` is
+# a request this file's fetch-call-site walk cannot see, because the call site
+# is spelled `_f(`.
+FETCH_ALIAS_SHAPES = {
+    r"(?:[=:(,\[]|=>)\s*fetch\b(?!\s*\()": "fetch bound to a name or passed as a value",
+    r"\bfetch\s*\.\s*(?:bind|call|apply)\b": "fetch re-bound",
+    r"\b(?:window|globalThis|self)\s*\.\s*fetch\b": "fetch reached through the global object",
+}
+
+
 # Every `setInterval(`/`setTimeout(` in js/, by the function it sits in, with
 # the exact callback text. Same default-deny, and setTimeout is in here for a
 # specific reason: a function that calls itself back on a timer is a poller
@@ -314,6 +371,43 @@ def test_every_network_call_site_in_the_dashboard_is_declared():
         f"declared network call site(s) that no longer exist: {gone} — "
         "remove them from NETWORK_CALLERS."
     )
+
+
+def test_no_other_transport_appears_in_the_dashboards_js():
+    """The blocklist half. The walk above sees `fetch(` and `postJSON(`; a
+    request made any other way is invisible to it, and an XHR poller driven by
+    requestAnimationFrame or an EventSource opened on page load is a perfectly
+    ordinary thing for someone to reach for."""
+    failures = []
+    for path in sorted(JS_DIR.glob("*.js")):
+        src = path.read_text()
+        for name, why in FORBIDDEN_TRANSPORTS.items():
+            for m in re.finditer(rf"\b{re.escape(name)}\b", src):
+                failures.append(
+                    f"{path.name}:{src[:m.start()].count(chr(10)) + 1}: {name} — {why}")
+    assert not failures, (
+        "\n".join(failures) + "\n\nIf this is a deliberate new transport, it "
+        "needs a decision about X-Waku-Background before it ships, not a line "
+        "removed from FORBIDDEN_TRANSPORTS. If it is only a mention in a "
+        "comment, reword the comment."
+    )
+
+
+def test_fetch_is_always_called_never_taken_as_a_value():
+    """`const _f = fetch; _f("/api/data")` is a request whose call site is
+    spelled `_f(`, so the fetch-call-site walk never sees it and the site is
+    never classified. Requiring `fetch` to be immediately called keeps that
+    walk's view of the file honest."""
+    failures = []
+    for path in sorted(JS_DIR.glob("*.js")):
+        src = path.read_text()
+        for pattern, why in FETCH_ALIAS_SHAPES.items():
+            for m in re.finditer(pattern, src):
+                failures.append(
+                    f"{path.name}:{src[:m.start()].count(chr(10)) + 1}: {why} "
+                    f"(`{src[m.start():m.end()].strip()}`) — call fetch() at the "
+                    f"site that needs it, so NETWORK_CALLERS can classify it")
+    assert not failures, "\n".join(failures)
 
 
 def test_the_two_tables_agree_on_which_functions_are_background_aware():
@@ -483,6 +577,43 @@ TIMER_CALLERS = {
 }
 
 
+# `paused` written by anything other than a plain `=`. JavaScript has a dozen
+# of these and `paused &&= false` clears the flag exactly as `paused = false`
+# does, while matching nothing that looks for `paused =`. Rather than list the
+# operators to accept, this matches an assignment of ANY form and lets the
+# test below refuse every form but the plain one.
+PAUSED_WRITE_RE = re.compile(
+    r"(?:(?P<decl>let|var|const)\s+)?\bpaused\b\s*"
+    r"(?P<op>(?:\*\*|<<|>>>?|[+\-*/%&|^]|&&|\|\||\?\?)?=(?!=)|\+\+|--)"
+    r"\s*(?P<value>[A-Za-z0-9_\"']+)?")
+PAUSED_PREFIX_RE = re.compile(r"(?:\+\+|--)\s*\bpaused\b")
+
+
+def test_paused_is_only_ever_written_by_plain_assignment():
+    """The declared-writer walk below reads `paused = <value>`. Every other
+    assignment form in the language writes the same flag and would not be
+    read by it: `paused &&= false` clears it, `paused ||= true` sets it,
+    `paused--` coerces it to a number. One recognised form, refused
+    otherwise, keeps the walk's answer complete."""
+    failures = []
+    for path in sorted(JS_DIR.glob("*.js")):
+        src = path.read_text()
+        for m in PAUSED_WRITE_RE.finditer(src):
+            if m.group("op") == "=":
+                continue
+            failures.append(
+                f"{path.name}:{src[:m.start()].count(chr(10)) + 1}: "
+                f"`paused {m.group('op')}` — write it as `paused = true` or "
+                f"`paused = false` at a site declared in PAUSED_WRITERS, so "
+                f"the walk over routes into and out of the paused state stays "
+                f"complete")
+        for m in PAUSED_PREFIX_RE.finditer(src):
+            failures.append(
+                f"{path.name}:{src[:m.start()].count(chr(10)) + 1}: "
+                f"`{src[m.start():m.end()]}` — same rule; plain assignment only")
+    assert not failures, "\n".join(failures)
+
+
 def test_only_declared_sites_write_the_paused_flag():
     """Every assignment to `paused` in js/, whatever file it is in, must be a
     site this eval knows about. C1 was a MISSING write (no route out of the
@@ -494,12 +625,13 @@ def test_only_declared_sites_write_the_paused_flag():
     for path in sorted(JS_DIR.glob("*.js")):
         src = path.read_text()
         ranges = _function_ranges(src)
-        for m in re.finditer(r"(?:(let|var|const)\s+)?\bpaused\s*=\s*([A-Za-z0-9_\"']+)", src):
-            if src[m.end(2):m.end(2) + 1] == "=":   # `paused ==` / `===`
+        for m in PAUSED_WRITE_RE.finditer(src):
+            if m.group("decl"):                     # the declaration itself
                 continue
-            if m.group(1):                          # the declaration itself
+            if m.group("op") != "=":                # refused by the test above
                 continue
-            found.setdefault((path.name, _enclosing(ranges, m.start())), set()).add(m.group(2))
+            found.setdefault((path.name, _enclosing(ranges, m.start())),
+                             set()).add(m.group("value"))
     assert found == PAUSED_WRITERS, (
         "the set of places that write `paused` changed.\n"
         f"  found:    {found}\n"
