@@ -131,19 +131,21 @@ def test_product_and_evals_never_reach_into_examples_or_lab():
     run or read anything in examples/ or lab/ (conventions §6, rules 1 and 3)."""
     this = Path(__file__).resolve()
     # test_hosted_boundary.py's packaging check builds the real sdist/wheel
-    # and asserts neither ships a top-level directory literally named "lab" --
-    # it names the directory to check a BUILT ARTIFACT's member list, and
-    # never imports, runs or reads anything under lab/ itself. _reaches_outside
-    # cannot tell "the string lab, used as a forbidden-directory name" from
-    # "a path into lab/", so this one file is exempt from that one check.
-    exempt = {(ROOT / "evals" / "deterministic" / "test_hosted_boundary.py").resolve()}
+    # and asserts no member's path has "hosted" or "lab" as a component -- it
+    # names the directory as a STRING LITERAL to check a BUILT ARTIFACT's
+    # member list, and never imports, runs or reads anything under lab/
+    # itself. Exempt only that file's string LITERALS from this check, not
+    # the file: a real `import lab` written there would be exactly as wrong
+    # as one anywhere else, and stays covered below.
+    literal_exempt = {(ROOT / "evals" / "deterministic" / "test_hosted_boundary.py").resolve()}
     offenders = sorted({
         str(py.relative_to(ROOT))
         for top in ("waku", "evals")
         for py in (ROOT / top).rglob("*.py")
-        if py.resolve() != this and py.resolve() not in exempt
+        if py.resolve() != this
         for node in ast.walk(ast.parse(py.read_text(encoding="utf-8")))
         if _reaches_outside(node)
+        and not (isinstance(node, ast.Constant) and py.resolve() in literal_exempt)
     })
     assert not offenders, f"these reach into examples/ or lab/: {offenders}"
 

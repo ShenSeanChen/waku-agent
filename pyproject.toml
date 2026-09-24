@@ -132,6 +132,13 @@ dev = [
     # red with zero code changes (happened 2026-07-24 — 0.16.0 shipped new
     # rules and 106 violations appeared overnight). Bump deliberately.
     "ruff==0.16.0",
+    # Already the [build-system] backend below, fetched into an isolated
+    # build env on every `pip install` regardless. Declaring it here too
+    # makes it importable in THIS venv, so
+    # test_hosted_and_lab_never_ship_in_the_wheel_or_sdist can ask hatchling
+    # which files a build would include without running one (offline, no
+    # `uv` needed — task-B1-review.md, finding B1-F11).
+    "hatchling",
 ]
 
 [build-system]

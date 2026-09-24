@@ -86,20 +86,20 @@ and not hosted/.
 from __future__ import annotations
 
 import ast
-import shutil
 import subprocess
 import sys
-import tarfile
 import tomllib
-import zipfile
 from pathlib import Path
 
 import pytest
+from hatchling.builders.sdist import SdistBuilder
+from hatchling.builders.wheel import WheelBuilder
+from hatchling.metadata.core import ProjectMetadata
+from hatchling.plugin.manager import PluginManager
 
 ROOT = Path(__file__).resolve().parents[2]
 WAKU = ROOT / "waku"
 HOSTED = ROOT / "hosted"
-UV = shutil.which("uv")
 
 pytestmark = pytest.mark.skipif(
     not HOSTED.is_dir(),
@@ -245,75 +245,90 @@ def test_importing_every_hosted_module_never_loads_waku():
         "spelled. On the VM that call loads the platform's own .env.")
 
 
-@pytest.mark.skipif(
-    UV is None, reason="uv not on PATH -- install it to build and inspect the packaged artifacts")
-def test_hosted_and_lab_never_ship_in_the_wheel_or_sdist(tmp_path):
+# The one path allowed to carry "hosted" as a path component: the skip
+# conftest B2-B4's own hosted evals inherit. It must ship so a test run from
+# an unpacked sdist skips instead of failing on a missing directory.
+_ALLOWED_HOSTED_PATH = "evals/deterministic/hosted/conftest.py"
+
+
+def _distribution_paths(builder_cls: type) -> list[str]:
+    """Every path a build of `builder_cls` would write, without writing one.
+
+    hatchling.builders.plugin.interface.BuilderInterface.recurse_included_files
+    is the exact enumeration `build_standard` uses to fill the real archive --
+    it walks the project applying include/exclude/only-include, AND merges in
+    every static `force-include` entry from pyproject.toml (the mechanism
+    that ships skills/ into the wheel today, and the one a second reviewer
+    pass used to ship hosted/ under a different name and pass the previous,
+    build-then-inspect version of this test at 16/16: task-B1-review.md,
+    finding B1-F9). Calling it directly gives real distribution paths with no
+    archive written, no subprocess, and no network call -- offline and fast
+    by construction, so it needs no `uv` on PATH and no skip (B1-F11).
+    """
+    plugin_manager = PluginManager()
+    metadata = ProjectMetadata(str(ROOT), plugin_manager)
+    builder = builder_cls(str(ROOT), plugin_manager=plugin_manager, metadata=metadata)
+    return sorted(f.distribution_path for f in builder.recurse_included_files())
+
+
+def test_hosted_and_lab_never_ship_in_the_wheel_or_sdist():
     """The extra is on PyPI; the code is not. A contributor who packages
     hosted/ by accident hands every `pip install waku-agent` a copy of the
     platform's deployment.
 
-    An earlier version of this test read pyproject.toml as text and asserted
-    the string "/hosted" was present in the sdist's exclude list. That is a
-    claim about the configuration, not about what `pip install waku-agent`
-    actually receives, and in this repository the two had already come
-    apart: the neighbouring entry "lab", three items earlier in the very
-    same exclude list, did NOT keep lab/ out of the sdist. hatchling merges
-    .gitignore's patterns with pyproject.toml's `exclude` list into one
-    ordered pathspec, and the .gitignore lines that un-ignore two
-    directories' committed board diagrams for lab/ (`!lab/kimi-k3/**/*.excalidraw`,
-    `!lab/pi-agent/**/*.excalidraw` -- the lab/README.md convention of
-    committing screenshots, not board sources) survived a bare "lab" exclude
-    entry: only a pattern naming the directory's CONTENTS ("/lab/**") reliably
-    re-excludes what an earlier negation un-ignored; a bare directory name does
-    not. "/hosted" happened to work because nothing in .gitignore negates a
-    path under hosted/ -- it was correct by neighbourhood, not by anything the
-    old assertions checked (task-B1-review.md, finding B1-F1).
+    This is the third shape this check has taken, and each of the first two
+    was one step removed from the thing it protects (task-B1-review.md,
+    finding B1-F9, naming it "the third version of one defect"):
 
-    So: build both real artifacts with `uv build` and look inside them,
-    instead of reading intent off the config that is supposed to produce it.
+    1. Read pyproject.toml as text and asserted the string "/hosted" was in
+       the sdist's exclude list -- a claim about the config, not about what
+       `pip install waku-agent` receives. The neighbouring "lab" entry sat in
+       the same list and did not, in fact, keep lab/ out of the sdist (B1-F1).
+    2. Built the real sdist and wheel with `uv build` and reduced each to its
+       set of TOP-LEVEL directory names. Stronger, but a projection: any
+       member shipped under a DIFFERENT top-level name -- a wheel
+       force-include of "hosted" -> "waku/hosted", or an sdist force-include
+       to "extras/hosted" -- passes every assertion while shipping all ten
+       hosted/ files. pyproject.toml already has a force-include for
+       "skills" -> "waku/skills" sitting three lines below the wheel's own
+       target config, which is the exact pattern a contributor would copy.
+
+    So: check the member PATHS themselves, wherever "hosted" or "lab" sits as
+    a path component -- not the exclude config, and not a name projected down
+    to its top level.
     """
-    out = tmp_path / "dist"
-    result = subprocess.run(
-        [UV, "build", "--sdist", "--wheel", "--out-dir", str(out), str(ROOT)],
-        capture_output=True, text=True, timeout=180, check=False)
-    assert result.returncode == 0, f"uv build failed:\n{result.stderr[-4000:]}"
+    sdist_paths = _distribution_paths(SdistBuilder)
+    wheel_paths = _distribution_paths(WheelBuilder)
 
-    sdist_path = next(out.glob("*.tar.gz"))
-    wheel_path = next(out.glob("*.whl"))
+    def _leaks(paths: list[str], name: str) -> list[str]:
+        return sorted(p for p in paths if name in p.split("/") and p != _ALLOWED_HOSTED_PATH)
 
-    with tarfile.open(sdist_path) as tf:
-        sdist_names = tf.getnames()
-    with zipfile.ZipFile(wheel_path) as zf:
-        wheel_names = zf.namelist()
-
-    # The sdist wraps every path in a "<name>-<version>/" prefix; the first
-    # real path component is what a repo-root directory would appear as.
-    sdist_top_dirs = {n.split("/", 2)[1] for n in sdist_names if n.count("/") >= 1}
-    # The wheel has no such prefix -- "waku/..." and "waku_agent-*.dist-info/..."
-    # sit at the top directly.
-    wheel_top_dirs = {n.split("/", 1)[0] for n in wheel_names}
-
-    assert "hosted" not in sdist_top_dirs, (
-        f"the sdist ships a top-level hosted/ directory: "
-        f"{sorted(n for n in sdist_names if '/hosted/' in n)}")
-    assert "lab" not in sdist_top_dirs, (
-        f"the sdist ships a top-level lab/ directory: "
-        f"{sorted(n for n in sdist_names if '/lab/' in n)}")
-    assert "hosted" not in wheel_top_dirs, f"the wheel ships a hosted/ directory: {wheel_top_dirs}"
-    assert "lab" not in wheel_top_dirs, f"the wheel ships a lab/ directory: {wheel_top_dirs}"
-
-    dist_info_dirs = {d for d in wheel_top_dirs if d.endswith(".dist-info")}
-    assert wheel_top_dirs == {"waku"} | dist_info_dirs, (
-        f"the wheel ships more than waku/ and its dist-info: {wheel_top_dirs}")
+    offenders = {
+        f"{archive} ships {name}/": leak
+        for archive, paths in (("sdist", sdist_paths), ("wheel", wheel_paths))
+        for name in ("hosted", "lab")
+        if (leak := _leaks(paths, name))
+    }
+    assert not offenders, (
+        f"a build member names hosted/ or lab/ as a path component: {offenders}\n"
+        'A member need not sit at the top of the archive to ship -- a '
+        'force-include under a different name (pyproject.toml already has '
+        'one, "skills" -> "waku/skills") reaches this exactly the way an '
+        "unanchored exclude did.")
 
     # The anchoring must not over-exclude either: evals/deterministic/hosted/
     # holds only the skip conftest (B2-B4's own tests never land in the
     # sdist, since hosted/ itself does not), and it has to ship so a test run
     # from an unpacked sdist skips instead of failing on a missing directory.
-    assert any(n.endswith("evals/deterministic/hosted/conftest.py") for n in sdist_names), (
-        "the sdist must still ship evals/deterministic/hosted/conftest.py -- "
+    assert _ALLOWED_HOSTED_PATH in sdist_paths, (
+        f"the sdist must still ship {_ALLOWED_HOSTED_PATH} -- "
         'the "/hosted" exclude is anchored at the repo root precisely so it '
         "does not also drop this file")
+
+    # A build member outside waku/ at all -- not just one named hosted/ or
+    # lab/ -- is worth catching too, since the wheel ships nothing else.
+    wheel_top_dirs = {p.split("/", 1)[0] for p in wheel_paths}
+    assert wheel_top_dirs == {"waku"}, f"the wheel ships more than waku/: {wheel_top_dirs}"
 
 
 def test_the_hosted_extra_holds_only_what_hosted_needs():

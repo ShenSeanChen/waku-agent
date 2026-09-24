@@ -45,10 +45,6 @@ jobs:
       # version, even after a delete.
       - name: Install
         run: pip install -e '.[dev,hosted]'
-      # test_hosted_and_lab_never_ship_in_the_wheel_or_sdist builds the real
-      # sdist and wheel and looks inside them (task-B1-review.md, B1-F1).
-      - name: Install uv (builds the packaging check's own sdist/wheel)
-        run: pip install uv
       - name: Deterministic evals
         run: python -m pytest -q evals/deterministic
 
