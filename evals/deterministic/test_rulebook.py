@@ -130,11 +130,18 @@ def test_product_and_evals_never_reach_into_examples_or_lab():
     """The dependency runs one way: product code and the gate never import,
     run or read anything in examples/ or lab/ (conventions §6, rules 1 and 3)."""
     this = Path(__file__).resolve()
+    # test_hosted_boundary.py's packaging check builds the real sdist/wheel
+    # and asserts neither ships a top-level directory literally named "lab" --
+    # it names the directory to check a BUILT ARTIFACT's member list, and
+    # never imports, runs or reads anything under lab/ itself. _reaches_outside
+    # cannot tell "the string lab, used as a forbidden-directory name" from
+    # "a path into lab/", so this one file is exempt from that one check.
+    exempt = {(ROOT / "evals" / "deterministic" / "test_hosted_boundary.py").resolve()}
     offenders = sorted({
         str(py.relative_to(ROOT))
         for top in ("waku", "evals")
         for py in (ROOT / top).rglob("*.py")
-        if py.resolve() != this
+        if py.resolve() != this and py.resolve() not in exempt
         for node in ast.walk(ast.parse(py.read_text(encoding="utf-8")))
         if _reaches_outside(node)
     })
@@ -162,7 +169,12 @@ def test_lab_topics_follow_the_playbook():
 def test_lab_never_ships():
     build = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["tool"]["hatch"]["build"]
     assert build["targets"]["wheel"]["packages"] == ["waku"]
-    assert "lab" in build["targets"]["sdist"]["exclude"]
+    # Checks the config says so; this is not proof the artifact agrees -- a
+    # bare "lab" sat here and did not, in fact, keep lab/ out of the sdist
+    # (task-B1-review.md, finding B1-F1). The stronger check builds a real
+    # sdist and wheel and looks inside them:
+    # test_hosted_boundary.py::test_hosted_and_lab_never_ship_in_the_wheel_or_sdist.
+    assert "/lab/**" in build["targets"]["sdist"]["exclude"]
 
 
 def test_no_retired_waku_memory_address():

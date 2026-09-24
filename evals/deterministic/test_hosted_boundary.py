@@ -17,12 +17,12 @@ confirmed on this branch:
   pkgutil.resolve_name("waku.config:Settings")
   runpy.run_module("waku.config")
 
-4 files under scripts/, 72 under evals/, 3 under lab/ and 1 under examples/
+4 files under scripts/, 71 under evals/, 2 under lab/ and 1 under examples/
 import waku, and evals/conftest.py already puts the repo root on sys.path, so
 every one of them is reachable from hosted/. That is the shape group A's route
 guard lost with fourteen times across five rounds before it was inverted.
 
-So the hosted side is inverted. Three layers, each closed:
+So the hosted side is inverted. Three layers:
 
   1. Every import root in hosted/ must be in ALLOWED_IMPORT_ROOTS_IN_HOSTED --
      the standard library, minus the handful of stdlib modules whose job is to
@@ -32,15 +32,40 @@ So the hosted side is inverted. Three layers, each closed:
   2. No dynamic import machinery by name: __import__, exec and eval, which are
      builtins and therefore not import roots at all.
   3. A runtime check: import every module under hosted/ in a fresh interpreter
-     and assert "waku" never appears in sys.modules. This is the only closed
-     set for "however it was spelled, did waku actually get loaded" -- it
-     catches import-time dynamic loading that no AST walk can see.
+     and assert "waku" never appears in THAT interpreter's sys.modules. This
+     catches import-time dynamic loading that no AST walk can see -- a
+     module-scope pkgutil.resolve_name or runpy.run_module call, for one.
+
+  None of the three is a closed set for "however it was spelled, did waku
+  actually get loaded" -- layer 3 only ever inspects one process's
+  sys.modules, at import time. Two escapes are known and stay open on
+  purpose (task-B1-review.md, findings B1-F3 and B1-F4):
+
+    getattr(builtins, "__import__")("waku.config")   # called from INSIDE a
+                                                       # function body: every
+                                                       # module has already
+                                                       # finished importing
+                                                       # cleanly by the time
+                                                       # that function runs
+    subprocess.run([sys.executable, "-c", "import waku.config"])
+                                                       # genuinely loads
+                                                       # waku.config, in a
+                                                       # grandchild process
+                                                       # whose sys.modules
+                                                       # layer 3 never looks
+                                                       # inside
+
+  Both require deliberately routing around a named guard rather than writing
+  an ordinary import, so both are out of scope: this is a tripwire against
+  accidental drift, not a sandbox against an adversary who already has write
+  access to hosted/. Closing them would cost a fourth layer for a threat this
+  guard does not claim to cover.
 
 The waku/ -> hosted/ direction stays a denylist. waku/ imports no repo-root
 package today, hard rule 5 already forbids two of them, and waku/ genuinely
-needs importlib (five call sites in connect.py, ops/dashboard.py and
-ops/commands.py), so the inversion would have to carve exceptions rather than
-close a hole.
+needs importlib (seven call sites across five files: connect.py,
+ops/dashboard.py, ops/commands.py, integrations.py and tools/waku_memory.py),
+so the inversion would have to carve exceptions rather than close a hole.
 
 IT DOES NOT LOOK AT STRING LITERALS, on purpose (tasks.md B1): hosted/ names
 "waku" as an image tag, a container name, a Unix user and a directory, and a
@@ -49,7 +74,10 @@ guard that failed on those would be turned off within a week.
 IT READS *.py ONLY. hosted/deploy/*.sh and hosted/image/*.Dockerfile arrive in
 groups C and F and can run `python -c "import waku..."` with nothing here to
 stop them. That is C and F's problem to carry, and it is written down here so
-neither group discovers it as a surprise.
+neither group discovers it as a surprise. A *.py file does not need to be a
+script or a Dockerfile to do the same thing: the module-scope subprocess
+escape named above is plain Python, under hosted/, and still gets through --
+see the note on layer 3.
 
 The test skips itself when hosted/ is absent, because the sdist ships evals/
 and not hosted/.
@@ -58,9 +86,12 @@ and not hosted/.
 from __future__ import annotations
 
 import ast
+import shutil
 import subprocess
 import sys
+import tarfile
 import tomllib
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -68,6 +99,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 WAKU = ROOT / "waku"
 HOSTED = ROOT / "hosted"
+UV = shutil.which("uv")
 
 pytestmark = pytest.mark.skipif(
     not HOSTED.is_dir(),
@@ -171,12 +203,22 @@ def test_hosted_has_no_dynamic_import_machinery():
 
 
 def test_importing_every_hosted_module_never_loads_waku():
-    """The third layer, and the only one that is closed against spelling.
+    """The third layer: catches spellings layers 1-2 cannot recognise.
 
     Whatever the source says, this imports each module under hosted/ in a
-    fresh interpreter and asks whether waku ended up in sys.modules. An
-    import-time pkgutil.resolve_name, runpy.run_module or __import__ fails
-    here even if it somehow read as legal above.
+    fresh interpreter and asks whether waku ended up in THAT interpreter's
+    sys.modules. An import-time pkgutil.resolve_name, runpy.run_module, or a
+    module-scope getattr(builtins, "__import__")(...) fails here even if it
+    somehow read as legal above.
+
+    It is not a closed set. A module-scope subprocess.run that shells out to
+    `python -c "import waku.config"` loads waku.config for real, in a
+    grandchild process whose sys.modules this loop never inspects; and a
+    getattr(builtins, "__import__")(...) called from inside a function body
+    runs after this loop has already finished importing every module
+    cleanly. Both pass all six tests in this file (task-B1-review.md,
+    findings B1-F3 and B1-F4) -- closing them is out of scope for a guard
+    whose job is to catch accidental drift, not deliberate evasion.
     """
     modules = sorted(
         ".".join(py.relative_to(ROOT).with_suffix("").parts).removesuffix(".__init__")
@@ -191,28 +233,87 @@ def test_importing_every_hosted_module_never_loads_waku():
     result = subprocess.run([sys.executable, "-c", program], cwd=ROOT, check=False,
                             capture_output=True, text=True, timeout=120)
     assert result.returncode == 0, (
-        f"importing hosted/ failed:\n{result.stderr[-2000:]}")
+        f"importing a hosted/ module raised instead of completing:\n{result.stderr[-2000:]}\n"
+        "A nonzero exit here is itself a boundary finding, not an unrelated bug to "
+        "triage: a relative import that walks past hosted/'s own top-level package "
+        '(for example `from ...waku import config`) raises ImportError here rather '
+        "than ever reaching the LEAKED check below. Read the traceback above for "
+        "what the offending import actually named.")
     assert result.stdout.strip() == "LEAKED []", (
         f"importing hosted/ loaded waku: {result.stdout.strip()}\n"
         "Something under hosted/ reaches waku at import time, however it is "
         "spelled. On the VM that call loads the platform's own .env.")
 
 
-def test_hosted_ships_in_neither_the_wheel_nor_the_sdist():
+@pytest.mark.skipif(
+    UV is None, reason="uv not on PATH -- install it to build and inspect the packaged artifacts")
+def test_hosted_and_lab_never_ship_in_the_wheel_or_sdist(tmp_path):
     """The extra is on PyPI; the code is not. A contributor who packages
     hosted/ by accident hands every `pip install waku-agent` a copy of the
-    platform's deployment."""
-    build = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
-    targets = build["tool"]["hatch"]["build"]["targets"]
-    assert targets["wheel"]["packages"] == ["waku"], "the wheel ships waku/ and nothing else"
-    exclude = targets["sdist"]["exclude"]
-    assert "/hosted" in exclude, (
-        'add "/hosted" to the sdist excludes in pyproject.toml')
-    assert "hosted" not in exclude, (
-        'the sdist exclude must be "/hosted", anchored at the repo root: an '
-        'unanchored "hosted" would also drop evals/deterministic/hosted/, '
-        "which has to ship so a run from the sdist can skip it rather than "
-        "fail on a missing directory")
+    platform's deployment.
+
+    An earlier version of this test read pyproject.toml as text and asserted
+    the string "/hosted" was present in the sdist's exclude list. That is a
+    claim about the configuration, not about what `pip install waku-agent`
+    actually receives, and in this repository the two had already come
+    apart: the neighbouring entry "lab", three items earlier in the very
+    same exclude list, did NOT keep lab/ out of the sdist. hatchling merges
+    .gitignore's patterns with pyproject.toml's `exclude` list into one
+    ordered pathspec, and the .gitignore lines that un-ignore two
+    directories' committed board diagrams for lab/ (`!lab/kimi-k3/**/*.excalidraw`,
+    `!lab/pi-agent/**/*.excalidraw` -- the lab/README.md convention of
+    committing screenshots, not board sources) survived a bare "lab" exclude
+    entry: only a pattern naming the directory's CONTENTS ("/lab/**") reliably
+    re-excludes what an earlier negation un-ignored; a bare directory name does
+    not. "/hosted" happened to work because nothing in .gitignore negates a
+    path under hosted/ -- it was correct by neighbourhood, not by anything the
+    old assertions checked (task-B1-review.md, finding B1-F1).
+
+    So: build both real artifacts with `uv build` and look inside them,
+    instead of reading intent off the config that is supposed to produce it.
+    """
+    out = tmp_path / "dist"
+    result = subprocess.run(
+        [UV, "build", "--sdist", "--wheel", "--out-dir", str(out), str(ROOT)],
+        capture_output=True, text=True, timeout=180, check=False)
+    assert result.returncode == 0, f"uv build failed:\n{result.stderr[-4000:]}"
+
+    sdist_path = next(out.glob("*.tar.gz"))
+    wheel_path = next(out.glob("*.whl"))
+
+    with tarfile.open(sdist_path) as tf:
+        sdist_names = tf.getnames()
+    with zipfile.ZipFile(wheel_path) as zf:
+        wheel_names = zf.namelist()
+
+    # The sdist wraps every path in a "<name>-<version>/" prefix; the first
+    # real path component is what a repo-root directory would appear as.
+    sdist_top_dirs = {n.split("/", 2)[1] for n in sdist_names if n.count("/") >= 1}
+    # The wheel has no such prefix -- "waku/..." and "waku_agent-*.dist-info/..."
+    # sit at the top directly.
+    wheel_top_dirs = {n.split("/", 1)[0] for n in wheel_names}
+
+    assert "hosted" not in sdist_top_dirs, (
+        f"the sdist ships a top-level hosted/ directory: "
+        f"{sorted(n for n in sdist_names if '/hosted/' in n)}")
+    assert "lab" not in sdist_top_dirs, (
+        f"the sdist ships a top-level lab/ directory: "
+        f"{sorted(n for n in sdist_names if '/lab/' in n)}")
+    assert "hosted" not in wheel_top_dirs, f"the wheel ships a hosted/ directory: {wheel_top_dirs}"
+    assert "lab" not in wheel_top_dirs, f"the wheel ships a lab/ directory: {wheel_top_dirs}"
+
+    dist_info_dirs = {d for d in wheel_top_dirs if d.endswith(".dist-info")}
+    assert wheel_top_dirs == {"waku"} | dist_info_dirs, (
+        f"the wheel ships more than waku/ and its dist-info: {wheel_top_dirs}")
+
+    # The anchoring must not over-exclude either: evals/deterministic/hosted/
+    # holds only the skip conftest (B2-B4's own tests never land in the
+    # sdist, since hosted/ itself does not), and it has to ship so a test run
+    # from an unpacked sdist skips instead of failing on a missing directory.
+    assert any(n.endswith("evals/deterministic/hosted/conftest.py") for n in sdist_names), (
+        "the sdist must still ship evals/deterministic/hosted/conftest.py -- "
+        'the "/hosted" exclude is anchored at the repo root precisely so it '
+        "does not also drop this file")
 
 
 def test_the_hosted_extra_holds_only_what_hosted_needs():
