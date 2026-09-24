@@ -388,7 +388,7 @@
   /* Waku's reply keeps its card, on the page ground so it reads against
      the paper dock. Your message is the rounded bubble; the card is square. */
   #dock .card{background:var(--surface-bg)}
-  .chatbar{display:flex;gap:var(--space-2);padding:var(--space-3) 0;border-top:1px solid var(--rule);
+  .chatbar{display:flex;align-items:flex-end;gap:var(--space-2);padding:var(--space-3) 0;border-top:1px solid var(--rule);
            background:var(--surface-bg);position:sticky;bottom:0;min-width:0}
   /* the chat side-dock: chat from any tab, watch the harness in main */
   /* The page is never covered, and the chat is always resizable. The dock
@@ -427,9 +427,21 @@
      width — so the input refused to go below that and pushed Send off the edge
      of the dock. The buttons then get flex-shrink:0 so the input absorbs the
      squeeze instead of the controls turning into slivers. */
-  .chatbar input{flex:1;min-width:0;background:transparent;border:var(--rule-width) solid var(--input);border-radius:var(--radius);
+  .chatbar input,.chatbar textarea{flex:1;min-width:0;background:transparent;border:var(--rule-width) solid var(--input);border-radius:var(--radius);
                  padding:var(--space-2) var(--space-3);color:var(--text-ink);font-size:var(--text-sm);outline:none}
-  .chatbar input:focus{border-color:var(--accent)}
+  /* Two textarea defaults to undo. A textarea does NOT inherit the page font -
+     without face-sans the composer renders in the browser's monospace. And it
+     ships with a drag handle, which fights the autogrow. The max-height is five
+     lines; past that it scrolls instead of eating the chat log. */
+  .chatbar textarea{font-family:var(--face-sans);line-height:var(--leading-normal);resize:none;overflow-y:auto;
+                 min-height:calc(var(--text-sm) * var(--leading-normal) + var(--space-2) * 2 + var(--rule-width) * 2);
+                 max-height:calc(var(--text-sm) * var(--leading-normal) * 5 + var(--space-2) * 2)}
+  .chatbar input:focus,.chatbar textarea:focus{border-color:var(--accent)}
+  /* The button pair sits at the bottom of the (growing) composer row, and
+     stretches INTERNALLY so mic and Send always match each other's height -
+     no shared padding to keep in sync, and it self-corrects if either changes. */
+  .chatbar-actions{display:flex;align-items:stretch;gap:var(--space-2);flex-shrink:0;
+                 min-height:calc(var(--text-sm) * var(--leading-normal) + var(--space-2) * 2 + var(--rule-width) * 2)}
   .chatbar button{flex-shrink:0}
   .chatbar button:disabled{cursor:default}
   .stages{display:flex;flex-wrap:wrap;gap:calc(var(--spacing) * 1.5);margin:calc(var(--spacing) * 0.5) 0 var(--spacing)}

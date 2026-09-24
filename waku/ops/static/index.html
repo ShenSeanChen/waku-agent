@@ -67,9 +67,19 @@
   </div>
   <div class="chatlog" id="docklog"></div>
   <div class="chatbar">
-    <input id="dmsg" placeholder="Message Waku&hellip;" autocomplete="off">
-    <button id="mic" class="btn btn-secondary" title="Click to talk — local Whisper, no cloud"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg></button>
-    <button id="dsend" class="btn btn-primary">Send</button>
+    <!-- A <textarea>, not an <input>: an input is a single line by definition,
+         so a long message scrolled out of sight sideways. rows="1" starts it at
+         one line and autogrow() in render.js grows it. No whitespace inside the
+         tags - a textarea's content IS its value, so a newline here would make
+         the box open pre-filled and two rows tall. -->
+    <textarea id="dmsg" rows="1" placeholder="Message Waku&hellip;" autocomplete="off"></textarea>
+    <!-- Grouped so the two buttons stretch to EACH OTHER, not to the composer.
+         #mic carries no vertical padding while .btn gives Send 10px, so left to
+         their natural heights the mic comes out half the size. -->
+    <div class="chatbar-actions">
+      <button id="mic" class="btn btn-secondary" title="Click to talk — local Whisper, no cloud"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg></button>
+      <button id="dsend" class="btn btn-primary">Send</button>
+    </div>
   </div>
 </aside>
 <button id="dock-reopen" class="btn btn-primary" title="Open chat">&lsaquo; Chat</button>

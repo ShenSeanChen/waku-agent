@@ -257,8 +257,11 @@ async function stopMic(){
   let r; try { r = await (await fetch("/api/voice", {method:"POST", body:wav})).json(); }
   catch(e){ r = {error:String(e)}; }
   input.placeholder = hold;
-  if (r.error){ input.value = ""; micHint("voice: " + r.error); return; }
-  if (r.text){ input.value = r.text; input.focus(); }
+  // Both branches set .value from code, and a textarea never resizes itself -
+  // without autogrow a dictated sentence lands in a one-row box, which is the
+  // sideways-scrolling bug all over again, reached through the mic.
+  if (r.error){ input.value = ""; autogrow(input); micHint("voice: " + r.error); return; }
+  if (r.text){ input.value = r.text; autogrow(input); input.focus(); }
 }
 
 // float32 chunks → 16-bit PCM mono WAV blob
