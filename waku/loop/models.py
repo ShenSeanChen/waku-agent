@@ -219,19 +219,17 @@ def _belongs_elsewhere(model: str, provider_name: str) -> bool:
     when the family is one some OTHER provider actually owns, which is the case
     that produces a 400 rather than a surprise.
 
-    A row with claims_families = false (the hosted free tier) is neither an
-    owner in the map below NOR judged by it: it fronts a live catalog behind
-    a single placeholder id, so its own family tells you nothing about what
-    model is actually valid there. Judging it anyway meant a real anthropic
-    owns "claude", so a claude-* WAKU_MODEL under that row was always
-    discarded and replaced by the placeholder/override — no claude-* id from
-    the row's own catalog could ever take effect.
+    A row with claims_families = false (the hosted free tier) is left out of
+    the OWNER map below, because it fronts a live catalog behind a single
+    placeholder id and its own family tells you nothing about what is valid
+    there. It is still JUDGED by the map, and that is deliberate
+    (spec 001, "The free tier is a provider"): a real anthropic owns
+    "claude", so a leftover
+    claude-* WAKU_MODEL under the hosted row is replaced by the row's own
+    model rather than reaching the proxy, where it would meet the allowlist.
     """
     family = model.split("-")[0].lower()
     if "/" in model or not family:
-        return False
-    provider = PROVIDERS.get(provider_name)
-    if provider is not None and not provider.claims_families:
         return False
     owner = {f: name for name, p in PROVIDERS.items()
              if p.claims_families and "/" not in (p.model or "x")

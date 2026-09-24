@@ -223,14 +223,16 @@ def test_a_pin_equal_to_the_placeholder_survives_without_an_override(hosted, mon
     assert catalog.pinned_specs() == [f"{PLATFORM}:claude-sonnet-5"]
 
 
-# --- I4: claims_families = false means the row is skipped entirely, not just
-# excluded from ownership -- a claude-* choice under it must survive. --------
+# --- claims_families = false excludes the row from OWNING a family. It is
+# still judged by the owner map, which is what the spec asks for. ----------
 
-def test_a_claude_model_survives_under_the_platform_row(hosted, monkeypatch):
-    """Regression: anthropic owns the "claude" family, so a claude-* WAKU_MODEL
-    under waku-platform was discarded by _belongs_elsewhere and silently
-    replaced by the override/placeholder -- meaning no claude-* id from the
-    row's own live catalog could ever take effect."""
+def test_a_leftover_claude_model_is_replaced_under_the_platform_row(hosted, monkeypatch):
+    """Spec 001, "The free tier is a provider": while the provider is
+    waku-platform, a claude-* WAKU_MODEL belongs to anthropic under
+    _belongs_elsewhere, so get_client replaces it with the row's own model.
+    That is what keeps a leftover claude-* choice -- the one left in a
+    tenant's .env by a switch to BYOK and back -- from reaching the proxy,
+    where it would meet the allowlist instead."""
     monkeypatch.setenv("WAKU_MODEL", "claude-sonnet-4-6")
     monkeypatch.delenv("WAKU_SMALL_MODEL", raising=False)
 
@@ -240,7 +242,11 @@ def test_a_claude_model_survives_under_the_platform_row(hosted, monkeypatch):
     settings = Settings(provider=PLATFORM, model="claude-sonnet-4-6", small_model="")
     get_client(settings)
 
-    assert settings.model == "claude-sonnet-4-6"
+    assert settings.model == "claude-sonnet-5", (
+        "expected the row's deploy-time override (WAKU_PLATFORM_MODEL), not "
+        f"the leftover claude-* id -- got {settings.model!r}"
+    )
+
 
 
 # --- I5: offline coverage for the remaining consumers this task changed. ----
