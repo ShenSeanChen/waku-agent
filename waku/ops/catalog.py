@@ -37,9 +37,15 @@ def _known_default_ids(prov, out: dict, is_active: bool) -> list[dict]:
     """Best-effort model list when the live catalog is unreachable: the provider's
     flagship + fast + loop/gate defaults — so the showcase model (e.g. opus-4.8)
     is offered too, not just the two loop defaults — plus the active model when
-    this is the active provider."""
-    model, small_model = prov.models_now() if prov else ("", "")
-    ids = [*(prov.default_pair() if prov else []), model, small_model]
+    this is the active provider.
+
+    default_pair() already resolves through models_now(), so it alone carries
+    the loop/gate defaults AND any live override (flagship/fast fall back to
+    the overridden model/small_model, not the raw TOML fields) — appending a
+    second, un-overridden model/small_model pair here would put a stale
+    placeholder id ahead of the real one in the deduped list.
+    """
+    ids = list(prov.default_pair()) if prov else []
     if is_active:
         ids = [out.get("model"), out.get("small_model"), *ids]
     return [{"id": m} for m in dict.fromkeys(m for m in ids if m)]
@@ -198,18 +204,28 @@ def default_pinned_specs() -> list[str]:
 
 
 def _stale_platform_pin(spec: str) -> bool:
-    """True when a saved pin names a model_env/small_model_env-backed
-    provider's model that no longer matches the current override -- e.g. a
-    platform operator changed WAKU_PLATFORM_MODEL after a user pinned the old
-    id. Opt-in: only a row that sets one of those two fields is ever checked,
-    so an ordinary provider's pins are never touched."""
-    from waku.loop.models import PROVIDERS
+    """True only when a saved pin equals this row's TOML placeholder model or
+    small_model AND that placeholder is no longer what an operator's
+    model_env/small_model_env override actually resolves to -- e.g. someone
+    pinned the placeholder before WAKU_PLATFORM_MODEL was set, or before it
+    moved on to a newer id.
+
+    Deliberately narrow: this row also gets a live catalog
+    (catalog_from_base_url), so a tenant can pin whatever the proxy actually
+    serves. Only the placeholder can ever be provably wrong -- anything else
+    pinned is left alone, or this filter would fight the live catalog on
+    every read for no reason the spec asks for.
+    """
+    from waku.loop.models import PROVIDERS, REGISTRY
 
     name, _, model = spec.partition(":")
     prov = PROVIDERS.get(name)
-    if not prov or not (prov.model_env or prov.small_model_env):
+    if not prov or not model or not (prov.model_env or prov.small_model_env):
         return False
-    return bool(model) and model not in prov.models_now()
+    row = REGISTRY.get(name, {})
+    if model not in (row.get("model", ""), row.get("small_model", "")):
+        return False   # not a placeholder id at all -- a real catalog pin
+    return model not in prov.models_now()
 
 
 def pinned_specs() -> list[str]:

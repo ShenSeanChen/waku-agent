@@ -26,8 +26,13 @@ def fake_keys(monkeypatch):
     # waku-platform is hidden_unless_env — give it an endpoint so the
     # per-provider parametrized cases below can build it like any other row.
     # (Its own visibility/scoping contract is covered in
-    # test_platform_provider.py.)
+    # test_platform_provider.py.) Also clear its model overrides: on a machine
+    # where WAKU_PLATFORM_MODEL happens to be set, test_get_client_builds_the_
+    # right_wire's `settings.model == provider.model` would fail for exactly
+    # the reason models_now() exists — the override IS meant to win there.
     monkeypatch.setenv("WAKU_PLATFORM_BASE_URL", "http://platform.test")
+    monkeypatch.delenv("WAKU_PLATFORM_MODEL", raising=False)
+    monkeypatch.delenv("WAKU_PLATFORM_SMALL_MODEL", raising=False)
 
 
 @pytest.mark.parametrize("name", list(PROVIDERS))

@@ -93,8 +93,16 @@ class Provider:
         return bool(os.getenv(self.base_url_env, "").strip()) if self.base_url_env else False
 
     def default_pair(self) -> list[str]:
-        """[flagship, fast], deduped — the switcher's default picks."""
-        pair = [self.flagship or self.model, self.fast or self.small_model]
+        """[flagship, fast], deduped — the switcher's default picks.
+
+        Falls back to models_now(), not the raw model/small_model fields, so
+        a row with a model_env/small_model_env override (the hosted free
+        tier) never hands out its TOML placeholder here — every reader of
+        this pair (default_pinned_specs, _known_default_ids) would otherwise
+        pin an id the container will never actually call.
+        """
+        model, small_model = self.models_now()
+        pair = [self.flagship or model, self.fast or small_model]
         return list(dict.fromkeys(m for m in pair if m))
 
     def configured_base_url(self) -> str | None:
@@ -210,9 +218,20 @@ def _belongs_elsewhere(model: str, provider_name: str) -> bool:
     added since — and silently downgrade a deliberate choice. This only fires
     when the family is one some OTHER provider actually owns, which is the case
     that produces a 400 rather than a surprise.
+
+    A row with claims_families = false (the hosted free tier) is neither an
+    owner in the map below NOR judged by it: it fronts a live catalog behind
+    a single placeholder id, so its own family tells you nothing about what
+    model is actually valid there. Judging it anyway meant a real anthropic
+    owns "claude", so a claude-* WAKU_MODEL under that row was always
+    discarded and replaced by the placeholder/override — no claude-* id from
+    the row's own catalog could ever take effect.
     """
     family = model.split("-")[0].lower()
     if "/" in model or not family:
+        return False
+    provider = PROVIDERS.get(provider_name)
+    if provider is not None and not provider.claims_families:
         return False
     owner = {f: name for name, p in PROVIDERS.items()
              if p.claims_families and "/" not in (p.model or "x")

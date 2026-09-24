@@ -263,8 +263,11 @@ def _integration_from_provider(name: str, provider: Provider) -> Integration:
                             default=provider.base_url or "",
                             options=tuple(endpoint.base_url for endpoint in provider.endpoints),
                             option_labels=tuple(endpoint.label for endpoint in provider.endpoints)),)
-    return Integration(name, "AI Providers", name.replace("_", " ").title(),
-                       f"Uses {name.replace('_', ' ').title()} models.",
+    # label_text() falls back to the title-cased row name, so this changes
+    # nothing for a row that never sets `label` -- only waku-platform does.
+    label = provider.label_text(name)
+    return Integration(name, "AI Providers", label,
+                       f"Uses {label} models.",
                        fields, None, None, "",
                        ReloadMode.AGENT, lambda env, key=provider.key_env: bool(env.get(key)), _provider_probe)
 

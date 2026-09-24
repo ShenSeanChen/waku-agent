@@ -15,16 +15,20 @@ ENV = ("WAKU_PLATFORM_BASE_URL", "WAKU_PLATFORM_TOKEN",
 
 
 @pytest.fixture
-def local(monkeypatch):
-    """A local user's machine: no platform variable set anywhere."""
+def local(tmp_path, monkeypatch):
+    """A local user's machine: no platform variable set anywhere, and no real
+    .waku directory in reach — several tests below read/write models.json and
+    connections_health.json, and must never touch the developer's own home."""
+    monkeypatch.setenv("WAKU_HOME", str(tmp_path))
     for name in ENV:
         monkeypatch.delenv(name, raising=False)
     return monkeypatch
 
 
 @pytest.fixture
-def hosted(monkeypatch):
+def hosted(tmp_path, monkeypatch):
     """A tenant container: every platform variable set."""
+    monkeypatch.setenv("WAKU_HOME", str(tmp_path))
     monkeypatch.setenv("WAKU_PLATFORM_BASE_URL", "http://proxy.local:8080")
     monkeypatch.setenv("WAKU_PLATFORM_TOKEN", "tenant-token-abc")
     monkeypatch.setenv("WAKU_PLATFORM_MODEL", "claude-sonnet-5")
@@ -65,6 +69,33 @@ def test_an_ordinary_row_is_unaffected(local):
     anthropic = PROVIDERS["anthropic"]
     assert anthropic.is_visible() is True
     assert anthropic.models_now() == (anthropic.model, anthropic.small_model)
+
+
+# --- C1: the override must reach every reader the spec names, not just get_client --
+
+def test_default_pair_uses_the_override_not_the_placeholder(hosted):
+    """default_pair() feeds default_pinned_specs() and _known_default_ids().
+    Regression: it used to fall back to the raw model/small_model TOML fields,
+    so it handed out the placeholder even with an override active — the exact
+    pin _stale_platform_pin would then delete on the very next read."""
+    hosted.setenv("WAKU_PLATFORM_MODEL", "claude-opus-5")
+    hosted.setenv("WAKU_PLATFORM_SMALL_MODEL", "claude-haiku-9")
+
+    assert PROVIDERS[PLATFORM].default_pair() == ["claude-opus-5", "claude-haiku-9"]
+
+
+def test_default_pinned_specs_pins_the_override_not_the_placeholder(hosted):
+    hosted.setenv("WAKU_PLATFORM_MODEL", "claude-opus-5")
+    hosted.setenv("WAKU_PLATFORM_SMALL_MODEL", "claude-haiku-9")
+
+    from waku.ops import catalog
+
+    specs = catalog.default_pinned_specs()
+    platform_specs = [s for s in specs if s.startswith(f"{PLATFORM}:")]
+    assert platform_specs == [f"{PLATFORM}:claude-opus-5", f"{PLATFORM}:claude-haiku-9"]
+    # the pins this function just generated must not be the ones the stale
+    # filter deletes on the next read — that was the C1 contradiction.
+    assert not any(catalog._stale_platform_pin(s) for s in platform_specs)
 
 
 def test_it_appears_in_no_local_list(local):
@@ -137,10 +168,9 @@ def test_scoped_credentials_ignore_a_leftover_custom_key(hosted, monkeypatch):
     def fake_urlopen(req, timeout=10):
         captured["url"] = req.full_url
         captured["headers"] = {k.lower(): v for k, v in req.header_items()}
-        body = io.BytesIO(json.dumps({"data": []}).encode())
-        body.__enter__ = lambda *a: body
-        body.__exit__ = lambda *a: None
-        return body
+        # io.BytesIO already implements __enter__/__exit__ on the type, so it
+        # works directly as the `with` target urlopen callers expect.
+        return io.BytesIO(json.dumps({"data": []}).encode())
 
     monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
     catalog._models_cache.clear()
@@ -152,15 +182,123 @@ def test_scoped_credentials_ignore_a_leftover_custom_key(hosted, monkeypatch):
     assert captured["headers"]["x-api-key"] == "tenant-token-abc"
 
 
-def test_a_stale_pin_is_dropped_when_the_override_moves(hosted, tmp_path, monkeypatch):
-    """A pin saved under an earlier WAKU_PLATFORM_MODEL must not survive a
-    platform-side model change -- the switcher must never offer a model id
-    that the container will no longer actually call."""
-    monkeypatch.setenv("WAKU_HOME", str(tmp_path))
+# --- I2/I3: the stale-pin filter must bite on a real move, and only on the
+# placeholder id -- never on a real id the row's own live catalog offers. ----
+
+def test_a_stale_pin_is_dropped_when_the_override_moves(hosted):
+    """A pin saved under an earlier state (no override, or a superseded one)
+    must not survive a platform-side model change. Deliberately uses an
+    override value that DIFFERS from the TOML placeholder -- the `hosted`
+    fixture's own WAKU_PLATFORM_MODEL equals the placeholder, which is why the
+    first draft of this test could not fail (I2): a no-op filter
+    (`return bool(prov.model_env)`, which deletes every platform pin) also
+    passed it."""
+    hosted.setenv("WAKU_PLATFORM_MODEL", "claude-opus-5")   # a genuine move
 
     from waku.ops import catalog
 
-    catalog.save_pinned([f"{PLATFORM}:claude-old-id", "anthropic:claude-sonnet-5"])
+    catalog.save_pinned([
+        f"{PLATFORM}:claude-sonnet-5",     # the placeholder -- now stale
+        f"{PLATFORM}:claude-opus-5",       # the live override -- must survive
+        f"{PLATFORM}:claude-sonnet-4-6",   # a real id from the live catalog (I3) -- must survive
+        "anthropic:claude-sonnet-5",       # an ordinary row's pin -- untouched
+    ])
     specs = catalog.pinned_specs()
-    assert f"{PLATFORM}:claude-old-id" not in specs
+
+    assert f"{PLATFORM}:claude-sonnet-5" not in specs
+    assert f"{PLATFORM}:claude-opus-5" in specs
+    assert f"{PLATFORM}:claude-sonnet-4-6" in specs
     assert "anthropic:claude-sonnet-5" in specs
+
+
+def test_a_pin_equal_to_the_placeholder_survives_without_an_override(hosted, monkeypatch):
+    """No override set (WAKU_PLATFORM_MODEL unset) -> the placeholder IS the
+    current model, so a pin naming it is not stale."""
+    monkeypatch.delenv("WAKU_PLATFORM_MODEL", raising=False)
+    monkeypatch.delenv("WAKU_PLATFORM_SMALL_MODEL", raising=False)
+
+    from waku.ops import catalog
+
+    catalog.save_pinned([f"{PLATFORM}:claude-sonnet-5"])
+    assert catalog.pinned_specs() == [f"{PLATFORM}:claude-sonnet-5"]
+
+
+# --- I4: claims_families = false means the row is skipped entirely, not just
+# excluded from ownership -- a claude-* choice under it must survive. --------
+
+def test_a_claude_model_survives_under_the_platform_row(hosted, monkeypatch):
+    """Regression: anthropic owns the "claude" family, so a claude-* WAKU_MODEL
+    under waku-platform was discarded by _belongs_elsewhere and silently
+    replaced by the override/placeholder -- meaning no claude-* id from the
+    row's own live catalog could ever take effect."""
+    monkeypatch.setenv("WAKU_MODEL", "claude-sonnet-4-6")
+    monkeypatch.delenv("WAKU_SMALL_MODEL", raising=False)
+
+    from waku.config import Settings
+    from waku.loop.models import get_client
+
+    settings = Settings(provider=PLATFORM, model="claude-sonnet-4-6", small_model="")
+    get_client(settings)
+
+    assert settings.model == "claude-sonnet-4-6"
+
+
+# --- I5: offline coverage for the remaining consumers this task changed. ----
+
+def test_no_key_message_omits_the_hidden_row(local, monkeypatch):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+
+    from waku.config import Settings
+    from waku.loop.models import get_client
+
+    with pytest.raises(SystemExit) as exc:
+        get_client(Settings(provider="anthropic", model="", small_model="", api_key=""))
+    assert PLATFORM not in str(exc.value)
+
+
+def test_unknown_provider_error_omits_the_hidden_row(local):
+    """test_providers.py's fixture sets WAKU_PLATFORM_BASE_URL globally, which
+    would make the row visible here too -- this test controls the variable
+    itself (via `local`) rather than relying on that other file's state."""
+    from waku.config import Settings
+    from waku.loop.models import get_client
+
+    with pytest.raises(SystemExit) as exc:
+        get_client(Settings(provider="not-a-provider", model="", small_model="", api_key=""))
+    assert PLATFORM not in str(exc.value)
+
+
+def test_settings_info_masks_scoped_credentials(hosted, monkeypatch):
+    """A leftover WAKU_API_KEY/WAKU_BASE_URL from an earlier BYOK save must
+    not read back through settings_info as if it belonged to the scoped
+    platform row -- the same rule get_client and catalog.list_models follow."""
+    monkeypatch.setenv("WAKU_PROVIDER", PLATFORM)
+    monkeypatch.setenv("WAKU_API_KEY", "leftover-custom-key")
+    monkeypatch.setenv("WAKU_BASE_URL", "https://api.anthropic.com")
+
+    from waku.ops.settings_api import settings_info
+
+    info = settings_info()
+    assert info["base_url"] == ""
+    assert info["custom_key_set"] is False
+
+
+def test_default_pinned_specs_skips_the_hidden_row_even_with_a_key(local, monkeypatch):
+    """A key alone (no base_url) must not be enough to surface the hidden row
+    in the starter shortlist -- is_visible() gates it, not just key_env."""
+    monkeypatch.setenv("WAKU_PLATFORM_TOKEN", "tenant-token-abc")   # key set...
+    monkeypatch.delenv("WAKU_PLATFORM_BASE_URL", raising=False)     # ...but not visible
+
+    from waku.ops.catalog import default_pinned_specs
+
+    specs = default_pinned_specs()
+    assert not any(s.startswith(f"{PLATFORM}:") for s in specs)
+
+
+# --- M6: label_text() must actually reach the UI-facing integration title. --
+
+def test_label_text_is_wired_into_the_integration_title(hosted):
+    from waku.integrations import provider_integrations
+
+    row = next(i for i in provider_integrations() if i.key == PLATFORM)
+    assert row.name == "Hosted free tier"
