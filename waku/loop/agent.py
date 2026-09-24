@@ -74,8 +74,14 @@ def run_loop(
                     for delta in s.text_stream:
                         notify("text", {"delta": delta})
                     response = s.get_final_message()
-            except Exception:
-                response = None  # any streaming hiccup → fall back to one call
+            except Exception as exc:
+                # A 4xx is a decision, not a transport fault: the provider
+                # looked at the request and refused it. Retrying without
+                # streaming asks the same question and gets the same answer,
+                # which doubles what a metered tenant spends on being told no.
+                if 400 <= getattr(exc, "status_code", 0) < 500:
+                    raise
+                response = None  # any other streaming hiccup → fall back to one call
         if response is None:
             response = client.messages.create(
                 model=model,

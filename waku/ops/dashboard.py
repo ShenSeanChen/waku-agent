@@ -61,6 +61,19 @@ PORT = 7777
 STATIC = Path(__file__).resolve().parent / "static"
 
 
+def error_text(exc: BaseException) -> str:
+    """What the user reads when a call fails.
+
+    A provider that refused the call already wrote a sentence for a human;
+    show that one. Anything else keeps today's {type}: {message}, which is
+    the right amount of detail for a bug rather than a decision.
+    """
+    message = getattr(exc, "message", "")
+    if message and getattr(exc, "status_code", 0):
+        return str(message)
+    return f"{type(exc).__name__}: {exc}"
+
+
 def chat(message: str) -> dict:
     """One turn, one JSON result — the non-streaming door to the same room.
 
@@ -169,7 +182,7 @@ def graph_stream(payload: dict, emit) -> None:
     except Exception as exc:
         # Includes GraphStateCollision, which run_graph raises OUT (unlike node
         # errors) — better shown in the card than dropped on the floor.
-        emit("done", {"error": f"{type(exc).__name__}: {exc}"})
+        emit("done", {"error": error_text(exc)})
 
 
 def _run_command(command: tuple[str, str], emit) -> None:
@@ -1037,7 +1050,7 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 chat_stream(message, emit)
             except Exception as exc:  # surface as a terminal event, don't 500
-                emit("done", {"error": f"{type(exc).__name__}: {exc}"})
+                emit("done", {"error": error_text(exc)})
             return
         # /api/compare/stream races several models, emitting each result as it lands.
         if self.path == "/api/compare/stream":
