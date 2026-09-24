@@ -138,11 +138,16 @@ dev = [
     # test_hosted_and_lab_never_ship_in_the_wheel_or_sdist can ask hatchling
     # which files a build would include without running one (offline, no
     # `uv` needed — task-B1-review.md, finding B1-F11).
-    "hatchling",
+    # Pinned EXACTLY, same reasoning as ruff above: that test calls
+    # recurse_included_files, an internal, undocumented API, not part of
+    # hatchling's stable surface. An unpinned floor lets a routine hatchling
+    # release turn CI red with zero code change here. Re-verify the
+    # enumeration still matches a real build before bumping this pin.
+    "hatchling==1.32.4",
 ]
 
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling==1.32.4"]
 build-backend = "hatchling.build"
 
 # An sdist should be what you need to BUILD and TEST waku — source, bundled

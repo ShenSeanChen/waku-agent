@@ -6167,7 +6167,7 @@ requires-dist = [
     { name = "google-auth", marker = "extra == 'gcal'", specifier = ">=2.0" },
     { name = "google-auth-httplib2", marker = "extra == 'gcal'", specifier = ">=0.2" },
     { name = "google-auth-oauthlib", marker = "extra == 'gcal'", specifier = ">=1.0" },
-    { name = "hatchling", marker = "extra == 'dev'" },
+    { name = "hatchling", marker = "extra == 'dev'", specifier = "==1.32.4" },
     { name = "httplib2", marker = "extra == 'gcal'", specifier = ">=0.22" },
     { name = "httpx", marker = "extra == 'whatsapp'", specifier = ">=0.25" },
     { name = "kokoro", marker = "extra == 'voice-neural'", specifier = ">=0.9" },

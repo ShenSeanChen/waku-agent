@@ -245,10 +245,14 @@ def test_importing_every_hosted_module_never_loads_waku():
         "spelled. On the VM that call loads the platform's own .env.")
 
 
-# The one path allowed to carry "hosted" as a path component: the skip
-# conftest B2-B4's own hosted evals inherit. It must ship so a test run from
-# an unpacked sdist skips instead of failing on a missing directory.
-_ALLOWED_HOSTED_PATH = "evals/deterministic/hosted/conftest.py"
+# The directory allowed to carry "hosted" as a path component: the sdist
+# excludes "/hosted", anchored at the repo root, not "evals/" -- so
+# evals/deterministic/hosted/ ships legitimately. It holds the skip conftest
+# today and, from B2 on, the real tests for hosted/'s own logic. A single
+# filename here would report B2's first test file as a leak and stop the
+# next task cold (task-B1-review.md, finding B1-F12).
+_ALLOWED_HOSTED_PREFIX = "evals/deterministic/hosted/"
+_HOSTED_CONFTEST = _ALLOWED_HOSTED_PREFIX + "conftest.py"
 
 
 def _distribution_paths(builder_cls: type) -> list[str]:
@@ -301,7 +305,10 @@ def test_hosted_and_lab_never_ship_in_the_wheel_or_sdist():
     wheel_paths = _distribution_paths(WheelBuilder)
 
     def _leaks(paths: list[str], name: str) -> list[str]:
-        return sorted(p for p in paths if name in p.split("/") and p != _ALLOWED_HOSTED_PATH)
+        allowed_prefix = _ALLOWED_HOSTED_PREFIX if name == "hosted" else None
+        return sorted(p for p in paths
+                      if name in p.split("/")
+                      and not (allowed_prefix and p.startswith(allowed_prefix)))
 
     offenders = {
         f"{archive} ships {name}/": leak
@@ -317,13 +324,14 @@ def test_hosted_and_lab_never_ship_in_the_wheel_or_sdist():
         "unanchored exclude did.")
 
     # The anchoring must not over-exclude either: evals/deterministic/hosted/
-    # holds only the skip conftest (B2-B4's own tests never land in the
-    # sdist, since hosted/ itself does not), and it has to ship so a test run
-    # from an unpacked sdist skips instead of failing on a missing directory.
-    assert _ALLOWED_HOSTED_PATH in sdist_paths, (
-        f"the sdist must still ship {_ALLOWED_HOSTED_PATH} -- "
+    # legitimately ships -- the sdist excludes "/hosted", not "evals/" -- and
+    # it has to, so a test run from an unpacked sdist skips (today's skip
+    # conftest, and B2 on the real hosted/ tests it will hold) instead of
+    # failing on a missing directory.
+    assert _HOSTED_CONFTEST in sdist_paths, (
+        f"the sdist must still ship {_HOSTED_CONFTEST} -- "
         'the "/hosted" exclude is anchored at the repo root precisely so it '
-        "does not also drop this file")
+        "does not also drop evals/deterministic/hosted/")
 
     # A build member outside waku/ at all -- not just one named hosted/ or
     # lab/ -- is worth catching too, since the wheel ships nothing else.
