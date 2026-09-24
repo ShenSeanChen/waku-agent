@@ -23,6 +23,11 @@ def fake_keys(monkeypatch):
     # a stray custom-endpoint override must not leak into these checks
     monkeypatch.delenv("WAKU_API_KEY", raising=False)
     monkeypatch.delenv("WAKU_BASE_URL", raising=False)
+    # waku-platform is hidden_unless_env — give it an endpoint so the
+    # per-provider parametrized cases below can build it like any other row.
+    # (Its own visibility/scoping contract is covered in
+    # test_platform_provider.py.)
+    monkeypatch.setenv("WAKU_PLATFORM_BASE_URL", "http://platform.test")
 
 
 @pytest.mark.parametrize("name", list(PROVIDERS))
@@ -61,10 +66,13 @@ def test_dashboard_pricing_covers_every_provider(name):
 
 @pytest.mark.parametrize("name", [n for n, p in PROVIDERS.items()
                                   if p.catalog_url is None
+                                  and not p.catalog_from_base_url
                                   and (p.kind == "anthropic" or not p.base_url)])
 def test_model_listing_falls_back_without_a_catalog(name, monkeypatch):
     """Providers with no listable catalog still give the picker their defaults
-    (and never make a network call to get them)."""
+    (and never make a network call to get them). waku-platform is excluded:
+    catalog_from_base_url means it DOES have a listing endpoint (the proxy),
+    covered instead by test_platform_provider.py's own listing test."""
     from waku.ops import catalog
 
     monkeypatch.setenv("WAKU_PROVIDER", name)

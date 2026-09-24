@@ -25,7 +25,11 @@ def test_registry_contract():
     items = integrations.registry()
     assert len(items) == 24
     assert len({item.key for item in items}) == len(items)
-    assert {item.key for item in items if item.group == "AI Providers"} == set(PROVIDERS)
+    # waku-platform is hidden_unless_env: on this machine (no
+    # WAKU_PLATFORM_BASE_URL set) it must never appear in the registry — see
+    # test_platform_provider.py for the row's own visibility contract.
+    visible_providers = {name for name, p in PROVIDERS.items() if p.is_visible()}
+    assert {item.key for item in items if item.group == "AI Providers"} == visible_providers
     for item in items:
         assert callable(item.enabled)
         for field in item.env:
