@@ -31,6 +31,24 @@ LoopEvent = dict[str, Any]
 Observer = Callable[[str, LoopEvent], None]
 
 
+def error_text(exc: BaseException) -> str:
+    """What the user reads when a call fails.
+
+    A provider that refused the call already wrote a sentence for a human;
+    show that one. Anything else keeps today's {type}: {message}, which is
+    the right amount of detail for a bug rather than a decision.
+
+    It lives here, beside the 4xx rule above, because a refusal reaches a
+    reader by two routes — the gateway's "done" event and a graph node's
+    entry in a run's `errors` map — and two copies of this would drift the
+    way the dashboard's two chat implementations once did.
+    """
+    message = getattr(exc, "message", "")
+    if message and getattr(exc, "status_code", 0):
+        return str(message)
+    return f"{type(exc).__name__}: {exc}"
+
+
 @dataclass
 class LoopResult:
     reply: str

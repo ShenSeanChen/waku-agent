@@ -40,6 +40,7 @@ from waku.integrations import (
     list_providers,
     test_integration,
 )
+from waku.loop.agent import error_text
 from waku.ops import browser_agent, commands, compare_history
 from waku.ops.arena import (
     compare_clear,
@@ -59,19 +60,6 @@ PORT = 7777
 # served as-is by this stdlib server — no build step, no framework. Edit those
 # to change the UI; edit this file to change the server/API.
 STATIC = Path(__file__).resolve().parent / "static"
-
-
-def error_text(exc: BaseException) -> str:
-    """What the user reads when a call fails.
-
-    A provider that refused the call already wrote a sentence for a human;
-    show that one. Anything else keeps today's {type}: {message}, which is
-    the right amount of detail for a bug rather than a decision.
-    """
-    message = getattr(exc, "message", "")
-    if message and getattr(exc, "status_code", 0):
-        return str(message)
-    return f"{type(exc).__name__}: {exc}"
 
 
 def chat(message: str) -> dict:
