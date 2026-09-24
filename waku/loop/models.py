@@ -60,6 +60,37 @@ class Provider:
     # override for backwards compatibility, but must not leak across providers.
     base_url_env: str = ""
     endpoints: tuple[ProviderEndpoint, ...] = ()
+    # Seven opt-in fields, used only by the hosted free-tier row. Each
+    # defaults to the behaviour every other row already has.
+    label: str = ""
+    hidden_unless_env: bool = False
+    claims_families: bool = True
+    catalog_from_base_url: bool = False
+    model_env: str = ""
+    small_model_env: str = ""
+    scoped_credentials: bool = False
+
+    def label_text(self, name: str) -> str:
+        """What the UI calls this row."""
+        return self.label or name.replace("_", " ").title()
+
+    def models_now(self) -> tuple[str, str]:
+        """(model, small_model) with the environment overrides applied.
+
+        Read at call time, never at import: PROVIDERS is built once when the
+        module loads, and a tenant container sets these after that. Every
+        reader of a row's models goes through here so none can miss it.
+        """
+        model = os.getenv(self.model_env, "").strip() if self.model_env else ""
+        small = os.getenv(self.small_model_env, "").strip() if self.small_model_env else ""
+        return (model or self.model, small or self.small_model)
+
+    def is_visible(self) -> bool:
+        """False while a hidden row's endpoint is unset -- a local user must
+        never see the hosted row in a page, a list or an error message."""
+        if not self.hidden_unless_env:
+            return True
+        return bool(os.getenv(self.base_url_env, "").strip()) if self.base_url_env else False
 
     def default_pair(self) -> list[str]:
         """[flagship, fast], deduped — the switcher's default picks."""
@@ -103,6 +134,13 @@ def _provider(row: dict) -> Provider:
         base_url_env=row.get("base_url_env", ""),
         endpoints=tuple(ProviderEndpoint(e["label"], e["base_url"], e.get("catalog_url"))
                         for e in row.get("endpoints", ())),
+        label=row.get("label", ""),
+        hidden_unless_env=row.get("hidden_unless_env", False),
+        claims_families=row.get("claims_families", True),
+        catalog_from_base_url=row.get("catalog_from_base_url", False),
+        model_env=row.get("model_env", ""),
+        small_model_env=row.get("small_model_env", ""),
+        scoped_credentials=row.get("scoped_credentials", False),
     )
 
 

@@ -29,6 +29,20 @@
 #                UI; a live catalog overrides it per model where one exists.
 #   endpoints    official regional alternatives, offered in the Models dialog.
 #
+# Seven more fields exist, all opt-in and used only by the hosted free-tier row
+# below -- setting none of them is what every other row already does:
+#   label                 what the UI calls the row, instead of its table name
+#   hidden_unless_env     invisible everywhere (pages, lists, error messages,
+#                         .env.example) until base_url_env is set
+#   claims_families       false stops the row's placeholder model claiming its
+#                         family (e.g. "claude") away from the real owner
+#   catalog_from_base_url list models from {base_url}/v1/models even on the
+#                         anthropic wire
+#   model_env             env var that overrides `model` at call time
+#   small_model_env       env var that overrides `small_model` at call time
+#   scoped_credentials    ignore WAKU_API_KEY / WAKU_BASE_URL; use only this
+#                         row's own key_env / base_url_env
+#
 # Model ids age. When one 404s, fix the row -- every past race and spend figure
 # is derived at read time, so a correction here fixes history too.
 
@@ -204,3 +218,26 @@ model = "deepseek-v4-flash"
 small_model = "deepseek-v4-flash"
 key_url = "https://opencode.ai/zen"
 price = [0.435, 0.87]
+
+# The hosted free tier. Hidden on a local machine: with no
+# WAKU_PLATFORM_BASE_URL set it appears in no page, list or error message,
+# and never in .env.example. In a tenant container the four WAKU_PLATFORM_*
+# variables point it at the metering proxy, which holds the real key -- the
+# container never sees one. `model` and `small_model` are placeholders that
+# WAKU_PLATFORM_MODEL and WAKU_PLATFORM_SMALL_MODEL replace at call time;
+# they exist because test_providers_registry.py requires them.
+[waku-platform]
+kind = "anthropic"
+key_env = "WAKU_PLATFORM_TOKEN"
+base_url_env = "WAKU_PLATFORM_BASE_URL"
+model = "claude-sonnet-5"
+small_model = "claude-haiku-4-5-20251001"
+model_env = "WAKU_PLATFORM_MODEL"
+small_model_env = "WAKU_PLATFORM_SMALL_MODEL"
+label = "Hosted free tier"
+hidden_unless_env = true
+claims_families = false
+catalog_from_base_url = true
+scoped_credentials = true
+key_url = "https://github.com/ShenSeanChen/waku-agent"
+price = [3.0, 15.0]
