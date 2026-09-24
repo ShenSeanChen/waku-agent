@@ -237,6 +237,42 @@ def _belongs_elsewhere(model: str, provider_name: str) -> bool:
     return bool(owner) and owner != provider_name
 
 
+def models_for(provider_name: str, model: str = "", small_model: str = "") -> tuple[str, str]:
+    """The model ids a turn against `provider_name` will ACTUALLY run.
+
+    One answer from one place. get_client builds its client with these, and
+    settings_info/list_models report them, so the Models page can never name a
+    model the next turn will not use — which is what spec 001 asks of the two
+    readers ("report the model get_client will actually use, not the one in
+    .env"). They drifted apart once already: the hosted row resolved a leftover
+    claude-* to the deploy-time override in get_client while both readers still
+    showed the leftover.
+
+    A model name belongs to the provider it was configured FOR. WAKU_MODEL and
+    WAKU_SMALL_MODEL are global, so code that switches provider — the arena
+    races ten of them — carried anthropic's gate model to xAI, which answers
+    `400 Model not found: claude-haiku-4-5-20251001`. The retrieval gate then
+    FAILS OPEN by design, so it retrieved on every single turn for every
+    non-anthropic model instead of deciding, and reported that as a normal
+    "retrieve". A silent permanent failure wearing the costume of a healthy
+    decision.
+
+    So: a value INHERITED from the env for a different provider is dropped and
+    the provider's own default fills in; a value the caller passed explicitly
+    is kept, because that is a choice, not a leak. The two are distinguishable
+    exactly when the value still equals the env string.
+    """
+    provider = PROVIDERS.get(provider_name)
+    resolved: list[str] = []
+    for attr, value in (("model", model), ("small_model", small_model)):
+        inherited = os.getenv(f"WAKU_{attr.upper()}", "").strip()
+        if inherited and value == inherited and _belongs_elsewhere(inherited, provider_name):
+            value = ""
+        resolved.append(value)
+    default_model, default_small_model = provider.models_now() if provider else ("", "")
+    return resolved[0] or default_model, resolved[1] or default_small_model
+
+
 def get_client(settings: Settings):
     """Build the client for settings.provider and fill in default model ids.
     Returns anything with .messages.create(...) in the Anthropic shape."""
@@ -271,28 +307,11 @@ def get_client(settings: Settings):
             f"or arrow from a bad paste). Re-paste the key with no spaces or line breaks."
         )
 
-    # A model name belongs to the provider it was configured FOR. WAKU_MODEL and
-    # WAKU_SMALL_MODEL are global, so code that switches provider — the arena
-    # races ten of them — carried anthropic's gate model to xAI, which answers
-    # `400 Model not found: claude-haiku-4-5-20251001`. The retrieval gate then
-    # FAILS OPEN by design, so it retrieved on every single turn for every
-    # non-anthropic model instead of deciding, and reported that as a normal
-    # "retrieve". A silent permanent failure wearing the costume of a healthy
-    # decision.
-    #
-    # So: a value INHERITED from the env for a different provider is dropped
-    # (the provider's own default fills in below); a value the caller passed
-    # explicitly is kept, because that is a choice, not a leak. The two are
-    # distinguishable exactly when the setting still equals the env string.
-    for attr in ("model", "small_model"):
-        inherited = os.getenv(f"WAKU_{attr.upper()}", "").strip()
-        if inherited and getattr(settings, attr) == inherited \
-                and _belongs_elsewhere(inherited, settings.provider):
-            setattr(settings, attr, "")
-
-    default_model, default_small_model = provider.models_now()
-    settings.model = settings.model or default_model
-    settings.small_model = settings.small_model or default_small_model
+    # The ids the turn will run — resolved by models_for() above, which
+    # settings_info and list_models call too, so the page and the turn cannot
+    # name different models.
+    settings.model, settings.small_model = models_for(
+        settings.provider, settings.model, settings.small_model)
     # Same scoping as the key above: WAKU_BASE_URL is a global BYOK override
     # and must not leak into a scoped_credentials row's own endpoint.
     base_url = (provider.configured_base_url() if provider.scoped_credentials

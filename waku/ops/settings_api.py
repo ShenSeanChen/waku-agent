@@ -12,7 +12,7 @@ import os
 import shutil
 
 from waku.config import load_settings
-from waku.loop.models import PROVIDERS
+from waku.loop.models import PROVIDERS, models_for
 from waku.ops import catalog
 
 
@@ -65,15 +65,15 @@ def settings_info() -> dict:
     # a trailing separator with no model name. The display must not claim less
     # than the agent actually has.
     prov = PROVIDERS.get(s.provider)
-    default_model, default_small_model = prov.models_now() if prov else ("", "")
+    model, small_model = models_for(s.provider, s.model, s.small_model)
     # A scoped_credentials row (the hosted free tier) never reports the global
     # BYOK overrides — a leftover WAKU_BASE_URL/WAKU_API_KEY from an earlier
     # custom key must not read back as if it belonged to this row.
     scoped = bool(prov and prov.scoped_credentials)
     return {
         "provider": s.provider,
-        "model": s.model or default_model,
-        "small_model": s.small_model or default_small_model,
+        "model": model,
+        "small_model": small_model,
         "base_url": "" if scoped else (s.base_url or ""),
         "custom_key_set": False if scoped else bool(s.api_key),
         # Jev is not a chat provider, so it is not in PROVIDERS -- but the Models

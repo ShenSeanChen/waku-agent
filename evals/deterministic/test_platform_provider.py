@@ -248,6 +248,50 @@ def test_a_leftover_claude_model_is_replaced_under_the_platform_row(hosted, monk
     )
 
 
+def test_the_page_and_the_turn_name_the_same_model(hosted, monkeypatch):
+    """The three readers of a provider's model are pinned to each other.
+
+    get_client drops a leftover WAKU_MODEL that belongs to another provider;
+    settings_info and list_models did not, so the Models page showed a tenant
+    `claude-opus-5` while every turn ran the deploy-time override. Whatever the
+    rule is, all three have to give the same answer, because one of them is
+    what the tenant reads and another is what they get."""
+    monkeypatch.setenv("WAKU_PROVIDER", PLATFORM)           # a tenant container
+    monkeypatch.setenv("WAKU_MODEL", "claude-opus-5")       # the BYOK leftover
+    monkeypatch.delenv("WAKU_SMALL_MODEL", raising=False)
+    monkeypatch.setenv("WAKU_PLATFORM_MODEL", "claude-sonnet-4-6")   # what runs
+
+    import urllib.request
+
+    from waku.config import load_settings
+    from waku.loop.models import get_client
+    from waku.ops import catalog
+    from waku.ops.settings_api import settings_info
+
+    def offline(req, timeout=10):
+        raise OSError("no network in a deterministic eval")
+
+    monkeypatch.setattr(urllib.request, "urlopen", offline)
+    catalog._models_cache.clear()
+
+    settings = load_settings()
+    assert settings.provider == PLATFORM and settings.model == "claude-opus-5"
+    get_client(settings)
+    turn = settings.model
+    page = settings_info()["model"]
+    picker = catalog.list_models(PLATFORM, use_cache=False)["model"]
+    catalog._models_cache.clear()
+
+    assert turn == page == picker, (
+        f"the turn runs {turn!r}, the Models page shows {page!r} and the model "
+        f"picker shows {picker!r} -- a tenant reads one of these and gets "
+        f"another"
+    )
+    assert turn == "claude-sonnet-4-6", (
+        f"expected the deploy-time override, got {turn!r}"
+    )
+
+
 
 # --- I5: offline coverage for the remaining consumers this task changed. ----
 

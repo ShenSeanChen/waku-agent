@@ -64,7 +64,7 @@ def list_models(provider: str | None = None, *, use_cache: bool = True) -> dict:
     import time
     import urllib.request
 
-    from waku.loop.models import PROVIDERS
+    from waku.loop.models import PROVIDERS, models_for
 
     s = load_settings()
     # An explicit provider overrides the active one (and its custom base_url:
@@ -79,11 +79,14 @@ def list_models(provider: str | None = None, *, use_cache: bool = True) -> dict:
     else:
         base = ((s.base_url if name == s.provider else None)
                 or (prov.configured_base_url() if prov else None))
-    default_model, default_small_model = prov.models_now() if prov else ("", "")
+    # Same resolution get_client runs, so the picker names the model a turn on
+    # this provider would actually use — not the leftover WAKU_MODEL that
+    # get_client would drop.
+    model, small_model = models_for(name, s.model, s.small_model)
     out = {
         "provider": name,
-        "model": s.model or default_model,
-        "small_model": s.small_model or default_small_model,
+        "model": model,
+        "small_model": small_model,
         "endpoint": base or name,
     }
     # Where can this provider's models be listed? An explicit catalog_url wins
