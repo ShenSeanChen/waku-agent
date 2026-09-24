@@ -82,8 +82,6 @@ PINNED_POST = POST_ROUTES | STREAM_ROUTES | {
 
 _EXACT_PATH = re.compile(r'self\.path\s*==\s*"([^"]+)"')
 _PREFIX_PATH = re.compile(r'self\.path\.startswith\("([^"]+)"\)')
-_ROUTES_DICT = re.compile(r"routes\s*=\s*\{([^}]*)\}", re.DOTALL)
-_DICT_KEY = re.compile(r'"([^"]+)"\s*:')
 
 
 def _source() -> str:
@@ -129,13 +127,92 @@ def _literal_str_container(node: ast.AST | None) -> list[ast.AST] | None:
     return None
 
 
-def _routes_dict_names(tree: ast.Module) -> set[str]:
-    """Names bound to a `name = {...}` dict literal used for dispatch — today
-    just `routes`. `self.path not in routes` is fine on its own: the dict's
-    own keys are checked for literal-ness separately, below."""
-    return {t.id for node in ast.walk(tree) if isinstance(node, ast.Assign)
-            and isinstance(node.value, ast.Dict)
-            for t in node.targets if isinstance(t, ast.Name)}
+def _dispatch_dict_names(tree: ast.Module) -> dict[str, int]:
+    """Every name self.path is DISPATCHED against — `self.path in NAME`,
+    `self.path not in NAME`, or `NAME[self.path]` — mapped to the line where
+    it is first used that way.
+
+    CONTROLLER RULING (A5 review round 3): what makes a dict a routing table
+    is what the code DOES with it, not what it is called. Round 3 trusted any
+    name bound to a dict literal, but only validated and pinned the keys of
+    the one literally named `routes`, so `if self.path in STATIC_TYPES:` — or
+    in any new `_ADMIN_ROUTES = {...}` a contributor adds by analogy with the
+    `routes` dict a few hundred lines away — dispatched live with every test
+    green. Deciding by the use site closes that without hardcoding a name:
+
+      - `STATIC_TYPES` is an extension -> MIME lookup. It is read once, as
+        `STATIC_TYPES.get(target.suffix, ...)`, INSIDE an already-pinned
+        route's handler. self.path never meets it, so it is not a dispatch
+        surface and nothing here touches it — no false positive on a
+        legitimate content-type table.
+      - Write `if self.path in STATIC_TYPES:` tomorrow and that same table
+        becomes a dispatch surface by that act alone: its keys are collected
+        as routes and have to be pinned, which is exactly the loud failure
+        that case deserves.
+      - Rename `routes` to anything at all and the guard follows it.
+    """
+    names: dict[str, int] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Compare):
+            elements = [node.left, *node.comparators]
+            for left, op, right in zip(elements, node.ops, elements[1:]):
+                # Only `self.path in NAME`, never `NAME in self.path` — the
+                # latter is a substring test, not a lookup, and falls through
+                # to the literal-container check in the guard below.
+                if isinstance(op, (ast.In, ast.NotIn)) and _is_self_path(left) \
+                        and isinstance(right, ast.Name):
+                    names.setdefault(right.id, node.lineno)
+        elif (isinstance(node, ast.Subscript) and _is_self_path(node.slice)
+              and isinstance(node.value, ast.Name)):
+            names.setdefault(node.value.id, node.lineno)
+    return names
+
+
+def _dispatch_dict_facts(tree: ast.Module) -> tuple[set[str], list[str]]:
+    """The routes every dispatch dict registers, and a violation for each one
+    the guard cannot read. A dispatch dict must resolve to a `name = {...}`
+    literal in this module and all of its keys must be string literals —
+    exactly what `routes` has always had to satisfy, now applied to whatever
+    name self.path is actually matched against."""
+    used = _dispatch_dict_names(tree)
+    literals: dict[str, list[ast.Dict]] = {}
+    for node in ast.walk(tree):
+        # `name = {...}` and the annotated `name: dict[...] = {...}`. Both are
+        # a dict literal bound to a name; a type annotation is not a reason to
+        # stop reading the keys.
+        targets = (node.targets if isinstance(node, ast.Assign)
+                   else [node.target] if isinstance(node, ast.AnnAssign) else [])
+        if not targets or not isinstance(node.value, ast.Dict):
+            continue
+        for target in targets:
+            if isinstance(target, ast.Name):
+                literals.setdefault(target.id, []).append(node.value)
+
+    routes: set[str] = set()
+    violations: list[str] = []
+    for name, line in sorted(used.items(), key=lambda item: (item[1], item[0])):
+        dicts = literals.get(name)
+        if not dicts:
+            violations.append(
+                f"line {line}: self.path is matched against `{name}`, which is "
+                f"not assigned a `{name} = {{...}}` dict literal in this "
+                f"module — the guard cannot read its keys, so the routes it "
+                f"registers would reach production unpinned; write the "
+                f"dispatch table as a dict literal here")
+            continue
+        for literal in dicts:
+            for key in literal.keys:
+                if _is_str_literal(key):
+                    routes.add(key.value)
+                    continue
+                key_line = key.lineno if key is not None else literal.lineno
+                shown = _describe(key) if key is not None else "**unpacked entry**"
+                violations.append(
+                    f"line {key_line}: `{name}` dict key `{shown}`, not a "
+                    f"string literal — self.path is matched against this "
+                    f"dict, so every key of it is a route and has to be "
+                    f"written as a literal string")
+    return routes, violations
 
 
 def _ast_literal_routes(tree: ast.Module) -> set[str]:
@@ -175,15 +252,15 @@ def _ast_literal_routes(tree: ast.Module) -> set[str]:
 def routes_in_dashboard() -> set[str]:
     """Every path dashboard.py matches. Four literal styles: `self.path ==
     "/x"`, `self.path.startswith("/x")` (string or literal tuple),
-    `self.path in (...)` / `not in (...)`, and the route dict. A prefix is
-    normalised to its path without a trailing `?`."""
+    `self.path in (...)` / `not in (...)`, and the keys of every dispatch
+    dict — any dict self.path is matched against, not just the one named
+    `routes`. A prefix is normalised to its path without a trailing `?`."""
     src = _source()
+    tree = ast.parse(src)
     found = set(_EXACT_PATH.findall(src))
     found |= {p.rstrip("?") for p in _PREFIX_PATH.findall(src)}
-    routes_block = _ROUTES_DICT.search(src)
-    if routes_block:
-        found |= set(_DICT_KEY.findall(routes_block.group(1)))
-    found |= {p.rstrip("?") for p in _ast_literal_routes(ast.parse(src))}
+    found |= {p.rstrip("?") for p in _ast_literal_routes(tree)}
+    found |= _dispatch_dict_facts(tree)[0]
     return found
 
 
@@ -209,9 +286,11 @@ def dashboard_route_literal_violations() -> list[str]:
     side to be a string literal, or a literal tuple/list/set of them):
       - either side of `self.path == "..."` or `self.path != "..."`
       - either side of `self.path in (...)` / `self.path not in (...)` — or
-        the container is the already-checked `routes` dict
+        the container is a dispatch dict, whose keys are then validated and
+        collected as routes by `_dispatch_dict_facts`, whatever it is named
       - the receiver of `self.path.startswith(...)`
-      - the index of `routes[self.path]` (a lookup into the same dict)
+      - the index of `NAME[self.path]` (a lookup into a dispatch dict, whose
+        keys are validated and pinned the same way)
       - the argument to `urlparse(self.path).query` — reading the QUERY
         STRING is not a route match the way reading `.path` back out would
         be, and today's code only ever reads `.query`; `urlparse(self.path)
@@ -232,9 +311,9 @@ def dashboard_route_literal_violations() -> list[str]:
     to stop.
     """
     tree = ast.parse(_source())
-    routes_dict_names = _routes_dict_names(tree)
+    dispatch_dicts = _dispatch_dict_names(tree)
     parents = _parent_map(tree)
-    violations: list[str] = []
+    violations: list[str] = _dispatch_dict_facts(tree)[1]
     handled: set[int] = set()  # id() of every self.path node matched to a whitelisted position
 
     for node in ast.walk(tree):
@@ -254,8 +333,11 @@ def dashboard_route_literal_violations() -> list[str]:
                                 f"— write the route path as a literal string")
                     elif isinstance(op, (ast.In, ast.NotIn)):
                         op_word = "in" if isinstance(op, ast.In) else "not in"
-                        if isinstance(other, ast.Name) and other.id in routes_dict_names:
-                            continue  # membership against the routes dict, checked below
+                        if isinstance(other, ast.Name) and other.id in dispatch_dicts:
+                            # Membership against a dispatch dict. Its keys are
+                            # validated and collected as routes by
+                            # _dispatch_dict_facts, whatever it is called.
+                            continue
                         elts = _literal_str_container(other)
                         if elts is None or any(not _is_str_literal(e) for e in elts):
                             violations.append(
@@ -288,8 +370,10 @@ def dashboard_route_literal_violations() -> list[str]:
                     f"not a string literal (or tuple of them) — write every "
                     f"route path as a literal string")
         elif (isinstance(node, ast.Subscript) and _is_self_path(node.slice)
-              and isinstance(node.value, ast.Name) and node.value.id in routes_dict_names):
-            handled.add(id(node.slice))  # routes[self.path] — the dict's keys are checked below
+              and isinstance(node.value, ast.Name)):
+            # NAME[self.path] — a dispatch dict lookup. _dispatch_dict_facts
+            # resolves NAME, checks its keys and pins them.
+            handled.add(id(node.slice))
         elif (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
               and node.func.id == "urlparse" and node.args and _is_self_path(node.args[0])
               and isinstance(parents.get(id(node)), ast.Attribute)
@@ -309,15 +393,6 @@ def dashboard_route_literal_violations() -> list[str]:
             # _self_passed_to_helper for that check), already reached only
             # after self.path.startswith("/static/") passed.
             handled.add(id(node.args[0]))
-        elif (isinstance(node, ast.Assign) and isinstance(node.value, ast.Dict)
-              and any(isinstance(t, ast.Name) and t.id == "routes" for t in node.targets)):
-            for key in node.value.keys:
-                if not _is_str_literal(key):
-                    line = key.lineno if key is not None else node.lineno
-                    shown = _describe(key) if key is not None else "**unpacked entry**"
-                    violations.append(
-                        f"line {line}: routes dict key `{shown}`, not a string "
-                        f"literal — write the route path as a literal string")
 
     # Anything left over is a self.path occurrence in a context this guard
     # doesn't recognise at all — an f-string, an IfExp, a walrus, an argument
