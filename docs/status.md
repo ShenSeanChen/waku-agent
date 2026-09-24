@@ -6,7 +6,7 @@
 Read this before opening a PR or filing an issue: most of what is already
 known-broken is below, and half of it already has a fix in flight.
 
-**Last updated:** 2026-09-14
+**Last updated:** 2026-09-23
 
 ---
 
@@ -47,8 +47,10 @@ things that *might* work.
 
 ## What is deliberately not built
 
-Not a framework, not multi-agent, not production — see
-[architecture.md](architecture.md).
+Not a framework, not multi-agent, not production — true of `waku/`, see
+[architecture.md](architecture.md). `hosted/` runs that same code as a
+deployment instead; spec 001 designs it, and none of it exists in this repo
+yet.
 
 Additionally, and worth stating because people ask:
 
@@ -67,7 +69,11 @@ Additionally, and worth stating because people ask:
    is local, single-machine, and yours. Waku Memory is the same memory across
    several agents, and it is a paid hosted service. Both are true and the
    README does not yet say either plainly, so a reader has to work out the
-   difference alone.
+   difference alone. Hosted waku (`hosted/`, spec 001) adds a third case: a
+   tenant's memory lives on the operator's VM, not the person's own machine,
+   but it is still that one tenant's own directory, not Waku Memory. What
+   hosted waku keeps there is not written down yet; a later task in spec 001
+   records it once `hosted/` exists.
 
 ## Not in the repo
 
