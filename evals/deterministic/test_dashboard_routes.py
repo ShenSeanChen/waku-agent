@@ -168,31 +168,114 @@ def _dispatch_dict_names(tree: ast.Module) -> dict[str, int]:
     return names
 
 
+# The only things a dispatch dict may have called on it. Read-only, and a
+# closed list on purpose: see _dispatch_dict_uses.
+_DICT_READS = frozenset({"get", "items", "keys", "values", "__contains__"})
+
+
+def _dispatch_dict_uses(tree: ast.Module) -> tuple[
+        dict[str, list[tuple[int, ast.Dict | None]]], dict[str, list[tuple[int, str, str]]]]:
+    """Every BINDING of a module name (line, and the dict literal it is bound
+    to if it is one), and every use of one the guard will not allow on a
+    dispatch dict (line, what was written, why it is refused).
+
+    CONTROLLER RULING (A5 review round 4): forbid the mutation, do not try to
+    track it. A dispatch dict filled in after its definition —
+    `N["/api/x"] = h`, or `N.update({...})` — cannot be read statically in
+    general, and round 4's partial answer was worse than a miss: the
+    `.update()` case FAILED naming only the literal key, so pinning that key
+    turned the whole suite green while the added route stayed live and
+    unpinned. A tripwire may fail safe; it may never fail open, and it may
+    certainly never pay for a wrong fix with a green suite.
+
+    So the key set of a dispatch dict has to be one dict literal, bound once,
+    never touched again. This is recognised default-deny, the same way rounds
+    3 and 4 recognise everything else: ANY attribute on the name that is not
+    on the short read-only whitelist above is refused, rather than a list of
+    mutating methods that would need `.popitem` added the day someone writes
+    it. That refuses a few harmless reads too — `.copy()` is the obvious one —
+    and it is worth it: the alternative is a list that is wrong the moment
+    dict grows a method. Item assignment, `del`, and augmented assignment are
+    mutations outright, and a name bound more than once is rebinding.
+    """
+    # Which Store-Name nodes are the target of `name = {...}` / `name: T = {...}`.
+    literal_targets: dict[int, ast.Dict] = {}
+    augmented: set[int] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Assign, ast.AnnAssign)) and isinstance(node.value, ast.Dict):
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            for target in targets:
+                if isinstance(target, ast.Name):
+                    literal_targets[id(target)] = node.value
+        elif isinstance(node, ast.AugAssign) and isinstance(node.target, ast.Name):
+            augmented.add(id(node.target))
+
+    changed = "changes it after it is defined"
+    bindings: dict[str, list[tuple[int, ast.Dict | None]]] = {}
+    refused: dict[str, list[tuple[int, str, str]]] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and isinstance(node.ctx, (ast.Store, ast.Del)):
+            if id(node) in augmented:
+                refused.setdefault(node.id, []).append(
+                    (node.lineno, f"{node.id} <op>= ...", changed))
+            else:
+                bindings.setdefault(node.id, []).append(
+                    (node.lineno, literal_targets.get(id(node))))
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            bindings.setdefault(node.name, []).append((node.lineno, None))
+        elif isinstance(node, (ast.Import, ast.ImportFrom)):
+            for imported in node.names:
+                bound = (imported.asname or imported.name).split(".")[0]
+                bindings.setdefault(bound, []).append((node.lineno, None))
+        elif (isinstance(node, ast.Subscript) and isinstance(node.value, ast.Name)
+              and isinstance(node.ctx, (ast.Store, ast.Del))):
+            verb = "=" if isinstance(node.ctx, ast.Store) else " deleted"
+            refused.setdefault(node.value.id, []).append(
+                (node.lineno, f"{node.value.id}[...]{verb}", changed))
+        elif (isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name)
+              and node.attr not in _DICT_READS):
+            reads = "/".join(sorted(_DICT_READS))
+            why = (f"is not one of the reads this guard allows on a dispatch "
+                   f"dict ({reads}), so it cannot tell whether it changes it")
+            refused.setdefault(node.value.id, []).append(
+                (node.lineno, f"{node.value.id}.{node.attr}", why))
+    return bindings, refused
+
+
 def _dispatch_dict_facts(tree: ast.Module) -> tuple[set[str], list[str]]:
     """The routes every dispatch dict registers, and a violation for each one
-    the guard cannot read. A dispatch dict must resolve to a `name = {...}`
-    literal in this module and all of its keys must be string literals —
-    exactly what `routes` has always had to satisfy, now applied to whatever
-    name self.path is actually matched against."""
+    the guard cannot read in full. A dispatch dict must be bound exactly once,
+    to a `name = {...}` literal in this module, never mutated afterwards, and
+    all of its keys must be string literals — exactly what `routes` has always
+    had to satisfy, now applied to whatever name self.path is matched
+    against."""
     used = _dispatch_dict_names(tree)
-    literals: dict[str, list[ast.Dict]] = {}
-    for node in ast.walk(tree):
-        # `name = {...}` and the annotated `name: dict[...] = {...}`. Both are
-        # a dict literal bound to a name; a type annotation is not a reason to
-        # stop reading the keys.
-        targets = (node.targets if isinstance(node, ast.Assign)
-                   else [node.target] if isinstance(node, ast.AnnAssign) else [])
-        if not targets or not isinstance(node.value, ast.Dict):
-            continue
-        for target in targets:
-            if isinstance(target, ast.Name):
-                literals.setdefault(target.id, []).append(node.value)
+    if not used:
+        return set(), []
+    bindings, refused = _dispatch_dict_uses(tree)
 
     routes: set[str] = set()
     violations: list[str] = []
     for name, line in sorted(used.items(), key=lambda item: (item[1], item[0])):
-        dicts = literals.get(name)
-        if not dicts:
+        for at, what, why in sorted(set(refused.get(name, []))):
+            violations.append(
+                f"line {at}: `{what}` {why}, and self.path is matched against "
+                f"`{name}` (line {line}) — a dispatch dict's keys have to be "
+                f"ONE dict literal the guard can read whole, because what a "
+                f"dict holds after it is changed cannot be read from the "
+                f"source; write every route in the literal")
+
+        bound = bindings.get(name, [])
+        literals = [literal for _, literal in bound if literal is not None]
+        if len(bound) > 1:
+            where = ", ".join(str(at) for at, _ in sorted(bound))
+            violations.append(
+                f"line {line}: self.path is matched against `{name}`, which is "
+                f"bound more than once in this module (lines {where}) — the "
+                f"guard cannot tell which dict is live at the match; bind a "
+                f"dispatch table once, to a single dict literal")
+            continue
+        if len(literals) != 1:
             violations.append(
                 f"line {line}: self.path is matched against `{name}`, which is "
                 f"not assigned a `{name} = {{...}}` dict literal in this "
@@ -200,18 +283,18 @@ def _dispatch_dict_facts(tree: ast.Module) -> tuple[set[str], list[str]]:
                 f"registers would reach production unpinned; write the "
                 f"dispatch table as a dict literal here")
             continue
-        for literal in dicts:
-            for key in literal.keys:
-                if _is_str_literal(key):
-                    routes.add(key.value)
-                    continue
-                key_line = key.lineno if key is not None else literal.lineno
-                shown = _describe(key) if key is not None else "**unpacked entry**"
-                violations.append(
-                    f"line {key_line}: `{name}` dict key `{shown}`, not a "
-                    f"string literal — self.path is matched against this "
-                    f"dict, so every key of it is a route and has to be "
-                    f"written as a literal string")
+
+        for key in literals[0].keys:
+            if _is_str_literal(key):
+                routes.add(key.value)
+                continue
+            key_line = key.lineno if key is not None else literals[0].lineno
+            shown = _describe(key) if key is not None else "**unpacked entry**"
+            violations.append(
+                f"line {key_line}: `{name}` dict key `{shown}`, not a "
+                f"string literal — self.path is matched against this "
+                f"dict, so every key of it is a route and has to be "
+                f"written as a literal string")
     return routes, violations
 
 
