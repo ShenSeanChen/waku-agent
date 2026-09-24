@@ -30,6 +30,10 @@ Checks:
      a user-action call site (a click, a send, a tab's first open) must never
      send it, because that traffic is real engagement and must count as
      activity.
+  5. the pause/resume state machine: every `paused =` write and every
+     startTimers()/stopTimers() call in js/ is a declared site, and the one
+     action the paused status line names — sending a message — actually
+     resumes. See the second half of this file.
 """
 
 from __future__ import annotations
@@ -234,3 +238,159 @@ def test_no_user_action_call_site_carries_the_header():
             f"be added to BACKGROUND_AWARE in this eval, not left for this check "
             f"to flag as a leak."
         )
+
+
+# ---------------------------------------------------------------------------
+# The pause/resume state machine.
+#
+# The header half above is only half of acceptance 9. The other half is
+# "stops its timers, and resumes them after the next user action" — and it
+# had a hole that every per-task review missed, because this file used to
+# contain no assertion of any kind about `paused`, `stopTimers` or resume:
+# `paused` was cleared only inside refresh(), sendChat() never called it, so
+# a tenant who did exactly what the banner told them ("Paused. Send a message
+# to wake it.") got their reply on a page that stayed frozen on pre-pause
+# data for the life of the page, under a banner still saying "paused".
+#
+# Guarded the way A5's route guard finally had to be: not by listing the ways
+# resume could go wrong, but by walking the closed set of literal tokens that
+# can touch this state — every `paused =` assignment, every startTimers() and
+# stopTimers() call — and DENYING any site not on a whitelist. A new route
+# out of the paused state has to be declared here, which is the moment
+# someone asks whether it actually resumes.
+# ---------------------------------------------------------------------------
+
+# (file, enclosing function) -> the values that site may write to `paused`.
+# `<top level>` means module scope (the bootstrap, an event listener).
+PAUSED_WRITERS = {
+    ("main.js", "handleNotOk"): {"true"},
+    ("main.js", "resumeLive"): {"false"},
+}
+
+# (file, enclosing function) -> which timer calls that site may make.
+TIMER_CALLERS = {
+    ("main.js", "handleNotOk"): {"stopTimers"},
+    ("main.js", "resumeLive"): {"startTimers"},
+    # the visibilitychange listener and the bootstrap, both module scope
+    ("main.js", "<top level>"): {"startTimers", "stopTimers"},
+}
+
+
+def _function_ranges(src: str) -> list[tuple[int, int, str]]:
+    """(start, end, name) for every `function name(...){...}` in `src`, by the
+    same depth-count `_body_from` uses."""
+    out = []
+    for m in FUNC_DEF_RE.finditer(src):
+        body = _body_from(src, m.end())
+        out.append((m.end(), m.end() + len(body), m.group(1)))
+    return out
+
+
+def _enclosing(ranges: list[tuple[int, int, str]], pos: int) -> str:
+    """Innermost named function containing `pos`, or `<top level>`."""
+    best, width = "<top level>", None
+    for start, end, name in ranges:
+        if start <= pos < end and (width is None or end - start < width):
+            best, width = name, end - start
+    return best
+
+
+def test_only_declared_sites_write_the_paused_flag():
+    """Every assignment to `paused` in js/, whatever file it is in, must be a
+    site this eval knows about. C1 was a MISSING write (no route out of the
+    paused state from sendChat), so the guard that matters is the one that
+    forces the set of writers to stay small and named: with exactly one
+    clearer, "does sending a message resume?" is a question about one
+    function, not about every call site in the dashboard."""
+    found: dict[tuple[str, str], set[str]] = {}
+    for path in sorted(JS_DIR.glob("*.js")):
+        src = path.read_text()
+        ranges = _function_ranges(src)
+        for m in re.finditer(r"(?:(let|var|const)\s+)?\bpaused\s*=\s*([A-Za-z0-9_\"']+)", src):
+            if src[m.end(2):m.end(2) + 1] == "=":   # `paused ==` / `===`
+                continue
+            if m.group(1):                          # the declaration itself
+                continue
+            found.setdefault((path.name, _enclosing(ranges, m.start())), set()).add(m.group(2))
+    assert found == PAUSED_WRITERS, (
+        "the set of places that write `paused` changed.\n"
+        f"  found:    {found}\n"
+        f"  declared: {PAUSED_WRITERS}\n"
+        "Every route into and out of the paused state has to be declared here. "
+        "If this is a new route OUT, check it also restarts the timers — a "
+        "cleared flag with stopped timers is the frozen page C1 shipped."
+    )
+
+
+def test_only_declared_sites_start_or_stop_the_timers():
+    """Same walk over the other half of the state: the two timers. A site that
+    clears `paused` without restarting them, or restarts them while paused,
+    leaves the dashboard in a state its own status line lies about."""
+    found: dict[tuple[str, str], set[str]] = {}
+    for path in sorted(JS_DIR.glob("*.js")):
+        src = path.read_text()
+        ranges = _function_ranges(src)
+        for m in re.finditer(r"\b(startTimers|stopTimers)\(\)", src):
+            enclosing = _enclosing(ranges, m.start())
+            if (path.name, enclosing) in (("main.js", "startTimers"), ("main.js", "stopTimers")):
+                continue   # the definitions themselves
+            found.setdefault((path.name, enclosing), set()).add(m.group(1))
+    assert found == TIMER_CALLERS, (
+        "the set of places that start or stop the timer-driven polls changed.\n"
+        f"  found:    {found}\n"
+        f"  declared: {TIMER_CALLERS}"
+    )
+
+
+def test_resume_is_one_function_that_also_restarts_the_polls():
+    """`resumeLive()` is the single way back. Clearing the flag without
+    starting the timers again is exactly the frozen page: the banner goes
+    away and nothing ever polls /api/data again."""
+    body = _function_body(_read("main.js"), "resumeLive")
+    assert "paused = false" in body, "resumeLive() must clear `paused`"
+    assert "startTimers()" in body, (
+        "resumeLive() must restart the timer-driven polls — clearing `paused` "
+        "on its own leaves both intervals null and the whole page frozen on "
+        "pre-pause data."
+    )
+
+
+def test_sending_a_message_resumes_a_paused_dashboard():
+    """C1, pinned. The paused status line says "Send a message to wake it."
+    sendChat() is that message. It must route back through the resume path —
+    and as a USER action, not a background one: a plain `refresh()`, never
+    `refresh(true)`, because a person typing is exactly the engagement the
+    hosted gateway is counting."""
+    body = _function_body(_read("render.js"), "sendChat")
+    assert "paused" in body, (
+        "sendChat() no longer looks at `paused`. It is the one action the "
+        "paused status line names; if it does not resume, the tenant reads "
+        '"Paused. Send a message to wake it.", sends a message, gets a reply, '
+        "and watches the banner stay up while every card on the page holds "
+        "pre-pause data for the life of the page. That is C1."
+    )
+    assert re.search(r"\brefresh\(\s*\)", body), (
+        "sendChat() must reach refresh() to resume — no other call clears "
+        "`paused`."
+    )
+    assert not re.search(r"\brefresh\(\s*true\s*\)", body), (
+        "sendChat()'s refresh must be user-driven (`refresh()`), not "
+        "`refresh(true)` — a person typing a message is real engagement and "
+        "must reach the gateway without X-Waku-Background."
+    )
+
+
+def test_showing_a_hidden_tab_does_not_restart_a_paused_dashboards_polls():
+    """The show branch used to call startTimers() unconditionally, so
+    switching back to a hidden tab fired background polls at a container the
+    pause had deliberately stopped talking to. Resume is refresh()'s job, on
+    a 2xx, through resumeLive()."""
+    src = _read("main.js")
+    m = re.search(r'document\.addEventListener\("visibilitychange".*?\n\}\);', src, re.DOTALL)
+    assert m, "expected a visibilitychange listener in main.js"
+    block = m.group(0)
+    assert re.search(r"if\s*\(\s*!\s*paused\s*\)\s*startTimers\(\)", block), (
+        "showing a hidden tab must only restart the polls when we are NOT "
+        "paused — while paused the timers stay stopped, and a 2xx from the "
+        "one background refresh below resumes them through resumeLive()."
+    )

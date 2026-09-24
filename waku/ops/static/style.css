@@ -191,6 +191,11 @@
             word-break:break-all;margin-top:var(--space-2);max-height:180px;overflow:auto}
   .live{display:inline-flex;align-items:center;gap:var(--space-2)}
   .live .dot{animation:pulse 2s ease-in-out infinite}
+  /* A paused hosted container. The sentence REPLACES the live line and names
+     the one action that brings the page back, so it must not read like the
+     thing it replaced — there is no pulsing dot behind it and nothing is
+     updating. --warn, not --bad: waiting for you is not a failure. */
+  .live.paused{color:var(--warn);font-weight:var(--font-weight-medium)}
   @keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
   /* streaming caret — the token-by-token "thinking" cursor */
   .caret{display:inline-block;width:7px;height:14px;margin-left:calc(var(--spacing) * 0.5);vertical-align:text-bottom;

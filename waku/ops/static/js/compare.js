@@ -420,9 +420,9 @@ function modelArenaView(d){
 
   // Load the history once when the tab first opens (setting [] first stops the
   // 5s refresh from re-triggering); loadCompareHistory re-renders when it lands.
-  // bgRefresh is captured now (this render is synchronous) — it's true only if
+  // deferBg carries this render's provenance to the load: background only if
   // this very render was itself a timer's, not a person opening the tab.
-  if (compareState.history === undefined){ compareState.history = []; const bg = bgRefresh; setTimeout(() => loadCompareHistory(bg), 0); }
+  if (compareState.history === undefined){ compareState.history = []; deferBg(loadCompareHistory); }
 
   return uiCard(`
     <div class="cmp-controls">
@@ -685,8 +685,8 @@ async function maSeeAll(store){
 
 function memoryArenaView(){
   if (memoryArenaFixture === undefined){
-    // bgRefresh: see the identical comment on the Compare history load above.
-    const bg = bgRefresh; setTimeout(() => loadMemoryArena(bg), 0);
+    // deferBg: see the comment on the Compare history load above.
+    deferBg(loadMemoryArena);
     return uiCard("loading…", {cls: "empty"});
   }
   if (memoryArenaFixture === null){

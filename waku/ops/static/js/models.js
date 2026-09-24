@@ -178,9 +178,9 @@ function yourModelsCard(st){
   // Populate the model <select> for the initially-selected provider once the
   // card is in the DOM (a fresh fetch of that provider's catalog). This card
   // is rebuilt on every settings re-render, including an unattended 5s poll —
-  // bgRefresh (captured now, this render is synchronous) says whether this
-  // particular render was one of those, or a person opening the tab.
-  const bg = bgRefresh; setTimeout(() => loadAddModels(st.provider, bg), 0);
+  // deferBg says whether this particular render was one of those, or a person
+  // opening the tab.
+  deferBg(bg => loadAddModels(st.provider, bg));
   return `<h2>Your models <span class="meta" style="font-weight:400">— what the chat switcher shows</span></h2>
     ${uiCard(`
       ${rows}
