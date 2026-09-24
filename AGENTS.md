@@ -61,6 +61,7 @@ The `validate` workflow runs on every PR. Each of these fails it:
 | a `uv.lock` change without a `pyproject.toml` change | a step in `.github/workflows/validate-skills.yml` |
 | a lint error in `waku/`, `evals/`, `scripts/` or `hosted/` | `ruff check` |
 | an import between `waku/` and `hosted/`, in either direction | `evals/deterministic/test_hosted_boundary.py` |
+| a dashboard route with no hosted policy entry | `evals/deterministic/hosted/test_route_contract.py` |
 | a skill that fails validation | `scripts/validate_skills.py` |
 | a skill that loads on everyday or another skill's messages | `evals/deterministic/test_skill_triggers.py` |
 | `.env.example` out of step with the integrations registry | `scripts/generate_env_example.py` |

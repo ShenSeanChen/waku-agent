@@ -58,6 +58,11 @@ this ladder either.
   test, and the other is a scored opinion.
 - Every behaviour change gets a deterministic eval. A bug fix adds the case
   that would have caught the bug.
+- A new route in `waku/ops/dashboard.py` needs two things beyond its handler:
+  a pin in `evals/deterministic/test_dashboard_routes.py`, and a decision in
+  `hosted/core/policy.py` about whether the hosted gateway passes, filters or
+  blocks it. `test_route_contract.py` fails until you make that decision, and
+  it does not guess a default for you.
 - Run `make gate` and `make lint` before you push. CI runs the deterministic
   tier. The judge tier needs a key, so only `make gate` runs it.
 - The dashboard's JavaScript has no test runner. Verify a frontend change in a
