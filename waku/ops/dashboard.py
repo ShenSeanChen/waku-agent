@@ -15,7 +15,7 @@ voice/telegram gateways drive light up in the browser as it runs.
 
 The frontend is plain static files (static/index.html + style.css + app.js)
 served as-is — no build step, no framework. This file is just the server + API.
-Bound to 127.0.0.1 only. For deep trace waterfalls use Phoenix (`make trace`).
+Bound to 127.0.0.1 unless WAKU_DASHBOARD_HOST says otherwise, which warns.
 """
 
 from __future__ import annotations
@@ -1204,13 +1204,32 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
 
+LOOPBACK = {"127.0.0.1", "::1", "localhost"}
+
+
+def bind_host() -> str:
+    """Where the dashboard listens. Loopback unless told otherwise.
+
+    A container has to answer on its own address, so this is configurable —
+    but the dashboard has no authentication and its SQL console runs
+    arbitrary SQL, so leaving loopback prints a warning to the terminal that
+    chose it.
+    """
+    host = os.getenv("WAKU_DASHBOARD_HOST", "127.0.0.1").strip() or "127.0.0.1"
+    if host not in LOOPBACK:
+        print(f"warning: WAKU_DASHBOARD_HOST={host} — the dashboard has no "
+              f"authentication and its SQL console runs arbitrary SQL. "
+              f"Only do this behind something that authenticates.")
+    return host
+
+
 def main() -> None:
     # Port precedence: WAKU_DASHBOARD_PORT, then the conventional PORT (used by
     # deploy platforms and IDE preview panes), then 7777. If it's taken, walk on.
     base = int(os.getenv("WAKU_DASHBOARD_PORT") or os.getenv("PORT") or PORT)
     for port in range(base, base + 10):  # walk past a busy port instead of crashing
         try:
-            server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+            server = ThreadingHTTPServer((bind_host(), port), Handler)
         except OSError:
             print(f"port {port} busy, trying {port + 1}…")
             continue
