@@ -141,8 +141,11 @@ friendly view; the **Data** tab shows the raw `state.db` tables.
 
 ## What this deliberately is not
 
-Not a framework, not multi-agent, not production. (Still not multi-agent even with
-graph workflows: a graph's `agent_node` is the same loop invoked as one step — no
-peer-to-peer agent messaging, execution follows the edges deterministically.) It's
-the readable blueprint — OpenClaw and Hermes are the products; this is the afternoon
-read that explains them.
+This tree, `waku/`, is not a framework, not multi-agent, and not production.
+(Still not multi-agent even with graph workflows: a graph's `agent_node` is the
+same loop invoked as one step — no peer-to-peer agent messaging, execution
+follows the edges deterministically.) It's the readable blueprint — OpenClaw
+and Hermes are the products; this is the afternoon read that explains them.
+`hosted/` runs this same loop as a service instead; it is a deployment of
+waku, not a second architecture (conventions.md §3). Spec 001 designs it, and
+none of it exists in this repo yet.

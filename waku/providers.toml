@@ -1,0 +1,243 @@
+# Every model provider Waku can talk to, as data.
+#
+# Adding one is this file plus a logo at waku/ops/static/logos/<name>.svg.
+# Nothing else: the loop, the model picker, the pricing table, the spend chart
+# and .env.example are all built from the rows below. Before 2026-09-22 a
+# provider meant editing seven to nine files across three directories, four of
+# them tests, and provider pull requests piled up because each one was a
+# careful review rather than a glance at a table.
+#
+# Fields
+#   kind         the wire format: "anthropic" or "openai". Nothing else exists;
+#                the loop speaks Anthropic's Messages shape and the openai
+#                adapter translates. A provider that speaks neither needs code,
+#                not a row here.
+#   key_env      which environment variable holds the key
+#   base_url     omit for a provider whose SDK default is right (anthropic, openai)
+#   model        the loop's default; small_model runs the gate and summaries
+#   flagship/fast  the two models the chat switcher pins by default. Blank
+#                falls back to model/small_model. These are starting points --
+#                any model the live catalog lists is one click away.
+#   catalog_url  where to LIST models, when that differs from base_url/models
+#   base_url_env a provider-scoped endpoint override, for separately-issued
+#                regional keys. Never reuse WAKU_BASE_URL for this: it is
+#                global and would leak across providers.
+#   key_url      where a human goes to get a key. It is printed when the key is
+#                missing, so it has to be a real page, not ".env.example".
+#   price        rough [in, out] dollars per million tokens, for the spend
+#                estimate. Deliberately approximate and labelled "est" in the
+#                UI; a live catalog overrides it per model where one exists.
+#   endpoints    official regional alternatives, offered in the Models dialog.
+#
+# Seven more fields exist, all opt-in and used only by the hosted free-tier row
+# below -- setting none of them is what every other row already does:
+#   label                 what the UI calls the row, instead of its table name
+#   hidden_unless_env     invisible everywhere (pages, lists, error messages,
+#                         .env.example) until base_url_env is set
+#   claims_families       false stops the row's placeholder model claiming its
+#                         family (e.g. "claude") away from the real owner
+#   catalog_from_base_url list models from {base_url}/v1/models even on the
+#                         anthropic wire
+#   model_env             env var that overrides `model` at call time
+#   small_model_env       env var that overrides `small_model` at call time
+#   scoped_credentials    ignore WAKU_API_KEY / WAKU_BASE_URL; use only this
+#                         row's own key_env / base_url_env
+#
+# Model ids age. When one 404s, fix the row -- every past race and spend figure
+# is derived at read time, so a correction here fixes history too.
+
+[anthropic]
+kind = "anthropic"
+key_env = "ANTHROPIC_API_KEY"
+model = "claude-sonnet-5"
+small_model = "claude-haiku-4-5-20251001"
+catalog_url = "https://api.anthropic.com/v1/models"
+flagship = "claude-opus-4-8"
+fast = "claude-sonnet-5"
+key_url = "https://console.anthropic.com/settings/keys"
+price = [3.0, 15.0]
+
+# The gpt-5.6 REASONING models (luna/sol/terra) cannot use function tools on
+# /v1/chat/completions -- they need /v1/responses -- so every Waku turn 400s
+# on them. The whole `-chat-latest` line is 404 deprecated, so falling back
+# to it is not an option either. gpt-5.5 is the newest plain model that
+# returns a tool_call on chat/completions; gpt-4.1-mini is a cheap
+# tool-capable gate. A `-latest` alias is deliberately NOT used: it changes
+# silently under a pinned benchmark, and test_openai_default_is_tool_capable
+# rejects one.
+
+[openai]
+kind = "openai"
+key_env = "OPENAI_API_KEY"
+model = "gpt-5.5"
+small_model = "gpt-4.1-mini"
+catalog_url = "https://api.openai.com/v1/models"
+key_url = "https://platform.openai.com/api-keys"
+price = [2.5, 15.0]
+
+# One key, every lab's models, and a $0 tier: the defaults below are ":free"
+# ids, rate-limited to roughly 50 requests a day without credits.
+
+[openrouter]
+kind = "openai"
+key_env = "OPENROUTER_API_KEY"
+base_url = "https://openrouter.ai/api/v1"
+model = "nvidia/nemotron-3-super-120b-a12b:free"
+small_model = "google/gemma-4-26b-a4b-it:free"
+key_url = "https://openrouter.ai/keys"
+price = [1.0, 3.0]
+
+# Google's Pro tier is not "gemini-3.5-pro" (that id 404s); the current Pro
+# is gemini-3.1-pro-preview.
+
+[gemini]
+kind = "openai"
+key_env = "GEMINI_API_KEY"
+base_url = "https://generativelanguage.googleapis.com/v1beta/openai/"
+model = "gemini-3.5-flash"
+small_model = "gemini-3.1-flash-lite"
+flagship = "gemini-3.1-pro-preview"
+fast = "gemini-3.5-flash"
+key_url = "https://aistudio.google.com/apikey"
+price = [0.3, 2.5]
+
+[deepseek]
+kind = "openai"
+key_env = "DEEPSEEK_API_KEY"
+base_url = "https://api.deepseek.com"
+model = "deepseek-v4-pro"
+small_model = "deepseek-v4-pro"
+key_url = "https://platform.deepseek.com/api_keys"
+price = [0.435, 0.87]
+
+[minimax]
+kind = "anthropic"
+key_env = "MINIMAX_API_KEY"
+base_url = "https://api.minimaxi.com/anthropic"
+model = "MiniMax-M3"
+small_model = "MiniMax-M2"
+catalog_url = "https://api.minimaxi.com/anthropic/v1/models"
+base_url_env = "MINIMAX_BASE_URL"
+key_url = "https://platform.minimaxi.com/user-center/basic-information"
+price = [0.3, 1.2]
+
+[[minimax.endpoints]]
+label = "China"
+base_url = "https://api.minimaxi.com/anthropic"
+catalog_url = "https://api.minimaxi.com/anthropic/v1/models"
+
+[[minimax.endpoints]]
+label = "Global"
+base_url = "https://api.minimax.io/anthropic"
+catalog_url = "https://api.minimax.io/anthropic/v1/models"
+
+# K3 is the flagship; the gate and summariser stay on cheap K2.6. The live
+# catalog has no plain "kimi-k2.7", only -code variants -- we checked.
+# Override with WAKU_SMALL_MODEL=kimi-k3 if your key is K3-only.
+
+[kimi]
+kind = "anthropic"
+key_env = "MOONSHOT_API_KEY"
+base_url = "https://api.moonshot.ai/anthropic"
+model = "kimi-k3"
+small_model = "kimi-k2.6"
+catalog_url = "https://api.moonshot.ai/v1/models"
+flagship = "kimi-k3"
+fast = "kimi-k2.7-code-highspeed"
+base_url_env = "MOONSHOT_BASE_URL"
+key_url = "https://platform.moonshot.ai/console/api-keys"
+price = [0.6, 2.5]
+
+# K3 is the flagship; the gate and summariser stay on cheap K2.6. The live
+# catalog has no plain "kimi-k2.7", only -code variants -- we checked.
+# Override with WAKU_SMALL_MODEL=kimi-k3 if your key is K3-only.
+
+[[kimi.endpoints]]
+label = "Global"
+base_url = "https://api.moonshot.ai/anthropic"
+catalog_url = "https://api.moonshot.ai/v1/models"
+
+# K3 is the flagship; the gate and summariser stay on cheap K2.6. The live
+# catalog has no plain "kimi-k2.7", only -code variants -- we checked.
+# Override with WAKU_SMALL_MODEL=kimi-k3 if your key is K3-only.
+
+[[kimi.endpoints]]
+label = "China"
+base_url = "https://api.moonshot.cn/anthropic"
+catalog_url = "https://api.moonshot.cn/v1/models"
+
+[glm]
+kind = "anthropic"
+key_env = "ZHIPU_API_KEY"
+base_url = "https://api.z.ai/api/anthropic"
+model = "glm-5.2"
+small_model = "glm-5-turbo"
+base_url_env = "ZHIPU_BASE_URL"
+key_url = "https://z.ai/manage-apikey/apikey-list"
+price = [0.6, 2.2]
+
+[[glm.endpoints]]
+label = "Global"
+base_url = "https://api.z.ai/api/anthropic"
+
+[[glm.endpoints]]
+label = "China"
+base_url = "https://open.bigmodel.cn/api/anthropic"
+
+# Grok on its OpenAI-compatible endpoint. The ids below are starting points:
+# add XAI_API_KEY and the picker lists the live catalog, which is the
+# authoritative source.
+
+[xai]
+kind = "openai"
+key_env = "XAI_API_KEY"
+base_url = "https://api.x.ai/v1"
+model = "grok-4"
+small_model = "grok-4-fast"
+catalog_url = "https://api.x.ai/v1/models"
+key_url = "https://console.x.ai"
+price = [3.0, 15.0]
+
+# OpenCode -- an OpenAI-compatible platform with two endpoints sharing one
+# platform key. zen serves free models; go serves the standard ones.
+
+[opencode_zen]
+kind = "openai"
+key_env = "OPENCODE_ZEN_API_KEY"
+base_url = "https://opencode.ai/zen/v1"
+model = "deepseek-v4-flash-free"
+small_model = "deepseek-v4-flash-free"
+key_url = "https://opencode.ai/zen"
+price = [0.435, 0.87]
+
+[opencode_go]
+kind = "openai"
+key_env = "OPENCODE_GO_API_KEY"
+base_url = "https://opencode.ai/zen/go/v1"
+model = "deepseek-v4-flash"
+small_model = "deepseek-v4-flash"
+key_url = "https://opencode.ai/zen"
+price = [0.435, 0.87]
+
+# The hosted free tier. Hidden on a local machine: with no
+# WAKU_PLATFORM_BASE_URL set it appears in no page, list or error message,
+# and never in .env.example. In a tenant container the four WAKU_PLATFORM_*
+# variables point it at the metering proxy, which holds the real key -- the
+# container never sees one. `model` and `small_model` are placeholders that
+# WAKU_PLATFORM_MODEL and WAKU_PLATFORM_SMALL_MODEL replace at call time;
+# they exist because test_providers_registry.py requires them.
+[waku-platform]
+kind = "anthropic"
+key_env = "WAKU_PLATFORM_TOKEN"
+base_url_env = "WAKU_PLATFORM_BASE_URL"
+model = "claude-sonnet-5"
+small_model = "claude-haiku-4-5-20251001"
+model_env = "WAKU_PLATFORM_MODEL"
+small_model_env = "WAKU_PLATFORM_SMALL_MODEL"
+label = "Hosted free tier"
+hidden_unless_env = true
+claims_families = false
+catalog_from_base_url = true
+scoped_credentials = true
+key_url = "https://github.com/ShenSeanChen/waku-agent/blob/main/hosted/README.md"
+price = [3.0, 15.0]

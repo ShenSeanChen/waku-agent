@@ -176,8 +176,11 @@ function yourModelsCard(st){
   // suggests the CURRENT provider's models (the only one we've fetched).
   const provOpts = providers.map(n => `<option value="${esc(n)}" ${n===st.provider?"selected":""}>${esc(n)}</option>`).join("");
   // Populate the model <select> for the initially-selected provider once the
-  // card is in the DOM (a fresh fetch of that provider's catalog).
-  setTimeout(() => loadAddModels(st.provider), 0);
+  // card is in the DOM (a fresh fetch of that provider's catalog). This card
+  // is rebuilt on every settings re-render, including an unattended 5s poll —
+  // deferBg says whether this particular render was one of those, or a person
+  // opening the tab.
+  deferBg(bg => loadAddModels(st.provider, bg));
   return `<h2>Your models <span class="meta" style="font-weight:400">— what the chat switcher shows</span></h2>
     ${uiCard(`
       ${rows}
@@ -191,13 +194,14 @@ function yourModelsCard(st){
 
 // Fill the add-row model <select> with a provider's catalog (any provider, not
 // just the active one — the backend takes a ?provider= override).
-async function loadAddModels(provider){
+async function loadAddModels(provider, background = false){
   const sel = document.getElementById("add-model");
   const msg = document.getElementById("add-msg");
   if (!sel) return;
   sel.innerHTML = `<option value="">loading ${esc(provider)} models…</option>`;
   let data;
-  try { data = await (await fetch("/api/models?provider=" + encodeURIComponent(provider))).json(); }
+  try { data = await (await fetch("/api/models?provider=" + encodeURIComponent(provider),
+    background ? {headers: BG} : undefined)).json(); }
   catch(e){ sel.innerHTML = `<option value="">couldn't load — pick another provider</option>`; return; }
   const ms = data.models || [];
   sel.innerHTML = `<option value="">choose a model…</option>` + ms.map(m => {
@@ -241,7 +245,54 @@ function modelsGrid(d){
     : providerCardStatus(p, st) === "configured" ? 2 : 3;
   const providers = (d.providers || []).slice()
     .sort((a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name));
-  return `<div class="provgrid">` + providers.map(p => providerCard(p, st)).join("") + `</div>`;
+  return `<div class="provgrid">` + providers.map(p => providerCard(p, st)).join("")
+       + jevCard(d) + `</div>`;
+}
+
+// Jev is not a chat provider -- it cannot hold a conversation -- so it is not in
+// the provider list. It still needs a key, and this is where people look for
+// one. The key goes straight to the user's own .env.
+function jevCard(d){
+  const ready = !!(d.settings && d.settings.typesafe_key_set);
+  const act = (label, onclick) => uiButton(label, {level: "secondary", size: "sm", onclick});
+  return uiCard(`
+    <div class="provstatus"><span class="provdot" style="background:${
+      ready ? "var(--ok)" : "var(--bad)"}"></span>${ready ? "key set" : "no key"}</div>
+    <p class="muted">Answers typed questions in the Judgment race. Get a key at
+      ${uiLink("typesafe.ai", "https://typesafe.ai")}.</p>
+    <div class="provactions">${act(ready ? "replace key" : "add key", "openJevKey()")}</div>`,
+    {title: "TypeSafe (Jev)", cls: "provcard"});
+}
+
+// Same shape as the provider modal: a header row with a close button, a .fld
+// label around the input, and a right-aligned action row.
+function openJevKey(){
+  markEditing();   // keep the 5s refresh loop from wiping this modal
+  const set = !!(D && D.settings && D.settings.typesafe_key_set);
+  openDialog(`
+      <div class="u" style="display:flex;justify-content:space-between;align-items:center">
+        <b>TypeSafe (Jev)</b>${uiButton("\u2715", {level: "tertiary", size: "sm",
+          onclick: "closeDialog()", attrs: 'aria-label="close"'})}</div>
+      <label class="fld"><span>API key <span class="meta">(TYPESAFE_API_KEY)</span>
+        ${set ? uiBadge("set", "ok") : uiBadge("not set", "neutral")}</span>
+        <input type="password" id="jev-key" autocomplete="off"
+               placeholder="${set ? "key on file — blank keeps it" : "paste key"}"></label>
+      <p class="meta">Written to your own <code>.env</code>. It is sent to
+        api.typesafe.ai and nowhere else.</p>
+      <div id="jev-key-msg" class="meta"></div>
+      <div class="dialog-foot">
+        ${uiButton("Save", {level: "primary", onclick: "saveJevKey()", attrs: 'id="jev-save"'})}
+      </div>`, {label: "TypeSafe key"});
+}
+
+async function saveJevKey(){
+  const input = document.getElementById("jev-key"), msg = document.getElementById("jev-key-msg");
+  const out = await postJSON("/api/judgment-arena/key", {key: input.value});
+  if (out && out.error){ msg.textContent = out.error; return; }
+  input.value = "";                    // do not leave it sitting in the DOM
+  closeDialog();
+  jaFixture = undefined;               // the arena re-reads whether Jev is ready
+  refresh();
 }
 
 function providerCard(p, st){

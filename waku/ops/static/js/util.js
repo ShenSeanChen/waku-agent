@@ -1,4 +1,5 @@
-// waku dashboard — escaping, markdown, core globals (D/editing), postJSON, reveal.
+// waku dashboard — escaping, markdown, core globals (D/editing), the
+// postJSON helper, reveal.
 // Split out of app.js: classic <script>, shared global scope (no build
 // step, no modules). Load order + rules: static/README.md.
 
@@ -97,7 +98,7 @@ const reveal = (path, label) => uiButton(esc(label), {level: "tertiary", size: "
 // --- memory CRUD (dashboard side). `editing` pauses the 5s rebuild so an
 // in-progress edit isn't wiped (same idea as the animation guard).
 let editing = false;
-async function postJSON(url, body){ return (await fetch(url,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)})).json(); }
+async function postJSON(url, body, headers = {}){ return (await fetch(url,{method:"POST",headers:{"Content-Type":"application/json",...headers},body:JSON.stringify(body)})).json(); }
 
 // --- Shared row atoms.
 //

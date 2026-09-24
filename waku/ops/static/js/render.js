@@ -253,6 +253,12 @@ async function sendChat(fromInput){
   if (pending.pending) pending.pending = false;   // stream ended without a 'done'
   syncChatLogs();
   input.focus();
+  // "Paused. Send a message to wake it." — this IS that message, and the turn
+  // above already woke the container. Nothing else pulls /api/data again, so
+  // without this the banner keeps saying "paused" while the reply sits in the
+  // dock and every card on the page stays frozen on pre-pause data for the
+  // life of the page. User-driven on purpose: no background header.
+  if (paused) await refresh();
 }
 function wireDock(){
   const b = document.getElementById("dsend"), i = document.getElementById("dmsg");

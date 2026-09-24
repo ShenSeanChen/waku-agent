@@ -44,7 +44,7 @@ jobs:
       # action here that cannot be undone: PyPI does not allow re-uploading a
       # version, even after a delete.
       - name: Install
-        run: pip install -e '.[dev]'
+        run: pip install -e '.[dev,hosted]'
       - name: Deterministic evals
         run: python -m pytest -q evals/deterministic
 

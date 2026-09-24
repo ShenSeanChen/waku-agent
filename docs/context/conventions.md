@@ -31,8 +31,10 @@ Waku registers is sent to the model on every call, so the bar for adding one
 is deliberately high. Start at the top of this ladder and move down only when
 the rung above cannot do the job:
 
-1. **Extend something that already exists.** A new provider is usually one
-   `PROVIDERS` row. A new memory backend matches an existing interface.
+1. **Extend something that already exists.** A new provider is one table in
+   `waku/providers.toml` plus a logo — see
+   [providers-registry.md](../providers-registry.md). A new memory backend
+   matches an existing interface.
 2. **A skill**: `skills/community/<name>/SKILL.md`. It is Markdown with no
    Python, and it costs no context until the model needs it.
 3. **A CLI and a README.** Waku can already run any program on your machine,
@@ -45,7 +47,9 @@ the rung above cannot do the job:
    prompt.
 
 The ladder has no rung for a new top-level package (like `waku/graph/`). That
-is an architecture decision and needs a proposal (§2).
+is an architecture decision and needs a proposal (§2). `hosted/` is a
+deployment of waku, not new capability inside it, so it sits on no rung of
+this ladder either.
 
 ## 4. Testing
 
@@ -54,6 +58,11 @@ is an architecture decision and needs a proposal (§2).
   test, and the other is a scored opinion.
 - Every behaviour change gets a deterministic eval. A bug fix adds the case
   that would have caught the bug.
+- A new route in `waku/ops/dashboard.py` needs two things beyond its handler:
+  a pin in `evals/deterministic/test_dashboard_routes.py`, and a decision in
+  `hosted/core/policy.py` about whether the hosted gateway passes, filters or
+  blocks it. `test_route_contract.py` fails until you make that decision, and
+  it does not guess a default for you.
 - Run `make gate` and `make lint` before you push. CI runs the deterministic
   tier. The judge tier needs a key, so only `make gate` runs it.
 - The dashboard's JavaScript has no test runner. Verify a frontend change in a

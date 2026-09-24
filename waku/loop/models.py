@@ -19,7 +19,9 @@ from __future__ import annotations
 
 import json
 import os
+import tomllib
 from dataclasses import dataclass
+from pathlib import Path
 from types import SimpleNamespace
 
 from waku.config import Settings
@@ -58,10 +60,49 @@ class Provider:
     # override for backwards compatibility, but must not leak across providers.
     base_url_env: str = ""
     endpoints: tuple[ProviderEndpoint, ...] = ()
+    # Seven opt-in fields, used only by the hosted free-tier row. Each
+    # defaults to the behaviour every other row already has.
+    label: str = ""
+    hidden_unless_env: bool = False
+    claims_families: bool = True
+    catalog_from_base_url: bool = False
+    model_env: str = ""
+    small_model_env: str = ""
+    scoped_credentials: bool = False
+
+    def label_text(self, name: str) -> str:
+        """What the UI calls this row."""
+        return self.label or name.replace("_", " ").title()
+
+    def models_now(self) -> tuple[str, str]:
+        """(model, small_model) with the environment overrides applied.
+
+        Read at call time, never at import: PROVIDERS is built once when the
+        module loads, and a tenant container sets these after that. Every
+        reader of a row's models goes through here so none can miss it.
+        """
+        model = os.getenv(self.model_env, "").strip() if self.model_env else ""
+        small = os.getenv(self.small_model_env, "").strip() if self.small_model_env else ""
+        return (model or self.model, small or self.small_model)
+
+    def is_visible(self) -> bool:
+        """False while a hidden row's endpoint is unset -- a local user must
+        never see the hosted row in a page, a list or an error message."""
+        if not self.hidden_unless_env:
+            return True
+        return bool(os.getenv(self.base_url_env, "").strip()) if self.base_url_env else False
 
     def default_pair(self) -> list[str]:
-        """[flagship, fast], deduped — the switcher's default picks."""
-        pair = [self.flagship or self.model, self.fast or self.small_model]
+        """[flagship, fast], deduped — the switcher's default picks.
+
+        Falls back to models_now(), not the raw model/small_model fields, so
+        a row with a model_env/small_model_env override (the hosted free
+        tier) never hands out its TOML placeholder here — every reader of
+        this pair (default_pinned_specs, _known_default_ids) would otherwise
+        pin an id the container will never actually call.
+        """
+        model, small_model = self.models_now()
+        pair = [self.flagship or model, self.fast or small_model]
         return list(dict.fromkeys(m for m in pair if m))
 
     def configured_base_url(self) -> str | None:
@@ -78,105 +119,55 @@ class Provider:
         return self.catalog_url
 
 
-PROVIDERS: dict[str, Provider] = {
-    "anthropic": Provider("anthropic", "ANTHROPIC_API_KEY", None,
-                          "claude-sonnet-5", "claude-haiku-4-5-20251001",
-                          catalog_url="https://api.anthropic.com/v1/models",
-                          flagship="claude-opus-4-8", fast="claude-sonnet-5"),
-    # The gpt-5.6 REASONING models (luna/sol/terra) can't use function tools on
-    # /v1/chat/completions (they need /v1/responses), so every Waku turn 400s on
-    # them. That constraint still holds — what changed is where the escape hatch
-    # is: the whole `-chat-latest` line (5.3, 5.2, 5.1 and the bare gpt-5 alias)
-    # is now 404 deprecated, so "fall back to the previous -chat-latest" is not
-    # an option any more. gpt-5.5 is the newest plain model that returns a
-    # tool_call on /v1/chat/completions; gpt-4.1-mini is a cheap tool-capable
-    # gate. A `-latest` alias is deliberately NOT used — it silently changes
-    # under a pinned benchmark, and test_openai_default_is_tool_capable rejects
-    # one. base_url is None (SDK default) so point the picker at the catalog.
-    "openai":    Provider("openai", "OPENAI_API_KEY", None,
-                          "gpt-5.5", "gpt-4.1-mini",
-                          catalog_url="https://api.openai.com/v1/models"),
-    # one key, every lab's models, and a $0 tier: the default models below are
-    # free ids (":free" suffix). Rate-limited (~50 req/day without credits).
-    "openrouter": Provider("openai", "OPENROUTER_API_KEY", "https://openrouter.ai/api/v1",
-                           "nvidia/nemotron-3-super-120b-a12b:free",
-                           "google/gemma-4-26b-a4b-it:free"),
-    "gemini":    Provider("openai", "GEMINI_API_KEY",
-                          "https://generativelanguage.googleapis.com/v1beta/openai/",
-                          "gemini-3.5-flash", "gemini-3.1-flash-lite",
-                          # Google's Pro tier isn't "gemini-3.5-pro" (that id
-                          # 404s); the current Pro is gemini-3.1-pro-preview.
-                          flagship="gemini-3.1-pro-preview", fast="gemini-3.5-flash"),
-    "deepseek":  Provider("openai", "DEEPSEEK_API_KEY", "https://api.deepseek.com",
-                          "deepseek-v4-pro", "deepseek-v4-pro"),
-    "minimax":   Provider("anthropic", "MINIMAX_API_KEY", "https://api.minimaxi.com/anthropic",
-                          "MiniMax-M3", "MiniMax-M2",
-                          catalog_url="https://api.minimaxi.com/anthropic/v1/models",
-                          base_url_env="MINIMAX_BASE_URL",
-                          endpoints=(
-                              ProviderEndpoint("China", "https://api.minimaxi.com/anthropic",
-                                               "https://api.minimaxi.com/anthropic/v1/models"),
-                              ProviderEndpoint("Global", "https://api.minimax.io/anthropic",
-                                               "https://api.minimax.io/anthropic/v1/models"),
-                          )),
-    # K3 is the flagship default; the gate/summarizer stays on cheap K2.6
-    # (the live catalog has no plain "kimi-k2.7" — only -code variants; we
-    # checked). Override with WAKU_SMALL_MODEL=kimi-k3 if your key is K3-only.
-    "kimi":      Provider("anthropic", "MOONSHOT_API_KEY", "https://api.moonshot.ai/anthropic",
-                          "kimi-k3", "kimi-k2.6",
-                          catalog_url="https://api.moonshot.ai/v1/models",
-                          flagship="kimi-k3", fast="kimi-k2.7-code-highspeed",
-                          base_url_env="MOONSHOT_BASE_URL",
-                          endpoints=(
-                              ProviderEndpoint("Global", "https://api.moonshot.ai/anthropic",
-                                               "https://api.moonshot.ai/v1/models"),
-                              ProviderEndpoint("China", "https://api.moonshot.cn/anthropic",
-                                               "https://api.moonshot.cn/v1/models"),
-                          )),
-    "glm":       Provider("anthropic", "ZHIPU_API_KEY", "https://api.z.ai/api/anthropic",
-                          "glm-5.2", "glm-5-turbo",
-                          base_url_env="ZHIPU_BASE_URL",
-                          endpoints=(
-                              ProviderEndpoint("Global", "https://api.z.ai/api/anthropic"),
-                              ProviderEndpoint("China", "https://open.bigmodel.cn/api/anthropic"),
-                          )),
-    # xAI Grok on its OpenAI-compatible endpoint. The model ids below are
-    # starting points — add XAI_API_KEY and the picker lists the live catalog
-    # (the authoritative source); pin whatever the current flagship/fast are.
-    "xai":       Provider("openai", "XAI_API_KEY", "https://api.x.ai/v1",
-                          "grok-4", "grok-4-fast",
-                          catalog_url="https://api.x.ai/v1/models"),
-    # OpenCode — OpenAI-compatible platform. Two endpoints: "zen" and "go"
-    # share the same platform key. zen offers free models (default:
-    # deepseek-v4-flash-free); go uses the standard deepseek-v4-flash.
-    # The live catalog (GET /models) lists whatever the endpoint serves,
-    # and the picker is the authoritative menu.
-    "opencode_zen": Provider("openai", "OPENCODE_ZEN_API_KEY",
-                               "https://opencode.ai/zen/v1",
-                               "deepseek-v4-flash-free", "deepseek-v4-flash-free"),
-    "opencode_go":  Provider("openai", "OPENCODE_GO_API_KEY",
-                               "https://opencode.ai/zen/go/v1",
-                               "deepseek-v4-flash", "deepseek-v4-flash"),
-}
+def _registry() -> dict:
+    """Read waku/providers.toml -- the whole provider list, as data.
 
+    A provider used to be a row here plus a pricing row, a key-url row, an
+    .env.example block and two to four separate eval files: seven to nine files
+    for what the rulebook calls a one-line change. It is now one table in that
+    file and a logo, and everything below is built from it, so a provider pull
+    request is a diff a maintainer can read at a glance.
+    """
+    path = Path(__file__).resolve().parents[1] / "providers.toml"
+    with path.open("rb") as fh:
+        return tomllib.load(fh)
+
+
+def _provider(row: dict) -> Provider:
+    return Provider(
+        kind=row["kind"], key_env=row["key_env"], base_url=row.get("base_url"),
+        model=row["model"], small_model=row["small_model"],
+        catalog_url=row.get("catalog_url"),
+        flagship=row.get("flagship", ""), fast=row.get("fast", ""),
+        base_url_env=row.get("base_url_env", ""),
+        endpoints=tuple(ProviderEndpoint(e["label"], e["base_url"], e.get("catalog_url"))
+                        for e in row.get("endpoints", ())),
+        label=row.get("label", ""),
+        hidden_unless_env=row.get("hidden_unless_env", False),
+        claims_families=row.get("claims_families", True),
+        catalog_from_base_url=row.get("catalog_from_base_url", False),
+        model_env=row.get("model_env", ""),
+        small_model_env=row.get("small_model_env", ""),
+        scoped_credentials=row.get("scoped_credentials", False),
+    )
+
+
+REGISTRY: dict[str, dict] = _registry()
+PROVIDERS: dict[str, Provider] = {name: _provider(row) for name, row in REGISTRY.items()}
 
 # Where each provider's key actually comes from. Pointing at ".env.example"
 # was useless advice for anyone who installed from PyPI — that file only exists
 # in a git checkout, so the one instruction the message gave could not be
 # followed by the people most likely to need it.
-KEY_URLS = {
-    "anthropic": "https://console.anthropic.com/settings/keys",
-    "openai": "https://platform.openai.com/api-keys",
-    "gemini": "https://aistudio.google.com/apikey",
-    "deepseek": "https://platform.deepseek.com/api_keys",
-    "openrouter": "https://openrouter.ai/keys",
-    "kimi": "https://platform.moonshot.ai/console/api-keys",
-    "glm": "https://z.ai/manage-apikey/apikey-list",
-    "minimax": "https://platform.minimaxi.com/user-center/basic-information",
-    "xai": "https://console.x.ai",
-    "opencode_zen": "https://opencode.ai/zen",
-    "opencode_go": "https://opencode.ai/zen",
-}
+KEY_URLS: dict[str, str] = {name: row["key_url"] for name, row in REGISTRY.items()}
+
+
+def _visible_names() -> list[str]:
+    """Provider names a local user is allowed to see: every row, minus a
+    hidden_unless_env row whose endpoint isn't set. Read at call time (never
+    cached) because is_visible() depends on the environment, which a tenant
+    container sets after PROVIDERS is built."""
+    return sorted(name for name, provider in PROVIDERS.items() if provider.is_visible())
 
 
 def _no_key_message(name: str, key_env: str) -> str:
@@ -202,7 +193,7 @@ def _no_key_message(name: str, key_env: str) -> str:
         f"  1. Get a key: {url}\n" if url else f"No API key for provider '{name}'.\n\n"
     ) + (
         f"  2. {where}\n\n"
-        f"Other providers: {', '.join(sorted(PROVIDERS))}\n"
+        f"Other providers: {', '.join(_visible_names())}\n"
         f"Switch with WAKU_PROVIDER=<name> and that provider's key."
     )
 
@@ -227,13 +218,59 @@ def _belongs_elsewhere(model: str, provider_name: str) -> bool:
     added since — and silently downgrade a deliberate choice. This only fires
     when the family is one some OTHER provider actually owns, which is the case
     that produces a 400 rather than a surprise.
+
+    A row with claims_families = false (the hosted free tier) is left out of
+    the OWNER map below, because it fronts a live catalog behind a single
+    placeholder id and its own family tells you nothing about what is valid
+    there. It is still JUDGED by the map, and that is deliberate
+    (spec 001, "The free tier is a provider"): a real anthropic owns
+    "claude", so a leftover
+    claude-* WAKU_MODEL under the hosted row is replaced by the row's own
+    model rather than reaching the proxy, where it would meet the allowlist.
     """
     family = model.split("-")[0].lower()
     if "/" in model or not family:
         return False
-    owner = {f: name for name, p in PROVIDERS.items() if "/" not in (p.model or "x")
+    owner = {f: name for name, p in PROVIDERS.items()
+             if p.claims_families and "/" not in (p.model or "x")
              for f in _families(p)}.get(family)
     return bool(owner) and owner != provider_name
+
+
+def models_for(provider_name: str, model: str = "", small_model: str = "") -> tuple[str, str]:
+    """The model ids a turn against `provider_name` will ACTUALLY run.
+
+    One answer from one place. get_client builds its client with these, and
+    settings_info/list_models report them, so the Models page can never name a
+    model the next turn will not use — which is what spec 001 asks of the two
+    readers ("report the model get_client will actually use, not the one in
+    .env"). They drifted apart once already: the hosted row resolved a leftover
+    claude-* to the deploy-time override in get_client while both readers still
+    showed the leftover.
+
+    A model name belongs to the provider it was configured FOR. WAKU_MODEL and
+    WAKU_SMALL_MODEL are global, so code that switches provider — the arena
+    races ten of them — carried anthropic's gate model to xAI, which answers
+    `400 Model not found: claude-haiku-4-5-20251001`. The retrieval gate then
+    FAILS OPEN by design, so it retrieved on every single turn for every
+    non-anthropic model instead of deciding, and reported that as a normal
+    "retrieve". A silent permanent failure wearing the costume of a healthy
+    decision.
+
+    So: a value INHERITED from the env for a different provider is dropped and
+    the provider's own default fills in; a value the caller passed explicitly
+    is kept, because that is a choice, not a leak. The two are distinguishable
+    exactly when the value still equals the env string.
+    """
+    provider = PROVIDERS.get(provider_name)
+    resolved: list[str] = []
+    for attr, value in (("model", model), ("small_model", small_model)):
+        inherited = os.getenv(f"WAKU_{attr.upper()}", "").strip()
+        if inherited and value == inherited and _belongs_elsewhere(inherited, provider_name):
+            value = ""
+        resolved.append(value)
+    default_model, default_small_model = provider.models_now() if provider else ("", "")
+    return resolved[0] or default_model, resolved[1] or default_small_model
 
 
 def get_client(settings: Settings):
@@ -242,11 +279,24 @@ def get_client(settings: Settings):
     provider = PROVIDERS.get(settings.provider)
     if provider is None:
         raise SystemExit(f"Unknown WAKU_PROVIDER '{settings.provider}'. "
-                         f"Pick one of: {', '.join(PROVIDERS)}")
+                         f"Pick one of: {', '.join(_visible_names())}")
+
+    # A hidden row that isn't configured yet must never build a client — it has
+    # no endpoint to talk to, and the message needs to name the variable that
+    # would turn it on, not "no API key", which would be misleading here.
+    if not provider.is_visible():
+        raise SystemExit(
+            f"'{settings.provider}' is not configured: set {provider.base_url_env} "
+            f"to enable it."
+        )
 
     # .strip() so a trailing newline/space from a copy-paste doesn't corrupt the
     # auth header (headers are latin-1; a stray non-ASCII char errors cryptically).
-    api_key = (settings.api_key or os.getenv(provider.key_env, "")).strip()
+    # A scoped_credentials row (the hosted free tier) never falls back to
+    # WAKU_API_KEY: that global override exists for BYOK and must not outrank
+    # the platform token a tenant container was actually given.
+    api_key = (os.getenv(provider.key_env, "") if provider.scoped_credentials
+              else (settings.api_key or os.getenv(provider.key_env, ""))).strip()
     if not api_key:
         raise SystemExit(_no_key_message(settings.provider, provider.key_env))
     try:
@@ -257,28 +307,15 @@ def get_client(settings: Settings):
             f"or arrow from a bad paste). Re-paste the key with no spaces or line breaks."
         )
 
-    # A model name belongs to the provider it was configured FOR. WAKU_MODEL and
-    # WAKU_SMALL_MODEL are global, so code that switches provider — the arena
-    # races ten of them — carried anthropic's gate model to xAI, which answers
-    # `400 Model not found: claude-haiku-4-5-20251001`. The retrieval gate then
-    # FAILS OPEN by design, so it retrieved on every single turn for every
-    # non-anthropic model instead of deciding, and reported that as a normal
-    # "retrieve". A silent permanent failure wearing the costume of a healthy
-    # decision.
-    #
-    # So: a value INHERITED from the env for a different provider is dropped
-    # (the provider's own default fills in below); a value the caller passed
-    # explicitly is kept, because that is a choice, not a leak. The two are
-    # distinguishable exactly when the setting still equals the env string.
-    for attr in ("model", "small_model"):
-        inherited = os.getenv(f"WAKU_{attr.upper()}", "").strip()
-        if inherited and getattr(settings, attr) == inherited \
-                and _belongs_elsewhere(inherited, settings.provider):
-            setattr(settings, attr, "")
-
-    settings.model = settings.model or provider.model
-    settings.small_model = settings.small_model or provider.small_model
-    base_url = settings.base_url or provider.configured_base_url()
+    # The ids the turn will run — resolved by models_for() above, which
+    # settings_info and list_models call too, so the page and the turn cannot
+    # name different models.
+    settings.model, settings.small_model = models_for(
+        settings.provider, settings.model, settings.small_model)
+    # Same scoping as the key above: WAKU_BASE_URL is a global BYOK override
+    # and must not leak into a scoped_credentials row's own endpoint.
+    base_url = (provider.configured_base_url() if provider.scoped_credentials
+               else settings.base_url or provider.configured_base_url())
 
     # a hung network call must never freeze a turn silently
     timeout = float(os.getenv("WAKU_LLM_TIMEOUT", "120"))

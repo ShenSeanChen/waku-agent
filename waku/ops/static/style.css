@@ -50,10 +50,15 @@
   .rail > a:hover{color:var(--text-ink)}
   .rail > a.on{border-left-color:var(--accent);background:var(--surface-raised);color:var(--text-ink)}
   .rail .n{color:var(--text-faint);font-variant-numeric:tabular-nums}
-  .r-bottom{margin-top:auto;display:flex;align-items:center;padding:var(--space-2);border-top:var(--rule-width) solid var(--rule)}
+  .r-bottom{margin-top:auto;display:flex;flex-wrap:wrap;align-items:center;
+    row-gap:var(--space-2);padding:var(--space-2);border-top:var(--rule-width) solid var(--rule)}
   .r-gh{font-family:var(--face-mono);font-size:var(--text-xs);letter-spacing:var(--tracking-label);text-transform:uppercase;
-        color:var(--text-faint);text-decoration:none;padding:var(--space-2)}
+        color:var(--text-faint);text-decoration:none;
+        padding:var(--space-2) var(--spacing)}
   .r-gh:hover{color:var(--text-ink)}
+  .r-one{color:var(--accent-fg)}
+  .r-home{display:flex;align-items:center;gap:var(--space-2);
+    color:inherit;text-decoration:none}
   #theme-toggle{margin-left:auto;display:inline-flex;background:transparent;border:var(--rule-width) solid transparent;
                 color:var(--text-muted);cursor:pointer;padding:var(--space-2)}
   #theme-toggle:hover{color:var(--text-ink)}
@@ -186,6 +191,11 @@
             word-break:break-all;margin-top:var(--space-2);max-height:180px;overflow:auto}
   .live{display:inline-flex;align-items:center;gap:var(--space-2)}
   .live .dot{animation:pulse 2s ease-in-out infinite}
+  /* A paused hosted container. The sentence REPLACES the live line and names
+     the one action that brings the page back, so it must not read like the
+     thing it replaced — there is no pulsing dot behind it and nothing is
+     updating. --warn, not --bad: waiting for you is not a failure. */
+  .live.paused{color:var(--warn);font-weight:var(--font-weight-medium)}
   @keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
   /* streaming caret — the token-by-token "thinking" cursor */
   .caret{display:inline-block;width:7px;height:14px;margin-left:calc(var(--spacing) * 0.5);vertical-align:text-bottom;
@@ -864,3 +874,33 @@ dialog.dialog :focus-visible{outline:var(--focus-ring-width) solid var(--accent)
    of every row behind a scrollbar. */
 .menu{overflow-x:hidden}
 .menu-item{flex-wrap:wrap;overflow-wrap:anywhere}
+
+/* Judgment arena — the third race. Reuses the model race's pick chips; only
+   the grid of answers is new. Every cell is one judgment, and the pending dot
+   is drawn from the start so the table does not grow in front of the viewer. */
+  .ja-picker{display:flex;gap:var(--space-2);flex-wrap:wrap;margin-bottom:var(--space-3)}
+  .ja-controls{display:flex;align-items:center;gap:var(--space-3);flex-wrap:wrap;
+    margin-top:var(--space-3)}
+  .ja-cell{display:inline-block;min-width:7ch;text-align:center;
+    font-family:var(--face-mono);font-size:var(--text-xs);white-space:nowrap}
+  .ja-cell.good{color:var(--ok)}
+  .ja-cell.bad{color:var(--bad)}
+  .ja-cell.pending{color:var(--text-faint)}
+  .ja-state{display:inline-block;max-width:44ch;overflow:hidden;
+    text-overflow:ellipsis;white-space:nowrap;color:var(--text-faint)}
+  .ja-want{font-family:var(--face-mono);font-size:var(--text-xs)}
+  .cmp-pick.off{opacity:.45;cursor:not-allowed}
+  .ja-best{color:var(--ok);font-weight:var(--font-weight-medium)}
+  .ja-folded .card-body{display:none}
+  .ja-shape{margin-top:var(--space-2);color:var(--text-faint);font-size:var(--text-xs)}
+  .ja-bad{color:var(--bad)}
+  .ja-qid{font-family:var(--face-mono);font-size:var(--text-xs);color:var(--text-faint)}
+  .ja-qcell{display:block}
+  .ja-grid td:has([data-tip]){cursor:help}
+  .ja-tip{position:fixed;z-index:60;max-width:56ch;white-space:pre-wrap;
+    padding:var(--space-3);background:var(--surface-paper);color:var(--text-ink);
+    border:var(--rule-width) solid var(--rule-hard);border-radius:var(--radius);
+    font-size:var(--text-xs);
+    line-height:var(--leading-snug);pointer-events:none}
+  .ja-asks{margin-top:var(--spacing);max-width:52ch}
+  .ja-conf{margin-left:var(--spacing);opacity:.55}

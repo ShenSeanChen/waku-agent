@@ -138,9 +138,10 @@ function playNext(){
   animateStage(evQueue.shift());
   setTimeout(playNext, 620);   // stagger so stages light up in sequence
 }
-async function pollEvents(){
+async function pollEvents(background = false){
   try{
-    const r = await (await fetch("/api/events" + (evCursor==null?"":"?cursor="+evCursor))).json();
+    const r = await (await fetch("/api/events" + (evCursor==null?"":"?cursor="+evCursor),
+      background ? {headers: BG} : undefined)).json();
     if (evCursor != null && r.events.length){
       evQueue.push(...r.events);
       if (!playing) playNext();

@@ -15,8 +15,8 @@ async function newChat(){
 //   mode 'history' -> action:history, read-only ('__all__' = full timeline)
 // Replaces CHAT + repaints, unless `guard` is set and the length is unchanged
 // (the live-poll case, to avoid a needless redraw). Returns the items or null.
-async function loadThreadInto(id, {mode = "history", setSession = false, guard = false} = {}){
-  const r = await postJSON("/api/session", {action: mode, id});
+async function loadThreadInto(id, {mode = "history", setSession = false, guard = false, background = false} = {}){
+  const r = await postJSON("/api/session", {action: mode, id}, background ? BG : {});
   if (!r.ok) return null;
   const fresh = (r.history || []).map(histItem);
   if (guard && fresh.length === CHAT.length) return fresh;   // unchanged -> skip repaint
@@ -51,9 +51,11 @@ async function viewAllHistory(){
 }
 // Re-pull the opened conversation each refresh so incoming messages from another
 // gateway (your phone) show up live — unless a turn is mid-stream in the dock.
-async function syncLiveView(){
+// `background` comes straight from the refresh() call that reached us: this is
+// only ever a side effect of that poll, never its own user action.
+async function syncLiveView(background = false){
   if (!liveView || CHAT.some(m => m.pending)) return;
-  await loadThreadInto(liveView, {guard: true});   // guard: repaint only if changed
+  await loadThreadInto(liveView, {guard: true, background});   // guard: repaint only if changed
 }
 // The history and model menus are both ui.js's one menu (openMenu), which
 // closes itself on an outside click or Escape. Only one is open at a time, so

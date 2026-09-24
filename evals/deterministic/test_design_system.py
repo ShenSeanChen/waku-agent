@@ -259,7 +259,7 @@ def test_rail_links_carry_their_letter():
     """Collapsed, the rail shows each item's first letter (from data-short);
     the full name stays in aria-label for a screen reader and the tooltip."""
     links = re.findall(r'(<a href="#[^"]*"[^>]*data-v="[^"]*"[^>]*>)<span class="lbl">([^<]+)</span>', _index())
-    assert len(links) == 13, f"expected 13 rail links with a .lbl label, found {len(links)}"
+    assert len(links) == 14, f"expected 14 rail links with a .lbl label, found {len(links)}"
     for tag, label in links:
         assert f'data-short="{label[0]}"' in tag, f"{label}: data-short must be its first letter"
         assert f'aria-label="{label}"' in tag, f"{label}: aria-label must be its full name"

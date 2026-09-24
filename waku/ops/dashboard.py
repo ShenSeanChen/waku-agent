@@ -15,7 +15,7 @@ voice/telegram gateways drive light up in the browser as it runs.
 
 The frontend is plain static files (static/index.html + style.css + app.js)
 served as-is — no build step, no framework. This file is just the server + API.
-Bound to 127.0.0.1 only. For deep trace waterfalls use Phoenix (`make trace`).
+Bound to 127.0.0.1 unless WAKU_DASHBOARD_HOST says otherwise, which warns.
 """
 
 from __future__ import annotations
@@ -40,6 +40,7 @@ from waku.integrations import (
     list_providers,
     test_integration,
 )
+from waku.loop.agent import error_text
 from waku.ops import browser_agent, commands, compare_history
 from waku.ops.arena import (
     compare_clear,
@@ -169,7 +170,7 @@ def graph_stream(payload: dict, emit) -> None:
     except Exception as exc:
         # Includes GraphStateCollision, which run_graph raises OUT (unlike node
         # errors) — better shown in the card than dropped on the floor.
-        emit("done", {"error": f"{type(exc).__name__}: {exc}"})
+        emit("done", {"error": error_text(exc)})
 
 
 def _run_command(command: tuple[str, str], emit) -> None:
@@ -912,6 +913,13 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == "/api/data":
             self._send(json.dumps(collect(), default=str).encode(), "application/json")
+        elif self.path == "/api/judgment-arena":
+            from waku.ops import judgment_arena, judgment_cases  # noqa: PLC0415
+            self._send(json.dumps({"suites": judgment_cases.suite_list(),
+                                   "contestants": judgment_arena.contestants(),
+                                   "runs": judgment_arena.load_runs()}).encode(),
+                       "application/json")
+            return
         elif self.path == "/api/compare/history":
             runs = compare_history.load_runs(load_settings().home)
             self._send(json.dumps(history_response(runs)).encode(), "application/json")
@@ -1030,7 +1038,7 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 chat_stream(message, emit)
             except Exception as exc:  # surface as a terminal event, don't 500
-                emit("done", {"error": f"{type(exc).__name__}: {exc}"})
+                emit("done", {"error": error_text(exc)})
             return
         # /api/compare/stream races several models, emitting each result as it lands.
         if self.path == "/api/compare/stream":
@@ -1052,6 +1060,37 @@ class Handler(BaseHTTPRequestHandler):
                                judge_spec=(payload.get("judge_model") or ""), apple=bool(payload.get("apple")))
             except Exception as exc:
                 emit("done", {"error": f"{type(exc).__name__}: {exc}"})
+            return
+        if self.path == "/api/judgment-arena/key":
+            from waku.ops import judgment_arena
+
+            payload = json.loads(self.rfile.read(length) or "{}")
+            out = judgment_arena.save_key(payload.get("key", ""))
+            self._send(json.dumps(out).encode(), "application/json")
+            return
+        # /api/judgment-arena/stream — the third race: same harness, same cases,
+        # same policy, and only WHO makes the judgment changes.
+        if self.path == "/api/judgment-arena/stream":
+            from waku.ops import judgment_arena
+
+            payload = json.loads(self.rfile.read(length) or "{}")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-cache")
+            self.end_headers()
+
+            def emit_judge(kind, ev):
+                try:
+                    self.wfile.write(
+                        f"data: {json.dumps({'kind': kind, **ev}, default=str)}\n\n".encode())
+                    self.wfile.flush()
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
+            try:
+                judgment_arena.race((payload.get("suite") or "").strip(),
+                                    payload.get("specs") or [], emit_judge)
+            except Exception as exc:
+                emit_judge("done", {"error": f"{type(exc).__name__}: {exc}"})
             return
         # /api/memory-arena/stream — same shape as the model race above, one dial
         # over: every contestant is the same agent on the same model, and only
@@ -1166,13 +1205,36 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
 
+LOOPBACK = {"127.0.0.1", "::1", "localhost"}
+
+
+def bind_host() -> str:
+    """Where the dashboard listens. Loopback unless told otherwise.
+
+    A container has to answer on its own address, so this is configurable —
+    but the dashboard has no authentication and its SQL console runs
+    arbitrary SQL, so leaving loopback prints a warning to the terminal that
+    chose it.
+    """
+    host = os.getenv("WAKU_DASHBOARD_HOST", "127.0.0.1").strip() or "127.0.0.1"
+    if host not in LOOPBACK:
+        print(f"warning: WAKU_DASHBOARD_HOST={host} — the dashboard has no "
+              f"authentication and its SQL console runs arbitrary SQL. "
+              f"Only do this behind something that authenticates.")
+    return host
+
+
 def main() -> None:
     # Port precedence: WAKU_DASHBOARD_PORT, then the conventional PORT (used by
     # deploy platforms and IDE preview panes), then 7777. If it's taken, walk on.
     base = int(os.getenv("WAKU_DASHBOARD_PORT") or os.getenv("PORT") or PORT)
+    # Resolved once, above the walk: the environment cannot change between
+    # iterations, and bind_host() prints the off-loopback security warning. Ten
+    # busy ports used to print it ten times, which teaches people to skip it.
+    host = bind_host()
     for port in range(base, base + 10):  # walk past a busy port instead of crashing
         try:
-            server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+            server = ThreadingHTTPServer((host, port), Handler)
         except OSError:
             print(f"port {port} busy, trying {port + 1}…")
             continue

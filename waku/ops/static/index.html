@@ -10,7 +10,9 @@
 <link rel="stylesheet" href="/static/design/controls.css">
 <link rel="stylesheet" href="/static/style.css"></head><body>
 <nav id="nav" class="rail">
-  <div class="r-top"><i class="mark" aria-hidden="true"></i><span class="r-name">WAKU</span>
+  <div class="r-top"><a class="r-home" href="https://waku.one" target="_blank"
+      rel="noopener noreferrer" title="waku.one"><i class="mark" aria-hidden="true"></i><span
+      class="r-name">WAKU</span></a>
     <button id="nav-collapse" class="r-chev" aria-label="Collapse the sidebar" aria-expanded="true">&#8249;</button></div>
   <div class="r-grp">System</div>
   <a href="#overview" data-v="overview" data-short="O" aria-label="Overview"><span class="lbl">Overview</span></a>
@@ -32,12 +34,14 @@
   <div class="r-grp">Arena</div>
   <a href="#compare/models" data-v="compare" data-sub="models" data-short="M" aria-label="Model race"><span class="lbl">Model race</span></a>
   <a href="#compare/memory" data-v="compare" data-sub="memory" data-short="M" aria-label="Memory race"><span class="lbl">Memory race</span></a>
+  <a href="#judgment" data-v="judgment" data-short="J" aria-label="Judgment race"><span class="lbl">Judgment race</span></a>
   <div class="r-grp">Setup</div>
   <a href="#models" data-v="models" data-short="M" aria-label="Models"><span class="lbl">Models</span></a>
   <a href="#connections" data-v="connections" data-short="C" aria-label="Connections"><span class="lbl">Connections</span></a>
   <a href="#settings" data-v="settings" data-short="B" aria-label="Behaviour"><span class="lbl">Behaviour</span></a>
   <div class="r-bottom">
     <a class="r-gh" href="https://github.com/ShenSeanChen/waku-agent" target="_blank" rel="noopener noreferrer">GitHub</a>
+    <a class="r-gh r-one" href="https://waku.one" target="_blank" rel="noopener noreferrer">waku.one</a>
     <button id="theme-toggle" onclick="cycleTheme()"></button>
   </div>
 </nav>
@@ -92,5 +96,6 @@
 <script src="/static/js/graph.js"></script>
 <script src="/static/js/views.js"></script>
 <script src="/static/js/compare.js"></script>
+<script src="/static/js/judgment.js"></script>
 <script src="/static/js/dock.js"></script>
 <script src="/static/js/main.js"></script></body></html>

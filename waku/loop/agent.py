@@ -31,6 +31,24 @@ LoopEvent = dict[str, Any]
 Observer = Callable[[str, LoopEvent], None]
 
 
+def error_text(exc: BaseException) -> str:
+    """What the user reads when a call fails.
+
+    A provider that refused the call already wrote a sentence for a human;
+    show that one. Anything else keeps today's {type}: {message}, which is
+    the right amount of detail for a bug rather than a decision.
+
+    It lives here, beside the 4xx rule above, because a refusal reaches a
+    reader by two routes — the gateway's "done" event and a graph node's
+    entry in a run's `errors` map — and two copies of this would drift the
+    way the dashboard's two chat implementations once did.
+    """
+    message = getattr(exc, "message", "")
+    if message and getattr(exc, "status_code", 0):
+        return str(message)
+    return f"{type(exc).__name__}: {exc}"
+
+
 @dataclass
 class LoopResult:
     reply: str
@@ -74,8 +92,14 @@ def run_loop(
                     for delta in s.text_stream:
                         notify("text", {"delta": delta})
                     response = s.get_final_message()
-            except Exception:
-                response = None  # any streaming hiccup → fall back to one call
+            except Exception as exc:
+                # A 4xx is a decision, not a transport fault: the provider
+                # looked at the request and refused it. Retrying without
+                # streaming asks the same question and gets the same answer,
+                # which doubles what a metered tenant spends on being told no.
+                if 400 <= getattr(exc, "status_code", 0) < 500:
+                    raise
+                response = None  # any other streaming hiccup → fall back to one call
         if response is None:
             response = client.messages.create(
                 model=model,

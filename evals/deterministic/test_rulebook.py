@@ -130,6 +130,14 @@ def test_product_and_evals_never_reach_into_examples_or_lab():
     """The dependency runs one way: product code and the gate never import,
     run or read anything in examples/ or lab/ (conventions §6, rules 1 and 3)."""
     this = Path(__file__).resolve()
+    # test_hosted_boundary.py's packaging check builds the real sdist/wheel
+    # and asserts no member's path has "hosted" or "lab" as a component -- it
+    # names the directory as a STRING LITERAL to check a BUILT ARTIFACT's
+    # member list, and never imports, runs or reads anything under lab/
+    # itself. Exempt only that file's string LITERALS from this check, not
+    # the file: a real `import lab` written there would be exactly as wrong
+    # as one anywhere else, and stays covered below.
+    literal_exempt = {(ROOT / "evals" / "deterministic" / "test_hosted_boundary.py").resolve()}
     offenders = sorted({
         str(py.relative_to(ROOT))
         for top in ("waku", "evals")
@@ -137,6 +145,7 @@ def test_product_and_evals_never_reach_into_examples_or_lab():
         if py.resolve() != this
         for node in ast.walk(ast.parse(py.read_text(encoding="utf-8")))
         if _reaches_outside(node)
+        and not (isinstance(node, ast.Constant) and py.resolve() in literal_exempt)
     })
     assert not offenders, f"these reach into examples/ or lab/: {offenders}"
 
@@ -162,7 +171,12 @@ def test_lab_topics_follow_the_playbook():
 def test_lab_never_ships():
     build = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["tool"]["hatch"]["build"]
     assert build["targets"]["wheel"]["packages"] == ["waku"]
-    assert "lab" in build["targets"]["sdist"]["exclude"]
+    # Checks the config says so; this is not proof the artifact agrees -- a
+    # bare "lab" sat here and did not, in fact, keep lab/ out of the sdist
+    # (task-B1-review.md, finding B1-F1). The stronger check builds a real
+    # sdist and wheel and looks inside them:
+    # test_hosted_boundary.py::test_hosted_and_lab_never_ship_in_the_wheel_or_sdist.
+    assert "/lab/**" in build["targets"]["sdist"]["exclude"]
 
 
 def test_no_retired_waku_memory_address():
@@ -208,3 +222,35 @@ def test_lab_topics_commit_screenshots_not_board_sources():
               if topic.name not in BOARD_SOURCES_PREDATE_RULE
               for p in topic.rglob("*.excalidraw")]
     assert not leaked, f"keep board sources out of the repo; commit a PNG in screenshots/ instead: {leaked}"
+
+
+def test_no_module_defines_a_top_level_name_twice():
+    """A second definition of a module-level name silently replaces the first.
+
+    Written the moment it was needed. A large edit to
+    test_dashboard_background_header.py left a duplicated 90-line block: two
+    identical copies of two helpers and two tables, plus a superseded
+    DECLARED_INTERVALS that no test referenced. Nothing failed, because the
+    second copies were identical — which is exactly why it survived review. A
+    tripwire file with dead code in it is a tripwire nobody trusts.
+
+    `ruff --select F811` does not see this: run against that file with the
+    duplication present, it exits 0.
+    """
+    offenders = []
+    for path in sorted([*ROOT.glob("waku/**/*.py"), *ROOT.glob("evals/**/*.py"),
+                        *ROOT.glob("scripts/*.py")]):
+        seen: dict[str, list[int]] = {}
+        for node in ast.parse(path.read_text(encoding="utf-8")).body:
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                seen.setdefault(node.name, []).append(node.lineno)
+            elif isinstance(node, ast.Assign):
+                for target in node.targets:
+                    if isinstance(target, ast.Name):
+                        seen.setdefault(target.id, []).append(node.lineno)
+        offenders += [f"{path.relative_to(ROOT)}: `{name}` at lines {lines}"
+                      for name, lines in seen.items() if len(lines) > 1]
+    assert not offenders, (
+        "module-level name defined more than once — the later definition wins "
+        "and the earlier one is dead:\n  " + "\n  ".join(offenders)
+    )
