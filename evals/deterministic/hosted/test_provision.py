@@ -148,9 +148,11 @@ def test_an_env_symlink_is_left_alone_rather_than_followed(dirs, template, tmp_p
 
 
 def test_a_broken_env_symlink_does_not_create_the_target(dirs, template, tmp_path):
-    """exists() is False for a dangling symlink, so the create path is the one
-    that has to refuse it: opening with O_CREAT alone would follow the link
-    and write the file it points at."""
+    """is_symlink() is what refuses this, and it has to be: exists() is False
+    for a dangling link, so without that check provisioning would fall into
+    the create path and O_CREAT would follow the link and write the file it
+    points at. The create path is never reached here, and its O_EXCL and
+    O_NOFOLLOW only cover a link planted after the check."""
     dirs.env.mkdir(parents=True, exist_ok=True)
     target = tmp_path / "does-not-exist"
     (dirs.env / ".env").symlink_to(target)

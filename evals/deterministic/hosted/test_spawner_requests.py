@@ -68,6 +68,85 @@ def test_no_operation_is_half_wired():
         assert "op" not in required, op
 
 
+# A valid value for every field the tables name, so a payload for any
+# operation can be built FROM the tables rather than typed out per operation.
+_VALUES = {
+    "tenant_id": GOOD_ID,
+    "project_id": 7,
+    "timezone": "UTC",
+    "token": GOOD_TOKEN,
+    "task": "backup",
+}
+
+
+def payload_for(op: str, **overrides) -> dict:
+    """The minimal valid payload for `op`, derived from `_KEYS`."""
+    payload = {key: (op if key == "op" else _VALUES[key]) for key in requests._KEYS[op]}
+    payload.update(overrides)
+    return payload
+
+
+# Keys no operation takes. The case variants matter: a check that normalised
+# key case before comparing would let "TOKEN" through as "token" on start,
+# which every other test in this file would call a pass.
+_JUNK_KEYS = ["extra", "cmd", "image", "args", "env", "OP", "Op",
+              "TENANT_ID", "Tenant_Id", "TOKEN", "Project_Id", "TASK", "TIMEZONE"]
+
+
+@pytest.mark.parametrize("op", sorted(SPEC_OPERATIONS))
+def test_parse_accepts_every_operation_the_table_names(op):
+    """The tests above pin the TABLES. These drive the same tables through
+    parse() itself, because a check widened at the use site -- `op not in
+    OPERATIONS | {"exec"}`, say -- leaves every table assertion green. The
+    packaging guard earlier in this group failed the same way: it asserted the
+    exclude string while the build did something else."""
+    assert requests.parse(payload_for(op)).op == op
+
+
+@pytest.mark.parametrize("op", ["exec", "restart", "run", "shell", "delete", "",
+                                "PROVISION", "start ", "list2", None, 0])
+def test_parse_refuses_an_operation_the_table_does_not_name(op):
+    assert op not in SPEC_OPERATIONS, "this parameter stopped being a negative case"
+    with pytest.raises(requests.Invalid):
+        requests.parse({"op": op})
+
+
+@pytest.mark.parametrize("task", sorted(SPEC_TASKS))
+def test_parse_accepts_every_task_the_table_names(task):
+    assert requests.parse(payload_for("task", task=task)).task == task
+
+
+@pytest.mark.parametrize("task", ["exec", "rm -rf", "", "inspect-start", "BACKUP",
+                                  "backup ", "stop", None, 0])
+def test_parse_refuses_a_task_the_table_does_not_name(task):
+    assert task not in SPEC_TASKS, "this parameter stopped being a negative case"
+    with pytest.raises(requests.Invalid):
+        requests.parse(payload_for("task", task=task))
+
+
+@pytest.mark.parametrize("op", sorted(SPEC_OPERATIONS))
+def test_parse_refuses_every_key_the_operation_does_not_take(op):
+    """Driven through parse(), one key at a time, so an unknown-key check that
+    was widened or made case-insensitive fails here. The universe is every
+    junk key plus every field another operation takes: `project_id` is legal
+    on start and must not be legal on stop."""
+    universe = set(_JUNK_KEYS) | {key for keys in requests._KEYS.values() for key in keys}
+    for key in sorted(universe - requests._KEYS[op]):
+        with pytest.raises(requests.Invalid, match="does not take"):
+            requests.parse(payload_for(op, **{key: "anything"}))
+
+
+@pytest.mark.parametrize("op", sorted(SPEC_OPERATIONS))
+def test_parse_accepts_every_key_the_operation_does_take(op):
+    """The other direction: a key allowlist NARROWED at the use site would
+    start refusing a field the spawner needs, and every negative test in this
+    file would still pass."""
+    parsed = requests.parse(payload_for(op))
+    assert parsed.op == op
+    for key in requests._KEYS[op] - {"op"}:
+        assert getattr(parsed, key) == _VALUES[key], key
+
+
 def test_a_start_request_carries_everything_the_template_needs():
     parsed = requests.parse({"op": "start", "tenant_id": GOOD_ID, "project_id": 7,
                              "timezone": "Asia/Shanghai", "token": GOOD_TOKEN})
