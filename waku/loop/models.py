@@ -60,10 +60,49 @@ class Provider:
     # override for backwards compatibility, but must not leak across providers.
     base_url_env: str = ""
     endpoints: tuple[ProviderEndpoint, ...] = ()
+    # Seven opt-in fields, used only by the hosted free-tier row. Each
+    # defaults to the behaviour every other row already has.
+    label: str = ""
+    hidden_unless_env: bool = False
+    claims_families: bool = True
+    catalog_from_base_url: bool = False
+    model_env: str = ""
+    small_model_env: str = ""
+    scoped_credentials: bool = False
+
+    def label_text(self, name: str) -> str:
+        """What the UI calls this row."""
+        return self.label or name.replace("_", " ").title()
+
+    def models_now(self) -> tuple[str, str]:
+        """(model, small_model) with the environment overrides applied.
+
+        Read at call time, never at import: PROVIDERS is built once when the
+        module loads, and a tenant container sets these after that. Every
+        reader of a row's models goes through here so none can miss it.
+        """
+        model = os.getenv(self.model_env, "").strip() if self.model_env else ""
+        small = os.getenv(self.small_model_env, "").strip() if self.small_model_env else ""
+        return (model or self.model, small or self.small_model)
+
+    def is_visible(self) -> bool:
+        """False while a hidden row's endpoint is unset -- a local user must
+        never see the hosted row in a page, a list or an error message."""
+        if not self.hidden_unless_env:
+            return True
+        return bool(os.getenv(self.base_url_env, "").strip()) if self.base_url_env else False
 
     def default_pair(self) -> list[str]:
-        """[flagship, fast], deduped — the switcher's default picks."""
-        pair = [self.flagship or self.model, self.fast or self.small_model]
+        """[flagship, fast], deduped — the switcher's default picks.
+
+        Falls back to models_now(), not the raw model/small_model fields, so
+        a row with a model_env/small_model_env override (the hosted free
+        tier) never hands out its TOML placeholder here — every reader of
+        this pair (default_pinned_specs, _known_default_ids) would otherwise
+        pin an id the container will never actually call.
+        """
+        model, small_model = self.models_now()
+        pair = [self.flagship or model, self.fast or small_model]
         return list(dict.fromkeys(m for m in pair if m))
 
     def configured_base_url(self) -> str | None:
@@ -103,6 +142,13 @@ def _provider(row: dict) -> Provider:
         base_url_env=row.get("base_url_env", ""),
         endpoints=tuple(ProviderEndpoint(e["label"], e["base_url"], e.get("catalog_url"))
                         for e in row.get("endpoints", ())),
+        label=row.get("label", ""),
+        hidden_unless_env=row.get("hidden_unless_env", False),
+        claims_families=row.get("claims_families", True),
+        catalog_from_base_url=row.get("catalog_from_base_url", False),
+        model_env=row.get("model_env", ""),
+        small_model_env=row.get("small_model_env", ""),
+        scoped_credentials=row.get("scoped_credentials", False),
     )
 
 
@@ -114,6 +160,14 @@ PROVIDERS: dict[str, Provider] = {name: _provider(row) for name, row in REGISTRY
 # in a git checkout, so the one instruction the message gave could not be
 # followed by the people most likely to need it.
 KEY_URLS: dict[str, str] = {name: row["key_url"] for name, row in REGISTRY.items()}
+
+
+def _visible_names() -> list[str]:
+    """Provider names a local user is allowed to see: every row, minus a
+    hidden_unless_env row whose endpoint isn't set. Read at call time (never
+    cached) because is_visible() depends on the environment, which a tenant
+    container sets after PROVIDERS is built."""
+    return sorted(name for name, provider in PROVIDERS.items() if provider.is_visible())
 
 
 def _no_key_message(name: str, key_env: str) -> str:
@@ -139,7 +193,7 @@ def _no_key_message(name: str, key_env: str) -> str:
         f"  1. Get a key: {url}\n" if url else f"No API key for provider '{name}'.\n\n"
     ) + (
         f"  2. {where}\n\n"
-        f"Other providers: {', '.join(sorted(PROVIDERS))}\n"
+        f"Other providers: {', '.join(_visible_names())}\n"
         f"Switch with WAKU_PROVIDER=<name> and that provider's key."
     )
 
@@ -164,13 +218,59 @@ def _belongs_elsewhere(model: str, provider_name: str) -> bool:
     added since — and silently downgrade a deliberate choice. This only fires
     when the family is one some OTHER provider actually owns, which is the case
     that produces a 400 rather than a surprise.
+
+    A row with claims_families = false (the hosted free tier) is left out of
+    the OWNER map below, because it fronts a live catalog behind a single
+    placeholder id and its own family tells you nothing about what is valid
+    there. It is still JUDGED by the map, and that is deliberate
+    (spec 001, "The free tier is a provider"): a real anthropic owns
+    "claude", so a leftover
+    claude-* WAKU_MODEL under the hosted row is replaced by the row's own
+    model rather than reaching the proxy, where it would meet the allowlist.
     """
     family = model.split("-")[0].lower()
     if "/" in model or not family:
         return False
-    owner = {f: name for name, p in PROVIDERS.items() if "/" not in (p.model or "x")
+    owner = {f: name for name, p in PROVIDERS.items()
+             if p.claims_families and "/" not in (p.model or "x")
              for f in _families(p)}.get(family)
     return bool(owner) and owner != provider_name
+
+
+def models_for(provider_name: str, model: str = "", small_model: str = "") -> tuple[str, str]:
+    """The model ids a turn against `provider_name` will ACTUALLY run.
+
+    One answer from one place. get_client builds its client with these, and
+    settings_info/list_models report them, so the Models page can never name a
+    model the next turn will not use — which is what spec 001 asks of the two
+    readers ("report the model get_client will actually use, not the one in
+    .env"). They drifted apart once already: the hosted row resolved a leftover
+    claude-* to the deploy-time override in get_client while both readers still
+    showed the leftover.
+
+    A model name belongs to the provider it was configured FOR. WAKU_MODEL and
+    WAKU_SMALL_MODEL are global, so code that switches provider — the arena
+    races ten of them — carried anthropic's gate model to xAI, which answers
+    `400 Model not found: claude-haiku-4-5-20251001`. The retrieval gate then
+    FAILS OPEN by design, so it retrieved on every single turn for every
+    non-anthropic model instead of deciding, and reported that as a normal
+    "retrieve". A silent permanent failure wearing the costume of a healthy
+    decision.
+
+    So: a value INHERITED from the env for a different provider is dropped and
+    the provider's own default fills in; a value the caller passed explicitly
+    is kept, because that is a choice, not a leak. The two are distinguishable
+    exactly when the value still equals the env string.
+    """
+    provider = PROVIDERS.get(provider_name)
+    resolved: list[str] = []
+    for attr, value in (("model", model), ("small_model", small_model)):
+        inherited = os.getenv(f"WAKU_{attr.upper()}", "").strip()
+        if inherited and value == inherited and _belongs_elsewhere(inherited, provider_name):
+            value = ""
+        resolved.append(value)
+    default_model, default_small_model = provider.models_now() if provider else ("", "")
+    return resolved[0] or default_model, resolved[1] or default_small_model
 
 
 def get_client(settings: Settings):
@@ -179,11 +279,24 @@ def get_client(settings: Settings):
     provider = PROVIDERS.get(settings.provider)
     if provider is None:
         raise SystemExit(f"Unknown WAKU_PROVIDER '{settings.provider}'. "
-                         f"Pick one of: {', '.join(PROVIDERS)}")
+                         f"Pick one of: {', '.join(_visible_names())}")
+
+    # A hidden row that isn't configured yet must never build a client — it has
+    # no endpoint to talk to, and the message needs to name the variable that
+    # would turn it on, not "no API key", which would be misleading here.
+    if not provider.is_visible():
+        raise SystemExit(
+            f"'{settings.provider}' is not configured: set {provider.base_url_env} "
+            f"to enable it."
+        )
 
     # .strip() so a trailing newline/space from a copy-paste doesn't corrupt the
     # auth header (headers are latin-1; a stray non-ASCII char errors cryptically).
-    api_key = (settings.api_key or os.getenv(provider.key_env, "")).strip()
+    # A scoped_credentials row (the hosted free tier) never falls back to
+    # WAKU_API_KEY: that global override exists for BYOK and must not outrank
+    # the platform token a tenant container was actually given.
+    api_key = (os.getenv(provider.key_env, "") if provider.scoped_credentials
+              else (settings.api_key or os.getenv(provider.key_env, ""))).strip()
     if not api_key:
         raise SystemExit(_no_key_message(settings.provider, provider.key_env))
     try:
@@ -194,28 +307,15 @@ def get_client(settings: Settings):
             f"or arrow from a bad paste). Re-paste the key with no spaces or line breaks."
         )
 
-    # A model name belongs to the provider it was configured FOR. WAKU_MODEL and
-    # WAKU_SMALL_MODEL are global, so code that switches provider — the arena
-    # races ten of them — carried anthropic's gate model to xAI, which answers
-    # `400 Model not found: claude-haiku-4-5-20251001`. The retrieval gate then
-    # FAILS OPEN by design, so it retrieved on every single turn for every
-    # non-anthropic model instead of deciding, and reported that as a normal
-    # "retrieve". A silent permanent failure wearing the costume of a healthy
-    # decision.
-    #
-    # So: a value INHERITED from the env for a different provider is dropped
-    # (the provider's own default fills in below); a value the caller passed
-    # explicitly is kept, because that is a choice, not a leak. The two are
-    # distinguishable exactly when the setting still equals the env string.
-    for attr in ("model", "small_model"):
-        inherited = os.getenv(f"WAKU_{attr.upper()}", "").strip()
-        if inherited and getattr(settings, attr) == inherited \
-                and _belongs_elsewhere(inherited, settings.provider):
-            setattr(settings, attr, "")
-
-    settings.model = settings.model or provider.model
-    settings.small_model = settings.small_model or provider.small_model
-    base_url = settings.base_url or provider.configured_base_url()
+    # The ids the turn will run — resolved by models_for() above, which
+    # settings_info and list_models call too, so the page and the turn cannot
+    # name different models.
+    settings.model, settings.small_model = models_for(
+        settings.provider, settings.model, settings.small_model)
+    # Same scoping as the key above: WAKU_BASE_URL is a global BYOK override
+    # and must not leak into a scoped_credentials row's own endpoint.
+    base_url = (provider.configured_base_url() if provider.scoped_credentials
+               else settings.base_url or provider.configured_base_url())
 
     # a hung network call must never freeze a turn silently
     timeout = float(os.getenv("WAKU_LLM_TIMEOUT", "120"))

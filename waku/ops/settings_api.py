@@ -12,7 +12,7 @@ import os
 import shutil
 
 from waku.config import load_settings
-from waku.loop.models import PROVIDERS
+from waku.loop.models import PROVIDERS, models_for
 from waku.ops import catalog
 
 
@@ -65,12 +65,17 @@ def settings_info() -> dict:
     # a trailing separator with no model name. The display must not claim less
     # than the agent actually has.
     prov = PROVIDERS.get(s.provider)
+    model, small_model = models_for(s.provider, s.model, s.small_model)
+    # A scoped_credentials row (the hosted free tier) never reports the global
+    # BYOK overrides — a leftover WAKU_BASE_URL/WAKU_API_KEY from an earlier
+    # custom key must not read back as if it belonged to this row.
+    scoped = bool(prov and prov.scoped_credentials)
     return {
         "provider": s.provider,
-        "model": s.model or (prov.model if prov else ""),
-        "small_model": s.small_model or (prov.small_model if prov else ""),
-        "base_url": s.base_url or "",
-        "custom_key_set": bool(s.api_key),
+        "model": model,
+        "small_model": small_model,
+        "base_url": "" if scoped else (s.base_url or ""),
+        "custom_key_set": False if scoped else bool(s.api_key),
         # Jev is not a chat provider, so it is not in PROVIDERS -- but the Models
         # page shows a card for it, and needs to know whether a key is set.
         # The flag only; the key itself never leaves the machine.
@@ -80,7 +85,9 @@ def settings_info() -> dict:
         # hides disabled providers from the chat switcher.
         "disabled_providers": sorted(s.disabled_providers),
         "pinned": pinned,
-        "providers": [{"name": name} for name in PROVIDERS],
+        # A hidden_unless_env row (the hosted free tier) must never appear in a
+        # local page, list or switcher — see Provider.is_visible().
+        "providers": [{"name": name} for name in PROVIDERS if PROVIDERS[name].is_visible()],
         # experimental tools (delegate_task -> pi). The ARENA can switch this on
         # per-race, but the chat agent reads it from the environment — so without
         # a toggle here, the sidebar chat could never delegate. See settings_save.

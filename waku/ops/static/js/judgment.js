@@ -19,8 +19,12 @@ let jaAskedOpen = true;
 const PRIMITIVE_MARK = {noul: "N", choice: "C", score: "S"};
 
 async function loadJudgmentArena(){
+  // bgRefresh: this is only ever reached as a side effect of the judgment
+  // view's own render (see judgment.js's VIEWS.judgment below), which is
+  // itself either a person opening the tab or a background refresh's redraw.
+  const background = bgRefresh;
   try {
-    const r = await fetch("/api/judgment-arena");
+    const r = await fetch("/api/judgment-arena", background ? {headers: BG} : undefined);
     jaFixture = r.ok ? await r.json() : null;
   } catch { jaFixture = null; }
   if (jaFixture && !jaSuite){

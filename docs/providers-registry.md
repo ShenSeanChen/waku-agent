@@ -56,11 +56,18 @@ Adding a provider is now:
 2. `waku/ops/static/logos/<name>.svg`
 3. `python scripts/generate_env_example.py` — mechanical, and CI checks it
 
-No test needs editing. `test_providers.py` was already parametrised over
-`PROVIDERS`, and `test_providers_registry.py` walks the file: every row
-complete, a wire format that exists, a reachable key URL, a logo on disk, a
-price, no two providers sharing a key variable, and a regional endpoint that
-carries its own env var rather than leaking through the global one.
+No test needs editing, for an ordinary row. `test_providers.py` was already
+parametrised over `PROVIDERS`, and `test_providers_registry.py` walks the
+file: every row complete, a wire format that exists, a reachable key URL, a
+logo on disk, a price, no two providers sharing a key variable, and a
+regional endpoint that carries its own env var rather than leaking through
+the global one.
+
+A row that turns on one of the seven opt-in fields (see the header of
+`waku/providers.toml`) is the exception. Adding the hosted `waku-platform`
+row edited `test_providers.py` and `test_integrations.py`, and added
+`test_platform_provider.py` to exercise the fields those two files don't
+cover.
 
 ## Why TOML rather than a Python package
 
@@ -73,9 +80,14 @@ beside the row they explain, which is where they were and where they belong.
 
 ## What did not change
 
-`Provider` and `ProviderEndpoint` are the same frozen dataclasses, built with
-the same fields. The registry produced by the file was diffed field by field
-against the hand-written one before the old list was deleted: identical.
+`Provider` and `ProviderEndpoint` were the same frozen dataclasses, built with
+the same fields, when this file replaced the hand-written list: the registry
+it produced was diffed field by field against that list before the old code
+was deleted, and it matched. `Provider` has since gained seven opt-in
+fields — `label`, `hidden_unless_env`, `claims_families`,
+`catalog_from_base_url`, `model_env`, `small_model_env`,
+`scoped_credentials` — each one defaulting to what every other row already
+does, and used only by the hosted `waku-platform` row.
 
 A provider that speaks neither wire format still needs code, and still needs a
 proposal. This lowers the cost of the common case; it does not remove the

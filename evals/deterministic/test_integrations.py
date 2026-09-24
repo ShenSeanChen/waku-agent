@@ -23,9 +23,16 @@ def _isolate(monkeypatch, tmp_path):
 
 def test_registry_contract():
     items = integrations.registry()
-    assert len(items) == 24
+    # waku-platform is hidden_unless_env: it's in the registry only when its
+    # WAKU_PLATFORM_BASE_URL is set (see test_platform_provider.py for the
+    # row's own visibility contract) — so the expected count is DERIVED from
+    # the live environment, not hardcoded. A hardcoded 24 passes on a laptop
+    # and fails inside a tenant container, where the row is visible and the
+    # true count is 25.
+    visible_providers = {name for name, p in PROVIDERS.items() if p.is_visible()}
+    assert len(items) == len(visible_providers) + len(integrations.INTEGRATIONS)
     assert len({item.key for item in items}) == len(items)
-    assert {item.key for item in items if item.group == "AI Providers"} == set(PROVIDERS)
+    assert {item.key for item in items if item.group == "AI Providers"} == visible_providers
     for item in items:
         assert callable(item.enabled)
         for field in item.env:

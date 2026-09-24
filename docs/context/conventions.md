@@ -47,7 +47,9 @@ the rung above cannot do the job:
    prompt.
 
 The ladder has no rung for a new top-level package (like `waku/graph/`). That
-is an architecture decision and needs a proposal (§2).
+is an architecture decision and needs a proposal (§2). `hosted/` is a
+deployment of waku, not new capability inside it, so it sits on no rung of
+this ladder either.
 
 ## 4. Testing
 
