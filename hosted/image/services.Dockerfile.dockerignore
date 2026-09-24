@@ -1,0 +1,31 @@
+# ALLOWLIST, for the same reason as the tenant image's. See that file.
+#
+# waku/ is NOT admitted, and that is the load-bearing line: it is what makes a
+# `python -c "import waku"` in services.Dockerfile a build failure rather than
+# a boundary violation nobody notices. README.md is not admitted either,
+# which is why the Dockerfile passes --no-install-project.
+*
+.*
+
+!hosted/
+!pyproject.toml
+!uv.lock
+!LICENSE
+!LICENSE-BRAND
+
+**/__pycache__/
+**/*.pyc
+**/.pytest_cache/
+**/.ruff_cache/
+
+# Secrets, re-excluded INSIDE the admitted trees. The lines above this block
+# admit whole directories, and an allowlist that only names top-level entries
+# cannot see a waku/.env or a skills/deploy.pem that somebody wrote while
+# debugging -- it rides in with the tree that admits it. These four patterns
+# are the only part of this file that is not about build noise, and they must
+# stay BELOW the `!` lines: Docker is last-match-wins, so the same four lines
+# above the admissions would be undone by them.
+**/.env
+**/.env.*
+**/*.pem
+**/*.key

@@ -1,0 +1,43 @@
+# ALLOWLIST. Exclude everything, then re-admit exactly the six entries the spec
+# names, plus the two license files pyproject.toml's license-files requires.
+#
+# This is an allowlist because a denylist loses. A denylist would have to name
+# .env -- and then .env.local, .env.production, the *.pem somebody drops in
+# while debugging TLS, the whole ~/.aws a contributor copies into the checkout.
+# An allowlist refuses all of them by default and refuses the next one too.
+#
+# BuildKit is required for this file to be read at all: the legacy builder
+# looks only for .dockerignore at the context root, and this repo has none. So
+# a legacy build would send the entire checkout -- .env included -- to the
+# daemon. hosted/image/build.sh sets DOCKER_BUILDKIT=1 rather than trusting
+# that the CLI still defaults to it.
+*
+.*
+
+!waku/
+!skills/
+!pyproject.toml
+!uv.lock
+!README.md
+!LICENSE
+!LICENSE-BRAND
+
+# Re-excluded inside the admitted trees: build noise, and the maintainers' own
+# runtime state, neither of which belongs in a tenant's image. Last match wins,
+# so these beat the !waku/ above.
+**/__pycache__/
+**/*.pyc
+**/.pytest_cache/
+**/.ruff_cache/
+
+# Secrets, re-excluded INSIDE the admitted trees. The lines above this block
+# admit whole directories, and an allowlist that only names top-level entries
+# cannot see a waku/.env or a skills/deploy.pem that somebody wrote while
+# debugging -- it rides in with the tree that admits it. These four patterns
+# are the only part of this file that is not about build noise, and they must
+# stay BELOW the `!` lines: Docker is last-match-wins, so the same four lines
+# above the admissions would be undone by them.
+**/.env
+**/.env.*
+**/*.pem
+**/*.key
