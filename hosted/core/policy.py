@@ -12,12 +12,18 @@ evals/deterministic/test_dashboard_routes.py pins, plus two prefixes that are
 not routes of their own ("/" and "/api/compare").  Add a route to the dashboard
 and that test names it until somebody classifies it.
 
-Two entries are prefixes rather than routes, and both exist to make the
-default DENY rather than PASS for a family that is blocked as a whole:
-  "/api/compare"       so a compare route added later is blocked, not passed
-  "/api/memory-arena"  same, and it is longer than "/api/memory" so it wins
-"/api/compare/history" is longer than "/api/compare" and passes, which is the
-one compare route the hosted dashboard needs.
+Exactly two entries are NOT routes the dashboard serves, and the route
+contract's ALLOWED_EXTRA_ENTRIES names the same two:
+  "/"              the catch-all. It is what makes design section 8's "a path
+                   with no entry passes" a line of this table rather than an
+                   unwritten default, and decide() relies on it matching
+                   everything that survives path hygiene
+  "/api/compare"   a prefix, so a compare route added upstream is blocked
+                   rather than passed
+"/api/memory-arena" is a prefix too, and it is longer than "/api/memory" so it
+wins -- but it is also a live GET route the dashboard serves and A5 pins, so it
+is not one of the extras. "/api/compare/history" is longer than "/api/compare"
+and passes, which is the one compare route the hosted dashboard needs.
 """
 
 from __future__ import annotations
@@ -41,6 +47,14 @@ PAUSED_BODY = {"error": "Paused. Send a message to wake it.", "code": PAUSED_COD
 # both directions: a code here that no page branch reads fails, and a page
 # branch reading a code that is not here fails. Add to this set and to the
 # page in the same PR, or do neither.
+#
+# A HOSTED ERROR BODY IS A MODULE-LEVEL DICT WHOSE NAME ENDS IN _BODY. That is
+# the convention, not a description: test_paused_contract.py enumerates this
+# module's *_BODY attributes and requires their codes to be exactly this set,
+# so a body named anything else is invisible to it, and a body named correctly
+# cannot be added without deciding what its code is. It listed the bodies by
+# hand until review proved the hole -- an AT_CAPACITY_BODY with no entry here
+# and no page branch left every test in that file green.
 CODES = frozenset({PAUSED_CODE})
 
 BAD_PATH = "That is not a path this dashboard serves."

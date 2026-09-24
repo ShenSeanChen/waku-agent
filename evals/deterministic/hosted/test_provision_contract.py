@@ -3,8 +3,15 @@
 hosted/core/provision.py renders a file, and waku/config.py reads one. Neither
 imports the other -- they must not -- so this is the only place the two meet.
 It runs waku's own loader, waku's own model resolution and waku's own catalog
-against the file provisioning wrote, with the four platform variables set the
-way the container template sets them.
+against the file provisioning wrote, with the four platform variables set in
+os.environ around each call.
+
+Those four are set here, by name, from the constants below. There is no
+container image or compose template yet to read them from -- groups C and F
+build that -- so this file is the only thing today that says which four a
+tenant's waku needs and that they come from the environment rather than from
+the .env provisioning writes. When C and F land, the names have to match, and
+a mismatch shows up as a tenant whose dashboard reports the wrong model.
 """
 
 from __future__ import annotations
@@ -44,8 +51,13 @@ def provisioned(tmp_path):
 
 @pytest.fixture
 def container(provisioned, monkeypatch):
-    """A tenant container: the working directory is /work, and the four
-    platform variables come from the container's environment."""
+    """What a tenant's waku starts into: a working directory holding the .env
+    provisioning wrote, and the four platform variables in the environment.
+
+    The directory is the fixture's own tmp_path, not /work. /work is where C2
+    mounts it inside the container; nothing here cares about the name, because
+    waku finds its .env with find_dotenv(usecwd=True) -- which is the thing the
+    assertion below actually checks."""
     monkeypatch.chdir(provisioned.env)
     for name in ("WAKU_PROVIDER", "WAKU_MODEL", "WAKU_SMALL_MODEL",
                  "WAKU_API_KEY", "WAKU_BASE_URL", "ANTHROPIC_API_KEY"):

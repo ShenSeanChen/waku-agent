@@ -14,11 +14,15 @@ branch reading it and the test would stay green. The gateway side is now
 AND THE PAGE SIDE IS CLOSED AGAINST SPELLING. It does not look for a
 comparison shape; it counts every occurrence of the `.code` token in the
 dashboard's JavaScript and requires the comparison scanner to have accounted
-for all of them. A `switch (body.code)`, a `body.code == "paused"` with two
-equals signs, or an `includes(body.code)` leaves a token the scanner did not
-claim, and the test fails asking for the scanner to be extended rather than
-passing while a branch goes unread. That is the A5 inversion: the closed set
-is the token, and the recognised forms are checked against it.
+for all of them. A `switch (body.code)`, an `includes(body.code)`, a
+comparison against a template literal or against a named constant leaves a
+token the scanner did not claim, and the test fails asking for the scanner to
+be extended rather than passing while a branch goes unread. That is the A5
+inversion: the closed set is the token, and the recognised forms are checked
+against it. `body.code == "paused"` with two equals signs is NOT one of those:
+CODE_COMPARISON is `===?` and reads it deliberately, as the comment on it says.
+An earlier draft of this paragraph claimed otherwise, which overstated the
+guard by one form.
 """
 
 from __future__ import annotations
@@ -64,18 +68,30 @@ def _js_files() -> list[Path]:
     return sorted(JS_DIR.rglob("*.js"))
 
 
-def test_the_javascript_this_contract_reads_is_actually_there():
-    """Every assertion below is a claim about a set of files. An empty set
-    satisfies all of them, so a moved directory or a renamed main.js would
-    turn this whole contract green and silent."""
+def _codes_read_in(path: Path) -> set[str]:
+    found: set[str] = set()
+    for left, right in CODE_COMPARISON.findall(_code_only(path.read_text(encoding="utf-8"))):
+        found.add(left or right)
+    return found
+
+
+def test_main_js_itself_still_reads_the_gateways_code():
+    """The set test below ranges over the whole of js/, which is right for a
+    set -- a hosted-specific file group D or E adds belongs in it. But a set
+    over a directory can be satisfied from the wrong file: replace main.js's
+    reader with `body.status === 503`, put `_decoy.code === "paused"` in
+    util.js, and the set test is green with the only reader gone. Proved.
+
+    So the file that actually handles the reply is named here, and only here.
+    Nothing about WHICH code it reads is asserted -- that is the set test's
+    job, and pinning it twice would mean two places to edit for one change."""
     assert MAIN_JS.is_file(), f"{MAIN_JS} is gone: this contract now guards nothing"
-    assert len(_js_files()) > 1, f"only {len(_js_files())} JavaScript files under {JS_DIR}"
-    tokens = sum(len(CODE_TOKEN.findall(_code_only(p.read_text(encoding="utf-8"))))
-                 for p in _js_files())
-    assert tokens, (
-        "no `.code` token anywhere in the dashboard's JavaScript. The page no "
-        "longer reads the gateway's code field, so either A3's reader was "
-        "removed or it was rewritten in a shape this file cannot see.")
+    assert _codes_read_in(MAIN_JS), (
+        f"{MAIN_JS.name} no longer compares a `.code` against a string "
+        "literal. A3's handleNotOk is what turns a hosted error body into the "
+        "paused banner; either it was removed or it was rewritten in a shape "
+        "the scanner below cannot read, and a `.code` somewhere else under "
+        f"{JS_DIR.name}/ does not replace it.")
 
 
 def test_every_code_token_in_the_dashboard_is_one_this_file_can_read():
@@ -98,9 +114,7 @@ def test_every_code_token_in_the_dashboard_is_one_this_file_can_read():
 def _codes_the_page_reads() -> set[str]:
     found: set[str] = set()
     for path in _js_files():
-        for left, right in CODE_COMPARISON.findall(
-                _code_only(path.read_text(encoding="utf-8"))):
-            found.add(left or right)
+        found |= _codes_read_in(path)
     return found - LOCAL_ONLY_CODES
 
 
@@ -116,12 +130,46 @@ def test_the_page_reads_exactly_the_codes_the_gateway_sends():
         "for its own reasons goes in LOCAL_ONLY_CODES with a line saying why.")
 
 
+def _bodies() -> dict[str, dict]:
+    """Every hosted error body `policy.py` declares, by name.
+
+    Enumerated from the module rather than listed here. A hand-written list
+    fails CLOSED for a body wired into CODES -- you are forced to edit the
+    line -- and fails OPEN for one that is not, which is the dangerous
+    direction and the one this test exists to see. Proved: an
+    AT_CAPACITY_BODY added to policy.py with no CODES entry and no page
+    branch left all seven tests in this file green.
+
+    The naming convention is the contract, and policy.py says so beside
+    CODES: a hosted error body is a module-level dict whose name ends in
+    _BODY. A body that hides under another name is invisible here -- which
+    is why the convention is written down on the side that has to follow it
+    rather than only on the side that checks it.
+    """
+    return {name: value for name, value in vars(policy).items()
+            if name.endswith("_BODY") and isinstance(value, dict)}
+
+
 def test_every_declared_code_is_actually_used_by_a_body():
-    """CODES is the declaration; PAUSED_BODY is the one body so far. A code
-    declared and never put in a body would satisfy the test above while
-    nothing sends it."""
-    bodies = [policy.PAUSED_BODY]
-    assert {body["code"] for body in bodies} == set(policy.CODES)
+    """CODES is the declaration; the *_BODY dicts are what actually goes on
+    the wire. A code declared and never put in a body would satisfy the test
+    above while nothing sends it, and a body carrying a code that is not
+    declared is a reply the page has never heard of."""
+    bodies = _bodies()
+    assert bodies, (
+        "policy.py declares no *_BODY dict. Either the hosted error bodies "
+        "were removed, or they were renamed out of the convention this test "
+        "and policy.py's own comment beside CODES both rely on.")
+    codeless = sorted(name for name, body in bodies.items() if "code" not in body)
+    assert not codeless, (
+        f"hosted error bodies with no `code` field: {codeless}. The page "
+        "branches on `code`, so a body without one can only fall through.")
+    assert {body["code"] for body in bodies.values()} == set(policy.CODES), (
+        f"codes carried by a body but not declared in CODES: "
+        f"{sorted({b['code'] for b in bodies.values()} - set(policy.CODES))}\n"
+        f"codes declared in CODES that no body carries: "
+        f"{sorted(set(policy.CODES) - {b['code'] for b in bodies.values()})}\n"
+        f"bodies read: {sorted(bodies)}")
 
 
 def test_the_body_is_the_shape_the_spec_names():
