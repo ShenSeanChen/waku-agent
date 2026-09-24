@@ -48,13 +48,21 @@ PAUSED_BODY = {"error": "Paused. Send a message to wake it.", "code": PAUSED_COD
 # branch reading a code that is not here fails. Add to this set and to the
 # page in the same PR, or do neither.
 #
-# A HOSTED ERROR BODY IS A MODULE-LEVEL DICT WHOSE NAME ENDS IN _BODY. That is
-# the convention, not a description: test_paused_contract.py enumerates this
-# module's *_BODY attributes and requires their codes to be exactly this set,
-# so a body named anything else is invisible to it, and a body named correctly
-# cannot be added without deciding what its code is. It listed the bodies by
-# hand until review proved the hole -- an AT_CAPACITY_BODY with no entry here
-# and no page branch left every test in that file green.
+# A HOSTED ERROR BODY IS A DICT CARRYING A `code` KEY, and test_paused_contract.py
+# finds them structurally: every dict this module declares, and every dict one
+# level inside one, is checked for that key, and their codes must be exactly
+# this set. There is no name you can give a body that hides it -- that is the
+# point, and it is why the rule is the code's and not this comment's.
+#
+# Name one `*_BODY` anyway. It is good practice, and the test reads the name
+# too, for the one thing structure cannot give: a dict named like a body but
+# carrying no `code` can only fall through the page's branch, and the name is
+# what lets the test say so.
+#
+# This started as a list of bodies written out by hand in the test, then as a
+# scan by name. Review defeated both: an AT_CAPACITY_BODY with no entry here,
+# then a MAINTENANCE not ending in _BODY, then a nested ERROR_BODIES -- each
+# left every test in that file green with a live code the page never reads.
 CODES = frozenset({PAUSED_CODE})
 
 BAD_PATH = "That is not a path this dashboard serves."

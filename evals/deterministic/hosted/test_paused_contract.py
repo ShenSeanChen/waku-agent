@@ -130,36 +130,65 @@ def test_the_page_reads_exactly_the_codes_the_gateway_sends():
         "for its own reasons goes in LOCAL_ONLY_CODES with a line saying why.")
 
 
-def _bodies() -> dict[str, dict]:
-    """Every hosted error body `policy.py` declares, by name.
+def _dicts_in_policy() -> dict[str, dict]:
+    """Every dict `policy.py` declares at module level, and every dict one
+    level inside one of those, labelled by where it was found.
 
-    Enumerated from the module rather than listed here. A hand-written list
-    fails CLOSED for a body wired into CODES -- you are forced to edit the
-    line -- and fails OPEN for one that is not, which is the dangerous
-    direction and the one this test exists to see. Proved: an
-    AT_CAPACITY_BODY added to policy.py with no CODES entry and no page
-    branch left all seven tests in this file green.
-
-    The naming convention is the contract, and policy.py says so beside
-    CODES: a hosted error body is a module-level dict whose name ends in
-    _BODY. A body that hides under another name is invisible here -- which
-    is why the convention is written down on the side that has to follow it
-    rather than only on the side that checks it.
+    One level of nesting, because `ERROR_BODIES = {"maintenance": {...}}` is
+    an ordinary way to write a second body and a flat scan cannot see it.
+    Dunders are skipped: `__builtins__` is a dict too, and recursing it would
+    be noise, not coverage.
     """
-    return {name: value for name, value in vars(policy).items()
-            if name.endswith("_BODY") and isinstance(value, dict)}
+    found: dict[str, dict] = {}
+    for name, value in vars(policy).items():
+        if name.startswith("__") or not isinstance(value, dict):
+            continue
+        found[name] = value
+        for key, nested in value.items():
+            if isinstance(nested, dict):
+                found[f"{name}[{key!r}]"] = nested
+    return found
+
+
+def _bodies() -> dict[str, dict]:
+    """Every hosted error body `policy.py` declares, by where it was found.
+
+    STRUCTURE FIRST, NAME SECOND. A body is any dict carrying a `code` key --
+    that is what makes it a body, and it is a rule the code enforces rather
+    than one a comment asks for. Review proved the name-only version could not
+    see two ordinary shapes:
+
+        MAINTENANCE = {"error": ..., "code": "maintenance"}   # 7 passed
+        ERROR_BODIES = {"maintenance": {...}}                 # 7 passed
+
+    Neither is evasion; both are how somebody in group D or E writes a second
+    body, and both were green with a live code the page has never heard of.
+
+    The `_BODY` name is still read, for the one thing structure cannot give:
+    a dict named like a body but carrying NO code is a body that can only fall
+    through the page's branch, and the codeless assertion below is what says
+    so. So the two selectors are a union, and neither is load-bearing alone.
+
+    Checked against the module as it stands: the structural half selects
+    PAUSED_BODY and nothing else. DECISIONS, BLOCK_MESSAGES and FILTERS are
+    keyed by route and carry no `code` key, and none of their values is a
+    dict, so one level of recursion adds nothing and no false positive.
+    """
+    return {name: value for name, value in _dicts_in_policy().items()
+            if "code" in value or name.endswith("_BODY")}
 
 
 def test_every_declared_code_is_actually_used_by_a_body():
-    """CODES is the declaration; the *_BODY dicts are what actually goes on
-    the wire. A code declared and never put in a body would satisfy the test
+    """CODES is the declaration; the bodies are what actually goes on the
+    wire. A code declared and never put in a body would satisfy the test
     above while nothing sends it, and a body carrying a code that is not
     declared is a reply the page has never heard of."""
     bodies = _bodies()
     assert bodies, (
-        "policy.py declares no *_BODY dict. Either the hosted error bodies "
-        "were removed, or they were renamed out of the convention this test "
-        "and policy.py's own comment beside CODES both rely on.")
+        "policy.py declares no hosted error body: no module-level dict "
+        "carries a `code` key and none is named *_BODY. Either the bodies "
+        "were removed, or they moved out of this module and this contract "
+        "no longer sees the gateway's side at all.")
     codeless = sorted(name for name, body in bodies.items() if "code" not in body)
     assert not codeless, (
         f"hosted error bodies with no `code` field: {codeless}. The page "
