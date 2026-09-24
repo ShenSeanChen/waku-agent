@@ -256,6 +256,22 @@ def test_no_key_message_omits_the_hidden_row(local, monkeypatch):
     assert PLATFORM not in str(exc.value)
 
 
+def test_no_key_message_includes_it_once_visible(hosted, monkeypatch):
+    """The one-directional check above (PLATFORM not in message, hidden) would
+    also pass an implementation that omits the row unconditionally. This is
+    the other direction: with base_url_env set, `_visible_names()` must
+    actually list waku-platform among "Other providers", not just fail to
+    list it while hidden."""
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+
+    from waku.config import Settings
+    from waku.loop.models import get_client
+
+    with pytest.raises(SystemExit) as exc:
+        get_client(Settings(provider="anthropic", model="", small_model="", api_key=""))
+    assert PLATFORM in str(exc.value)
+
+
 def test_unknown_provider_error_omits_the_hidden_row(local):
     """test_providers.py's fixture sets WAKU_PLATFORM_BASE_URL globally, which
     would make the row visible here too -- this test controls the variable
@@ -266,6 +282,18 @@ def test_unknown_provider_error_omits_the_hidden_row(local):
     with pytest.raises(SystemExit) as exc:
         get_client(Settings(provider="not-a-provider", model="", small_model="", api_key=""))
     assert PLATFORM not in str(exc.value)
+
+
+def test_unknown_provider_error_includes_it_once_visible(hosted):
+    """Same other-direction check for the unknown-provider SystemExit's
+    "Pick one of: ..." list -- with base_url_env set it must name
+    waku-platform, not merely refrain from naming it while hidden."""
+    from waku.config import Settings
+    from waku.loop.models import get_client
+
+    with pytest.raises(SystemExit) as exc:
+        get_client(Settings(provider="not-a-provider", model="", small_model="", api_key=""))
+    assert PLATFORM in str(exc.value)
 
 
 def test_settings_info_masks_scoped_credentials(hosted, monkeypatch):
