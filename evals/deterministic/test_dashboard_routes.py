@@ -19,6 +19,7 @@ same commit — that edit is the review signal that the public surface changed.
 from __future__ import annotations
 
 import inspect
+import re
 
 from waku.ops import dashboard
 
@@ -52,9 +53,51 @@ GET_PATHS = {
 STREAM_ROUTES = {"/api/chat/stream", "/api/compare/stream", "/api/voice",
                  "/api/graph/stream"}
 
+# Every path do_GET matches, exactly or as a prefix. Group A's Judgment Arena
+# and Memory Arena added routes here without ever landing in GET_PATHS above —
+# this is the set that closes that gap and that group E's gateway policy table
+# reads from.
+PINNED_GET = GET_PATHS | {
+    "/api/judgment-arena",
+    "/api/memory-arena",
+    "/api/memory-arena/stores",
+}
+
+# Every path do_POST matches: the streaming `if self.path == ...` checks handled
+# before the router (STREAM_ROUTES, which live inside do_POST too), the route
+# dict (POST_ROUTES), and the handful of exact checks that were added beside
+# them without a pin — providers, connections, and the arena routes.
+PINNED_POST = POST_ROUTES | STREAM_ROUTES | {
+    "/api/connections",
+    "/api/connections/test",
+    "/api/providers",
+    "/api/judgment-arena/key",
+    "/api/judgment-arena/stream",
+    "/api/memory-arena/clean",
+    "/api/memory-arena/stream",
+}
+
+_EXACT_PATH = re.compile(r'self\.path\s*==\s*"([^"]+)"')
+_PREFIX_PATH = re.compile(r'self\.path\.startswith\("([^"]+)"\)')
+_ROUTES_DICT = re.compile(r"routes\s*=\s*\{([^}]*)\}", re.DOTALL)
+_DICT_KEY = re.compile(r'"([^"]+)"\s*:')
+
 
 def _source() -> str:
     return inspect.getsource(dashboard)
+
+
+def routes_in_dashboard() -> set[str]:
+    """Every path dashboard.py matches, in all three styles it uses:
+    `self.path == "/x"`, `self.path.startswith("/x")`, and the route dict.
+    A prefix is normalised to its path without a trailing `?`."""
+    src = _source()
+    found = set(_EXACT_PATH.findall(src))
+    found |= {p.rstrip("?") for p in _PREFIX_PATH.findall(src)}
+    routes_block = _ROUTES_DICT.search(src)
+    if routes_block:
+        found |= set(_DICT_KEY.findall(routes_block.group(1)))
+    return found
 
 
 def test_every_post_route_is_still_registered():
@@ -75,6 +118,16 @@ def test_streaming_routes_survive():
     src = _source()
     for path in STREAM_ROUTES:
         assert f'"{path}"' in src, f"streaming route disappeared: {path}"
+
+
+def test_every_route_in_the_handler_is_pinned():
+    """Both directions. A route added without a pin fails here, and so does
+    a pin whose route was deleted — the gateway's policy table in group E
+    reads these sets and a stale entry is as bad as a missing one."""
+    found = routes_in_dashboard()          # all three styles, see below
+    assert found == PINNED_GET | PINNED_POST, (
+        f"unpinned: {sorted(found - (PINNED_GET | PINNED_POST))}\n"
+        f"stale pins: {sorted((PINNED_GET | PINNED_POST) - found)}")
 
 
 def test_the_handlers_behind_the_routes_exist_and_are_callable():
