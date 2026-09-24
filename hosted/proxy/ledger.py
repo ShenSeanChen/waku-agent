@@ -88,7 +88,12 @@ class Ledger:
 
     def __init__(self, path: Path) -> None:
         self._lock = threading.Lock()
-        self._conn = sqlite3.connect(path, check_same_thread=False)
+        # timeout=0, so PRAGMA busy_timeout is the ONLY place the timeout is
+        # set. sqlite3.connect's own `timeout` parameter sets a busy timeout
+        # too, and its default of 5.0 seconds is the same 5000 ms -- two
+        # sources agreeing by coincidence, which meant deleting the pragma
+        # changed nothing and no readback could tell that it had gone.
+        self._conn = sqlite3.connect(path, check_same_thread=False, timeout=0)
         with self._lock:
             for pragma in PRAGMAS:
                 self._conn.execute(pragma)
@@ -110,6 +115,10 @@ class Ledger:
         sees the difference between declared and applied."""
         with self._lock:
             return int(self._conn.execute("PRAGMA synchronous").fetchone()[0])
+
+    def busy_timeout(self) -> int:
+        with self._lock:
+            return int(self._conn.execute("PRAGMA busy_timeout").fetchone()[0])
 
     def _row_locked(self, tenant_id: str, month: str) -> None:
         self._conn.execute(

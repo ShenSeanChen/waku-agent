@@ -22,7 +22,11 @@ from hosted.core.quota import utc_month
 from hosted.gateway.internal import GATEWAY_SOCKET_MODE, serve_token_lookup
 from hosted.gateway.proxy_client import read_spend
 from hosted.gateway.store import ControlDb
-from hosted.proxy.gateway_client import TOKEN_CACHE_SECONDS, TokenCache
+from hosted.proxy.gateway_client import (
+    TOKEN_CACHE_MAX_ENTRIES,
+    TOKEN_CACHE_SECONDS,
+    TokenCache,
+)
 from hosted.proxy.internal import PROXY_SOCKET_MODE, serve_spend
 from hosted.proxy.ledger import Ledger
 
@@ -387,6 +391,30 @@ def test_the_token_cache_is_bounded_however_many_bad_keys_arrive(tmp_path, sock_
             for n in range(500):
                 assert await cache.resolve(f"bogus-token-{n}") is None
             assert len(cache) <= 8, f"{len(cache)} entries held after 500 bad keys"
+        finally:
+            await _closing(server)
+            store.close()
+
+    asyncio.run(run())
+
+
+def test_the_shipped_cache_bound_is_four_thousand_and_ninety_six(tmp_path, sock_dir):
+    """The test above passes max_entries=8, so it pins the mechanism and not
+    the number the proxy actually runs with. This floods past the real default
+    with the real constructor: a little under a second, which is worth paying
+    for a bound whose whole job is to hold when a tenant is hostile.
+    """
+    assert TOKEN_CACHE_MAX_ENTRIES == 4096
+
+    async def run():
+        store = ControlDb(tmp_path / "control.db")
+        sock = sock_dir / "gateway.sock"
+        server = await serve_token_lookup(sock, store)
+        try:
+            cache = TokenCache(sock, now=lambda: 0.0)       # the shipped bound
+            for n in range(TOKEN_CACHE_MAX_ENTRIES + 10):
+                await cache.resolve(f"bogus-token-{n}")
+            assert len(cache) == TOKEN_CACHE_MAX_ENTRIES
         finally:
             await _closing(server)
             store.close()

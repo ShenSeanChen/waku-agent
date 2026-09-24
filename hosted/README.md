@@ -33,7 +33,7 @@ covers.
 | Directory | Holds |
 |---|---|
 | `core/` | pure logic: tenant ids, route policy, quota, idle, provisioning, request validation |
-| `ports/` | the four replaceable seams and their MVP implementations |
+| `ports/` | the four replaceable seams, as Protocols and nothing else. The implementations live beside the service that owns each one |
 | `gateway/` | the front door: login, sessions, routing by host, `control.db` |
 | `proxy/` | the metering proxy in front of the model API, and `ledger.db` |
 | `spawner/` | the one process that talks to Docker |

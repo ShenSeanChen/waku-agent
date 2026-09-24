@@ -12,6 +12,7 @@ import threading
 import pytest
 
 from hosted.core import tenant as core_tenant
+from hosted.gateway import store as store_module
 from hosted.gateway.store import SESSION_TTL_SECONDS, ControlDb
 
 
@@ -42,6 +43,76 @@ def test_project_ids_do_not_repeat(store):
     assert len(set(ids)) == 5
 
 
+def test_a_deleted_tenants_project_id_is_never_handed_to_the_next_one(store):
+    """The composition neither task could see alone. next_project_id is
+    monotonic given a monotonic `used`, and create_tenant used to pass it the
+    live rows only, so a delete freed the id and the next arrival got it back.
+
+    Two guarantees break when it does. A directory keeps its XFS project id, so
+    the deleted tenant's archive -- kept thirty days -- counts against whoever
+    inherits the id, and a new tenant can be over quota on the day they sign
+    up with nothing in /account explaining it. And address_for_project derives
+    the bridge address from the project id, so a stale entry for the deleted
+    tenant reaches a live different tenant's dashboard, which has no
+    authentication of its own.
+    """
+    a = store.create_tenant(sub="sub-a", email="a@example.com", timezone="UTC")
+    b = store.create_tenant(sub="sub-b", email="b@example.com", timezone="UTC")
+    store.delete_tenant(b.id)
+    c = store.create_tenant(sub="sub-c", email="c@example.com", timezone="UTC")
+
+    assert c.project_id not in (a.project_id, b.project_id)
+    assert c.project_id > b.project_id
+    assert core_tenant.address_for_project(c.project_id) != \
+        core_tenant.address_for_project(b.project_id)
+
+
+def test_deleting_the_highest_project_id_does_not_free_it(store):
+    """The other direction, and the one a high-water mark taken over live rows
+    alone would still get wrong: delete the newest tenant and the maximum of
+    what is left goes backwards."""
+    a = store.create_tenant(sub="sub-a", email="a@example.com", timezone="UTC")
+    b = store.create_tenant(sub="sub-b", email="b@example.com", timezone="UTC")
+    assert b.project_id > a.project_id
+    store.delete_tenant(b.id)
+    c = store.create_tenant(sub="sub-c", email="c@example.com", timezone="UTC")
+
+    assert c.project_id > b.project_id, "the freed high-water mark came back"
+
+
+def test_every_tenant_ever_created_holds_a_distinct_project_id(store):
+    """Deleting every other one as we go, which is the shape that produced the
+    reissue: five live tenants, five deleted, ten distinct ids."""
+    seen = []
+    for n in range(10):
+        tenant = store.create_tenant(sub=f"sub-{n}", email=f"{n}@example.com",
+                                     timezone="UTC")
+        seen.append(tenant.project_id)
+        if n % 2:
+            store.delete_tenant(tenant.id)
+    assert len(set(seen)) == 10, seen
+    assert seen == sorted(seen)
+
+
+def test_a_full_range_refuses_a_new_tenant_rather_than_reusing_an_id(store):
+    """About 65,000 tenants over the life of one VM, counting deletions.
+    Refusing the signup is the only safe answer: the alternative is reuse, and
+    reuse is the thing all of this prevents.
+
+    B2's test_tenant.py already refuses the id past the end; what this adds is
+    that create_tenant propagates the refusal rather than catching it and
+    starting over from the bottom of the range. The retired row is written
+    straight into the table because the honest route to it is 65,277
+    deletions.
+    """
+    store._conn.execute(                                      # noqa: SLF001 - arrange
+        "INSERT INTO retired_project_id (project_id, retired_at) VALUES (?, ?)",
+        (core_tenant.LAST_PROJECT_ID, 0.0))
+    store._conn.commit()                                      # noqa: SLF001 - arrange
+    with pytest.raises(ValueError, match="no project id left"):
+        store.create_tenant(sub="sub-z", email="z@example.com", timezone="UTC")
+
+
 def test_one_sub_is_one_tenant(store):
     """The UNIQUE on sub is what makes a second login the same tenant rather
     than a second one; naming the error keeps this from passing on a typo."""
@@ -68,6 +139,24 @@ def test_a_session_resolves_until_it_expires(store):
     assert store.session_tenant("cookie-value",
                                 store.clock["t"] + SESSION_TTL_SECONDS + 1) is None
     assert store.session_tenant("not-a-cookie", store.clock["t"]) is None
+
+
+def test_a_session_lasts_thirty_days(store):
+    """The spec's number, in days rather than in the constant, because a test
+    that spells the TTL as SESSION_TTL_SECONDS on both sides moves with it and
+    pins nothing. The gateway sets the cookie's Max-Age from this, so shrinking
+    it silently logs every tenant out sooner and growing it leaves a stolen
+    cookie live for longer.
+    """
+    assert SESSION_TTL_SECONDS == 30 * 24 * 60 * 60
+
+    day = 24 * 60 * 60
+    t = store.create_tenant(sub="sub-1", email="mei@example.com", timezone="UTC")
+    issued = store.clock["t"]
+    store.create_session(tenant_id=t.id, value="cookie-value",
+                         expires_at=issued + SESSION_TTL_SECONDS)
+    assert store.session_tenant("cookie-value", issued + 29 * day) == t.id
+    assert store.session_tenant("cookie-value", issued + 31 * day) is None
 
 
 def test_the_cookie_value_is_not_in_the_database(store, tmp_path):
@@ -215,6 +304,31 @@ def test_the_database_is_in_wal_mode(store):
     assert store.journal_mode() == "wal"
 
 
+def declared(pragmas):
+    """name -> value, parsed from the tuple the store actually applies.
+
+    Two assertions are needed per pragma and neither is enough alone. The
+    readback catches a WRONG VALUE -- `=NORMAL`, or the `=FUL` typo that does
+    not error and silently lands on NORMAL. This catches REMOVAL, which the
+    readback cannot: SQLite's own default synchronous is already 2, so
+    deleting the line leaves every readback unchanged.
+
+    What ties this tuple to the database is test_the_database_is_in_wal_mode:
+    SQLite's default journal_mode is `delete`, so WAL is the canary that the
+    `for pragma in PRAGMAS` loop ran at all.
+    """
+    out = {}
+    for statement in pragmas:
+        name, _, value = statement.removeprefix("PRAGMA ").partition("=")
+        out[name.strip().lower()] = value.strip()
+    return out
+
+
+def test_the_store_declares_synchronous_full():
+    """Deleting the pragma is the mutation the readback below cannot see."""
+    assert declared(store_module.PRAGMAS).get("synchronous") == "FULL"
+
+
 def test_the_database_is_synchronous_full(store):
     """2 is FULL. This reads the value in effect rather than the text that was
     sent, which is the only thing that separates declared from applied: a typo
@@ -222,6 +336,19 @@ def test_the_database_is_synchronous_full(store):
     while the source still reads as a durability declaration. What NORMAL can
     lose to a power cut here is a token revocation or a tenant disable."""
     assert store.synchronous() == 2
+
+
+def test_the_store_declares_a_busy_timeout():
+    assert declared(store_module.PRAGMAS).get("busy_timeout") == "5000"
+
+
+def test_the_database_has_the_busy_timeout_backup_sh_needs(store):
+    """backup.sh opens this file from a second process, so a write that finds
+    it locked must wait rather than fail. The pragma is the only thing setting
+    this: sqlite3.connect's `timeout` parameter would otherwise set the same
+    5000 ms by default, two sources agreeing by coincidence, and deleting the
+    pragma would change nothing that any readback could see."""
+    assert store.busy_timeout() == 5000
 
 
 @pytest.mark.parametrize("round_", range(3))

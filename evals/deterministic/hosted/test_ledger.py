@@ -14,6 +14,7 @@ import threading
 import pytest
 
 from hosted.core.quota import utc_month
+from hosted.proxy import ledger as ledger_module
 from hosted.proxy.ledger import Ledger
 
 MONTH = "2026-09"
@@ -195,6 +196,31 @@ def test_the_database_is_in_wal_mode(ledger):
     assert ledger.journal_mode() == "wal"
 
 
+def declared(pragmas):
+    """name -> value, parsed from the tuple the store actually applies.
+
+    Two assertions are needed per pragma and neither is enough alone. The
+    readback catches a WRONG VALUE -- `=NORMAL`, or the `=FUL` typo that does
+    not error and silently lands on NORMAL. This catches REMOVAL, which the
+    readback cannot: SQLite's own default synchronous is already 2, so
+    deleting the line leaves every readback unchanged.
+
+    What ties this tuple to the database is test_the_database_is_in_wal_mode:
+    SQLite's default journal_mode is `delete`, so WAL is the canary that the
+    `for pragma in PRAGMAS` loop ran at all.
+    """
+    out = {}
+    for statement in pragmas:
+        name, _, value = statement.removeprefix("PRAGMA ").partition("=")
+        out[name.strip().lower()] = value.strip()
+    return out
+
+
+def test_the_store_declares_synchronous_full():
+    """Deleting the pragma is the mutation the readback below cannot see."""
+    assert declared(ledger_module.PRAGMAS).get("synchronous") == "FULL"
+
+
 def test_the_database_is_synchronous_full(ledger):
     """2 is FULL. This reads the value in effect rather than the text that was
     sent, which is the only thing that separates declared from applied: a typo
@@ -202,6 +228,18 @@ def test_the_database_is_synchronous_full(ledger):
     while the source still reads as a durability declaration. What NORMAL can
     lose to a power cut here is settled spend."""
     assert ledger.synchronous() == 2
+
+
+def test_the_store_declares_a_busy_timeout():
+    assert declared(ledger_module.PRAGMAS).get("busy_timeout") == "5000"
+
+
+def test_the_database_has_a_busy_timeout(ledger):
+    """The pragma is the only thing setting this: sqlite3.connect's `timeout`
+    parameter would otherwise set the same 5000 ms by default, two sources
+    agreeing by coincidence, and deleting the pragma would change nothing that
+    any readback could see."""
+    assert ledger.busy_timeout() == 5000
 
 
 def test_one_connection_shared_by_threads_keeps_every_dollar(ledger):
