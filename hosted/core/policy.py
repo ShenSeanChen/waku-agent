@@ -132,6 +132,21 @@ BLOCK_MESSAGES: dict[str, str] = {
 _BAD_IN_PATH = ("//", "/./", "/../", "\\", "%")
 
 
+def _has_control_character(text: str) -> bool:
+    """Any C0 control, DEL, or C1 control. Checked across the WHOLE request
+    target, query included, because forward_line forwards the query as
+    received and a request line splits wherever the newline sits.
+
+    The spec's list of forbidden path shapes (spec.md, "Route policy") names
+    five: no leading //, /./, /../, backslash, percent. Control characters are
+    a sixth, added here because a raw newline in the target E3 sends with
+    encoded=True is a second request line on the wire. The spec sentence wants
+    the same clause; it lives in the other repository, so it is called out in
+    this task's report rather than edited here.
+    """
+    return any(ord(char) < 0x20 or 0x7F <= ord(char) <= 0x9F for char in text)
+
+
 @dataclass(frozen=True)
 class FilterResult:
     allowed: bool
@@ -173,6 +188,8 @@ def forward_line(raw_path: str) -> str:
 def path_refusal(raw_path: object) -> str:
     """Empty when the path is fine, the 400 sentence when it is not."""
     if not isinstance(raw_path, str) or not raw_path.startswith("/"):
+        return BAD_PATH
+    if _has_control_character(raw_path):
         return BAD_PATH
     path, _ = split_path(raw_path)
     if any(bad in path for bad in _BAD_IN_PATH):
@@ -246,8 +263,12 @@ def decide(method: str, raw_path: str, payload: dict | None = None) -> Outcome:
     path, _query = split_path(raw_path)
     streaming = path in STREAMING_ROUTES
     route = match(path)
-    if route is None:
-        return Outcome(PASS, streaming=streaming)
+    # match() cannot answer None here, and the branch that pretended it could
+    # was unreachable: path_refusal has already required a leading "/", and
+    # "/" is itself an entry, so every path that gets this far matches at
+    # least that one. test_every_path_that_survives_hygiene_matches_an_entry
+    # pins the invariant -- delete "/" from DECISIONS and it fails there,
+    # rather than here as a KeyError on somebody's live request.
     decision = DECISIONS[route]
     if decision == BLOCK:
         return Outcome("block", 403, BLOCK_MESSAGES[route], route=route, streaming=streaming)

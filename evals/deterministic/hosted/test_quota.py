@@ -107,6 +107,28 @@ def test_the_hundred_and_twenty_first_byok_turn_is_refused():
     assert message == "Turn limit reached for this hour."
 
 
+def test_the_turn_window_is_the_specs_hour():
+    """The spec says 30 turns an HOUR. The behaviour test below advances the
+    clock by TURN_WINDOW_SECONDS, so it is circular with respect to this
+    number: set the constant to 60 and every other test in this file stays
+    green while a free tenant quietly gets 30 turns a minute, sixty times the
+    intended rate of platform model calls. The literal is the whole point."""
+    assert quota.TURN_WINDOW_SECONDS == 3600
+
+
+def test_a_turn_falls_out_of_the_window_after_an_hour_of_wall_clock():
+    """The same number again, but pinned through the behaviour rather than
+    through the constant, so shrinking the window inside count() fails here
+    even if the constant is left alone."""
+    clock = {"t": 1_000_000.0}
+    window = quota.TurnWindow(lambda: clock["t"])
+    window.record("abcdefghijkl")
+    clock["t"] += 3599.0
+    assert window.count("abcdefghijkl") == 1, "a turn expired inside the hour"
+    clock["t"] += 2.0
+    assert window.count("abcdefghijkl") == 0, "a turn outlived the hour"
+
+
 def test_the_turn_window_forgets_an_hour_later():
     clock = {"t": 1_000_000.0}
     window = quota.TurnWindow(lambda: clock["t"])

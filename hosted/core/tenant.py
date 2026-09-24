@@ -83,7 +83,13 @@ def tenant_dirs(root: Path, tenant_id: str) -> TenantDirs:
 
 
 def is_project_id(value: object) -> bool:
-    if isinstance(value, bool) or not isinstance(value, int):
+    # There is no isinstance(value, bool) guard, and there does not need to
+    # be: True and False are 1 and 0, and both are below FIRST_PROJECT_ID, so
+    # the range already refuses them. It would stop being true the day
+    # FIRST_PROJECT_ID became 0 or 1 -- which is why `True` is a parameter of
+    # test_a_project_id_outside_the_range_is_refused, and why that guard is a
+    # comment here rather than a line of code no test can reach.
+    if not isinstance(value, int):
         return False
     return FIRST_PROJECT_ID <= value <= LAST_PROJECT_ID
 

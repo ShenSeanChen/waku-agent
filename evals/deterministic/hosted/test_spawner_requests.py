@@ -16,6 +16,58 @@ GOOD_ID = "abcdefghijkl"
 GOOD_TOKEN = "T" * 43
 
 
+# The spawner's whole surface, from the spec's operation table. Every negative
+# case in this file is a NARROWING check -- it proves a bad payload is refused.
+# None of them notices the allowlists being WIDENED, which is the direction that
+# matters for a process running as root with CAP_SYS_ADMIN and the data disk's
+# block device. These three literals are the closure, in both directions.
+SPEC_OPERATIONS = {"provision", "start", "stop", "list", "task"}
+SPEC_TASKS = {"backup", "restore", "archive", "inspect", "inspect-stop"}
+SPEC_KEYS = {
+    "provision": {"op", "tenant_id", "project_id"},
+    "start": {"op", "tenant_id", "project_id", "timezone", "token"},
+    "stop": {"op", "tenant_id"},
+    "list": {"op"},
+    "task": {"op", "tenant_id", "task"},
+}
+SPEC_REQUIRED = {
+    "provision": ("tenant_id", "project_id"),
+    "start": ("tenant_id", "project_id", "timezone", "token"),
+    "stop": ("tenant_id",),
+    "list": (),
+    "task": ("tenant_id", "task"),
+}
+
+
+def test_the_spawner_answers_exactly_these_five_operations():
+    """Add a sixth and this fails, which is the point: `exec` slipped into
+    OPERATIONS leaves every other test in this file green."""
+    assert requests.OPERATIONS == SPEC_OPERATIONS
+
+
+def test_a_task_is_exactly_one_of_these_five():
+    assert requests.TASKS == SPEC_TASKS
+
+
+def test_each_operation_takes_exactly_its_own_keys():
+    """A key added to an operation's allowlist is a new field the spawner will
+    read and act on. `project_id` quietly added to `stop` changes nothing that
+    any narrowing test can see."""
+    assert {op: set(keys) for op, keys in requests._KEYS.items()} == SPEC_KEYS
+    assert requests._REQUIRED == SPEC_REQUIRED
+
+
+def test_no_operation_is_half_wired():
+    """Three tables keyed by operation. An operation present in one and absent
+    from another is a KeyError on a live request, or a required field nobody
+    checks."""
+    assert set(requests._KEYS) == requests.OPERATIONS
+    assert set(requests._REQUIRED) == requests.OPERATIONS
+    for op, required in requests._REQUIRED.items():
+        assert set(required) <= requests._KEYS[op], op
+        assert "op" not in required, op
+
+
 def test_a_start_request_carries_everything_the_template_needs():
     parsed = requests.parse({"op": "start", "tenant_id": GOOD_ID, "project_id": 7,
                              "timezone": "Asia/Shanghai", "token": GOOD_TOKEN})

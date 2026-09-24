@@ -44,6 +44,31 @@ def test_a_canonical_path_passes_the_hygiene_check(raw):
     assert policy.path_refusal(raw) == ""
 
 
+@pytest.mark.parametrize("raw", [
+    "/api/chat\n/api/voice",
+    "/api/chat\r\nX-Waku-Background: 1",
+    "/api/data\x00",
+    "/api/data\x7f",
+    "/api/data\tmore",
+    "/api/events?cursor=4\n2",          # the query is forwarded raw too
+    "/api/data\x1b[2J",
+])
+def test_a_path_carrying_a_control_character_is_refused(raw):
+    """forward_line hands E3 the raw target and E3 sends it with
+    encoded=True, so a newline here is a second request line on the wire. The
+    container reached is the tenant's own, so this is self-inflicted rather
+    than cross-tenant -- but a newline in a forwarded request target is the
+    shape of a request-splitting bug in anything that later sits in front of
+    it, and refusing it is one clause beside the five already here.
+
+    The query is checked as well as the path, because forward_line forwards
+    the query as received: splitting the request line does not care which
+    side of the "?" the newline came from."""
+    assert policy.path_refusal(raw) == policy.BAD_PATH
+    outcome = policy.decide("GET", raw)
+    assert outcome.verdict == "refuse" and outcome.status == 400
+
+
 def test_the_query_is_split_off_and_never_matched():
     assert policy.split_path("/api/events?cursor=42") == ("/api/events", "cursor=42")
     assert policy.split_path("/api/data") == ("/api/data", "")
@@ -235,6 +260,27 @@ def test_every_code_a_hosted_body_can_carry_is_declared():
     built with a code that is not in here is a branch no page reads."""
     assert policy.CODES == {policy.PAUSED_CODE}
     assert policy.PAUSED_BODY["code"] in policy.CODES
+
+
+def test_every_path_that_survives_hygiene_matches_an_entry():
+    """decide() indexes DECISIONS with whatever match() returns, and does not
+    check for None, because it cannot be None: "/" is an entry and hygiene has
+    already required a leading slash. That is an invariant of the table, not
+    of the code, so it is pinned here -- drop "/" from DECISIONS and this
+    fails, instead of decide() raising KeyError on a live request."""
+    assert "/" in policy.DECISIONS
+    for raw in ("/", "/api/data", "/something-waku-grows-later", "/x",
+                "/api/events?cursor=42", "/static/js/main.js", "/API/DATA"):
+        assert policy.path_refusal(raw) == "", raw
+        path, _query = policy.split_path(raw)
+        assert policy.match(path) is not None, raw
+
+
+def test_match_still_answers_none_for_something_that_is_not_a_path():
+    """match() is public: E3 may call it on a string decide() never sees, so
+    its `str | None` stays honest even though decide()'s side is closed."""
+    assert policy.match("api/chat") is None
+    assert policy.match("") is None
 
 
 def test_a_path_with_no_entry_passes():
