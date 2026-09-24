@@ -16,20 +16,39 @@ actually matters months from now: someone adds a new `setInterval(...)` poll,
 or a new fetch inside one of the functions that a poll already reaches, and
 forgets the header — silently making a tenant's container immortal again.
 
+This guard is DEFAULT-DENY over closed sets of literal tokens, and that
+shape is the whole point. The first version enumerated the ways a poller
+could be written — `setInterval(fn, ms)`, `setInterval(() => fn(true), ms)`
+— and walked one level of callee to see whether it fetched. The set of ways
+to write a poller is open: two-level indirection, an arrow bound to a const,
+a `setTimeout` that reschedules itself, a poller in a file this eval had not
+thought about. Every one of those slipped through. The same mistake cost the
+route guard in test_dashboard_routes.py five rounds and fourteen bypasses,
+and the version that finally held stopped enumerating the bad shapes and
+started walking the one closed set in the problem.
+
+Here the closed sets are the literal tokens that can put a request on the
+wire or start a timer: `fetch(`, `postJSON(` and `setInterval(`. Every
+occurrence of each, in every file under js/, must resolve to a site this
+file declares. An undeclared one fails, whatever shape it is written in —
+which turns "did the author think about the header?" from a question about
+this eval's imagination into a question it cannot avoid asking.
+
 Checks:
-  1. each background-aware wrapper function's own fetch/postJSON call is
-     conditioned on its `background` parameter and attaches BG.
-  2. every `setInterval(...)` callback in js/ is safe: it either calls no
-     function that fetches, or passes a literal `true` to the ones that do —
-     found by walking each callback's own function bodies, not a hardcoded
-     list, so a genuinely new poller is checked the same way as an old one.
-  3. hiding the tab stops the timer-driven polls, and showing it again calls
+  1. every `fetch(`/`postJSON(` occurrence in js/ sits in a declared
+     function, classified as background-aware (its request is conditioned on
+     its own `background` parameter) or user-action (it must never carry the
+     header). Anything undeclared fails.
+  2. each background-aware function's own call attaches BG conditionally,
+     and no user-action call site references the header at all — a click, a
+     send or a tab's first open is real engagement and must count.
+  3. every `setInterval(`/`setTimeout(` occurrence in js/ is a declared
+     site, and a declared callback that reaches a network function passes
+     literal `true`. setTimeout is in the walk because a function that
+     reschedules itself is a poller containing no `setInterval` at all.
+  4. hiding the tab stops the timer-driven polls, and showing it again calls
      refresh(true) — not a plain refresh(), which would count as a user
      action and could wake a stopped container just by switching tabs.
-  4. no OTHER fetch/postJSON call site in js/ references the header at all —
-     a user-action call site (a click, a send, a tab's first open) must never
-     send it, because that traffic is real engagement and must count as
-     activity.
   5. the pause/resume state machine: every `paused =` write and every
      startTimers()/stopTimers() call in js/ is a declared site, and the one
      action the paused status line names — sending a message — actually
@@ -145,58 +164,338 @@ def test_background_aware_functions_attach_the_header(filename, functions):
         )
 
 
-def test_setinterval_calls_pass_the_background_flag():
-    """Every `setInterval(...)` in js/ must be safe against the regression
-    this eval exists for: a poller that fetches without ever marking itself
-    as background.
+def _function_ranges(src: str) -> list[tuple[int, int, str]]:
+    """(start, end, name) for every `function name(...){...}` in `src`, by the
+    same depth-count `_body_from` uses."""
+    out = []
+    for m in FUNC_DEF_RE.finditer(src):
+        body = _body_from(src, m.end())
+        out.append((m.end(), m.end() + len(body), m.group(1)))
+    return out
 
-    setInterval doesn't pass its callback any argument on its own, so a bare
-    `setInterval(fn, ms)` always runs `fn()` with every parameter at its
-    default — background=false for any function this task gave one. That's
-    only a problem if `fn` (or a function the callback calls) actually
-    fetches: `setInterval(tickLive, 1000)` is fine (tickLive touches no
-    network), `setInterval(refresh, 5000)` would not be (caught below,
-    because refresh()'s own body contains a fetch).
 
-    So: for every setInterval callback, find every named function it calls
-    (one level — this codebase's tickers call a single helper, not a chain)
-    whose OWN body fetches directly, and require that call to pass literal
-    `true`. A direct inline `fetch(`/`postJSON(` in the callback itself must
-    show the same `background ? …` pattern the wrappers use."""
-    bodies = _all_function_bodies()
-    failures = []
+def _enclosing(ranges: list[tuple[int, int, str]], pos: int) -> str:
+    """Innermost named function containing `pos`, or `<top level>`."""
+    best, width = "<top level>", None
+    for start, end, name in ranges:
+        if start <= pos < end and (width is None or end - start < width):
+            best, width = name, end - start
+    return best
+
+
+NETWORK_TOKENS = ("fetch", "postJSON")
+
+# EVERY network call site in js/, classified. The walk below finds every
+# `fetch(` and `postJSON(` occurrence in the directory and denies any that is
+# not in this table, so adding a request to the dashboard means adding a line
+# here — which is the moment the question gets asked.
+#
+#   "background"  the function takes a `background` parameter and conditions
+#                 its own request on it. Exactly the keys of BACKGROUND_AWARE
+#                 above; the two are cross-checked so they cannot drift.
+#   "user"        a click, a send, a tab's first open. Real engagement: the
+#                 request must reach the gateway with NO header at all.
+#   "primitive"   postJSON itself, which forwards whatever headers its caller
+#                 hands it and decides nothing.
+NETWORK_CALLERS = {
+    ("compare.js", "loadCompareHistory"): "background",
+    ("compare.js", "clearCompareHistory"): "user",
+    ("compare.js", "regradeCompare"): "user",
+    ("compare.js", "gradeCard"): "user",
+    ("compare.js", "deleteCompareRun"): "user",
+    ("compare.js", "runCompare"): "user",
+    ("compare.js", "loadMemoryArena"): "background",
+    ("compare.js", "runMemoryArena"): "user",
+    ("compare.js", "maSeeAll"): "user",
+    ("compare.js", "cleanMemoryStores"): "user",
+    ("compare.js", "loadMemoryStores"): "user",
+    ("diagram.js", "pollEvents"): "background",
+    ("dock.js", "newChat"): "user",
+    ("dock.js", "loadThreadInto"): "background",
+    ("dock.js", "switchTo"): "user",
+    ("graph.js", "runGraph"): "user",
+    ("judgment.js", "loadJudgmentArena"): "background",
+    ("judgment.js", "runJudgmentArena"): "user",
+    ("main.js", "refresh"): "background",
+    ("main.js", "stopMic"): "user",
+    ("memory.js", "saveFact"): "user",
+    ("memory.js", "delMem"): "user",
+    ("memory.js", "saveSoul"): "user",
+    ("memory.js", "saveSkill"): "user",
+    ("models.js", "saveSettings"): "user",
+    ("models.js", "loadModelList"): "user",
+    ("models.js", "switchModel"): "user",
+    ("models.js", "loadAddModels"): "background",
+    ("models.js", "pinModel"): "user",
+    ("models.js", "saveJevKey"): "user",
+    ("models.js", "toggleProvider"): "user",
+    ("models.js", "loadModalModels"): "user",
+    ("models.js", "submitProviderModal"): "user",
+    ("render.js", "sendChat"): "user",
+    ("util.js", "revealFile"): "user",
+    ("util.js", "postJSON"): "primitive",
+    ("views.js", "runQuery"): "user",
+    ("views.js", "saveConnection"): "user",
+    ("views.js", "testConnection"): "user",
+    ("views.js", "saveProvider"): "user",
+}
+
+# Every `setInterval(`/`setTimeout(` in js/, by the function it sits in, with
+# the exact callback text. Same default-deny, and setTimeout is in here for a
+# specific reason: a function that calls itself back on a timer is a poller
+# with no `setInterval` anywhere in it — diagram.js's playNext is exactly that
+# shape, already in the codebase and harmless because it repaints. Walking
+# only setInterval would let the next one fetch.
+DECLARED_TIMERS = {
+    # the demo animation: a self-rescheduling repaint, no request
+    ("diagram.js", "hot", "setTimeout"): {"()=>el.classList.remove(cls)"},
+    ("diagram.js", "playNext", "setTimeout"): {"playNext"},
+    # the graph card's repaint while a run is streaming: render() only
+    ("graph.js", "runGraph", "setInterval"): {"() => { if (graphRun.running) render(); }"},
+    # carries a render's provenance to a load it defers; the load itself is in
+    # NETWORK_CALLERS and receives the captured flag
+    ("main.js", "deferBg", "setTimeout"): {"() => load(bg)"},
+    # the voice hint restoring its placeholder
+    ("main.js", "<top level>", "setTimeout"): {'()=>{ i.placeholder = "Message Waku…"; }'},
+    # the two timer-driven polls, the reason this file exists
+    ("main.js", "startTimers", "setInterval"): {"() => refresh(true)", "() => pollEvents(true)"},
+    # the status line's "updated Ns ago" tick: text only, no request
+    ("main.js", "<top level>", "setInterval"): {"tickLive"},
+    # the dock's elapsed counter while waiting for the first token: repaint only
+    ("render.js", "sendChat", "setInterval"):
+        {"() => { if (pending.pending && !pending.stream) syncChatLogs(); }"},
+    # menu/copy-button chrome
+    ("ui.js", "openMenu", "setTimeout"): {'() => document.addEventListener("click", _menuOutside)'},
+    ("util.js", "copyCode", "setTimeout"):
+        {'() => { btn.textContent = orig; btn.classList.remove("copied"); }'},
+    ("util.js", "copyMsg", "setTimeout"):
+        {'() => { btn.textContent = orig; btn.classList.remove("copied"); }'},
+}
+
+
+def _function_ranges(src: str) -> list[tuple[int, int, str]]:
+    """(start, end, name) for every `function name(...){...}` in `src`, by the
+    same depth-count `_body_from` uses."""
+    out = []
+    for m in FUNC_DEF_RE.finditer(src):
+        body = _body_from(src, m.end())
+        out.append((m.end(), m.end() + len(body), m.group(1)))
+    return out
+
+
+def _enclosing(ranges: list[tuple[int, int, str]], pos: int) -> str:
+    """Innermost named function containing `pos`, or `<top level>`."""
+    best, width = "<top level>", None
+    for start, end, name in ranges:
+        if start <= pos < end and (width is None or end - start < width):
+            best, width = name, end - start
+    return best
+
+
+NETWORK_TOKENS = ("fetch", "postJSON")
+
+# EVERY network call site in js/, classified. The walk below finds every
+# `fetch(` and `postJSON(` occurrence in the directory and denies any that is
+# not in this table, so adding a request to the dashboard means adding a line
+# here — which is the moment the question gets asked.
+#
+#   "background"  the function takes a `background` parameter and conditions
+#                 its own request on it. Exactly the keys of BACKGROUND_AWARE
+#                 above; the two are cross-checked so they cannot drift.
+#   "user"        a click, a send, a tab's first open. Real engagement: the
+#                 request must reach the gateway with NO header at all.
+#   "primitive"   postJSON itself, which forwards whatever headers its caller
+#                 hands it and decides nothing.
+NETWORK_CALLERS = {
+    ("compare.js", "loadCompareHistory"): "background",
+    ("compare.js", "clearCompareHistory"): "user",
+    ("compare.js", "regradeCompare"): "user",
+    ("compare.js", "gradeCard"): "user",
+    ("compare.js", "deleteCompareRun"): "user",
+    ("compare.js", "runCompare"): "user",
+    ("compare.js", "loadMemoryArena"): "background",
+    ("compare.js", "runMemoryArena"): "user",
+    ("compare.js", "maSeeAll"): "user",
+    ("compare.js", "cleanMemoryStores"): "user",
+    ("compare.js", "loadMemoryStores"): "user",
+    ("diagram.js", "pollEvents"): "background",
+    ("dock.js", "newChat"): "user",
+    ("dock.js", "loadThreadInto"): "background",
+    ("dock.js", "switchTo"): "user",
+    ("graph.js", "runGraph"): "user",
+    ("judgment.js", "loadJudgmentArena"): "background",
+    ("judgment.js", "runJudgmentArena"): "user",
+    ("main.js", "refresh"): "background",
+    ("main.js", "stopMic"): "user",
+    ("memory.js", "saveFact"): "user",
+    ("memory.js", "delMem"): "user",
+    ("memory.js", "saveSoul"): "user",
+    ("memory.js", "saveSkill"): "user",
+    ("models.js", "saveSettings"): "user",
+    ("models.js", "loadModelList"): "user",
+    ("models.js", "switchModel"): "user",
+    ("models.js", "loadAddModels"): "background",
+    ("models.js", "pinModel"): "user",
+    ("models.js", "saveJevKey"): "user",
+    ("models.js", "toggleProvider"): "user",
+    ("models.js", "loadModalModels"): "user",
+    ("models.js", "submitProviderModal"): "user",
+    ("render.js", "sendChat"): "user",
+    ("util.js", "revealFile"): "user",
+    ("util.js", "postJSON"): "primitive",
+    ("views.js", "runQuery"): "user",
+    ("views.js", "saveConnection"): "user",
+    ("views.js", "testConnection"): "user",
+    ("views.js", "saveProvider"): "user",
+}
+
+# Every `setInterval(` in js/, by the function it sits in, with the exact
+# callback text. Same default-deny: a new timer of any shape fails here
+# first. The declared callbacks are also checked below against the network
+# table, so a declared timer that starts fetching is not silently blessed.
+DECLARED_INTERVALS = {
+    # the graph card's repaint while a run is streaming: render() only
+    ("graph.js", "runGraph"): {"() => { if (graphRun.running) render(); }"},
+    # the two timer-driven polls, the reason this file exists
+    ("main.js", "startTimers"): {"() => refresh(true)", "() => pollEvents(true)"},
+    # the status line's "updated Ns ago" tick: text only, no request
+    ("main.js", "<top level>"): {"tickLive"},
+    # the dock's elapsed counter while waiting for the first token: repaint only
+    ("render.js", "sendChat"): {"() => { if (pending.pending && !pending.stream) syncChatLogs(); }"},
+}
+
+
+def _network_sites() -> dict[tuple[str, str], set[str]]:
+    """(file, enclosing function) -> which network tokens appear there, for
+    every `fetch(`/`postJSON(` occurrence under js/. A token that is the name
+    in its own `function name(...)` definition is the definition, not a call
+    site, and is skipped."""
+    sites: dict[tuple[str, str], set[str]] = {}
     for path in sorted(JS_DIR.glob("*.js")):
         src = path.read_text()
-        for lineno, line in enumerate(src.splitlines(), start=1):
-            for m in re.finditer(r"setInterval\(([^,]+),\s*\d+\)", line):
-                callee = m.group(1).strip()
-                if _fetches_directly(callee) and "background" not in callee:
+        ranges = _function_ranges(src)
+        defs = {m.start(1) for m in FUNC_DEF_RE.finditer(src)}
+        for m in re.finditer(rf"\b({'|'.join(NETWORK_TOKENS)})\(", src):
+            if m.start(1) in defs:
+                continue
+            sites.setdefault((path.name, _enclosing(ranges, m.start())), set()).add(m.group(1))
+    return sites
+
+
+def test_every_network_call_site_in_the_dashboard_is_declared():
+    """Default-deny over the one closed set in the problem.
+
+    Not "is this poller shaped like a poller we recognise" — that set is
+    open and unwinnable. `fetch(` and `postJSON(` are literal tokens and
+    there are forty of them; every one has to resolve to a named function
+    this table classifies. A request added anywhere, reached by any number
+    of levels of indirection, from a timer written in any style, fails here
+    until someone says which kind it is."""
+    found = _network_sites()
+    missing = {k: sorted(v) for k, v in found.items() if k not in NETWORK_CALLERS}
+    gone = sorted(k for k in NETWORK_CALLERS if k not in found)
+    assert not missing, (
+        f"undeclared network call site(s): {missing}\n"
+        "Every fetch/postJSON in js/ must be declared in NETWORK_CALLERS as "
+        '"background" (conditioned on its own `background` parameter, so a '
+        'timer-driven call carries X-Waku-Background) or "user" (a click, a '
+        "send, a tab's first open — real engagement, never tagged). A call "
+        "site at <top level> is neither and has to move into a function."
+    )
+    assert not gone, (
+        f"declared network call site(s) that no longer exist: {gone} — "
+        "remove them from NETWORK_CALLERS."
+    )
+
+
+def test_the_two_tables_agree_on_which_functions_are_background_aware():
+    """BACKGROUND_AWARE pins the exact conditional-header expression; the
+    table above pins the set. Drift between them is how a function stops
+    being checked while still looking checked."""
+    from_patterns = {(f, fn) for f, fns in BACKGROUND_AWARE.items() for fn in fns}
+    from_table = {k for k, kind in NETWORK_CALLERS.items() if kind == "background"}
+    assert from_patterns == from_table, (
+        "BACKGROUND_AWARE and NETWORK_CALLERS disagree about which functions "
+        f"are background-aware.\n  only in BACKGROUND_AWARE: {sorted(from_patterns - from_table)}"
+        f"\n  only in NETWORK_CALLERS:  {sorted(from_table - from_patterns)}"
+    )
+
+
+def test_user_action_call_sites_never_name_the_header():
+    """The other half of the guarantee, checked per site rather than per
+    file: a user-action function must not mention BG at all."""
+    failures = []
+    for (filename, fn_name), kind in sorted(NETWORK_CALLERS.items()):
+        if kind != "user":
+            continue
+        body = _function_body(_read(filename), fn_name)
+        if re.search(r"\bBG\b|X-Waku-Background", body):
+            failures.append(f"{filename}: {fn_name}()")
+    assert not failures, (
+        f"user-action call site(s) attaching the background header: {failures} "
+        "— a click, a send or a tab's first open is real engagement and must "
+        "reach the gateway untagged, or a hosted tenant's container stops "
+        "while they are using it."
+    )
+
+
+def test_every_timer_in_the_dashboard_is_declared():
+    """`setInterval(` and `setTimeout(` are the other closed tokens. Declaring
+    the callback text means a timer that changes what it calls fails here and
+    gets read again — and it catches the shapes the enumerating version let
+    through, because it never asks what shape a poller has. Two-level
+    indirection, an arrow bound to a const, a function that reschedules
+    itself: all of them need one of these two tokens, and all of them fail
+    here until declared."""
+    found: dict[tuple[str, str, str], set[str]] = {}
+    for path in sorted(JS_DIR.glob("*.js")):
+        src = path.read_text()
+        ranges = _function_ranges(src)
+        for m in re.finditer(r"\b(setInterval|setTimeout)\(", src):
+            # the callback is everything up to the LAST top-level comma of
+            # the argument list; find the closing paren by depth first.
+            depth, i = 1, m.end()
+            while depth and i < len(src):
+                if src[i] in "({[":
+                    depth += 1
+                elif src[i] in ")}]":
+                    depth -= 1
+                i += 1
+            callback = src[m.end():i - 1].rsplit(",", 1)[0].strip()
+            key = (path.name, _enclosing(ranges, m.start()), m.group(1))
+            found.setdefault(key, set()).add(callback)
+    assert found == DECLARED_TIMERS, (
+        "the set of timers in js/ changed.\n"
+        f"  found:    {found}\n"
+        f"  declared: {DECLARED_TIMERS}\n"
+        "A new or changed timer has to be declared here. If its callback "
+        "reaches anything in NETWORK_CALLERS, it must pass literal `true` — "
+        "a timer hands its callback no arguments, so a bare "
+        "`setInterval(refresh, 5000)` polls with background=false forever and "
+        "holds a hosted tenant's container awake."
+    )
+
+
+def test_declared_timers_that_fetch_pass_the_background_flag():
+    """Cheap net over the closed declared set: if a declared callback names a
+    function that puts a request on the wire, it passes literal `true`."""
+    network_names = {fn for _, fn in NETWORK_CALLERS}
+    failures = []
+    for (filename, enclosing, token), callbacks in sorted(DECLARED_TIMERS.items()):
+        for callback in sorted(callbacks):
+            for call in re.finditer(r"\b([A-Za-z_]\w*)\s*\(([^()]*)\)", callback):
+                name, arg = call.group(1), call.group(2).strip()
+                if name in network_names and arg != "true":
                     failures.append(
-                        f"{path.name}:{lineno}: setInterval callback fetches directly "
-                        f"with no `background` check in sight — a timer-driven poll "
-                        f"here would go untagged."
-                    )
-                    continue
-                bare = re.fullmatch(r"\w+", callee)
-                if bare:
-                    body = bodies.get(callee)
-                    if body is not None and _fetches_directly(body):
-                        failures.append(
-                            f"{path.name}:{lineno}: setInterval({callee}, ...) passes no "
-                            f"arguments, so {callee}() always runs with background=false "
-                            f"— but {callee}() itself fetches, so this poll would go "
-                            f"untagged. Wrap it as `() => {callee}(true)`."
-                        )
-                    continue
-                for call in re.finditer(r"\b([A-Za-z_]\w*)\(([^()]*)\)", callee):
-                    name, arg = call.group(1), call.group(2).strip()
-                    body = bodies.get(name)
-                    if body is not None and _fetches_directly(body) and arg != "true":
-                        failures.append(
-                            f"{path.name}:{lineno}: setInterval callback calls "
-                            f"{name}({arg}) — {name}() fetches, so a timer-driven poll "
-                            f"through it must pass `true`, not {arg!r}."
-                        )
+                        f"{filename}: the {token} in {enclosing} calls {name}({arg}) "
+                        f"— {name}() puts a request on the wire, so a timer-driven "
+                        f"call through it must pass `true`, not {arg!r}.")
+            if re.fullmatch(r"\w+", callback) and callback in network_names:
+                failures.append(
+                    f"{filename}: the {token} in {enclosing} is "
+                    f"`{token}({callback}, ...)`, which passes no arguments, so "
+                    f"{callback}() always runs with background=false — but it "
+                    f"fetches. Wrap it as `() => {callback}(true)`.")
     assert not failures, "\n".join(failures)
 
 
@@ -274,25 +573,6 @@ TIMER_CALLERS = {
     # the visibilitychange listener and the bootstrap, both module scope
     ("main.js", "<top level>"): {"startTimers", "stopTimers"},
 }
-
-
-def _function_ranges(src: str) -> list[tuple[int, int, str]]:
-    """(start, end, name) for every `function name(...){...}` in `src`, by the
-    same depth-count `_body_from` uses."""
-    out = []
-    for m in FUNC_DEF_RE.finditer(src):
-        body = _body_from(src, m.end())
-        out.append((m.end(), m.end() + len(body), m.group(1)))
-    return out
-
-
-def _enclosing(ranges: list[tuple[int, int, str]], pos: int) -> str:
-    """Innermost named function containing `pos`, or `<top level>`."""
-    best, width = "<top level>", None
-    for start, end, name in ranges:
-        if start <= pos < end and (width is None or end - start < width):
-            best, width = name, end - start
-    return best
 
 
 def test_only_declared_sites_write_the_paused_flag():
