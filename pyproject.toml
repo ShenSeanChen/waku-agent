@@ -116,6 +116,16 @@ notion = [
 mcp = [
     "mcp>=2.1",
 ]
+# Hosted waku (hosted/): the gateway, the metering proxy and the spawner.
+# The CODE is not on PyPI -- hosted/ ships in neither the wheel nor the sdist,
+# and comes from a git checkout (hosted/README.md). This extra exists so that
+# a checkout can install the two libraries those services need, and so CI can
+# run their evals. `pip install waku-agent[hosted]` from PyPI therefore
+# installs these two libraries and nothing else; that is accepted.
+hosted = [
+    "aiohttp>=3.9",
+    "PyJWT[crypto]>=2.8",
+]
 dev = [
     "pytest>=8.0",
     # Pinned EXACTLY: an unpinned linter means every ruff release can turn CI
@@ -140,6 +150,10 @@ path = "waku/__init__.py"
 exclude = [
     "docs", "examples", "lab", "scripts/whiteboard",
     ".claude", ".deepeval", ".github",
+    # Anchored at the repo root on purpose: an unanchored "hosted" would also
+    # drop evals/deterministic/hosted/, and a test run from the sdist would
+    # then fail on a missing directory instead of skipping it.
+    "/hosted",
 ]
 
 [tool.hatch.build.targets.wheel]
