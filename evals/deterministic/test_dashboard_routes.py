@@ -18,6 +18,7 @@ same commit — that edit is the review signal that the public surface changed.
 
 from __future__ import annotations
 
+import ast
 import inspect
 import re
 
@@ -25,7 +26,9 @@ from waku.ops import dashboard
 
 # Every path the POST router accepts. `/api/compare` (non-streaming) was removed
 # on 2026-07-26: nothing called it, and its implementation had drifted behind the
-# streaming one badly enough to return wrong scores.
+# streaming one badly enough to return wrong scores. `/api/connections`,
+# `/api/connections/test` and `/api/providers` are here too — they are `routes`
+# dict keys (value `None`) exactly like the rest of this set, just added later.
 POST_ROUTES = {
     "/api/chat",
     "/api/memory",
@@ -33,6 +36,9 @@ POST_ROUTES = {
     "/api/query",
     "/api/session",
     "/api/pin",
+    "/api/connections",
+    "/api/connections/test",
+    "/api/providers",
     "/api/compare/clear",
     "/api/compare/regrade",
     "/api/compare/delete_run",
@@ -65,12 +71,9 @@ PINNED_GET = GET_PATHS | {
 
 # Every path do_POST matches: the streaming `if self.path == ...` checks handled
 # before the router (STREAM_ROUTES, which live inside do_POST too), the route
-# dict (POST_ROUTES), and the handful of exact checks that were added beside
-# them without a pin — providers, connections, and the arena routes.
+# dict (POST_ROUTES), and the judgment/memory-arena exact checks that were
+# added beside them without a pin.
 PINNED_POST = POST_ROUTES | STREAM_ROUTES | {
-    "/api/connections",
-    "/api/connections/test",
-    "/api/providers",
     "/api/judgment-arena/key",
     "/api/judgment-arena/stream",
     "/api/memory-arena/clean",
@@ -98,6 +101,76 @@ def routes_in_dashboard() -> set[str]:
     if routes_block:
         found |= set(_DICT_KEY.findall(routes_block.group(1)))
     return found
+
+
+def _is_self_path(node: ast.AST | None) -> bool:
+    """True for the `self.path` attribute access, wherever it appears."""
+    return (isinstance(node, ast.Attribute) and node.attr == "path"
+            and isinstance(node.value, ast.Name) and node.value.id == "self")
+
+
+def _is_str_literal(node: ast.AST | None) -> bool:
+    return isinstance(node, ast.Constant) and isinstance(node.value, str)
+
+
+def dashboard_route_literal_violations() -> list[str]:
+    """The AST-level twin of routes_in_dashboard(). That extractor can only see
+    a route when its path is a string literal sitting right beside the
+    comparison; it cannot follow a variable, a loop-bound name, or anything
+    else. This walks the same three constructs — `self.path == ...`,
+    `self.path.startswith(...)`, and the POST `routes` dict — and reports every
+    one where the path is NOT a plain string literal, naming the line. An
+    empty result is what makes routes_in_dashboard() complete: if every
+    comparison here is a literal, there is nothing left for it to miss."""
+    tree = ast.parse(_source())
+    violations: list[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Compare) and len(node.ops) == 1 and isinstance(node.ops[0], ast.Eq):
+            left, right = node.left, node.comparators[0]
+            other = right if _is_self_path(left) and not _is_str_literal(right) else None
+            other = left if other is None and _is_self_path(right) and not _is_str_literal(left) else other
+            if other is not None:
+                violations.append(
+                    f"line {node.lineno}: self.path compared against "
+                    f"`{ast.unparse(other)}`, not a string literal — write the "
+                    f"route path as a literal string")
+        elif (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+              and node.func.attr == "startswith" and _is_self_path(node.func.value)):
+            arg = node.args[0] if node.args else None
+            if not _is_str_literal(arg):
+                shown = ast.unparse(arg) if arg is not None else "<no argument>"
+                violations.append(
+                    f"line {node.lineno}: self.path.startswith(`{shown}`), not a "
+                    f"string literal — write the route path as a literal string")
+        elif (isinstance(node, ast.Assign) and isinstance(node.value, ast.Dict)
+              and any(isinstance(t, ast.Name) and t.id == "routes" for t in node.targets)):
+            for key in node.value.keys:
+                if not _is_str_literal(key):
+                    line = key.lineno if key is not None else node.lineno
+                    shown = ast.unparse(key) if key is not None else "**unpacked entry**"
+                    violations.append(
+                        f"line {line}: routes dict key `{shown}`, not a string "
+                        f"literal — write the route path as a literal string")
+    return violations
+
+
+def test_every_dashboard_route_comparison_is_a_string_literal():
+    """CONTROLLER RULING (A5 review round 1, C1): routes_in_dashboard() is
+    fooled by indirection — `_x = "/api/secret"; if self.path == _x:` or a path
+    built in a loop is fully live and dispatchable, but invisible to a regex
+    that only looks for a literal beside `==`. Rather than teach the extractor
+    to chase variables (which leads to loops, then helpers, then getattr, and
+    never ends), this constrains dashboard.py instead: every `self.path ==`
+    comparison, every `self.path.startswith(...)` call, and every key of the
+    POST `routes` dict must BE a string literal. That makes
+    routes_in_dashboard() complete by construction — there is no longer a
+    shape of route it could miss — instead of complete by effort."""
+    violations = dashboard_route_literal_violations()
+    assert not violations, (
+        "dashboard.py compares self.path against something other than a "
+        "string literal, so routes_in_dashboard() cannot see it and it can "
+        "reach production unpinned. Write the route path as a literal string "
+        "at the comparison instead:\n" + "\n".join(violations))
 
 
 def test_every_post_route_is_still_registered():
