@@ -15,6 +15,11 @@ from hosted.ports.control import ControlStore
 
 GATEWAY_SOCKET_MODE = 0o660
 
+# The whole request, field for field, the way core.requests does it for the
+# spawner. An extra field is a caller that thinks this socket takes something
+# it does not, and answering it anyway teaches that it does.
+TOKEN_FIELDS = frozenset({"op", "hash"})
+
 
 async def serve_token_lookup(path: Path, store: ControlStore) -> asyncio.Server:
     async def handler(request: dict) -> dict:
@@ -22,6 +27,9 @@ async def serve_token_lookup(path: Path, store: ControlStore) -> asyncio.Server:
         # forbidden ops would need editing every time the store grows a method.
         if request.get("op") != "token":
             return {"error": "this socket answers one question: op=token"}
+        unknown = sorted(set(request) - TOKEN_FIELDS)
+        if unknown:
+            return {"error": f"token does not take {unknown}"}
         digest = request.get("hash")
         if not isinstance(digest, str) or len(digest) != 64:
             return {"tenant": None}

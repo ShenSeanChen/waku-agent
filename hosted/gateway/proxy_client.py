@@ -18,13 +18,21 @@ class Spend:
 
 async def read_spend(socket_path: Path, tenant_id: str) -> Spend | None:
     """None when the proxy cannot answer. The caller then applies free's turn
-    limit and /account says the spend is unavailable -- it does not guess."""
+    limit and /account says the spend is unavailable -- it does not guess.
+
+    An answer missing a field, or carrying one that is not a number, is also
+    None, for the same reason: /account shows a figure a tenant is billed on,
+    and half an answer is not one.
+    """
     try:
         answer = await jsonsock.ask(socket_path, {"op": "spend", "tenant": tenant_id})
-    except (jsonsock.Unreachable, ValueError):
+    except jsonsock.Unreachable:
         return None
     if "error" in answer:
         return None
-    return Spend(month=answer["month"], settled=answer["settled"],
-                 reserved=answer["reserved"],
-                 last_platform_call=answer.get("last_platform_call"))
+    try:
+        return Spend(month=str(answer["month"]), settled=float(answer["settled"]),
+                     reserved=float(answer["reserved"]),
+                     last_platform_call=answer.get("last_platform_call"))
+    except (KeyError, TypeError, ValueError):
+        return None

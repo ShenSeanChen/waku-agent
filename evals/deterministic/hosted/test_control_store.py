@@ -151,17 +151,93 @@ def test_deleting_a_tenant_leaves_nothing_behind(store):
     assert store.tenant_for_token_hash(core_tenant.token_hash(token)) is None
 
 
+def test_two_tenants_can_share_an_email_and_the_lookup_is_pinned(store):
+    """Only sub and project_id are unique, in the schema and in the spec. An
+    anonymous account later upgraded, an address reused after a delete, or a
+    second Supabase identity all put two rows on one address.
+
+    `tenant.sh disable <email>` and `tenant.sh delete <email>` are built on
+    this lookup, so which row it answers has to be stated and not left to
+    whichever SQLite reached first: disabling the wrong tenant, or archiving
+    the wrong tenant's files, is found out afterwards.
+
+    The second row is created with an EARLIER created_at than the first, so
+    insertion order and creation order disagree. Without the ORDER BY, SQLite
+    hands back the first row it reaches, which is the first inserted -- so a
+    test whose two rows agreed on both orders would pass with the pin deleted.
+    """
+    store.clock["t"] = 2_000.0
+    later = store.create_tenant(sub="sub-1", email="mei@example.com", timezone="UTC")
+    store.clock["t"] = 1_000.0
+    earlier = store.create_tenant(sub="sub-2", email="mei@example.com", timezone="UTC")
+
+    assert later.id != earlier.id
+    assert earlier.created_at < later.created_at
+    assert store.tenant_by_email("mei@example.com") == earlier, "the earliest created"
+    for _ in range(5):
+        assert store.tenant_by_email("mei@example.com").id == earlier.id, "always the same"
+
+
+@pytest.mark.parametrize("bad", ["", "not-a-tenant-id", "ABCDEFGHIJKL",
+                                 "abcdefghijkl1", "abcdefghijk", None, 12])
+@pytest.mark.parametrize("method,args", [
+    ("set_status", ("active",)),
+    ("set_timezone", ("UTC",)),
+    ("delete_sessions", ()),
+    ("issue_token", ()),
+    ("revoke_tokens", ()),
+    ("delete_tenant", ()),
+])
+def test_a_method_that_changes_a_row_refuses_a_mangled_tenant_id(store, method, args, bad):
+    """Every one of these used to take any string and silently affect zero
+    rows, so `tenant.sh disable` on a truncated id reported success and
+    disabled nobody. Format only: a well-formed id belonging to nobody still
+    affects no rows, and existence is the caller's question."""
+    with pytest.raises(ValueError):
+        getattr(store, method)(bad, *args)
+
+
+@pytest.mark.parametrize("bad", ["", "not-a-tenant-id", None])
+def test_create_session_refuses_a_mangled_tenant_id(store, bad):
+    with pytest.raises(ValueError):
+        store.create_session(tenant_id=bad, value="c", expires_at=store.clock["t"] + 10)
+
+
+def test_a_lookup_answers_none_for_a_mangled_id_rather_than_raising(store):
+    """The guard is on the methods that change a row. A lookup is a question,
+    and the answer to "is this nonsense a tenant" is no, not an exception."""
+    assert store.tenant_by_id("not-a-tenant-id") is None
+    assert store.tenant_by_sub("nobody") is None
+    assert store.tenant_by_email("nobody@example.com") is None
+
+
 def test_the_database_is_in_wal_mode(store):
     assert store.journal_mode() == "wal"
 
 
-def test_one_connection_shared_by_threads_still_issues_exactly_one_live_token(store):
+def test_the_database_is_synchronous_full(store):
+    """2 is FULL. This reads the value in effect rather than the text that was
+    sent, which is the only thing that separates declared from applied: a typo
+    such as `synchronous=FUL` does not error, it silently lands on NORMAL (1)
+    while the source still reads as a durability declaration. What NORMAL can
+    lose to a power cut here is a token revocation or a tenant disable."""
+    assert store.synchronous() == 2
+
+
+@pytest.mark.parametrize("round_", range(3))
+def test_one_connection_shared_by_threads_still_issues_exactly_one_live_token(store, round_):
     """check_same_thread=False lets the connection outlive the thread that made
     it, and E1 will put one of these calls in an executor. Without the lock,
     issue_token's revoke and insert interleave and two tokens end up live --
     which is the whole rule this table exists to hold.
+
+    Three rounds, because one catches the lock-free version 39 times in 40 and
+    three catch it 40 in 40. A single burst per thread rather than a loop:
+    looping is worse here, not better, because a late issue revokes everything
+    before it and hands the invariant back by accident -- eight threads issuing
+    twenty-five times each catches it only 9 times in 40.
     """
-    t = store.create_tenant(sub="sub-1", email="mei@example.com", timezone="UTC")
+    t = store.create_tenant(sub=f"sub-{round_}", email="mei@example.com", timezone="UTC")
     start = threading.Barrier(8)
     tokens: list[str] = []
     raised: list[BaseException] = []

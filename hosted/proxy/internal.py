@@ -18,6 +18,11 @@ from hosted.proxy.ledger import Ledger
 
 PROXY_SOCKET_MODE = 0o660
 
+# The whole request, field for field, the way core.requests does it for the
+# spawner. An extra field is a caller that thinks this socket takes something
+# it does not -- a `month`, say -- and answering it anyway teaches that it does.
+SPEND_FIELDS = frozenset({"op", "tenant"})
+
 
 async def serve_spend(path: Path, ledger: Ledger,
                       now: Callable[[], float] = time.time) -> asyncio.Server:
@@ -27,6 +32,9 @@ async def serve_spend(path: Path, ledger: Ledger,
         # the caller, not a feature to add.
         if request.get("op") != "spend":
             return {"error": "this socket answers one question: op=spend"}
+        unknown = sorted(set(request) - SPEND_FIELDS)
+        if unknown:
+            return {"error": f"spend does not take {unknown}"}
         tenant_id = request.get("tenant")
         if not isinstance(tenant_id, str):
             return {"error": "tenant must be a string"}

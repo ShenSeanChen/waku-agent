@@ -87,10 +87,16 @@ class ControlDb:
     Every public method holds the lock for the whole of its work, statement
     and commit together, so no other thread can see or interleave with a
     half-finished change. The lock is a plain Lock rather than an RLock, so
-    the two methods that need a second method's SQL call the _locked helper
-    beside it instead of re-entering the public one -- which also makes
-    issue_token's revoke-then-insert a single critical section, the thing that
-    makes "exactly one live token per tenant" true under concurrency.
+    the one method that needs a second method's SQL -- issue_token, which must
+    revoke before it inserts -- calls the _locked helper beside it instead of
+    re-entering the public one. That also makes revoke-then-insert a single
+    critical section, which is what makes "exactly one live token per tenant"
+    true under concurrency rather than only in a single thread.
+
+    Methods that change a row require a well-formed tenant id; lookups do not,
+    and answer None. The guard is on format only: an id that is well formed and
+    belongs to nobody still affects no rows, and whether a tenant exists is the
+    caller's question, asked with tenant_by_id.
     """
 
     def __init__(self, path: Path, now: Callable[[], float] = time.time) -> None:
@@ -112,9 +118,25 @@ class ControlDb:
         with self._lock:
             return self._conn.execute("PRAGMA journal_mode").fetchone()[0].lower()
 
+    def synchronous(self) -> int:
+        """The value in effect, not the text that was sent. A typo such as
+        `synchronous=FUL` does not error: SQLite lands on NORMAL while the
+        source still reads as a durability declaration, and only a readback
+        sees the difference between declared and applied."""
+        with self._lock:
+            return int(self._conn.execute("PRAGMA synchronous").fetchone()[0])
+
     @staticmethod
     def _tenant(row: sqlite3.Row | None) -> Tenant | None:
         return Tenant(*row) if row is not None else None
+
+    @staticmethod
+    def _require_tenant_id(tenant_id: str) -> None:
+        """Every method that changes a row takes this. A mangled id would
+        otherwise update nothing and report success, and `tenant.sh disable`
+        on a truncated id would tell an operator it had disabled somebody."""
+        if not is_tenant_id(tenant_id):
+            raise ValueError(f"not a tenant id: {tenant_id!r}")
 
     def create_tenant(self, *, sub: str, email: str, timezone: str) -> Tenant:
         with self._lock:
@@ -140,13 +162,28 @@ class ControlDb:
                 f"SELECT {_COLUMNS} FROM tenant WHERE id = ?", (tenant_id,)).fetchone())
 
     def tenant_by_email(self, email: str) -> Tenant | None:
-        """tenant.sh names a tenant by email. Two Supabase users cannot share
-        one, so this is a lookup and not a search."""
+        """The earliest-created tenant with this address, or None.
+
+        EMAIL IS NOT UNIQUE. Only sub and project_id are, in the schema and in
+        the spec, and nothing here stops two tenant rows sharing an address: an
+        anonymous account later upgraded, an address reused after a delete, a
+        second Supabase identity. So this is a search that returns one row, not
+        a lookup, and the row it returns is pinned by created_at and then by id
+        so that the same address always answers the same tenant.
+
+        `tenant.sh disable <email>` and `tenant.sh delete <email>` are operator
+        commands built on this. Disabling or archiving whichever row SQLite
+        reached first is the kind of mistake found afterwards, so the order is
+        stated here and tested. An operator who needs certainty should name the
+        tenant id.
+        """
         with self._lock:
             return self._tenant(self._conn.execute(
-                f"SELECT {_COLUMNS} FROM tenant WHERE email = ?", (email,)).fetchone())
+                f"SELECT {_COLUMNS} FROM tenant WHERE email = ? "
+                "ORDER BY created_at, id LIMIT 1", (email,)).fetchone())
 
     def set_status(self, tenant_id: str, status: str) -> None:
+        self._require_tenant_id(tenant_id)
         if status not in STATUSES:
             raise ValueError(f"status must be one of {sorted(STATUSES)}, not {status!r}")
         with self._lock:
@@ -155,14 +192,14 @@ class ControlDb:
             self._conn.commit()
 
     def set_timezone(self, tenant_id: str, timezone: str) -> None:
+        self._require_tenant_id(tenant_id)
         with self._lock:
             self._conn.execute("UPDATE tenant SET timezone = ? WHERE id = ?",
                                (normalise_timezone(timezone), tenant_id))
             self._conn.commit()
 
     def create_session(self, *, tenant_id: str, value: str, expires_at: float) -> None:
-        if not is_tenant_id(tenant_id):
-            raise ValueError(f"not a tenant id: {tenant_id!r}")
+        self._require_tenant_id(tenant_id)
         with self._lock:
             self._conn.execute(
                 "INSERT OR REPLACE INTO session (hash, tenant_id, expires_at) "
@@ -178,6 +215,7 @@ class ControlDb:
         return row[0] if row else None
 
     def delete_sessions(self, tenant_id: str) -> None:
+        self._require_tenant_id(tenant_id)
         with self._lock:
             self._conn.execute("DELETE FROM session WHERE tenant_id = ?", (tenant_id,))
             self._conn.commit()
@@ -185,6 +223,7 @@ class ControlDb:
     def issue_token(self, tenant_id: str) -> str:
         """Issuing revokes the tenant's previous token, so exactly one is live
         and it belongs to the container the gateway is about to start."""
+        self._require_tenant_id(tenant_id)
         token = new_proxy_token()
         with self._lock:
             self._revoke_tokens_locked(tenant_id)
@@ -195,6 +234,7 @@ class ControlDb:
         return token
 
     def revoke_tokens(self, tenant_id: str) -> None:
+        self._require_tenant_id(tenant_id)
         with self._lock:
             self._revoke_tokens_locked(tenant_id)
             self._conn.commit()
@@ -216,6 +256,7 @@ class ControlDb:
     def delete_tenant(self, tenant_id: str) -> None:
         """The row goes; the archive keeps the files for 30 days. A tenant id
         is never reissued, because its project id is never reissued either."""
+        self._require_tenant_id(tenant_id)
         with self._lock:
             self._conn.execute("DELETE FROM session WHERE tenant_id = ?", (tenant_id,))
             self._conn.execute("DELETE FROM proxy_token WHERE tenant_id = ?", (tenant_id,))
