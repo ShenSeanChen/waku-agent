@@ -239,5 +239,5 @@ hidden_unless_env = true
 claims_families = false
 catalog_from_base_url = true
 scoped_credentials = true
-key_url = "https://github.com/ShenSeanChen/waku-agent"
+key_url = "https://github.com/ShenSeanChen/waku-agent/blob/main/hosted/README.md"
 price = [3.0, 15.0]
