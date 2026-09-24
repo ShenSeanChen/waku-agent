@@ -18,14 +18,27 @@ forgets the header — silently making a tenant's container immortal again.
 
 WHAT THIS GUARD IS, AND WHAT IT IS NOT. Read this before trusting it.
 
-The tokens it walks — `fetch`, `postJSON`, `setInterval`, `setTimeout` and
-`paused` — it walks exhaustively. Every occurrence of each, in every file
-under js/, must resolve to a site declared in this file, and an undeclared
-one fails whatever shape it is written in. That is what catches the poller
-written with two levels of indirection, the one bound to a const as an
-arrow, and the one that reschedules itself with setTimeout — the three
-shapes that walked through the first version of this file, which tried to
-enumerate what a poller looks like instead.
+It walks five tokens — `fetch`, `postJSON`, `setInterval`, `setTimeout` and
+`paused` — in every file under js/, and requires each occurrence to resolve
+to a site declared in this file. What it reads is each token's RECOGNISED
+FORM: a call (`fetch(`, `setInterval(`, whitespace before the paren
+allowed) and a plain assignment (`paused = false`). Within those forms it
+is exhaustive, and an undeclared site fails whatever shape the surrounding
+code is written in — which is what catches the poller built from two levels
+of indirection, the one bound to a const as an arrow, and the one that
+reschedules itself with setTimeout, three shapes that walked through the
+first version of this file, which tried to enumerate what a poller looks
+like instead.
+
+Written any OTHER way, those same five tokens are caught by named shape
+rather than by the walk: a network function taken as a value
+(`const _f = fetch`, `const _pj = postJSON`), re-bound, reached through the
+global object, renamed in an object pattern, or called through optional
+chaining (`globalThis?.fetch?.()`); and `paused` written by a compound
+assignment (`paused &&= false`), by `++`/`--`, or by destructuring
+(`({paused} = {paused: false})`). Those lists are named shapes, not a
+closure — the honest way to read this file is that the walk is exhaustive
+over the recognised forms and everything else is a blocklist.
 
 It is NOT a proof that the dashboard cannot make an unmarked request. "What
 makes a request in a browser" is not a closed set, and there is no AST
@@ -35,15 +48,20 @@ takes no new dependency. test_dashboard_routes.py can walk Python's `ast`
 and genuinely close its set; this file cannot, and an earlier version of
 this paragraph claimed it did while four live pollers went through.
 
-So the other transports are denied BY NAME — XMLHttpRequest, EventSource,
-WebSocket, navigator.sendBeacon, and `fetch` used as a value instead of
-called. Reaching for one fails here and forces the same deliberate
-decision a new fetch does. A named list is a blocklist, and a blocklist is
-never complete: an indirect construction (`window["Event" + "Source"]`,
-`eval`, a transport the platform grows after this was written) goes
-through. That limit is real and stated rather than papered over, because
-the next person maintaining this file will trust what it says about
-itself.
+So the other transports are denied BY NAME too — XMLHttpRequest,
+EventSource, WebSocket, navigator.sendBeacon. Reaching for one fails here
+and forces the same deliberate decision a new fetch does.
+
+A named list is a blocklist, and a blocklist is never complete. Known to
+go through, and verified to: a name built at runtime and reached by
+computed property access (`window["Event" + "Sour" + "ce"]`), anything
+constructed through `eval` or `new Function`, any transport the platform
+grows after this was written, and any alias spelled in a way none of the
+shapes above happens to match. Those limits are real and stated rather than
+papered over, because the next person maintaining this file will trust
+what it says about itself — an earlier version of this paragraph claimed a
+closure it did not have, and four live pollers made of these very tokens
+went through while it said so.
 
 EventSource is the one worth naming twice. A server-sent-events stream is
 a permanent keepalive and carries no per-request header at all, so it
@@ -55,10 +73,11 @@ merely mentions one of them fails too; that is the cheap half of the
 trade, and the fix is to reword the comment.
 
 Checks:
-  1. every `fetch(`/`postJSON(` occurrence in js/ sits in a declared
-     function, classified as background-aware (its request is conditioned on
-     its own `background` parameter) or user-action (it must never carry the
-     header). Anything undeclared fails.
+  1. every `fetch(`/`postJSON(` call in js/ — whitespace before the paren
+     allowed — sits in a declared function, classified as background-aware
+     (its request is conditioned on its own `background` parameter) or
+     user-action (it must never carry the header). Anything undeclared
+     fails.
   2. each background-aware function's own call attaches BG conditionally,
      and no user-action call site references the header at all — a click, a
      send or a tab's first open is real engagement and must count.
@@ -66,16 +85,19 @@ Checks:
      site, and a declared callback that reaches a network function passes
      literal `true`. setTimeout is in the walk because a function that
      reschedules itself is a poller containing no `setInterval` at all.
-  3b. no other transport appears by name, and `fetch` is never taken as a
-     value — see the limits stated above.
+  3b. no other transport appears by name, and neither network function is
+     taken as a value, re-bound, reached through the global object, renamed
+     in an object pattern, or called through optional chaining — see the
+     limits stated above.
   4. hiding the tab stops the timer-driven polls, and showing it again calls
      refresh(true) — not a plain refresh(), which would count as a user
      action and could wake a stopped container just by switching tabs.
   5. the pause/resume state machine: every write to `paused` — plain
-     assignment only, so `paused &&= false` is refused as a form — and
-     every startTimers()/stopTimers() call in js/ is a declared site, and
-     the one action the paused status line names, sending a message,
-     actually resumes. See the second half of this file.
+     assignment only, so a compound assignment, `++`/`--` and a
+     destructuring write are each refused as a form — and every
+     startTimers()/stopTimers() call in js/ is a declared site, and the one
+     action the paused status line names, sending a message, actually
+     resumes. See the second half of this file.
 """
 
 from __future__ import annotations
@@ -287,13 +309,29 @@ FORBIDDEN_TRANSPORTS = {
         "fire-and-forget POST with no header control and no response to check",
 }
 
-# `fetch` taken as a VALUE rather than called. `const _f = fetch; _f(url)` is
-# a request this file's fetch-call-site walk cannot see, because the call site
-# is spelled `_f(`.
+# A network token taken as a VALUE, or called by a spelling the call walk does
+# not read. `const _f = fetch; _f(url)` is a request whose call site is spelled
+# `_f(`; `const _pj = postJSON` is the same trick on the project's own helper;
+# `globalThis?.fetch?.()` is a call the `fetch(` walk never sees.
+#
+# These are named shapes, not a closed set — see the limits in the module
+# docstring. Matched in raw source, so the names are kept out of prose: the
+# trigger characters (`=`, `:`, `(`, `,`, `[`, `=>`) are what keeps an English
+# sentence from matching, which is why util.js's header says "the postJSON
+# helper" rather than listing it after a comma.
+NET = "fetch|postJSON"
 FETCH_ALIAS_SHAPES = {
-    r"(?:[=:(,\[]|=>)\s*fetch\b(?!\s*\()": "fetch bound to a name or passed as a value",
-    r"\bfetch\s*\.\s*(?:bind|call|apply)\b": "fetch re-bound",
-    r"\b(?:window|globalThis|self)\s*\.\s*fetch\b": "fetch reached through the global object",
+    rf"(?:[=:(,\[]|=>)\s*(?:{NET})\b(?!\s*\()":
+        "a network function bound to a name or passed as a value",
+    rf"\b(?:{NET})\s*\.\s*(?:bind|call|apply)\b":
+        "a network function re-bound",
+    rf"\b(?:window|globalThis|self)\s*\??\.\s*(?:{NET})\b":
+        "a network function reached through the global object",
+    rf"[{{,]\s*(?:{NET})\s*:":
+        "a network function destructured or renamed in an object pattern",
+    rf"\b(?:{NET})\s*\?\.":
+        "a network function called through optional chaining, which the "
+        "`fetch(`/`postJSON(` walk does not read",
 }
 
 
@@ -340,7 +378,7 @@ def _network_sites() -> dict[tuple[str, str], set[str]]:
         src = path.read_text()
         ranges = _function_ranges(src)
         defs = {m.start(1) for m in FUNC_DEF_RE.finditer(src)}
-        for m in re.finditer(rf"\b({'|'.join(NETWORK_TOKENS)})\(", src):
+        for m in re.finditer(rf"\b({'|'.join(NETWORK_TOKENS)})\s*\(", src):
             if m.start(1) in defs:
                 continue
             sites.setdefault((path.name, _enclosing(ranges, m.start())), set()).add(m.group(1))
@@ -393,10 +431,12 @@ def test_no_other_transport_appears_in_the_dashboards_js():
     )
 
 
-def test_fetch_is_always_called_never_taken_as_a_value():
+def test_a_network_function_is_always_called_never_passed_around():
     """`const _f = fetch; _f("/api/data")` is a request whose call site is
-    spelled `_f(`, so the fetch-call-site walk never sees it and the site is
-    never classified. Requiring `fetch` to be immediately called keeps that
+    spelled `_f(`, so the call-site walk never sees it and the site is never
+    classified. `const _pj = postJSON` is the same trick on the project's own
+    helper, and `globalThis?.fetch?.()` is a call the walk cannot read.
+    Requiring a network function to be called where it is used keeps that
     walk's view of the file honest."""
     failures = []
     for path in sorted(JS_DIR.glob("*.js")):
@@ -405,8 +445,9 @@ def test_fetch_is_always_called_never_taken_as_a_value():
             for m in re.finditer(pattern, src):
                 failures.append(
                     f"{path.name}:{src[:m.start()].count(chr(10)) + 1}: {why} "
-                    f"(`{src[m.start():m.end()].strip()}`) — call fetch() at the "
-                    f"site that needs it, so NETWORK_CALLERS can classify it")
+                    f"(`{src[m.start():m.end()].strip()}`) — call fetch() or "
+                    f"postJSON() at the site that needs it, so NETWORK_CALLERS "
+                    f"can classify it")
     assert not failures, "\n".join(failures)
 
 
@@ -453,7 +494,7 @@ def test_every_timer_in_the_dashboard_is_declared():
     for path in sorted(JS_DIR.glob("*.js")):
         src = path.read_text()
         ranges = _function_ranges(src)
-        for m in re.finditer(r"\b(setInterval|setTimeout)\(", src):
+        for m in re.finditer(r"\b(setInterval|setTimeout)\s*\(", src):
             # the callback is everything up to the LAST top-level comma of
             # the argument list; find the closing paren by depth first.
             depth, i = 1, m.end()
@@ -587,6 +628,10 @@ PAUSED_WRITE_RE = re.compile(
     r"(?P<op>(?:\*\*|<<|>>>?|[+\-*/%&|^]|&&|\|\||\?\?)?=(?!=)|\+\+|--)"
     r"\s*(?P<value>[A-Za-z0-9_\"']+)?")
 PAUSED_PREFIX_RE = re.compile(r"(?:\+\+|--)\s*\bpaused\b")
+# `({paused} = {paused: false})` and `[paused] = [false]` clear the flag with
+# no assignment operator anywhere near the name.
+PAUSED_PATTERN_RE = re.compile(
+    r"[{\[][^{}\[\]]*\bpaused\b[^{}\[\]]*[}\]]\s*=(?!=)")
 
 
 def test_paused_is_only_ever_written_by_plain_assignment():
@@ -611,6 +656,13 @@ def test_paused_is_only_ever_written_by_plain_assignment():
             failures.append(
                 f"{path.name}:{src[:m.start()].count(chr(10)) + 1}: "
                 f"`{src[m.start():m.end()]}` — same rule; plain assignment only")
+        for m in PAUSED_PATTERN_RE.finditer(src):
+            failures.append(
+                f"{path.name}:{src[:m.start()].count(chr(10)) + 1}: "
+                f"`{src[m.start():m.end()].strip()}` — a destructuring "
+                f"assignment writes `paused` with no assignment operator beside "
+                f"the name, so the declared-writer walk cannot see it. Plain "
+                f"assignment only")
     assert not failures, "\n".join(failures)
 
 

@@ -1,4 +1,5 @@
-// waku dashboard — escaping, markdown, core globals (D/editing), postJSON, reveal.
+// waku dashboard — escaping, markdown, core globals (D/editing), the
+// postJSON helper, reveal.
 // Split out of app.js: classic <script>, shared global scope (no build
 // step, no modules). Load order + rules: static/README.md.
 
