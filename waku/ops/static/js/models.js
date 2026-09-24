@@ -176,8 +176,11 @@ function yourModelsCard(st){
   // suggests the CURRENT provider's models (the only one we've fetched).
   const provOpts = providers.map(n => `<option value="${esc(n)}" ${n===st.provider?"selected":""}>${esc(n)}</option>`).join("");
   // Populate the model <select> for the initially-selected provider once the
-  // card is in the DOM (a fresh fetch of that provider's catalog).
-  setTimeout(() => loadAddModels(st.provider), 0);
+  // card is in the DOM (a fresh fetch of that provider's catalog). This card
+  // is rebuilt on every settings re-render, including an unattended 5s poll —
+  // bgRefresh (captured now, this render is synchronous) says whether this
+  // particular render was one of those, or a person opening the tab.
+  const bg = bgRefresh; setTimeout(() => loadAddModels(st.provider, bg), 0);
   return `<h2>Your models <span class="meta" style="font-weight:400">— what the chat switcher shows</span></h2>
     ${uiCard(`
       ${rows}
@@ -191,13 +194,14 @@ function yourModelsCard(st){
 
 // Fill the add-row model <select> with a provider's catalog (any provider, not
 // just the active one — the backend takes a ?provider= override).
-async function loadAddModels(provider){
+async function loadAddModels(provider, background = false){
   const sel = document.getElementById("add-model");
   const msg = document.getElementById("add-msg");
   if (!sel) return;
   sel.innerHTML = `<option value="">loading ${esc(provider)} models…</option>`;
   let data;
-  try { data = await (await fetch("/api/models?provider=" + encodeURIComponent(provider))).json(); }
+  try { data = await (await fetch("/api/models?provider=" + encodeURIComponent(provider),
+    background ? {headers: BG} : undefined)).json(); }
   catch(e){ sel.innerHTML = `<option value="">couldn't load — pick another provider</option>`; return; }
   const ms = data.models || [];
   sel.innerHTML = `<option value="">choose a model…</option>` + ms.map(m => {

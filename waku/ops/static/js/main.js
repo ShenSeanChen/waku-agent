@@ -63,8 +63,27 @@ function render(){
 }
 let lastFetch = Date.now();
 let lastCompareLoad = 0;   // throttle the Compare scoreboard self-heal to ~5s
+// Marks a request as a timer's poll, not a person doing something — the
+// hosted gateway (group E) reads this to decide whether a request counts as
+// activity, so a background tab can't hold a container awake forever.
+const BG = {"X-Waku-Background": "1"};
+// Set for the duration of a timer-driven refresh() (and reset in its
+// `finally`), so a fetch scheduled as a *side effect* of that refresh's
+// render() — e.g. loadAddModels's setTimeout in models.js — can tell it
+// wasn't a person opening a tab, without threading a parameter through
+// render()/VIEWS. Read it synchronously (or capture it into a local at
+// schedule time); it is only meaningful while that refresh's own synchronous
+// call chain is still running.
+let bgRefresh = false;
+let paused = false, pausedMsg = "";   // set by a "paused" reply; see handleNotOk
 function tickLive(){
   if (!D) return;
+  if (paused){
+    // Keep showing the sentence a "paused" reply sent, not the live/updated
+    // line — this 1s tick has no fetch of its own, so it can't overwrite it.
+    document.getElementById("sub").innerHTML = `<span class="live paused">${esc(pausedMsg)}</span>`;
+    return;
+  }
   const ago = Math.round((Date.now()-lastFetch)/1000);
   document.getElementById("sub").innerHTML =
     `<span class="live"><span class="dot"></span>live</span> · updated ${ago}s ago · ${esc(D.home)}`;
@@ -78,13 +97,32 @@ async function restoreDock(){
   if (!sid || CHAT.length) return;
   await loadThreadInto(sid, {setSession: true});
 }
-async function refresh(){
+// A reply whose body is {"code": "paused", "error": "…"} — the hosted
+// container went idle and needs a real user action to wake it. Any other
+// non-2xx (a 401 from an expired session included) just keeps the last data:
+// it used to reassign D unconditionally, so one bad response blanked the
+// whole dashboard.
+async function handleNotOk(res, background){
+  let body = null;
+  try { body = await res.json(); } catch(e){ /* not JSON — nothing to read */ }
+  if (body && body.code === "paused"){
+    paused = true;
+    pausedMsg = body.error || "Paused. Send a message to wake it.";
+    stopTimers();
+  }
+  tickLive();
+}
+async function refresh(background = false){
+  bgRefresh = background;
   try {
-    D = await (await fetch("/api/data")).json(); lastFetch = Date.now();
+    const res = await fetch("/api/data", background ? {headers: BG} : undefined);
+    if (!res.ok){ await handleNotOk(res, background); return; }
+    D = await res.json(); lastFetch = Date.now();
+    if (paused){ paused = false; startTimers(); }   // a real reply: resume
     render(); tickLive();
     syncModelChip();  // keep the dock's model pill in sync with the active brain
     applyTele();      // reflect the stats on/off choice (default on)
-    syncLiveView();   // live-update an opened conversation (e.g. new phone messages)
+    syncLiveView(background);   // live-update an opened conversation (e.g. new phone messages)
     if (!dockRestored) restoreDock();
     // Self-heal the Compare scoreboard: it otherwise only loads on tab-open and
     // after a race, so a slow/interrupted race (or a server blip) can leave it
@@ -94,9 +132,10 @@ async function refresh(){
     if (activeView === "compare" && !compareState.running && !editing
         && Date.now() - lastCompareLoad > 5000){
       lastCompareLoad = Date.now();
-      loadCompareHistory();
+      loadCompareHistory(background);
     }
   } catch(e){ /* server restarting — keep showing last data */ }
+  finally { bgRefresh = false; }
 }
 // --- resizable columns: drag the thin handle between nav|main and main|dock.
 // Width lives in a CSS var + localStorage, so it survives refreshes.
@@ -210,10 +249,31 @@ function encodeWAV(chunks, rate){
 }
 function wireMic(){ const b = document.getElementById("mic"); if (b) b.onclick = toggleMic; }
 
+// --- the two timer-driven polls (5s data, 450ms live-harness animation) —
+// stopped while the tab is hidden so a background tab can't hold a hosted
+// container awake, and restarted when it's shown again. Named intervals
+// (not bare setInterval calls) so stopTimers() has something to clear.
+let refreshTimer = null, pollTimer = null;
+function startTimers(){
+  if (refreshTimer) return;   // idempotent — a rapid hide/show shouldn't double them
+  refreshTimer = setInterval(() => refresh(true), 5000);
+  pollTimer = setInterval(() => pollEvents(true), 450);
+}
+function stopTimers(){
+  clearInterval(refreshTimer); clearInterval(pollTimer);
+  refreshTimer = null; pollTimer = null;
+}
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden){ stopTimers(); }
+  else { refresh(true); startTimers(); }   // that refresh is timer-driven:
+});                                        // showing a tab must not wake a
+                                           // stopped container
+
 window.addEventListener("hashchange", render);
 window.__hold = (v)=>{ animating = v; };   // test hook: freeze the diagram
 applyTheme(currentTheme());
 watchSlots();
 wireDock(); wireChrome(); wireMic();
-refresh(); setInterval(refresh, 5000); setInterval(tickLive, 1000);
-pollEvents(); setInterval(pollEvents, 450);   // live harness animation
+refresh(); pollEvents();   // initial load: a real user action, no header
+setInterval(tickLive, 1000);   // status text only, no fetch of its own
+startTimers();

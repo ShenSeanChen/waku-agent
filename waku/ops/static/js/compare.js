@@ -28,9 +28,9 @@ function saveCompare(){
 // --- Compare history: past races + a cumulative per-model scoreboard, from the
 // server's own compare/history.jsonl (never the agent's real state). Loaded once
 // when the tab opens and refreshed after each race.
-async function loadCompareHistory(){
+async function loadCompareHistory(background = false){
   try {
-    const h = await (await fetch("/api/compare/history")).json();
+    const h = await (await fetch("/api/compare/history", background ? {headers: BG} : undefined)).json();
     compareState.history = h.runs || [];
     compareState.aggregate = h.aggregate || [];
   } catch(e){ compareState.history = []; compareState.aggregate = []; }
@@ -420,7 +420,9 @@ function modelArenaView(d){
 
   // Load the history once when the tab first opens (setting [] first stops the
   // 5s refresh from re-triggering); loadCompareHistory re-renders when it lands.
-  if (compareState.history === undefined){ compareState.history = []; setTimeout(loadCompareHistory, 0); }
+  // bgRefresh is captured now (this render is synchronous) — it's true only if
+  // this very render was itself a timer's, not a person opening the tab.
+  if (compareState.history === undefined){ compareState.history = []; const bg = bgRefresh; setTimeout(() => loadCompareHistory(bg), 0); }
 
   return uiCard(`
     <div class="cmp-controls">
@@ -469,9 +471,10 @@ async function pickProbeFile(id){
 }
 function pickTrack(name){ maTrack = name; editing = false; render(); }
 
-async function loadMemoryArena(){
+async function loadMemoryArena(background = false){
   try {
-    const r = await fetch("/api/memory-arena" + (maFile ? `?probes=${encodeURIComponent(maFile)}` : ""));
+    const r = await fetch("/api/memory-arena" + (maFile ? `?probes=${encodeURIComponent(maFile)}` : ""),
+      background ? {headers: BG} : undefined);
     const j = await r.json();
     memoryArenaFixture = j && j.available ? j : null;
   } catch { memoryArenaFixture = null; }
@@ -682,7 +685,8 @@ async function maSeeAll(store){
 
 function memoryArenaView(){
   if (memoryArenaFixture === undefined){
-    setTimeout(loadMemoryArena, 0);
+    // bgRefresh: see the identical comment on the Compare history load above.
+    const bg = bgRefresh; setTimeout(() => loadMemoryArena(bg), 0);
     return uiCard("loading…", {cls: "empty"});
   }
   if (memoryArenaFixture === null){
