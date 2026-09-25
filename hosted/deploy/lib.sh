@@ -123,6 +123,14 @@ waku_write_config() {
   # a name nothing would ever clean up or look at again.
   cat >"$tmp" || { rm -f "$tmp"; WAKU_WRITE_TMP=""; waku_die "could not write $tmp"; }
   mv -f "$tmp" "$target"
-  WAKU_WRITE_TMP=""
+  # NOT CLEARED AFTER THE RENAME, and that is deliberate rather than an
+  # oversight. A `WAKU_WRITE_TMP=""` stood here and nothing could turn it red:
+  # once the rename has happened the name points at a file that no longer
+  # exists, so a later trap firing on it removes nothing, and no path can
+  # observe the difference. It is the same judgement as the two dead guards in
+  # waku_bytes and the dead chmod above -- a line that reads as cleanup and can
+  # never matter is a line the next reader trusts. The value is cleared on the
+  # one path where it WOULD matter: a failed write, where the temporary is
+  # removed by hand a line above.
   waku_log "wrote $target"
 }

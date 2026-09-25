@@ -154,6 +154,13 @@ def test_a_nameserver_line_with_no_address_is_refused(tmp_path):
         ("nameserver ::1\nnameserver 127.0.0.53\n", None),
         ("nameserver ::1\nnameserver 1.1.1.1\n", "1.1.1.1"),
         ("nameserver ::1\nnameserver 127.0.0.53\nnameserver 10.0.0.2\n", "10.0.0.2"),
+        # A REAL IPv6 UPSTREAM MUST SURVIVE. Without this fixture the arm
+        # could be widened from `^::1$` to `^:` -- dropping every IPv6
+        # resolver -- with the suite still green, which is the mirror of the
+        # arm having no fixture at all.
+        ("nameserver 2001:4860:4860::8888\n", "2001:4860:4860::8888"),
+        ("nameserver ::1\nnameserver 2001:4860:4860::8888\n",
+         "2001:4860:4860::8888"),
     ])
 def test_the_ipv6_loopback_is_dropped_like_the_ipv4_one(tmp_path, body, expected):
     """systemd writes `nameserver ::1` on a host whose stub listens on IPv6.
@@ -970,6 +977,39 @@ def test_the_whole_dns_provider_string_is_printable_ascii_on_one_line(
     done = shelllib.run(INSTALL, args, tmp_path=tmp_path, stubs=OUTSIDE)
     assert done.returncode != 0
     assert "must be printable text on one line" in done.stderr
+
+
+def test_the_dns_provider_stays_printable_ascii_under_a_utf8_locale(tmp_path):
+    """The `LC_ALL=C` on that check, which the control-character fixtures
+    above cannot reach: every one of them is refused by `[:print:]` in any
+    locale. A multibyte character is the case where the locale decides -- under
+    a UTF-8 LC_CTYPE it counts as printable and the set quietly widens, so the
+    value would reach config/install.env and the Caddyfile."""
+    args = _required(tmp_path) + ["--dns-provider", "route53 caf\u00e9"]
+    done = shelllib.run(INSTALL, args, tmp_path=tmp_path, stubs=OUTSIDE,
+                        env={"LC_ALL": "en_US.UTF-8", "LANG": "en_US.UTF-8"})
+    assert done.returncode != 0
+    assert "must be printable text on one line" in done.stderr
+
+
+def test_a_high_byte_is_not_mistaken_for_a_nul_under_a_utf8_locale(tmp_path):
+    """The `LC_ALL=C` on refuse_a_nul_byte, which the NUL fixture cannot
+    reach because `tr` copes with a NUL in any locale.
+
+    Measured on macOS: over a file holding an invalid UTF-8 byte,
+    `tr -d '\000'` under en_US.UTF-8 stops at that byte and says "Illegal
+    byte sequence", so the two counts disagree (11 against 6) and the file is
+    refused as holding a NUL byte that is not there. Under LC_ALL=C both
+    counts are 11 and the file reaches the character set, which refuses it for
+    the right reason.
+    """
+    key = _key_file(tmp_path, b"sk-ant\xc3\x28abc\n")
+    done = shelllib.run(INSTALL, _required(tmp_path, key=key),
+                        tmp_path=tmp_path, stubs=OUTSIDE,
+                        env={"LC_ALL": "en_US.UTF-8", "LANG": "en_US.UTF-8"})
+    assert done.returncode != 0
+    assert "holds a NUL byte" not in done.stderr, done.stderr
+    assert "must hold the value and nothing else" in done.stderr
 
 
 @pytest.mark.parametrize("value", ["route53\tx", "route53\nWAKU_EVIL=1"])
