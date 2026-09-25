@@ -256,3 +256,23 @@ def test_the_three_sentences_are_the_specs_sentences():
         "Your assistant is taking too long to start. Try again.")
     assert idle.MAINTENANCE_MESSAGE == (
         "Your assistant is under maintenance. Try again in a few minutes.")
+
+
+def test_reading_a_status_does_not_invent_a_container():
+    """Fleet.running_status must not grow the fleet.
+
+    `_state` is a setdefault, so a read through it creates a ContainerState
+    for every tenant anybody asks about -- and `running()` counts STARTING and
+    RUNNING, `idle_stops()` walks every entry, and the running cap is a length
+    comparison against that walk. A probe that leaves a STOPPED entry behind
+    is invisible until the day the dict is the thing being measured.
+    """
+    f = idle.Fleet(lambda: 0.0, max_running=1)
+    assert f.running_status("aaaaaaaaaaaa") == idle.STOPPED
+    # A private read, on purpose: "the fleet did not grow" has no public
+    # expression on Fleet, and this is a shape check, not a guard.
+    assert len(f._states) == 0
+    assert f.running() == []
+    assert f.idle_stops() == []
+    f.set_status("bbbbbbbbbbbb", idle.RUNNING)
+    assert f.running() == ["bbbbbbbbbbbb"]

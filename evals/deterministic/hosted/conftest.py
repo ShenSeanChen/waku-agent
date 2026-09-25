@@ -11,9 +11,14 @@ it, and none of them may import `hosted` at module scope without it.
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 HOSTED = Path(__file__).resolve().parents[3] / "hosted"
 
 if not HOSTED.is_dir():
     collect_ignore_glob = ["*.py"]
+else:
+    # gatewaylib.py is a sibling module, not a package.
+    # evals/hosted_docker/conftest.py does the same for dockerlib.py.
+    sys.path.insert(0, str(Path(__file__).resolve().parent))

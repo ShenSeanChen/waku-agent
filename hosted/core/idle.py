@@ -90,6 +90,13 @@ class Fleet:
         """Record a transition the gateway made. Touches no clock."""
         self._state(tenant_id).status = status
 
+    def running_status(self, tenant_id: str) -> str:
+        """The status the gateway believes, without creating a state for a
+        tenant nobody has asked about. `_state` is a setdefault, so a bare
+        read through it would grow the fleet by one entry per probe."""
+        state = self._states.get(tenant_id)
+        return state.status if state is not None else STOPPED
+
     def adopt(self, tenant_id: str) -> None:
         """A container the spawner's `list` reports as running.
 
