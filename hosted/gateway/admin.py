@@ -111,6 +111,7 @@ async def _act(gateway: Gateway, op: str, tenant: Tenant) -> dict:
         archived = await gateway.launcher.spawner_task(tenant.id, "archive",
                                                        project_id=tenant.project_id)
         gateway.store.delete_tenant(tenant.id)
+        gateway.launcher.forget_tenant(tenant.id)
         return {"ok": True, "tenant": tenant.id, "archive": archived.get("path", "")}
     task = _TASKS[op]
     gateway.launcher.mark_maintenance(tenant.id)

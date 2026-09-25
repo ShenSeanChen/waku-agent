@@ -27,6 +27,7 @@ worse answer than 400 for the same reason "/api/ch%61t/stream" is.
 from __future__ import annotations
 
 import asyncio
+import html
 import time
 from collections.abc import Awaitable, Callable
 from pathlib import Path
@@ -147,7 +148,17 @@ class Gateway:
     def end_sessions(self, tenant_id: str) -> None:
         """Every session of the tenant, on both hosts, plus both in-memory
         caches. Logout and disable both go through here so neither can forget
-        half of it."""
+        half of it.
+
+        SO LOGOUT IS TENANT-WIDE, AND THAT IS A CHOICE. Signing out in one
+        browser signs the same person out of every browser and every device,
+        because a tenant IS a person here -- one Supabase identity, one
+        container, one home directory. Fail-closed: "log me out" on a shared
+        machine ends the session that is on the phone too. The alternative,
+        deleting only the row the cookie names, would leave `disable` needing
+        a second code path to end all of them, and that is the path that must
+        not be forgotten.
+        """
         self._store.delete_sessions(tenant_id)
         self._sessions.forget_tenant(tenant_id)
         self._handoffs.forget_tenant(tenant_id)
@@ -237,9 +248,17 @@ class Gateway:
         that can run a string.
         """
         template = (TEMPLATES / "login.html").read_text(encoding="utf-8")
+        # ESCAPED ON THE WAY INTO THE HTML, raw on the way into the header.
+        # Both values are operator-written in config/gateway.env, so this is
+        # not attacker-controlled -- but they land in a <body> attribute, and
+        # a quote in either would break out of the attribute rather than be
+        # read as data. The CSP below is a HEADER and not HTML, so it takes
+        # the value as written: html.escape there would turn an ampersand in a
+        # URL into &amp; and silently change the policy.
         body = (template
-                .replace("@@SUPABASE_URL@@", self._config.supabase_url)
-                .replace("@@SUPABASE_KEY@@", self._config.supabase_publishable_key))
+                .replace("@@SUPABASE_URL@@", html.escape(self._config.supabase_url))
+                .replace("@@SUPABASE_KEY@@",
+                         html.escape(self._config.supabase_publishable_key)))
         policy_header = (
             "default-src 'none'; script-src 'self'; style-src 'self'; "
             f"connect-src 'self' {self._config.supabase_url}; img-src 'self'; "

@@ -97,9 +97,14 @@ def _is_same_origin_location(location: str | None) -> bool:
 
 
 def holds_container(path: str) -> bool:
-    """A turn, or another streaming request. These are the ones that count as
-    "in flight" AND the ones with no 120-second timeout -- one predicate, two
-    uses, so the two can never disagree about what a long request is.
+    """A turn, or another streaming request: the ones with no 120-second
+    timeout, because a turn can legitimately take twenty minutes.
+
+    THIS IS NOT THE "IN FLIGHT" PREDICATE, and it used to be. Counting only
+    these as in flight meant Fleet._evictable and Fleet.idle_stops considered
+    a container serving an ordinary POST /api/settings free to stop. _deliver
+    now enters and leaves the fleet for EVERY forwarded request, and this
+    answers one question only: whether the request may run past 120 seconds.
 
     EXACT PATH, NOT THE MATCHED ROUTE, and the asymmetry with is_a_turn below
     is deliberate. policy.match is longest-PREFIX, so /api/chat/streamX matches
@@ -407,8 +412,14 @@ class ContainerForwarder:
         ClientError.
         """
         held = holds_container(path)
-        if held:
-            self._launcher.fleet.enter(tenant.id)
+        # EVERY forwarded request is in flight, not only the long ones.
+        # Fleet._evictable and Fleet.idle_stops both require in_flight == 0,
+        # and this used to be incremented only for turns and streams -- so a
+        # sign-in or a request at the cap could stop a container in the middle
+        # of somebody's POST /api/settings. `held` stays what it always was,
+        # the timeout predicate; the two questions are not the same question
+        # and pretending they were is what made an ordinary request evictable.
+        self._launcher.fleet.enter(tenant.id)
         try:
             try:
                 return await self._send(request, running, body, held=held)
@@ -429,9 +440,21 @@ class ContainerForwarder:
             except aiohttp.ClientConnectorError:
                 return self._refuse(request, REFUSED_STATUS,
                                     idle.START_TIMEOUT_MESSAGE, streaming=streaming)
+        except aiohttp.ClientError as exc:
+            # EVERY OTHER WAY A CONTAINER CAN FAIL MID-REQUEST, shaped rather
+            # than left to aiohttp. Without this the browser gets aiohttp's
+            # own 500 with a `text/plain` body -- which the dashboard's
+            # res.json() cannot read, and which makes Gateway._shape_errors'
+            # docstring ("every refusal the browser can see is the
+            # JSON-or-HTML shape group A's page reads") false on this path.
+            # The five security headers were on it either way, so this is a
+            # message shape, not a header hole.
+            _LOG.info("tenant=%s dropped the connection at %s: %s",
+                      tenant.id, running.address, exc)
+            return self._refuse(request, REFUSED_STATUS,
+                                idle.START_TIMEOUT_MESSAGE, streaming=streaming)
         finally:
-            if held:
-                self._launcher.fleet.leave(tenant.id)
+            self._launcher.fleet.leave(tenant.id)
 
     async def _send(self, request: web.Request, running: RunningContainer,
                     body: bytes, *, held: bool) -> web.StreamResponse:
@@ -487,3 +510,16 @@ class ContainerForwarder:
                 await downstream.write_eof()
                 return downstream
             return answers.refusal(request, 504, answers.TOOK_TOO_LONG)
+        except aiohttp.ClientError:
+            # A container that ACCEPTED and then went away: one being stopped,
+            # one evicted between _reach and here, or a kernel backlog accept
+            # during Docker's stop. It raises ServerDisconnectedError, which
+            # is a ClientError and NOT a ClientConnectorError -- so _deliver's
+            # retry does not run on it, deliberately: the request may have
+            # been delivered, and replaying a POST would be a second side
+            # effect. Re-raised for _deliver to shape, except once the headers
+            # are on the wire, where there is no status left to choose.
+            if downstream is not None and downstream.prepared:
+                await downstream.write_eof()
+                return downstream
+            raise

@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import socket
 import threading
 import time
 from http.cookies import SimpleCookie
@@ -71,7 +72,15 @@ class FakeSpawner:
         self.running: dict[str, RunningContainer] = {}
         self.fail_start: Exception | None = None
         self.fail_provision: Exception | None = None
+        # A stop the spawner refuses. The container survives, and its token
+        # has already been revoked -- the drift resync exists to repair.
+        self.fail_stop: Exception | None = None
+        # EVERY CALL YIELDS, EVEN AT ZERO. SpawnerClient.start and .stop are
+        # unix socket round trips, so the real ones always suspend; a fake
+        # that returns without yielding cannot show an interleaving the real
+        # one has, and the running cap was broken for exactly that window.
         self.start_delay: float = 0.0
+        self.stop_delay: float = 0.0
         self.address: str | None = None
         self.port: int = 7777
         # E3 step 14 drives the refused-connection ladder by making the FIRST
@@ -95,8 +104,7 @@ class FakeSpawner:
         self.requests.append({"op": "start", "tenant_id": tenant_id,
                               "project_id": project_id, "timezone": timezone,
                               "token": token})
-        if self.start_delay:
-            await asyncio.sleep(self.start_delay)
+        await asyncio.sleep(self.start_delay)
         if self.fail_start is not None:
             raise self.fail_start
         container = RunningContainer(
@@ -119,6 +127,11 @@ class FakeSpawner:
 
     async def stop(self, tenant_id: str) -> None:
         self.requests.append({"op": "stop", "tenant_id": tenant_id})
+        await asyncio.sleep(self.stop_delay)
+        if self.fail_stop is not None:
+            # The container is NOT removed from `running`: that is the whole
+            # point of a stop that failed.
+            raise self.fail_stop
         self.running.pop(tenant_id, None)
 
     async def list(self) -> list[RunningContainer]:
@@ -450,6 +463,10 @@ class FakeContainer:
         # of what "unbuffered" means and is not a timing assertion.
         self.frame_delay = 0.0
         self.finished = threading.Event()
+        # Extra bytes to CLAIM in Content-Length and then not send, before
+        # hanging up. A container killed for memory halfway through a
+        # response looks like this: the headers arrived, the body did not.
+        self.truncate = 0
         # The Location the container tries to send. Off-origin by default,
         # because that is the one acceptance 14 is about; the tests that drive
         # forward._is_same_origin_location set it case by case.
@@ -491,7 +508,8 @@ class FakeContainer:
                 payload = json.dumps({"path": self.path}).encode("utf-8")
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
-                self.send_header("Content-Length", str(len(payload)))
+                self.send_header("Content-Length",
+                                 str(len(payload) + recorder.truncate))
                 self.send_header("Set-Cookie", "evil=1")
                 self.send_header("Clear-Site-Data", '"cookies"')
                 self.send_header("Location", recorder.location)
@@ -509,4 +527,41 @@ class FakeContainer:
         if self._server is not None:
             self._server.shutdown()
             self._server.server_close()
+            self._server = None
+
+
+class AcceptsThenCloses:
+    """A socket that accepts a connection and closes it without answering.
+
+    A CONTAINER BEING STOPPED LOOKS EXACTLY LIKE THIS from the gateway's side,
+    and it is not the same as a refused connection: the connect succeeded, so
+    aiohttp raises ServerDisconnectedError rather than ClientConnectorError,
+    and the retry ladder must NOT run -- the request may already have been
+    delivered.
+    """
+
+    def __init__(self) -> None:
+        self._server: socket.socket | None = None
+        self.port = 0
+
+    def start(self) -> None:
+        self._server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self._server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self._server.bind(("127.0.0.1", 0))
+        self._server.listen(8)
+        self.port = self._server.getsockname()[1]
+
+        def serve() -> None:
+            while True:
+                try:
+                    connection, _ = self._server.accept()
+                except OSError:
+                    return
+                connection.close()
+
+        threading.Thread(target=serve, daemon=True).start()
+
+    def stop(self) -> None:
+        if self._server is not None:
+            self._server.close()
             self._server = None

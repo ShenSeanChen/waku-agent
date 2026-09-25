@@ -35,10 +35,11 @@ from gatewaylib import (
     cookie_value,
     ops,
     sign,
+    sign_in,
     signing_key,
 )
 
-from hosted.gateway import admin
+from hosted.gateway import admin, sessions
 from hosted.gateway.identity import JwksVerifier, NotSignedIn
 from hosted.gateway.spawner_client import SpawnerError
 
@@ -315,3 +316,59 @@ def test_a_token_naming_more_than_one_audience_is_refused():
         verifier_for(jwks, clock).verify(listed)
     # The single string, unchanged, still verifies.
     assert verifier_for(jwks, clock).verify(sign(private, now=clock.t)).sub == "sub-mei"
+
+
+def test_an_abandoned_hand_off_code_does_not_live_in_memory_for_ever(harness):
+    """F5. Codes used to leave HandoffCodes only through `redeem` or
+    `forget_tenant`, so every sign-in nobody followed left one behind for the
+    life of the process.
+
+    `issue` now sweeps what has expired, which is bounded by the sign-in rate
+    over the code's sixty-second life and so needs no timer of its own. The
+    control is the second half: a code issued INSIDE the window is still there
+    and still works, so this is a sweep and not a purge.
+
+    THE SIZE IS READ OFF A PRIVATE ATTRIBUTE AND THERE IS NO OTHER WAY. What
+    is under test is that memory is released, and released memory has no
+    public expression: an expired code failed to redeem before this change as
+    well, so the redeem half alone could not fail. Declared here rather than
+    dressed up, which is what test_idle.py does for the same shape.
+    """
+    codes = sessions.HandoffCodes(harness.clock)
+    abandoned = [codes.issue("aaaaaaaaaaaa") for _ in range(5)]
+    harness.clock.t += sessions.HANDOFF_TTL_SECONDS + 1
+    fresh = codes.issue("bbbbbbbbbbbb")
+
+    assert len(codes._codes) == 1                       # noqa: SLF001
+    assert all(codes.redeem(code, "aaaaaaaaaaaa") is False for code in abandoned)
+    assert codes.redeem(fresh, "bbbbbbbbbbbb") is True
+
+
+def test_deleting_a_tenant_forgets_the_launcher_state_too(harness):
+    """F5. `admin delete` removed the row, the sessions, the turn window and
+    the fleet entry, and left the maintenance mark and the per-tenant lock
+    behind for the life of the process.
+
+    The mark is the one that matters: `Launcher.start` refuses a marked
+    tenant, so a mark for a tenant that no longer exists is a refusal nobody
+    can clear.
+    """
+    async def run():
+        tenant_id, _apex, _code = await sign_in(harness)
+        harness.launcher.mark_maintenance(tenant_id)
+        held = harness.launcher.in_maintenance(tenant_id)
+        answer = await admin.handle(harness.gateway,
+                                    {"op": "delete", "tenant": tenant_id})
+        return tenant_id, held, answer, harness.launcher.in_maintenance(tenant_id)
+
+    async def driven():
+        await harness.start()
+        result = await run()
+        await harness.stop()
+        return result
+
+    tenant_id, held, answer, after = asyncio.run(driven())
+    assert held is True, "the mark was never set; nothing was tested"
+    assert answer["ok"] is True
+    assert answer["tenant"] == tenant_id
+    assert after is False

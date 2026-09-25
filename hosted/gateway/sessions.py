@@ -132,9 +132,34 @@ class HandoffCodes:
         self._codes: dict[str, tuple[str, float]] = {}
 
     def issue(self, tenant_id: str) -> str:
+        """A single-use code, held IN PLAINTEXT, unlike a session value.
+
+        WHY THE ASYMMETRY WITH SessionCache, which stores token_hash(value).
+        A session value is a live credential for its whole TTL, so a heap dump
+        of the gateway must not be a set of live cookies. A hand-off code is
+        live for sixty seconds and dies on first read, whichever way the
+        redeem goes -- and the gateway has to be able to answer "which tenant
+        is this code for", which a hash of the code alone cannot do without
+        storing the mapping this dict already is. Hashing it would buy a
+        sixty-second window against an attacker who can already read the
+        process's memory, which is an attacker who can read the sessions the
+        code is about to become.
+
+        SWEPT ON ISSUE. Entries used to leave only through redeem or
+        forget_tenant, so a code nobody followed sat here for the life of the
+        process -- one per abandoned sign-in, for ever. The sweep is bounded
+        by the number of codes issued in the last sixty seconds, which is the
+        sign-in rate, so it costs nothing and needs no timer of its own.
+        """
+        self._sweep()
         code = new_secret()
         self._codes[code] = (tenant_id, self._now() + self._ttl)
         return code
+
+    def _sweep(self) -> None:
+        now = self._now()
+        for code in [c for c, (_, expires) in self._codes.items() if expires <= now]:
+            self._codes.pop(code, None)
 
     def redeem(self, code: str, tenant_id: str) -> bool:
         found = self._codes.pop(code, None)

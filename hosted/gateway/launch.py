@@ -95,8 +95,13 @@ class Launcher:
         _LOG.info("maintenance on tenant=%s", tenant_id)
 
     def clear_maintenance(self, tenant_id: str) -> None:
-        self._maintenance.discard(tenant_id)
-        _LOG.info("maintenance off tenant=%s", tenant_id)
+        """Only says so when there was a mark, so that `delete` can call this
+        unconditionally without writing a line about maintenance nobody set.
+        Without that call a deleted tenant's id stayed in the set for the life
+        of the process."""
+        if tenant_id in self._maintenance:
+            self._maintenance.discard(tenant_id)
+            _LOG.info("maintenance off tenant=%s", tenant_id)
 
     def require_active(self, tenant: Tenant) -> None:
         if tenant.status != "active":
@@ -167,21 +172,56 @@ class Launcher:
         token is bound to one tenant, and the alternative breaks a working
         tenant to tidy a row.
         """
-        self.require_active(tenant)
-        if self.in_maintenance(tenant.id):
-            raise InMaintenance(idle.MAINTENANCE_MESSAGE)
-        lock = self._locks.setdefault(tenant.id, asyncio.Lock())
-        async with lock:
+        try:
+            self.require_active(tenant)
             if self.in_maintenance(tenant.id):
                 raise InMaintenance(idle.MAINTENANCE_MESSAGE)
+        except (NotActive, InMaintenance):
+            # THE ONLY TWO WAYS OUT OF start() THAT NEVER REACH
+            # _start_locked, so the only two that have to give back a slot
+            # Fleet.admit reserved. Every other failure path below goes
+            # through _forget_running, which does the same thing and pops the
+            # address as well. release_start is a no-op unless the fleet still
+            # says STARTING, so a caller refused here cannot mark somebody
+            # else's running container stopped.
+            self._abandon_start(tenant.id)
+            raise
+        lock = self._locks.setdefault(tenant.id, asyncio.Lock())
+        async with lock:
+            try:
+                if self.in_maintenance(tenant.id):
+                    raise InMaintenance(idle.MAINTENANCE_MESSAGE)
+            except InMaintenance:
+                self._abandon_start(tenant.id)
+                raise
             running = self._addresses.get(tenant.id)
             if running is not None and self._fleet.running_status(tenant.id) == idle.RUNNING:
                 return running
             return await self._start_locked(tenant)
 
+    def _start_event(self, tenant_id: str) -> asyncio.Event:
+        """The event a waiter waits on and a starter sets, created by
+        whichever of the two arrives first.
+
+        A WAITER CAN ARRIVE BEFORE THE STARTER MAKES IT. Fleet.admit reserves
+        the slot by marking the tenant STARTING, and on the evict arm the
+        caller that won it then awaits the spawner's `stop` before it reaches
+        _start_locked. A second request in that window is told to wait, and
+        without this setdefault it would find no event, read an address that
+        is not there yet, and be refused 503 on a container seconds from
+        running.
+        """
+        return self._starts.setdefault(tenant_id, asyncio.Event())
+
+    def _abandon_start(self, tenant_id: str) -> None:
+        """Give back a reserved slot and wake anybody waiting on it."""
+        self._fleet.release_start(tenant_id)
+        event = self._starts.pop(tenant_id, None)
+        if event is not None:
+            event.set()
+
     async def _start_locked(self, tenant: Tenant) -> RunningContainer:
-        event = asyncio.Event()
-        self._starts[tenant.id] = event
+        event = self._start_event(tenant.id)
         self._fleet.set_status(tenant.id, idle.STARTING)
         token = self._store.issue_token(tenant.id)
         try:
@@ -196,6 +236,14 @@ class Launcher:
             self._forget_running(tenant.id)
             _LOG.warning("start of tenant=%s failed: %s", tenant.id, exc)
             raise StartFailed(idle.START_TIMEOUT_MESSAGE) from exc
+        except BaseException:
+            # A CANCELLED REQUEST, ALMOST ALWAYS -- a browser that went away
+            # while its container was starting. STARTING is now a reserved
+            # slot, so leaving the mark behind would shrink the VM by one
+            # container for the life of the process. Fail-closed rather than
+            # over-committing, but still wrong, so it is closed here.
+            self._forget_running(tenant.id)
+            raise
         finally:
             self._starts.pop(tenant.id, None)
             event.set()
@@ -253,10 +301,15 @@ class Launcher:
 
     async def wait_for_start(self, tenant_id: str) -> RunningContainer | None:
         """Wait for a start another request began. None when it did not
-        finish in the budget or finished without producing a container."""
-        event = self._starts.get(tenant_id)
-        if event is None:
+        finish in the budget or finished without producing a container.
+
+        NO EVENT YET IS NOT "NO START" -- see _start_event. The fleet is the
+        authority on whether a start is under way, because Fleet.admit is what
+        marks it; the event is only how this coroutine is woken.
+        """
+        if self._fleet.running_status(tenant_id) != idle.STARTING:
             return self._addresses.get(tenant_id)
+        event = self._start_event(tenant_id)
         try:
             await asyncio.wait_for(event.wait(), idle.START_TIMEOUT_SECONDS)
         except TimeoutError:
@@ -281,26 +334,40 @@ class Launcher:
         except (SpawnerError, OSError) as exc:
             # The token is already revoked and the address is already
             # forgotten, so the tenant is safe either way. A container that
-            # survives this is picked up by the next resync.
+            # survives this is stopped again by the next resync.
             #
-            # UNDECIDED, FOR E3: "picked up" is not "fixed". If the container
-            # really did survive, the next resync finds it active at the
-            # address its project id derives and re-adopts it (RUNNING), and
-            # `start`'s fast path then hands that same container straight
-            # back to every request -- with no token, because nothing on
-            # this path re-issues one. The dashboard loads and every model
-            # call 401s, with no self-healing until an idle stop or an
-            # operator `restart-all`. E2 does not decide which of the two
-            # fixes is right -- `resync` refusing to adopt a tenant with no
-            # live token, or a failed stop here marking the tenant for a
-            # forced restart -- because E3 owns the refused-connection
-            # ladder this would slot into. This paragraph is that decision
-            # waiting to be made on purpose rather than found by an operator.
-            _LOG.warning("stop of tenant=%s failed: %s", tenant_id, exc)
+            # DECIDED: resync enforces the INVARIANT, not this path. A
+            # container that survives a failed stop is a live container whose
+            # token has been revoked -- the dashboard would load and every
+            # model call would 401, for ever, because nothing on this path
+            # re-issues one. The fix is not a flag set here: it is that
+            # `resync` stops any running container whose tenant has no live
+            # token, whatever put it in that state. That covers this, the
+            # idle sweep, an eviction, restore, inspect, and whatever group F
+            # adds later, and it self-heals on the next sweep instead of
+            # needing the call that just failed to succeed.
+            _LOG.warning("stop of tenant=%s failed: %s; resync will stop it "
+                         "again -- its token is already revoked", tenant_id, exc)
 
     def _forget_running(self, tenant_id: str) -> None:
         self._addresses.pop(tenant_id, None)
         self._fleet.set_status(tenant_id, idle.STOPPED)
+
+    def forget_tenant(self, tenant_id: str) -> None:
+        """Everything this object remembers about a tenant who is gone.
+
+        `admin delete` calls it. Without it the maintenance mark and the
+        per-tenant lock outlived the tenant row for the life of the process --
+        not a leak that grows with traffic, but one that grows with every
+        tenant ever deleted, and the mark in particular would refuse a start
+        for a tenant id that no longer exists if one were ever reissued (it is
+        not: project ids are retired, not freed -- which is why this is
+        tidiness rather than a bug).
+        """
+        self.clear_maintenance(tenant_id)
+        self._locks.pop(tenant_id, None)
+        self._starts.pop(tenant_id, None)
+        self._addresses.pop(tenant_id, None)
 
     async def spawner_task(self, tenant_id: str, task: str,
                            project_id: int = 0) -> dict:
@@ -352,6 +419,20 @@ class Launcher:
                 _LOG.warning("tenant=%s is at %s, not the %s its project id "
                              "derives; not adopting it",
                              record.id, container.address, expected)
+                continue
+            if not self._store.has_live_token(record.id):
+                # THE INVARIANT: a running container holds its tenant's
+                # current token. This is the only place that enforces it, and
+                # it is enforced on the STATE rather than on the route that
+                # produced it -- a stop whose spawner call failed, an idle
+                # sweep, an eviction, a restore, or anything a later group
+                # adds. Adopting this container would hand a signed-in person
+                # a dashboard that loads and a model call that 401s, with no
+                # self-healing at all; stopping it costs them one start on
+                # their next request.
+                _LOG.warning("tenant=%s is running with no live token; "
+                             "stopping it", record.id)
+                await self.stop(record.id)
                 continue
             fresh[record.id] = container
         for tenant_id in list(self._addresses):

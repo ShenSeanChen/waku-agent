@@ -11,9 +11,11 @@ container rather than E1's recording stand-in.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hashlib
 import json
 import logging
+from dataclasses import replace
 from pathlib import Path
 
 import aiohttp
@@ -21,6 +23,7 @@ import pytest
 from aiohttp import web
 from gatewaylib import (
     SUPABASE_URL,
+    AcceptsThenCloses,
     FakeContainer,
     FakeSpawner,
     Harness,
@@ -37,6 +40,8 @@ from hosted.core import idle, policy, quota
 from hosted.gateway import __main__ as gateway_main
 from hosted.gateway.config import REQUIRED_ENV_NAMES
 from hosted.gateway.forward import ContainerForwarder
+from hosted.gateway.spawner_client import SpawnerError
+from hosted.ports.runtime import RunningContainer
 
 ROOT = Path(__file__).resolve().parents[3]
 REPO_ENV_EXAMPLE = ROOT / "hosted" / "deploy" / "gateway.env.example"
@@ -1758,3 +1763,349 @@ def test_a_policy_verdict_forward_py_does_not_handle_is_refused(wired, monkeypat
     assert answer[0] == 503
     assert json.loads(answer[2])["error"] == "That request was refused."
     assert forwarded == 0
+
+
+# --- the cap under concurrency, not only in sequence ---------------------
+
+
+def test_two_simultaneous_sign_ins_at_the_cap_cannot_both_start(wired_one_slot):
+    """The cap is a reservation, not an opinion.
+
+    INTERLEAVED, NOT SEQUENTIAL, and that is the whole test. Fleet.admit used
+    to decide and reserve nothing, so the caller went on to suspend -- on the
+    spawner's `stop` for the evicted container, then on its `start` -- while
+    the fleet still said a slot was free. A second sign-in arriving in that
+    window took the same slot. Measured before the fix at max_running=1: two
+    containers.
+
+    The fake spawner's start and stop both yield, at zero delay, because the
+    real ones are unix socket round trips; a fake that returned without
+    suspending could not show this at all.
+    """
+    wired = wired_one_slot
+
+    async def run():
+        await wired.start()
+        await signed_in_on_the_tenant_host(wired, sub="sub-one",
+                                           email="one@example.com")
+        wired.spawner.stop_delay = 0.05
+        wired.spawner.start_delay = 0.05
+        tokens = [sign(wired.private, now=wired.clock.t, sub=sub,
+                       email=f"{sub}@example.com")
+                  for sub in ("sub-two", "sub-three")]
+        answers = await asyncio.gather(*[
+            wired.json_post("/auth/session", {"access_token": token},
+                            host="agent.waku.one") for token in tokens])
+        running = sorted(wired.fleet.running())
+        starts = [r["tenant_id"] for r in wired.spawner.requests
+                  if r["op"] == "start"]
+        await wired.stop()
+        return answers, running, starts
+
+    answers, running, starts = asyncio.run(run())
+    # A pre-warm that does not happen is not a failed sign-in.
+    assert [a[0] for a in answers] == [200, 200]
+    # One slot, one container, however many people arrived at once.
+    assert len(running) == 1
+    # Three sign-ins, and the third never reached the spawner at all.
+    assert len(starts) == 2
+
+
+def test_two_simultaneous_requests_at_the_cap_cannot_both_start(wired_one_slot):
+    """The same reservation, reached through the forwarder rather than the
+    sign-in: two tenants, one slot, two requests in flight at once.
+
+    One is served and one is told the VM is full. Which is which is not the
+    claim -- the claim is that the fleet ends with one container, and that the
+    tenant who lost is told so in the shape the page reads.
+    """
+    wired = wired_one_slot
+
+    async def run():
+        await wired.start()
+        first_host, first_cookie = await signed_in_on_the_tenant_host(
+            wired, sub="sub-one", email="one@example.com")
+        second_host, second_cookie = await signed_in_on_the_tenant_host(
+            wired, sub="sub-two", email="two@example.com")
+        wired.spawner.stop_delay = 0.05
+        wired.spawner.start_delay = 0.05
+        mark = len(wired.spawner.requests)
+        answers = await asyncio.gather(
+            wired.send("GET", "/api/data", host=first_host, cookie=first_cookie),
+            wired.send("GET", "/api/data", host=second_host, cookie=second_cookie))
+        during = wired.spawner.requests[mark:]
+        running = sorted(wired.fleet.running())
+        await wired.stop()
+        return answers, during, running
+
+    answers, during, running = asyncio.run(run())
+    assert sorted(a[0] for a in answers) == [200, 503]
+    refused = next(a for a in answers if a[0] == 503)
+    assert json.loads(refused[2])["error"] == "At capacity, try again shortly."
+    assert len([r for r in during if r["op"] == "start"]) == 1
+    assert len(running) == 1
+
+
+def test_a_cancelled_start_gives_its_reserved_slot_back(wired_one_slot):
+    """A reservation that leaked would not over-commit the VM -- it would
+    shrink it by one container for the life of the process, because
+    Fleet.running() counts STARTING and nothing would ever clear the mark.
+
+    A browser that goes away while its container is starting is how that
+    happens, so the request task is cancelled mid-start and the next tenant
+    must still be able to have the slot.
+    """
+    wired = wired_one_slot
+
+    async def run():
+        await wired.start()
+        host, _cookie = await signed_in_on_the_tenant_host(
+            wired, sub="sub-one", email="one@example.com")
+        tenant_id = host.split(".", 1)[0]
+        await wired.launcher.stop(tenant_id)
+        wired.spawner.start_delay = 5.0
+        tenant = wired.store.tenant_by_id(tenant_id)
+        task = asyncio.create_task(wired.launcher.start(tenant))
+        await asyncio.sleep(0.05)              # it is inside the spawner call
+        reserved = wired.fleet.running()
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+        after = wired.fleet.running()
+        await wired.stop()
+        return tenant_id, reserved, after
+
+    tenant_id, reserved, after = asyncio.run(run())
+    assert reserved == [tenant_id]     # the slot really was held while starting
+    assert after == []                 # and given back when the start died
+
+
+def test_a_container_that_survived_a_failed_stop_is_never_served_to_a_browser(wired):
+    """What F2 looks like from the tenant's seat.
+
+    `stop` revokes the token and then asks the spawner. When that call fails
+    the container is still up with a token that no longer resolves, and the
+    next `resync` used to re-adopt it -- `start`'s fast path then handed that
+    container to every request, the dashboard loaded, and every model call
+    401d for ever, because no path re-issues a token to a container that is
+    already running.
+
+    THE RESYNC IS DRIVEN EXPLICITLY, AND THAT IS HONEST RATHER THAN
+    CONVENIENT. On this branch resync runs at gateway startup (__main__), on a
+    refused connection (_deliver), and on `restart-all`; the once-a-minute
+    sweep that would also call it is E4's and E4 is deferred. So the scenario
+    here is the one that really happens: a stop fails, the gateway is
+    restarted, and the adopt is where the stranded container would have come
+    back. A `resync()` call is what a restart does.
+
+    The two assertions that matter are the second start and the different
+    token: a 200 alone would be just as true of the broken behaviour, because
+    a container with a revoked token answers HTTP perfectly well.
+    """
+    async def run():
+        await wired.start()
+        host, cookie = await signed_in_on_the_tenant_host(wired)
+        tenant_id = host.split(".", 1)[0]
+        wired.spawner.fail_stop = SpawnerError("the daemon said no")
+        await wired.launcher.stop(tenant_id)
+        survived = tenant_id in wired.spawner.running
+        no_token = wired.store.has_live_token(tenant_id)
+        wired.spawner.fail_stop = None
+        adopted = await wired.launcher.resync()        # what a restart does
+        answer = await wired.send("GET", "/api/data", host=host, cookie=cookie)
+        tokens = [r["token"] for r in ops(wired.spawner, "start")]
+        stops = [r["tenant_id"] for r in ops(wired.spawner, "stop")]
+        await wired.stop()
+        return tenant_id, survived, no_token, adopted, answer, tokens, stops
+
+    tenant_id, survived, no_token, adopted, answer, tokens, stops = asyncio.run(run())
+    assert survived, "the fake did not keep the container; nothing was tested"
+    assert no_token is False
+    assert adopted == {}, "the stranded container was adopted"
+    assert answer[0] == 200
+    # A second start, with a token that is not the revoked one.
+    assert len(tokens) == 2
+    assert tokens[0] != tokens[1]
+    # Two stops: the one that failed, and the one resync made when it found a
+    # container running with no live token.
+    assert stops == [tenant_id, tenant_id]
+
+
+def test_a_container_that_accepts_and_then_closes_gets_a_shaped_refusal(wired):
+    """F3. A container being stopped -- or evicted between the admission and
+    the send -- accepts the connection and then closes it, which raises
+    ServerDisconnectedError and not ClientConnectorError.
+
+    Nothing caught it, so the browser got aiohttp's own 500 with a
+    `text/plain` body: the dashboard's res.json() cannot read that, and it
+    made Gateway._shape_errors' docstring false on this path. The five
+    security headers were on it either way, so acceptance 14 was never in
+    question -- but the sentence was.
+
+    THE RETRY LADDER MUST NOT RUN ON THIS. A connect that succeeded may have
+    delivered the request, and replaying a POST would be a second side
+    effect. The `start` count is what says it did not.
+    """
+    dead = AcceptsThenCloses()
+    dead.start()
+
+    async def run():
+        await wired.start()
+        host, cookie = await signed_in_on_the_tenant_host(wired)
+        tenant_id = host.split(".", 1)[0]
+        # The gateway still believes this tenant is running -- at an address
+        # that accepts and hangs up.
+        wired.spawner.port = dead.port
+        wired.spawner.running[tenant_id] = RunningContainer(
+            tenant_id=tenant_id, address="127.0.0.1", port=dead.port)
+        await wired.launcher.stop(tenant_id)
+        await wired.launcher.start(wired.store.tenant_by_id(tenant_id))
+        mark = len(wired.spawner.requests)
+        answer = await wired.send("GET", "/api/data", host=host, cookie=cookie)
+        during = wired.spawner.requests[mark:]
+        await wired.stop()
+        return answer, during
+
+    try:
+        (status, headers, body), during = asyncio.run(run())
+    finally:
+        dead.stop()
+    assert status == 503
+    assert headers["content-type"] == "application/json"
+    assert json.loads(body)["error"] == (
+        "Your assistant is taking too long to start. Try again.")
+    # The shaping is the finding; the headers were always there, and stay.
+    assert headers["x-frame-options"] == "DENY"
+    assert headers["cache-control"] == "no-store"
+    # Not retried, and nothing restarted underneath it.
+    assert [r["op"] for r in during] == []
+
+
+@pytest.mark.parametrize("method, target, body, extra", [
+    ("GET", "/api/data", None, None),
+    ("POST", "/api/settings", b'{"telemetry": true}',
+     {"Content-Type": "application/json"}),
+])
+def test_an_ordinary_request_in_flight_also_holds_the_container(
+        wired_one_slot, method, target, body, extra):
+    """F4. `in_flight` used to be incremented only for turns and streams, so
+    Fleet._evictable and Fleet.idle_stops both considered a container serving
+    an ordinary request free to stop -- and with F3 that meant a stranger
+    signing in could take the container out from under somebody's POST and
+    hand them a bare 500.
+
+    ONE SLOT AND A STRANGER, not a private call to _evictable. The eviction is
+    driven the way it happens: a second person signs in on a full VM while the
+    first person's request is still at their container. Nothing evictable, so
+    the sign-in is simply not pre-warmed -- and the request in flight is
+    served.
+
+    Parametrised over a GET and a filtered POST precisely because neither is a
+    turn or a stream: on the old predicate both of these were invisible.
+    """
+    wired = wired_one_slot
+
+    async def run():
+        await wired.start()
+        host, cookie = await signed_in_on_the_tenant_host(
+            wired, sub="sub-one", email="one@example.com")
+        tenant_id = host.split(".", 1)[0]
+        wired.container.delay = 0.5
+        headers = {"Origin": f"https://{host}", **(extra or {})} if body else None
+        task = asyncio.create_task(wired.send(method, target, host=host,
+                                              cookie=cookie, body=body,
+                                              headers=headers))
+        await asyncio.sleep(0.2)          # the request is at the container
+        wired.clock.t += 16 * 60          # older than idle.IDLE_SECONDS
+        stops = wired.fleet.idle_stops()
+        token = sign(wired.private, now=wired.clock.t, sub="sub-two",
+                     email="two@example.com")
+        mark = len(wired.spawner.requests)
+        stranger = await wired.json_post("/auth/session", {"access_token": token},
+                                         host="agent.waku.one")
+        during = wired.spawner.requests[mark:]
+        answer = await task
+        after = wired.fleet.idle_stops()
+        await wired.stop()
+        return tenant_id, stops, during, stranger, answer, after
+
+    tenant_id, stops, during, stranger, answer, after = asyncio.run(run())
+    assert answer[0] == 200            # served, not cut off underneath
+    assert stops == []                 # not swept while it is serving somebody
+    assert [r["tenant_id"] for r in during if r["op"] == "stop"] == []
+    assert [r["tenant_id"] for r in during if r["op"] == "start"] == []
+    assert stranger[0] == 200          # the sign-in works; it is just not pre-warmed
+    assert after == [tenant_id]        # and the moment it finishes, both change
+
+
+def test_a_quote_in_a_config_value_cannot_break_out_of_the_login_page(tmp_path):
+    """F8. `supabase_url` and the publishable key are pasted into a <body>
+    attribute by str.replace. Both are operator-written in
+    config/gateway.env, so this is not attacker-controlled -- but a quote in
+    either would end the attribute rather than be read as data, and the fix
+    costs one call.
+
+    THE CSP HEADER TAKES THE RAW VALUE, and that is the other half of the
+    claim: it is a header, not HTML, so html.escape there would turn an `&`
+    in a URL into `&amp;` and silently change the policy. So the test reads
+    both, and requires them to differ.
+    """
+    harness = Harness(tmp_path, FakeSpawner())
+    harness.config = replace(
+        harness.config,
+        supabase_url='https://x.example/a?b=1&c=2"><script>alert(1)</script>',
+        supabase_publishable_key='sb_"onload="alert(2)')
+    harness.gateway = harness._build_gateway()      # noqa: SLF001 - see below
+
+    async def run():
+        await harness.start()
+        answer = await harness.send("GET", "/login", host="agent.waku.one")
+        await harness.stop()
+        return answer
+
+    _status, headers, body = asyncio.run(run())
+    page = body.decode("utf-8")
+    # Nothing the operator wrote reaches the page as markup.
+    assert "<script>alert(1)</script>" not in page
+    assert '"><script' not in page
+    assert 'onload="alert(2)' not in page
+    # But the values are there, escaped, so the page still works.
+    assert "&lt;script&gt;alert(1)&lt;/script&gt;" in page
+    assert "sb_&quot;onload=&quot;alert(2)" in page
+    # And the header is NOT escaped: an & in a URL must stay an &.
+    assert "b=1&c=2" in headers["content-security-policy"]
+    assert "&amp;" not in headers["content-security-policy"]
+
+
+def test_a_container_that_dies_mid_body_ends_the_response_it_already_started(wired):
+    """F3, the other half: the headers are already on the wire.
+
+    A container killed for memory partway through a response sends its
+    headers, some of its body, and hangs up. aiohttp raises a ClientError on
+    the next read -- and by then `downstream.prepare()` has run, so there is
+    no status left to choose. The only thing left to do is end the body, which
+    is what the TimeoutError branch beside it already does for the same
+    reason.
+
+    WITHOUT THIS BRANCH the exception escapes to _deliver, which tries to
+    build a 503 on a response that is already prepared -- and that raises
+    inside the handler, so the browser gets aiohttp's 500 appended to a body
+    it had already begun reading. The assertion is that the answer is a clean,
+    short 200: the status the container chose, and no second response after
+    it.
+    """
+    async def run():
+        await wired.start()
+        host, cookie = await signed_in_on_the_tenant_host(wired)
+        wired.container.truncate = 64      # claim 64 bytes it will never send
+        answer = await wired.send("GET", "/api/data", host=host, cookie=cookie)
+        await wired.stop()
+        return answer
+
+    status, headers, body = asyncio.run(run())
+    assert status == 200
+    assert headers["content-type"] == "application/json"
+    # What the container managed to send, and nothing appended after it.
+    assert body == b'{"path": "/api/data"}'
+    assert b"500" not in body
+    assert headers["x-frame-options"] == "DENY"

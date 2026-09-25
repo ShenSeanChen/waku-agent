@@ -536,3 +536,65 @@ def test_prewarm_does_not_start_when_there_is_nothing_it_may_evict(made):
     assert fleet.running_status(third_id) == idle.STOPPED
     # And neither busy container was taken to make room for them.
     assert sorted(fleet.running()) == sorted(held)
+
+
+def test_resync_stops_a_running_container_whose_token_was_revoked(made):
+    """The invariant: a running container holds its tenant's current token.
+
+    E2 left this as a paragraph headed "UNDECIDED, FOR E3" and E3 did not take
+    it. `stop` revokes the token first and then asks the spawner; when the
+    spawner call fails the container survives with a revoked token, the next
+    resync re-adopts it at the address its project id derives, and `start`'s
+    fast path hands it to every request. The dashboard loads and every model
+    call 401s, with no self-healing at all.
+
+    The fix is on the STATE, not on the route that produced it: whatever left
+    a container running without a live token -- a failed stop, an eviction, an
+    idle sweep, a restore -- resync stops it.
+    """
+    _path, store, spawner, _clock, fleet, launcher = made
+
+    async def run():
+        record, _ = await launcher.ensure_tenant(sub="sub-1", email="m@x.com",
+                                                 timezone="UTC")
+        await launcher.start(record)
+        spawner.fail_stop = SpawnerError("the daemon said no")
+        await launcher.stop(record.id)          # revokes, then fails
+        survived = record.id in spawner.running
+        spawner.fail_stop = None
+        mark = len(spawner.requests)
+        adopted = await launcher.resync()
+        return record.id, survived, adopted, spawner.requests[mark:]
+
+    tenant_id, survived, adopted, during = asyncio.run(run())
+    assert survived, "the fake did not keep the container; nothing was tested"
+    assert store.has_live_token(tenant_id) is False
+    assert adopted == {}                       # not handed back to anybody
+    assert launcher.address(tenant_id) is None
+    assert fleet.running() == []
+    assert [r["tenant_id"] for r in during if r["op"] == "stop"] == [tenant_id]
+
+
+def test_resync_adopts_a_running_container_that_still_has_its_token(made):
+    """The control for the test above. Without it, a resync that stopped
+    every container it was told about would pass -- and the gateway would come
+    back from a restart with nothing running and no idea why."""
+    _path, store, spawner, clock, _fleet, launcher = made
+
+    async def run():
+        record, _ = await launcher.ensure_tenant(sub="sub-1", email="m@x.com",
+                                                 timezone="UTC")
+        await launcher.start(record)
+        # A FRESH GATEWAY on the same control.db and the same spawner, which
+        # is what a restart is. A second Launcher rather than a private write
+        # into this one's address book: its fleet and its addresses are empty
+        # because they are new, which is the state being tested.
+        restarted = Launcher(store=store, spawner=spawner,
+                             fleet=idle.Fleet(clock, max_running=2), now=clock)
+        return record.id, await restarted.resync(), restarted
+
+    tenant_id, adopted, restarted = asyncio.run(run())
+    assert store.has_live_token(tenant_id) is True
+    assert sorted(adopted) == [tenant_id]
+    assert restarted.fleet.running() == [tenant_id]
+    assert restarted.address(tenant_id) is not None
