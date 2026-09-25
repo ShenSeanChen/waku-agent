@@ -610,14 +610,41 @@ class DockerRuntime:
         runs, on exactly what the spec describes. The check below is what makes
         a future regression loud instead of silent.
 
-        NOTHING HERE STOPS A RUNNING TENANT CONTAINER, and F3 must. A task is
-        not a start, and _refuse_if_busy is one-way -- a task blocks a start, a
-        start does not block a task -- so a single-tenant restore empties /data
-        and /work under a live dashboard holding state.db open. The spec puts
-        "stop every tenant container first" on `restore.sh --all`, which is
-        F3's; a per-tenant restore needs the same, and the sequencing belongs
-        with the caller, which already has `stop` as a verb.
+        NOTHING HERE STOPS A RUNNING TENANT CONTAINER, and F3's caller does:
+        `_act` calls `launcher.stop(tenant.id)` before this task, and
+        `restore.sh --all` stops the whole fleet through `stop-all` first. The
+        sequencing belongs with the caller, which already has `stop` as a verb.
+        What the caller CANNOT reach is a task or inspect container -- `stop`
+        names a KIND_TENANT container and nothing else -- so those are refused
+        here instead; see the first lines of the body.
         """
+        # EVERY CONTAINER HOLDING THIS TENANT'S MOUNTS MUST BE GONE, NOT JUST
+        # THEIR DASHBOARD. `_refuse_if_busy` was called only from `start`, and
+        # the note below said so -- but the containers it blocks on,
+        # KIND_TASK and KIND_INSPECT, bind `home` and `env` exactly as the
+        # tenant container does (template.task_container,
+        # template.inspect_container), and those are the two directories the
+        # lines below remove and re-create.
+        #
+        # An inspect container is the one that bites: it is operator-started,
+        # AutoRemove is deliberately off, and it lives until `inspect-stop`.
+        # An operator who inspects a tenant and then runs `restore.sh --all`
+        # gets the failure designs/backup-restore-integrity.md records -- a
+        # bind mount left on a removed directory, and the next `docker exec`
+        # reporting "possible container breakout detected" in the middle of a
+        # disaster recovery. The gateway's `stop-all` cannot reach them: it
+        # stops by tenant id and `stop` only knows how to name a KIND_TENANT
+        # container.
+        #
+        # A REFUSAL AND NOT A WIDER STOP, deliberately. An inspect container
+        # holds a dashboard someone is looking at, and killing it from under a
+        # restore is a decision an operator should make with `inspect-stop`,
+        # not one this method should make for them. Busy is the maintenance
+        # answer the gateway already knows how to render.
+        #
+        # This runs BEFORE the manifest read and long before `_archive`, so a
+        # refusal here costs nothing: the tenant's tree is untouched.
+        await self._refuse_if_busy(tenant_id)
         staging = self._staging(tenant_id)
         if staging.is_symlink():
             # is_dir() FOLLOWS a link; _backup refuses one outright. Two guards

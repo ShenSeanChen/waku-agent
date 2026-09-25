@@ -275,7 +275,7 @@ restore_tenant() {
   # declaration (the spawner's _read_manifest refuses one), so it falls
   # through to being emptied like any other junk.
   if [ -f "$slot/manifest.json" ] && [ ! -L "$slot/manifest.json" ]; then
-    refuse "$slot already holds a finished backup that was never sent to restic -- backup.sh clears the slot only after a successful upload, so this is the only current copy of $id on this VM. Refusing to delete it. Send it with: backup.sh --tenant $id ; or discard it with: backup.sh --reset-staging $id"
+    refuse "$slot already holds a finished backup that was never sent to restic -- backup.sh clears a slot only after a successful upload, so this may be the only current copy of $id on this VM. Refusing to delete it. Send it to restic with: backup.sh --snapshot-staged $id ; or discard it with: backup.sh --reset-staging $id . NOT backup.sh --tenant $id, which empties this slot and re-copies the tenant's CURRENT live tree into it before snapshotting -- that destroys what is here."
     return 1
   fi
 
@@ -429,7 +429,13 @@ waku_compose stop gateway proxy
 # (before the rm), the old database without its log -- older and internally
 # consistent (between), or the new database (after the rename). No window
 # leaves a torn file at the live path.
+# THE TEMPORARY IS REMOVED BEFORE IT IS WRITTEN, which is the same `[ -L ]`
+# reasoning every other named path in this script carries. GNU install opens
+# the destination O_CREAT|O_TRUNC and so FOLLOWS a symlink sitting at that
+# name: it would write the database through the link, and the `mv` below would
+# then rename the LINK onto the live path. `rm -f` removes a link as a link.
 waku_log "replacing control.db"
+rm -f "$WAKU_ROOT/control/control.db.new"
 install -o 10002 -g 10002 -m 0600 "$control_slot/control.db" \
         "$WAKU_ROOT/control/control.db.new"
 rm -f "$WAKU_ROOT/control/control.db-wal" "$WAKU_ROOT/control/control.db-shm"
@@ -437,6 +443,7 @@ mv -f "$WAKU_ROOT/control/control.db.new" "$WAKU_ROOT/control/control.db"
 
 if [ -f "$control_slot/ledger.db" ]; then
   waku_log "replacing ledger.db"
+  rm -f "$WAKU_ROOT/ledger/ledger.db.new"
   install -o 10003 -g 10003 -m 0600 "$control_slot/ledger.db" \
           "$WAKU_ROOT/ledger/ledger.db.new"
   rm -f "$WAKU_ROOT/ledger/ledger.db-wal" "$WAKU_ROOT/ledger/ledger.db-shm"

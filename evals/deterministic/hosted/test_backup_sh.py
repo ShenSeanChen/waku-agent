@@ -453,7 +453,7 @@ def test_an_unknown_argument_is_refused(tmp_path):
 
 
 def test_a_flag_given_without_a_value_says_so(tmp_path):
-    for flag in ("--tenant", "--reset-staging"):
+    for flag in ("--tenant", "--snapshot-staged", "--reset-staging"):
         _, env = _root(tmp_path)
         done = _run(tmp_path, [flag], env)
         assert done.returncode != 0, flag
@@ -657,3 +657,80 @@ def test_a_refusal_about_backup_env_never_prints_what_is_in_it(tmp_path):
     assert done.returncode != 0
     assert secret not in done.stderr
     assert secret not in done.stdout
+
+
+# --- what is already staged, sent without re-copying anything -----------------
+#
+# The mode exists because restore.sh refuses to delete a slot that holds a
+# finished-but-unsent backup and has to name a remedy. `--tenant` is not that
+# remedy: it runs the spawner's _BACKUP_SCRIPT, whose first two lines empty the
+# slot and re-copy the tenant's CURRENT live tree -- which in the case that
+# matters is the bad one, because a bad live tree is why anyone is restoring.
+
+
+def _staged(root, *, manifest=True):
+    """A finished backup sitting in the slot, unsent."""
+    slot = root / "staging" / TENANT
+    (slot / "home").mkdir(parents=True)
+    (slot / "env").mkdir(parents=True, exist_ok=True)
+    (slot / "home" / "state.db").write_text("the staged copy", encoding="utf-8")
+    if manifest:
+        (slot / "manifest.json").write_text(
+            '{"version":1,"parts":["home","env"],"state_db":true}',
+            encoding="utf-8")
+    return slot
+
+
+def test_snapshot_staged_sends_the_slot_without_asking_the_gateway(tmp_path):
+    """The whole point: no `admin backup`, so nothing re-copies the live tree
+    over the staged copy before it is sent."""
+    root, env = _root(tmp_path)
+    _staged(root)
+    done = _run(tmp_path, ["--snapshot-staged", TENANT], env)
+    assert done.returncode == 0, done.stderr
+    calls = shelllib.calls(tmp_path)
+    assert not [line for line in calls if "admin backup" in line], (
+        "it asked the gateway to back up, which empties the slot and re-copies "
+        "the live tree -- the exact thing this mode exists to avoid")
+    assert [line for line in calls
+            if line.startswith("restic backup") and f"tenant:{TENANT}" in line]
+
+
+def test_snapshot_staged_clears_the_slot_only_after_restic_has_it(tmp_path):
+    """Same one-slot rule as the nightly path, and it shares the code that
+    enforces it rather than carrying a second copy."""
+    root, env = _root(tmp_path)
+    _staged(root)
+    done = _run(tmp_path, ["--snapshot-staged", TENANT], env)
+    assert done.returncode == 0, done.stderr
+    calls = shelllib.calls(tmp_path)
+    snapshot = next(i for i, line in enumerate(calls)
+                    if line.startswith("restic") and f"tenant:{TENANT}" in line)
+    cleared = next(i for i, line in enumerate(calls)
+                   if "find /staging -mindepth 1 -delete" in line)
+    assert snapshot < cleared
+
+
+def test_snapshot_staged_refuses_a_slot_with_no_manifest(tmp_path):
+    """The same declaration the nightly path reads. A slot with two empty part
+    directories is what an interrupted backup leaves, and sending it would
+    make it the latest good copy for that tag."""
+    root, env = _root(tmp_path)
+    _staged(root, manifest=False)
+    done = _run(tmp_path, ["--snapshot-staged", TENANT], env)
+    assert done.returncode != 0
+    assert "not a finished backup" in done.stderr
+    calls = shelllib.calls(tmp_path)
+    assert not [line for line in calls if line.startswith("restic backup")]
+    assert not _deletes(calls)
+
+
+@pytest.mark.parametrize("value", ["..", "../../srv", "", "k3fq7x2mza4A"])
+def test_snapshot_staged_takes_a_tenant_id_and_nothing_else(tmp_path, value):
+    """It joins the value to the staging root exactly as the other two id
+    flags do, and reaches the same `find -delete`."""
+    _, env = _root(tmp_path)
+    done = _run(tmp_path, ["--snapshot-staged", value], env)
+    assert done.returncode != 0
+    assert "a tenant id is twelve characters" in done.stderr
+    assert shelllib.calls(tmp_path) == []

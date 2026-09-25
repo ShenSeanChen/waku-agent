@@ -840,3 +840,66 @@ def test_backup_and_archive_mount_the_directory_the_helper_prepared(world):
             f"{prepared}. Whatever the helper chowned to 10001 is not what the "
             "container was handed, which is EACCES for one of them and a "
             "second expression for one location for both.")
+
+def _busy_with(engine, kind: str) -> None:
+    """The daemon reports one container of `kind` holding this tenant.
+
+    `_refuse_if_busy` reads the label query, so this is what an operator's
+    `tenant.sh inspect` -- or a task that outlived its run -- looks like from
+    inside the runtime.
+    """
+    async def containers(*, label=None, all_states=False):
+        if label == f"{template.LABEL_TENANT}={TENANT}":
+            return [{"Id": "deadbeefcafe",
+                     "Labels": {template.LABEL_TENANT: TENANT,
+                                template.LABEL_KIND: kind}}]
+        return []
+
+    engine.containers = containers
+
+
+@pytest.mark.parametrize("kind", sorted(template.BLOCKING_KINDS))
+def test_a_restore_refuses_while_a_container_holds_the_tenants_mounts(world, kind):
+    """The dead-inode failure, from the one direction `stop-all` cannot reach.
+
+    `task_container` and `inspect_container` bind `home` and `env` exactly as
+    the tenant container does, and those are the two directories a restore
+    removes and re-creates. But the gateway stops a tenant by id and `stop`
+    only knows how to name a KIND_TENANT container -- so an inspect container,
+    which is operator-started and lives until `inspect-stop`, survives both
+    `launcher.stop` and `stop-all` and then has its mount removed underneath
+    it. `designs/backup-restore-integrity.md` records what that costs: the next
+    `docker exec` reports "possible container breakout detected".
+
+    THE TREE MUST BE UNTOUCHED AFTERWARDS. An exit code alone would pass with
+    the refusal placed after `_archive`, which is the point at which the
+    tenant's live directories have already been packed away and removed.
+    """
+    runtime, engine, config, _claimed, _limited = world
+    asyncio.run(runtime.provision(TENANT, PROJECT))
+    _backed_up(runtime, config)
+    dirs = docker_mod.tenant_dirs(config.tenant_root, TENANT)
+    (dirs.home / "state.db").write_bytes(b"SQLite format 3\x00")
+    _busy_with(engine, kind)
+
+    with pytest.raises(docker_mod.Busy) as refused:
+        asyncio.run(runtime.task(TENANT, "restore", PROJECT))
+
+    assert kind in str(refused.value)
+    assert (dirs.home / "state.db").read_bytes() == b"SQLite format 3\x00"
+    # And nothing was packed away: _archive runs after this point, so an
+    # archive here would mean the refusal landed too late to matter.
+    assert list((config.archive_root / TENANT).glob("*pre-restore*")) == []
+
+
+def test_a_restore_is_not_refused_by_the_spawners_own_provision_container(world):
+    """KIND_PROVISION is the spawner's own bookkeeping, not an operator's
+    container, and `_refuse_if_busy` has always excluded it. A restore that
+    refused itself over one would be unrunnable -- provision() creates one on
+    the way through the restore itself."""
+    runtime, engine, config, _claimed, _limited = world
+    asyncio.run(runtime.provision(TENANT, PROJECT))
+    _backed_up(runtime, config)
+    _busy_with(engine, template.KIND_PROVISION)
+
+    assert asyncio.run(runtime.task(TENANT, "restore", PROJECT)) == {"ok": True}

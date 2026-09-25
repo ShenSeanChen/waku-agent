@@ -19,11 +19,19 @@ one=""
 
 usage() {
   cat <<'USAGE'
-usage: backup.sh [--all] [--tenant <id>] [--reset-staging <id>]
+usage: backup.sh [--all] [--tenant <id>] [--snapshot-staged <id>]
+                 [--reset-staging <id>]
   --all              every tenant and both platform databases (the default,
                      and what the timer runs)
-  --tenant <id>      one tenant, for a manual snapshot before a risky change
-  --reset-staging    empty one tenant's staging slot, as UID 10001 in a
+  --tenant <id>      one tenant. RE-COPIES their CURRENT live tree into the
+                     staging slot first, so it overwrites anything already
+                     staged
+  --snapshot-staged <id>
+                     send what is ALREADY in the tenant's staging slot to
+                     restic, without re-copying anything from the live tree.
+                     For a backup that finished and could not be uploaded
+  --reset-staging <id>
+                     empty one tenant's staging slot, as UID 10001 in a
                      throwaway container. The repair for a slot whose modes the
                      tenant's own files wedged
 USAGE
@@ -48,11 +56,12 @@ is_tenant_id() {
 }
 
 while [ $# -gt 0 ]; do
-  waku_needs_value "$1" "$#" --tenant --reset-staging \
+  waku_needs_value "$1" "$#" --tenant --snapshot-staged --reset-staging \
     || { usage >&2; waku_die "$1 needs a value"; }
   case "$1" in
     --all) mode=all; shift ;;
     --tenant) mode=one; one=$2; shift 2 ;;
+    --snapshot-staged) mode=staged; one=$2; shift 2 ;;
     --reset-staging) mode=reset; one=$2; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) usage >&2; waku_die "unknown argument: $1" ;;
@@ -173,6 +182,19 @@ backup_tenant() {
     waku_admin backup "$id" >/dev/null || return 1
   fi
 
+  snapshot_slot "$id" || return 1
+}
+
+# --- what is already in the slot, sent to restic ------------------------------
+#
+# SHARED BY backup_tenant AND --snapshot-staged, and it is the whole of the
+# second one. Extracted rather than copied: a second `restic backup` line with
+# its own tag and host is the drift this project keeps paying for.
+snapshot_slot() {
+  local id slot
+  id=$1
+  slot="$staging/$id"
+
   # THE BACKUP'S OWN DECLARATION THAT IT FINISHED. Nothing about the SHAPE of
   # the slot can tell a finished backup from one that died: `mkdir -p
   # /staging/home /staging/env` is the backup script's first line, so two empty
@@ -191,6 +213,25 @@ backup_tenant() {
   # compensation at all.
   waku_reset_staging_slot "$slot" || return 1
 }
+
+# THE SLOT AS IT STANDS, WITH NOTHING RE-COPIED INTO IT. The mode exists
+# because `--tenant` is not it and an operator reaching for a remedy will
+# believe it is: `waku_admin backup` runs the spawner's _BACKUP_SCRIPT, whose
+# first two lines are `rm -f /staging/manifest.json` and `find /staging/home
+# /staging/env -mindepth 1 -delete`, so --tenant EMPTIES the slot and re-copies
+# the tenant's CURRENT live tree before snapshotting it.
+#
+# That is exactly wrong in the one case a staged-but-unsent backup matters: the
+# upload failed, the live tree has since gone bad, and the slot holds the last
+# good copy on this VM. restore.sh refuses to delete such a slot and names this
+# command; before it existed, the remedy it could name would have destroyed the
+# copy it had just protected.
+if [ "$mode" = staged ]; then
+  snapshot_slot "$one" \
+    || waku_die "nothing in $staging/$one was sent to restic. A slot with no manifest.json is not a finished backup, and this mode never re-copies from the live tree -- see backup.sh --tenant $one for that, which OVERWRITES the slot."
+  waku_log "sent the staged backup of $one to restic"
+  exit 0
+fi
 
 if [ "$mode" = one ]; then
   backup_tenant "$one" || waku_die "the backup of $one did not finish"

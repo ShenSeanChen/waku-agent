@@ -869,6 +869,14 @@ def test_a_slot_holding_an_unsnapshotted_backup_is_refused_before_it_is_emptied(
     assert done.returncode != 0
     assert "never sent to restic" in done.stderr
     assert (slot / "home" / "state.db").read_text(encoding="utf-8") == "the only copy"
+    # THE REMEDY IT NAMES MUST NOT BE THE ONE THAT DESTROYS THE COPY.
+    # `backup.sh --tenant` runs the spawner's _BACKUP_SCRIPT, whose first two
+    # lines empty the slot and re-copy the tenant's CURRENT live tree -- which
+    # in this scenario is the bad one, since a bad live tree is why a restore
+    # is running at all. A refusal that hands the operator a destructive next
+    # step is worse than one that leaves them stuck.
+    assert f"backup.sh --snapshot-staged {TENANT}" in done.stderr
+    assert f"NOT backup.sh --tenant {TENANT}" in done.stderr
     calls = shelllib.calls(tmp_path)
     assert not _lines(calls, "find /staging -mindepth 1 -delete")
     assert not _lines(calls, "restic")
@@ -1066,3 +1074,27 @@ def test_a_resolve_that_answers_no_tenant_is_a_refusal(tmp_path):
     calls = shelllib.calls(tmp_path)
     assert not _lines(calls, "restic")
     assert not _lines(calls, "find /staging -mindepth 1 -delete")
+
+
+@pytest.mark.parametrize("database, owner", [("control", "10002"), ("ledger", "10003")])
+def test_a_symlink_left_at_the_temporary_name_is_removed_not_followed(
+        tmp_path, database, owner):
+    """The `.new` path is the only named path in this script that install(1)
+    creates, and GNU install opens its destination O_CREAT|O_TRUNC -- so it
+    FOLLOWS a symlink sitting there, writing the database through the link,
+    and the `mv` then renames the LINK onto the live path. `rm -f` removes a
+    link as a link, which is the same reasoning every other named path in this
+    script already carries."""
+    root, env = _env(tmp_path)
+    elsewhere = tmp_path / f"{database}-elsewhere"
+    elsewhere.write_text("not a database", encoding="utf-8")
+    temporary = root / database / f"{database}.db.new"
+    temporary.symlink_to(elsewhere)
+
+    done = _run(tmp_path, ["--all"], env, control=_CONTROL_AND_LEDGER)
+    assert done.returncode == 0, done.stderr
+    live = root / database / f"{database}.db"
+    assert not live.is_symlink(), "the link was renamed onto the live path"
+    assert elsewhere.read_text(encoding="utf-8") == "not a database"
+    calls = shelllib.calls(tmp_path)
+    assert _at(calls, f"rm -f {temporary}") < _at(calls, f"install -o {owner}")

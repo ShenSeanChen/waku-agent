@@ -68,6 +68,10 @@ def test_each_operation_answers_the_shape_the_specs_table_names():
     assert ask({"op": "stop", "tenant_id": TENANT})[0] == {"ok": True}
     assert ask({"op": "list"})[0] == {
         "containers": [{"tenant_id": TENANT, "address": "10.88.0.2", "port": 7777}]}
+    # The PRODUCER half of the `tenants` wire contract. Its key is agreed with
+    # SpawnerClient.tenant_ids and was asserted by neither side, so renaming it
+    # here was green and a SpawnerError on the VM.
+    assert ask({"op": "tenants"})[0] == {"tenant_ids": [TENANT]}
     assert ask({"op": "task", "tenant_id": TENANT, "task": "backup"})[0] == {
         "path": f"/srv/waku/staging/{TENANT}"}
     assert ask({"op": "task", "tenant_id": TENANT, "task": "restore",

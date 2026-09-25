@@ -459,3 +459,48 @@ def test_stop_all_stops_a_container_the_gateway_would_refuse_to_forward_to(harne
         "alone and prove nothing about the wider enumeration")
     assert answer == {"stopped": [tenant_id]}
     assert stops == [tenant_id]
+
+
+# The spawner's operation table is pinned by equality in both directions
+# (test_spawner_requests.py). The gateway's was pinned in neither, and it now
+# carries two verbs group F added to a group E file. A verb admitted here with
+# no ADMIN_KEYS row is a KeyError inside handle() on a live request -- the
+# failure the comment on the allowlist parametrize above warns about in prose.
+SPEC_ADMIN_OPS = {"status", "restart-all", "stop-all", "resolve", "disable",
+                  "enable", "delete", "backup", "restore", "inspect",
+                  "inspect-stop"}
+
+
+def test_the_admin_socket_answers_exactly_these_verbs():
+    """Add a twelfth and this fails, which is the point: every other test in
+    this file is a narrowing check and none of them notices the allowlist being
+    WIDENED, which is the direction that matters for the socket that disables
+    tenants and replaces their data."""
+    assert admin.ADMIN_OPS == SPEC_ADMIN_OPS
+
+
+def test_no_admin_verb_is_half_wired():
+    """Two tables keyed by verb. One present in ADMIN_OPS and absent from
+    ADMIN_KEYS is a KeyError on a live request; one present in ADMIN_KEYS and
+    absent from ADMIN_OPS is a row nothing can reach."""
+    assert set(admin.ADMIN_KEYS) == admin.ADMIN_OPS
+    for op, keys in admin.ADMIN_KEYS.items():
+        assert "op" in keys, op
+
+
+def test_every_verb_that_takes_a_tenant_is_refused_without_one(harness):
+    """Derived FROM the tables rather than typed out, so a verb added later
+    inherits the check instead of needing to be remembered into it."""
+    async def run():
+        await harness.start()
+        answers = {op: await admin.handle(harness.gateway, {"op": op})
+                   for op, keys in sorted(admin.ADMIN_KEYS.items())
+                   if "tenant" in keys}
+        await harness.stop()
+        return answers
+
+    answers = asyncio.run(run())
+    assert answers, "no verb takes a tenant, so this asserts nothing"
+    for op, answer in answers.items():
+        assert answer == {"error": f"{op} needs a tenant id or email"}, op
+    assert harness.spawner.requests == []
