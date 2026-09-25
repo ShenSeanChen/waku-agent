@@ -78,8 +78,8 @@ Everything else in the rulebook is checked in review. The judge evals in
 `hosted-docker` needs a Docker daemon and an XFS filesystem, so it is a job of
 its own, and its row above says "advisory" because it is: a red run there does
 not block a merge until `hosted-docker` is added to `main`'s required checks.
-It says nothing yet about the bridge rules -- `firewall.sh` and `networks.sh`
-arrive with the rest of spec 001's group C.
+It now checks the two bridges `networks.sh` creates, but nothing yet about the
+rules that make them safe: `firewall.sh` is still spec 001's group C.
 
 ## Commands
 

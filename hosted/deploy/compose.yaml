@@ -1,0 +1,97 @@
+# The four services, from two images built from the same checkout.
+#
+# EVERY FIELD HERE IS THE SPEC'S "How the services run" TABLE. The users are
+# UID:GID and never a bare UID -- a bare UID runs the process with group 0, and
+# the setgid socket directories then lock the peer out. The mounts are exactly
+# the directories each service serves or calls a socket in: the proxy, the one
+# service tenant code can reach, never sees run/spawner.
+#
+# HOST PATH AND CONTAINER PATH ARE THE SAME STRING, and for the spawner that is
+# a requirement, not a style: it hands host paths to the Docker daemon for a
+# tenant container's binds AND opens the same paths itself, so a container path
+# that differed would produce binds pointing at nothing. The other three follow
+# the same rule so one env value (WAKU_CONTROL_DB, WAKU_*_SOCKET) reads the same
+# from the host and from inside a container.
+#
+# THE PROXY IS DECLARED AND MAY BE SCALED TO ZERO. Group D is deferred, so
+# `python -m hosted.proxy` does not exist yet; install.sh passes
+# `--scale proxy=0` while hosted/proxy/__main__.py is absent from the checkout,
+# and nothing else changes. The day D lands, the flag stops being passed.
+name: waku
+
+services:
+  caddy:
+    image: ${WAKU_CADDY_IMAGE}
+    # host, and public 443: the certificate covers the apex and the wildcard,
+    # and Caddy is the only thing on this VM with a port on the internet.
+    network_mode: host
+    restart: unless-stopped
+    # Caddy's own user, from its image (spec's table). No `user:` here.
+    env_file:
+      - ${WAKU_ROOT}/config/caddy.env
+    environment:
+      WAKU_DOMAIN: ${WAKU_DOMAIN}
+      WAKU_DNS_PROVIDER: ${WAKU_DNS_PROVIDER}
+      WAKU_ACME_EMAIL: ${WAKU_ACME_EMAIL}
+      WAKU_GATEWAY_ADDRESS: ${WAKU_GATEWAY_ADDRESS}
+    volumes:
+      - ${WAKU_SRC}/hosted/deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - waku-caddy-data:/data
+      - waku-caddy-config:/config
+    oom_score_adj: -500
+
+  gateway:
+    image: ${WAKU_SERVICES_IMAGE}
+    command: ["python", "-m", "hosted.gateway"]
+    user: "10002:10002"
+    network_mode: host
+    restart: unless-stopped
+    env_file:
+      - ${WAKU_ROOT}/config/gateway.env
+    volumes:
+      - ${WAKU_ROOT}/control:${WAKU_ROOT}/control
+      - ${WAKU_ROOT}/run/gateway:${WAKU_ROOT}/run/gateway
+      - ${WAKU_ROOT}/run/proxy:${WAKU_ROOT}/run/proxy
+      - ${WAKU_ROOT}/run/spawner:${WAKU_ROOT}/run/spawner
+      - ${WAKU_ROOT}/run/admin:${WAKU_ROOT}/run/admin
+    oom_score_adj: -500
+
+  proxy:
+    image: ${WAKU_SERVICES_IMAGE}
+    command: ["python", "-m", "hosted.proxy"]
+    user: "10003:10003"
+    network_mode: host
+    restart: unless-stopped
+    env_file:
+      - ${WAKU_ROOT}/config/proxy.env
+    volumes:
+      - ${WAKU_ROOT}/ledger:${WAKU_ROOT}/ledger
+      - ${WAKU_ROOT}/run/gateway:${WAKU_ROOT}/run/gateway
+      - ${WAKU_ROOT}/run/proxy:${WAKU_ROOT}/run/proxy
+    oom_score_adj: -500
+
+  spawner:
+    image: ${WAKU_SERVICES_IMAGE}
+    command: ["python", "-m", "hosted.spawner"]
+    user: "0:0"
+    network_mode: host
+    restart: unless-stopped
+    # xfs_quota sets a project limit from inside this container, which needs
+    # both of these. C4's CI job proved the pair works before F1 relied on it.
+    cap_add:
+      - SYS_ADMIN
+    devices:
+      - ${WAKU_DATA_DEVICE}:${WAKU_DATA_DEVICE}
+    env_file:
+      - ${WAKU_ROOT}/config/spawner.env
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ${WAKU_ROOT}/tenants:${WAKU_ROOT}/tenants
+      - ${WAKU_ROOT}/archive:${WAKU_ROOT}/archive
+      - ${WAKU_ROOT}/staging:${WAKU_ROOT}/staging
+      - ${WAKU_ROOT}/run/spawner:${WAKU_ROOT}/run/spawner
+    oom_score_adj: -500
+
+volumes:
+  waku-caddy-data:
+  waku-caddy-config:

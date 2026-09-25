@@ -1,0 +1,26 @@
+# Re-apply the tenant firewall rules at boot and after every Docker restart.
+#
+# PartOf=docker.service is the half people forget: Docker rewrites its own
+# iptables chains when it starts, so rules added once at boot are gone after
+# `systemctl restart docker` or a Docker package upgrade, silently. PartOf makes
+# systemd restart this unit whenever docker.service restarts.
+#
+# ExecStart is hosted/deploy/firewall.sh, WHICH IS TASK C3's AND IS NOT IN THE
+# TREE YET. install.sh installs and enables this unit only when that file
+# exists, and prints a named warning when it does not: a unit that fails at
+# every boot is worse than a unit that is not there.
+
+[Unit]
+Description=waku tenant firewall rules
+After=docker.service
+Requires=docker.service
+PartOf=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/srv/waku/src/hosted/deploy/firewall.sh
+
+[Install]
+WantedBy=multi-user.target
+WantedBy=docker.service
