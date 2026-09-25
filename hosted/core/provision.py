@@ -82,7 +82,21 @@ def provision(dirs: TenantDirs, soul_template: Path) -> list[Path]:
         os.chmod(env_file, ENV_MODE)
 
     soul = dirs.home / "SOUL.md"
-    if not soul.exists():
+    if soul.is_symlink():
+        # The same branch, and the same reason, as .env's above. exists()
+        # FOLLOWS a link, so a dangling one reads as "absent" and write_text
+        # opens the target. A guard of the wrong shape sitting three lines
+        # below a guard of the right shape, in the file whose whole docstring
+        # is about tenants planting symlinks.
+        #
+        # What it reaches, stated correctly: /tmp, /data and /work are all
+        # writable in the throwaway container, so before this branch a tenant
+        # pointing home/SOUL.md at /work/.env got their own .env replaced with
+        # the SOUL template on their next start. Nothing outside those three
+        # paths is writable, so it was self-harm only -- but self-harm caused
+        # by the platform, on a path the tenant did not name, is a defect.
+        pass
+    elif not soul.exists():
         soul.write_text(soul_template.read_text(encoding="utf-8"), encoding="utf-8")
         written.append(soul)
 

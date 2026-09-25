@@ -413,3 +413,47 @@ def require_xfs() -> tuple[Path, str]:
         "would pass while proving the opposite. The hosted-docker job mounts with "
         "`-o prjquota` and asserts `Enforcement: ON`; see "
         ".github/workflows/hosted-docker.yml.")
+
+
+# --- the daemon's own storage directory ---------------------------------
+#
+# Added by C2 for the log-cap test, which has to measure what is RETAINED on
+# disk rather than what `docker logs` streams back. The two are different
+# numbers, and only the first is what acceptance 16 caps.
+
+
+def docker_root_dir() -> Path | None:
+    """The daemon's storage directory, if this process can read it.
+
+    None on Docker Desktop and on any remote daemon: `docker info` reports a
+    path inside the daemon's own VM, which does not exist out here. Checked by
+    reading it rather than by guessing at the platform, because a Linux host
+    can also be pointed at a remote daemon.
+    """
+    proc = _run(["info", "--format", "{{.DockerRootDir}}"],
+                timeout=QUICK_TIMEOUT, check=False)
+    if proc.returncode != 0:
+        return None
+    root = proc.stdout.strip()
+    if not root:
+        return None
+    path = Path(root)
+    return path if path.is_dir() else None
+
+
+def require_docker_root_dir() -> Path:
+    """The storage directory, or skip naming why there is not one here.
+
+    A skip is never a pass: this one says the daemon is not on this filesystem,
+    which is the state of every maintainer's Docker Desktop, and names the job
+    where the test does run.
+    """
+    root = docker_root_dir()
+    if root is not None:
+        return root
+    pytest.skip(
+        "the daemon's storage directory is not readable from here: `docker "
+        "info` reports a path this process cannot see, which is what Docker "
+        "Desktop and any remote daemon look like -- the daemon lives in a VM. "
+        "The retained-log cap is measured in the hosted-docker CI job, where "
+        "the daemon is on the runner's own filesystem.")

@@ -38,6 +38,30 @@ TENANT_GATEWAY = ipaddress.ip_address("10.88.0.1")
 # a tenant owns.
 DYNAMIC_RANGE = ipaddress.ip_network("10.88.255.0/24")
 
+# The two bridges, named here rather than in networks.sh, because their
+# addresses are already here and a name that lives apart from its address is a
+# name that drifts from it. hosted/deploy/networks.sh creates them and
+# hosted/deploy/firewall.sh writes rules against the Linux interfaces; the
+# Docker network name and the interface name are set to the same string with
+# com.docker.network.bridge.name, so `iptables -i waku-tenants` means what it
+# looks like it means. Both are 12 characters, under Linux's IFNAMSIZ of 15.
+TENANT_NETWORK = "waku-tenants"
+TENANT_BRIDGE = "waku-tenants"
+
+# inspect runs a stock `waku dashboard` on a tenant's stopped data for an
+# operator, so it is tenant-controlled code and gets its own bridge with the
+# same rules. It is NOT on the tenant bridge: an inspect container takes a
+# dynamic address, and the one rule the whole fixed-address scheme rests on is
+# that nothing but a tenant container is ever on 10.88/16.
+#
+# 10.89.0.0/24 and not a slice of 10.88/16: a /24 is more inspect containers
+# than an operator will ever run at once, and keeping it out of the tenant
+# subnet means no arithmetic anywhere has to remember to exclude it.
+INSPECT_NETWORK = "waku-inspect"
+INSPECT_BRIDGE = "waku-inspect"
+INSPECT_SUBNET = ipaddress.ip_network("10.89.0.0/24")
+INSPECT_GATEWAY = ipaddress.ip_address("10.89.0.1")
+
 # XFS reserves project id 0 for "no project", so ids start at 2 and their
 # addresses start one past the bridge gateway. 65279 is 0xFEFF: 10.88.254.255,
 # the last address before DYNAMIC_RANGE. About 65,000 tenants on one VM.

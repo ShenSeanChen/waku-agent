@@ -38,6 +38,32 @@ import dockerlib
 import pytest
 
 from hosted.core.provision import render_env
+from hosted.spawner import template
+
+
+def _config_for_tests(tenant_image: str, *, upstream_url: str) -> template.SpawnerConfig:
+    """A SpawnerConfig for this file's own container, so the nine environment
+    variables come from hosted/spawner/template.py and not from a second copy.
+
+    Only Env is taken from the body it builds: this test starts its container
+    with dockerlib, on its own network, with C1's two flags, because what it is
+    testing is the IMAGE. The isolation fields are C2's and are tested in
+    evals/hosted_docker/test_spawner.py against the running kernel.
+    """
+    return template.SpawnerConfig(
+        tenant_root=Path("/unused-by-this-test"),
+        archive_root=Path("/unused-by-this-test"),
+        staging_root=Path("/unused-by-this-test"),
+        tenant_image=tenant_image,
+        services_image="waku-services:test",
+        platform_base_url=upstream_url,
+        platform_model="waku-test-model",
+        platform_small_model="waku-test-model",
+        tenant_disk_bytes=64 * 1024 * 1024,
+        data_device="none",
+        seccomp_profile=(dockerlib.REPO / "hosted" / "image"
+                         / "seccomp.json").read_text(encoding="utf-8"),
+    )
 
 # The exact set of /app entries each image's Dockerfile puts there, plus what
 # the build creates. `leaked` catches anything extra; `MUST_BE_IN_*` catches
@@ -373,11 +399,13 @@ def running_tenant(tenant_image, tenant_dirs_on_host):
 
     The read-only root, the tmpfs and the two mounts are the spec's template --
     and only those three. CapDrop, no-new-privileges, seccomp and the resource
-    limits are C2's, and a container started here has none of them.
+    limits are C2's, and a container started here has none of them: this test
+    is about the IMAGE, so it keeps dockerlib.start_detached as the runner.
 
-    The environment is written out here because C2, which owns the template,
-    does not exist yet; C2 step 21 replaces this dict with a call into
-    hosted/spawner/template.py so there is one source from then on.
+    The ENVIRONMENT now comes from hosted/spawner/template.py. C1 wrote the
+    nine variables out by hand because C2 did not exist; from C2 on there is
+    one source, so the image test and the spawner cannot drift apart about
+    what a tenant container is started with.
     """
     home, env = tenant_dirs_on_host
     # Pre-emptive, not paranoid: a run killed mid-fixture leaves these two
@@ -400,20 +428,17 @@ def running_tenant(tenant_image, tenant_dirs_on_host):
         dockerlib.assert_alive(UPSTREAM_CONTAINER)
         dockerlib.wait_for_listener(UPSTREAM_CONTAINER, "127.0.0.1", 8080)
 
+        body = template.tenant_container(
+            _config_for_tests(tenant_image,
+                              upstream_url=f"http://{UPSTREAM_CONTAINER}:8080"),
+            # A tenant id is twelve characters of [a-z2-7]; the brief's
+            # "c1testc1test" carries a `1`, which tenant_container refuses.
+            tenant_id="ctestctestct", project_id=2, timezone="UTC",
+            token="x" * 43)
         tenant = dockerlib.start_detached(
             tenant_image, name=TENANT_CONTAINER, network=NETWORK,
             binds=[f"{home}:/data", f"{env}:/work"],
-            env={
-                "WAKU_HOME": "/data",
-                "WAKU_DASHBOARD_HOST": "0.0.0.0",
-                "WAKU_DASHBOARD_PORT": "7777",
-                "TZ": "UTC",
-                "HOME": "/tmp",
-                "WAKU_PLATFORM_BASE_URL": f"http://{UPSTREAM_CONTAINER}:8080",
-                "WAKU_PLATFORM_TOKEN": "c1-token-not-a-real-secret",
-                "WAKU_PLATFORM_MODEL": "waku-test-model",
-                "WAKU_PLATFORM_SMALL_MODEL": "waku-test-model",
-            })
+            env=dict(entry.split("=", 1) for entry in body["Env"]))
         dockerlib.assert_alive(tenant)
         dockerlib.wait_for_listener(tenant, "127.0.0.1", 7777)
         yield tenant

@@ -25,7 +25,16 @@ _KEYS: dict[str, frozenset[str]] = {
     "start": frozenset({"op", "tenant_id", "project_id", "timezone", "token"}),
     "stop": frozenset({"op", "tenant_id"}),
     "list": frozenset({"op"}),
-    "task": frozenset({"op", "tenant_id", "task"}),
+    # project_id is OPTIONAL here and required only for `restore`, which is a
+    # per-TASK requirement and _REQUIRED is per-OPERATION, so service.handle
+    # enforces it rather than parse(). restore recreates the tenant's two
+    # directories empty and has to give them back their own project id; the
+    # spawner cannot look one up, because the directories have just been
+    # removed and "The spawner opens neither database" (spec, The two
+    # databases). The gateway already sends this value on `provision` and on
+    # `start`, so sending it here adds no new source of truth -- it closes a
+    # gap where the spawner would otherwise have had to invent one.
+    "task": frozenset({"op", "tenant_id", "task", "project_id"}),
 }
 _REQUIRED: dict[str, tuple[str, ...]] = {
     "provision": ("tenant_id", "project_id"),
