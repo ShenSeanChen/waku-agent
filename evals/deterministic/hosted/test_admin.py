@@ -43,6 +43,8 @@ from hosted.gateway import admin
     # together: an op in ADMIN_OPS with no row in ADMIN_KEYS raises KeyError
     # inside handle() rather than answering a refusal.
     ({"op": "stop-all", "tenant": "a@b.c"}, "stop-all does not take ['tenant']"),
+    ({"op": "resolve"}, "resolve needs a tenant id or email"),
+    ({"op": "resolve", "tenant": "a@b.c", "why": 1}, "resolve does not take ['why']"),
     ({"op": "status", "path": "/etc/passwd"}, "status does not take ['path']"),
 ])
 def test_the_admin_socket_refuses_anything_outside_its_allowlist(
@@ -371,3 +373,89 @@ def test_stop_all_over_the_socket_answers_an_empty_fleet(harness, sock_dir):
         return answer
 
     assert asyncio.run(run()) == {"stopped": []}
+
+
+def test_resolve_turns_an_address_into_the_id_the_rest_of_the_platform_uses(
+        harness, sock_dir):
+    """The verb restore.sh needs so it does not carry its own SQL.
+
+    `_find` is `tenant_by_id` or `tenant_by_email`, and the second pins its
+    answer with `ORDER BY created_at, id LIMIT 1` because an address is not
+    unique. A shell copy of that query in restore.sh had neither clause -- a
+    second copy of a contract, already drifted. This is the one implementation.
+    """
+    async def run():
+        await harness.start()
+        tenant_id = await _signed_in(harness, sub="sub-mei", email="mei@example.com")
+        path = sock_dir / "admin.sock"
+        server = await admin.serve_admin(path, harness.gateway)
+        by_email = await jsonsock.ask(path, {"op": "resolve",
+                                             "tenant": "mei@example.com"})
+        by_id = await jsonsock.ask(path, {"op": "resolve", "tenant": tenant_id})
+        nobody = await jsonsock.ask(path, {"op": "resolve",
+                                           "tenant": "nobody@example.com"})
+        server.close()
+        await server.wait_closed()
+        await harness.stop()
+        return tenant_id, by_email, by_id, nobody
+
+    tenant_id, by_email, by_id, nobody = asyncio.run(run())
+    assert by_email == {"ok": True, "tenant": tenant_id}
+    assert by_id == {"ok": True, "tenant": tenant_id}
+    assert "error" in nobody
+
+
+def test_resolve_changes_nothing(harness):
+    """Read-only, and that is the whole reason restore.sh may call it while
+    the platform is mid-disaster. It must not stop a container, touch a
+    status, or reach the spawner at all."""
+    async def run():
+        await harness.start()
+        tenant_id = await _signed_in(harness, sub="sub-mei", email="mei@example.com")
+        before = list(harness.spawner.requests)
+        answer = await admin.handle(harness.gateway,
+                                    {"op": "resolve", "tenant": "mei@example.com"})
+        after = list(harness.spawner.requests)
+        status = harness.store.tenant_by_id(tenant_id).status
+        running = sorted(harness.gateway.launcher.fleet.running())
+        await harness.stop()
+        return tenant_id, answer, before, after, status, running
+
+    tenant_id, answer, before, after, status, running = asyncio.run(run())
+    assert answer == {"ok": True, "tenant": tenant_id}
+    assert after == before
+    assert status == "active"
+    assert running == [tenant_id]
+
+
+def test_stop_all_stops_a_container_the_gateway_would_refuse_to_forward_to(harness):
+    """The correction this verb needed, and the reason it does not ask
+    `resync`.
+
+    `resync` and the spawner's `list` answer "may the gateway forward to this
+    container?", so they drop one at an address its project id does not
+    derive. Stopping asks "is this container ours?" -- and that container is
+    precisely the one whose bind mount a restore is about to delete, leaving
+    it on a dead inode. `labelled_only` is a container the spawner has and
+    `list` would never report.
+    """
+    async def run():
+        await harness.start()
+        tenant_id = await _signed_in(harness, sub="sub-one", email="one@example.test")
+        # The gateway forgets it -- a wrong address, or a tenant the restored
+        # control.db does not know, both end here.
+        harness.gateway.launcher.fleet.forget(tenant_id)
+        harness.spawner.running.clear()
+        harness.spawner.labelled_only = [tenant_id]
+        listed = await harness.spawner.list()
+        answer = await admin.handle(harness.gateway, {"op": "stop-all"})
+        stops = [request["tenant_id"] for request in ops(harness.spawner, "stop")]
+        await harness.stop()
+        return tenant_id, listed, answer, stops
+
+    tenant_id, listed, answer, stops = asyncio.run(run())
+    assert listed == [], (
+        "the spawner's list reports it, so this test would pass on resync "
+        "alone and prove nothing about the wider enumeration")
+    assert answer == {"stopped": [tenant_id]}
+    assert stops == [tenant_id]

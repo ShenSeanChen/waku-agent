@@ -354,6 +354,38 @@ class DockerRuntime:
         await self._engine.remove(name)
         _LOG.info("stopped tenant=%s", tenant_id)
 
+    async def tenant_ids(self) -> list[str]:
+        """Every tenant container this spawner labelled, by id.
+
+        A DIFFERENT QUESTION FROM `list`, AND DELIBERATELY WIDER. `list`
+        answers "may the gateway forward to this container?", so it drops one
+        with no address on the tenant bridge and one at an address its project
+        id does not derive -- both right, because forwarding to either is
+        sending a signed-in person somewhere the platform never meant. This
+        answers "is this container ours?", which is what STOPPING needs, and
+        the containers in the difference are exactly the ones a restore is
+        about to delete the directories out from under. The failure that costs
+        is in designs/backup-restore-integrity.md: a bind mount left on a dead
+        inode, and the next `docker exec` reporting "possible container
+        breakout detected" in the middle of a disaster recovery.
+
+        THE LABEL AND THE ID SHAPE ARE THE WHOLE FILTER. No address check, no
+        control.db join -- the spawner opens no database, and a tenant the
+        restored control.db will not know is precisely a container that must
+        still be stopped. `is_tenant_id` stays because the id is a closed set
+        everywhere else it is used and `stop` joins it to a container name.
+        """
+        ids = []
+        for entry in await self._engine.containers(
+                label=f"{template.LABEL_KIND}={template.KIND_TENANT}"):
+            tenant_id = (entry.get("Labels") or {}).get(template.LABEL_TENANT, "")
+            if not is_tenant_id(tenant_id):
+                _LOG.warning("ignoring container %s with label tenant=%r",
+                             entry.get("Id", "")[:12], tenant_id)
+                continue
+            ids.append(tenant_id)
+        return sorted(set(ids))
+
     async def list(self) -> list[RunningContainer]:
         running = []
         for entry in await self._engine.containers(

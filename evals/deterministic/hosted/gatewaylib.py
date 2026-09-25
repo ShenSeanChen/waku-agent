@@ -87,6 +87,9 @@ class FakeSpawner:
         # start answer a port nothing listens on. A list of ports, consumed in
         # order, with the last one repeating.
         self.ports: list[int] = []
+        # Tenant ids the spawner has containers for but `list` would never
+        # report: see tenant_ids below.
+        self.labelled_only: list[str] = []
 
     def _port(self) -> int:
         if not self.ports:
@@ -137,6 +140,18 @@ class FakeSpawner:
     async def list(self) -> list[RunningContainer]:
         self.requests.append({"op": "list"})
         return list(self.running.values())
+
+    async def tenant_ids(self) -> list[str]:
+        """Every labelled tenant container, UNFILTERED -- the real spawner's
+        `tenants` op applies the kind label and the id shape and nothing else.
+
+        `labelled_only` is how a test says "the spawner has a container the
+        gateway would refuse to forward to": a tenant at an address its
+        project id does not derive, or one control.db has lost. Those never
+        appear in `list`, which is the whole reason this operation exists.
+        """
+        self.requests.append({"op": "tenants"})
+        return sorted(set(self.running) | set(self.labelled_only))
 
     async def task(self, tenant_id: str, task: str, project_id: int = 0) -> dict:
         self.requests.append({"op": "task", "tenant_id": tenant_id,

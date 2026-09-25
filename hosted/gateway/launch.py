@@ -385,6 +385,20 @@ class Launcher:
         self._starts.pop(tenant_id, None)
         self._addresses.pop(tenant_id, None)
 
+    async def running_tenant_ids(self) -> list[str]:
+        """Every tenant container the spawner has, by id, unfiltered.
+
+        NOT `resync`, AND THE DIFFERENCE IS THE POINT. `resync` decides what
+        the gateway may FORWARD to: it drops a container whose address is not
+        the one its project id derives and one whose tenant control.db does
+        not know, and it forgets both. Stopping is a different question, and
+        those two are precisely the containers a restore is about to delete
+        the directories out from under. This exists so `stop-all` can ask the
+        wider one without making `resync` destructive, which would change what
+        a consistency function is.
+        """
+        return await self._spawner.tenant_ids()
+
     async def spawner_task(self, tenant_id: str, task: str,
                            project_id: int = 0) -> dict:
         """The admin path's one door to the spawner's five tasks. It exists so

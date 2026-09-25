@@ -33,6 +33,7 @@ here=$(cd "$(dirname "$0")" && pwd)
 mode=""
 one=""
 snapshot=latest
+stop_fleet=yes
 
 usage() {
   cat <<'USAGE'
@@ -43,6 +44,12 @@ usage: restore.sh --tenant <id|email> [--snapshot ID]
   --all                the whole system onto this VM: both platform databases
                        and then every tenant, in the spec's order
   --snapshot ID        a restic snapshot id, or `latest` (the default)
+  --no-stop-fleet      with --all, do not ask the gateway to stop the tenant
+                       containers first. ONLY when the gateway cannot answer
+                       its admin socket -- which is the disaster this command
+                       exists for. The fleet is still stopped once the gateway
+                       is back on the restored database, before any tenant
+                       tree is touched
 USAGE
 }
 
@@ -133,6 +140,7 @@ while [ $# -gt 0 ]; do
       [ -z "$mode" ] || { usage >&2; waku_die "--tenant and --all are two different restores; give one"; }
       mode=all; shift ;;
     --snapshot) snapshot=$2; shift 2 ;;
+    --no-stop-fleet) stop_fleet=no; shift ;;
     -h|--help) usage; exit 0 ;;
     *) usage >&2; waku_die "unknown argument: $1" ;;
   esac
@@ -148,6 +156,12 @@ is_snapshot_id "$snapshot" \
 if [ "$mode" = one ]; then
   is_tenant_id "$one" || is_tenant_email "$one" \
     || waku_die "--tenant takes a tenant id (twelve characters of a-z and 2-7) or an email address; got '$one'"
+  # REFUSED RATHER THAN IGNORED. A one-tenant restore goes through the gateway
+  # for everything it does -- it is what stops that tenant's container, inside
+  # the admin verb -- so a flag saying "do not ask the gateway" has no reading
+  # here, and a flag that is silently ignored is one an operator will believe.
+  [ "$stop_fleet" = yes ] \
+    || waku_die "--no-stop-fleet is for --all only; a --tenant restore asks the gateway to stop that one container and cannot run without it"
 fi
 
 waku_require_root
@@ -189,30 +203,37 @@ waku_flock_staging
 # An id or an email in, a tenant id out. Nothing else in this file accepts an
 # email, because nothing else in this file has anywhere to put one.
 resolve_tenant() {
-  local value id
+  local value answer id
   value=$1
   if is_tenant_id "$value"; then
     printf '%s\n' "$value"
     return 0
   fi
-  # INSIDE THE GATEWAY'S CONTAINER, AS UID 10002, exactly as backup.sh copies
-  # control.db out. That database belongs to that user and is open in WAL mode
-  # while the gateway runs; a root sqlite3 reaching it first would leave a
-  # root-owned -wal and -shm in a 0700 directory the gateway has to write, and
-  # the gateway would never start again. A --tenant restore needs the running
-  # gateway anyway -- it is what stops the tenant's container -- so asking it
-  # rather than the file costs nothing and removes that failure.
+  # THROUGH THE GATEWAY'S OWN `resolve` VERB, AND NOT THROUGH SQL OF THIS
+  # SCRIPT'S OWN. An earlier version of this function ran
+  # `select id from tenant where email = '$value'` inside the gateway's
+  # container. It was not injectable -- is_tenant_email is a closed set that
+  # refuses the quote -- but it was a SECOND COPY OF A CONTRACT, and it had
+  # already drifted from the one it copied: store.tenant_by_email pins its
+  # answer with `ORDER BY created_at, id LIMIT 1` because an address is not
+  # unique, and this had neither clause. An operator whose address is on two
+  # rows got two lines back, and the refusal they saw in the middle of a
+  # disaster named neither row. `resolve` calls the same `_find` that
+  # `tenant.sh disable <email>` and `waku_admin restore <email>` already use.
   #
-  # THE SQL LITERAL IS SAFE BECAUSE OF is_tenant_email, NOT BECAUSE OF THIS
-  # LINE. That set has already refused the quote, the semicolon, the backslash
-  # and every space. And whatever comes back is still only a candidate: two
-  # rows, a stray carriage return or an empty answer all fail is_tenant_id in
-  # restore_tenant, which is the funnel every id passes through.
-  id=$(waku_compose exec -T --user 10002:10002 gateway \
-        sqlite3 "$WAKU_ROOT/control/control.db" \
-        "select id from tenant where email = '$value'") || return 1
+  # THE ANSWER IS STILL ONLY A CANDIDATE. The extraction takes whatever sits
+  # at the "tenant" key and is_tenant_id in restore_tenant decides -- so a
+  # malformed answer, an empty one or two of them is a refusal, not a path.
+  answer=$(waku_admin resolve "$value") || {
+    refuse "the gateway could not resolve '$value' to a tenant: $answer"
+    return 1
+  }
+  # `[^"]*` rather than an interval expression: BRE `\{12\}` is POSIX and
+  # works on GNU and BSD sed alike, but the id's shape is is_tenant_id's job
+  # and stating it twice is how the two drift apart.
+  id=$(printf '%s' "$answer" | sed -n 's/.*"tenant": *"\([^"]*\)".*/\1/p')
   if [ -z "$id" ]; then
-    refuse "no tenant in $WAKU_ROOT/control/control.db has the email $value"
+    refuse "the gateway's answer to resolve '$value' names no tenant: $answer"
     return 1
   fi
   printf '%s\n' "$id"
@@ -233,6 +254,30 @@ restore_tenant() {
   fi
   slot="$staging/$id"
   waku_log "restoring tenant $id from snapshot $snapshot"
+
+  # A SLOT THAT ALREADY CARRIES A MANIFEST IS A FINISHED BACKUP NOBODY
+  # SNAPSHOTTED, AND IT IS REFUSED BEFORE ANYTHING IS EMPTIED. backup.sh
+  # clears the slot only AFTER `restic backup` returns, so when the upload
+  # fails -- network, object store, credentials, quota, the ordinary failures
+  # -- the slot keeps a complete, manifest-bearing copy and the tenant is
+  # reported as a failure. That copy is then the only current copy of this
+  # tenant on the VM, and emptying the slot is the first thing this function
+  # would otherwise do: destroy, and then discover at the manifest check that
+  # there was no snapshot to replace it with. That is the shape
+  # designs/backup-restore-integrity.md exists about.
+  #
+  # A REFUSAL AND NOT A REORDER. Emptying first is necessary -- restic merges
+  # into what is there, and a slot holding part of another backup would hand
+  # the spawner a mixture of two. So the precondition is checked instead, and
+  # the operator is told which of the two things they have.
+  #
+  # `-f` AND NOT `-L`: a symlinked manifest is not a finished backup's
+  # declaration (the spawner's _read_manifest refuses one), so it falls
+  # through to being emptied like any other junk.
+  if [ -f "$slot/manifest.json" ] && [ ! -L "$slot/manifest.json" ]; then
+    refuse "$slot already holds a finished backup that was never sent to restic -- backup.sh clears the slot only after a successful upload, so this is the only current copy of $id on this VM. Refusing to delete it. Send it with: backup.sh --tenant $id ; or discard it with: backup.sh --reset-staging $id"
+    return 1
+  fi
 
   # Empty first, as UID 10001 in a container: restic merges into what is there,
   # and a slot holding a previous restore would hand the spawner a mixture of
@@ -337,28 +382,65 @@ fi
 
 # STAGE 1. From here on the platform is down, and everything it depends on has
 # been checked.
-waku_log "stopping every tenant container"
-waku_admin stop-all
+#
+# NOT `|| true`. If the gateway cannot be asked to stop the fleet, a container
+# survives into the restore and the restore deletes the directories under it:
+# the dead-inode failure CI produced, whose first symptom is `docker exec`
+# reporting "possible container breakout detected" in the middle of a disaster
+# recovery. So the default is to stop, and to stop the RUN if that fails.
+#
+# AND THE ESCAPE IS EXPLICIT, because the failure it guards against is the
+# disaster this command exists for. `waku_admin` is `docker compose exec ...
+# gateway python -m hosted.gateway.admin`, which exits 2 when the socket does
+# not answer -- so on a VM whose gateway is down or crash-looping, and whose
+# control.db is the broken thing, the default refuses at stage 1 and the
+# primary recovery path does not run. --no-stop-fleet is how an operator says
+# "the gateway cannot answer; I know". It is survivable rather than merely
+# permitted, because stage 3b below stops the fleet once the gateway is back
+# on the restored database and BEFORE any tenant tree is touched.
+if [ "$stop_fleet" = yes ]; then
+  waku_log "stopping every tenant container"
+  waku_admin stop-all
+else
+  waku_log "--no-stop-fleet: not asking the gateway to stop the fleet. Any tenant container still running keeps its bind mount into a tree this restore will replace; they are stopped once the gateway is back, before any tenant is restored."
+fi
 
 waku_log "stopping the gateway and the proxy"
 waku_compose stop gateway proxy
 
-# STAGE 2. THE -wal AND -shm GO FIRST, BEFORE the database they belong to is
-# replaced. They belong to the OLD database and would be read as part of the
-# new one. Removing them first means a run killed in the middle leaves the old
-# database without its log -- older, and consistent. The other order leaves the
-# NEW database with the OLD log, which is corruption SQLite applies silently.
+# STAGE 2. COPY BESIDE, THEN DROP THE LOG, THEN RENAME. Three steps and the
+# order of all three is load-bearing.
 #
-# install(1) then sets owner, group and mode in one call and writes to a
-# temporary file first, so a half-copied database never sits at the live path.
+# `mv` IS WHAT MAKES THIS ATOMIC, NOT `install`. An earlier version of this
+# block said install(1) "writes to a temporary file first", which is true of
+# BSD install -- the man page on a maintainer's macOS laptop says so, which is
+# where the sentence came from -- and FALSE of GNU coreutils, which is what
+# Ubuntu 24.04 runs. GNU install is cp plus chown plus chmod: it unlinks the
+# destination and reopens it O_CREAT|O_TRUNC. No temporary, no rename. So on
+# the platform this actually runs on, a kill mid-copy left a TRUNCATED
+# control.db, and with the log already removed there was nothing to recover
+# it from -- worse than either of the two orders the -wal decision below
+# compares. install still does the owner, the group and the mode in one call,
+# which is why it is still here; rename(2) keeps all three.
+#
+# THE -wal AND -shm GO BEFORE THE RENAME. They belong to the OLD database and
+# would be read as part of the new one. With the copy already complete beside
+# it, a run killed at any point leaves either the old database with its log
+# (before the rm), the old database without its log -- older and internally
+# consistent (between), or the new database (after the rename). No window
+# leaves a torn file at the live path.
 waku_log "replacing control.db"
+install -o 10002 -g 10002 -m 0600 "$control_slot/control.db" \
+        "$WAKU_ROOT/control/control.db.new"
 rm -f "$WAKU_ROOT/control/control.db-wal" "$WAKU_ROOT/control/control.db-shm"
-install -o 10002 -g 10002 -m 0600 "$control_slot/control.db" "$WAKU_ROOT/control/control.db"
+mv -f "$WAKU_ROOT/control/control.db.new" "$WAKU_ROOT/control/control.db"
 
 if [ -f "$control_slot/ledger.db" ]; then
   waku_log "replacing ledger.db"
+  install -o 10003 -g 10003 -m 0600 "$control_slot/ledger.db" \
+          "$WAKU_ROOT/ledger/ledger.db.new"
   rm -f "$WAKU_ROOT/ledger/ledger.db-wal" "$WAKU_ROOT/ledger/ledger.db-shm"
-  install -o 10003 -g 10003 -m 0600 "$control_slot/ledger.db" "$WAKU_ROOT/ledger/ledger.db"
+  mv -f "$WAKU_ROOT/ledger/ledger.db.new" "$WAKU_ROOT/ledger/ledger.db"
 else
   waku_log "the snapshot holds no ledger.db (group D of spec 001); leaving the spend ledger alone"
 fi
@@ -379,6 +461,16 @@ while [ $i -lt 60 ]; do
   i=$((i + 1))
 done
 [ "$ready" = yes ] || waku_die "the gateway did not answer after the databases were restored; no tenant has been restored yet"
+
+# STAGE 3b. AGAIN, AND ON THE RESTORED DATABASE THIS TIME. Two different
+# containers are caught here and neither is caught at stage 1: one that was
+# started by a sign-in landing between stage 1 and the gateway going down, and
+# -- under --no-stop-fleet -- every container that was running all along. This
+# is the line that makes --no-stop-fleet survivable rather than merely
+# permitted, and it runs before the first tenant tree is touched. On an
+# ordinary run it answers {"stopped": []} and costs one round trip.
+waku_log "stopping any tenant container that survived the restart"
+waku_admin stop-all
 
 # STAGE 4. THE LIST COMES FROM THE RESTORED COPY IN STAGING, not from the live
 # database: it is the same bytes, it was integrity-checked a moment ago, and

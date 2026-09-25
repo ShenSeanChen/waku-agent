@@ -48,18 +48,20 @@ case "$*" in
     if [ -n "$mount" ] && [ -d "$mount" ]; then
       find "$mount" -mindepth 1 -delete
     fi ;;
-  *"where email"*) @EMAIL@ ;;
+  *"admin resolve"*) @EMAIL@ ;;
   *"admin restore"*) @ADMIN_RESTORE@ ;;
 esac
 exit 0
 """
 
-# The default: one tenant's address resolves to one tenant id.
-_EMAIL_FOUND = f'echo {TENANT}'
-_EMAIL_MISSING = ": "
-# A control.db row that is not a tenant id. It reaches the same `find -delete`
-# as a flag would, through a different door.
-_EMAIL_POISONED = "echo '../../srv'"
+# The gateway's `resolve` verb answers the JSON its main() prints. A tenant
+# nobody has is an answer with an `error` key AND a non-zero exit, which is
+# what hosted/gateway/admin.py's main() does.
+_EMAIL_FOUND = f"""echo '{{"ok": true, "tenant": "{TENANT}"}}'"""
+_EMAIL_MISSING = """echo '{"error": "no tenant matches"}'; exit 1"""
+# A row control.db should not hold. It would reach the same `find -delete` a
+# flag would, through a different door -- so the funnel checks it too.
+_EMAIL_POISONED = """echo '{"ok": true, "tenant": "../../srv"}'"""
 
 # THE TAG, NOT A PATH, is what each arm matches on. pytest spells the test's
 # own name into tmp_path, so a stub that recognised the control restore by
@@ -123,8 +125,17 @@ _TWO_ROWS = f"printf '%s\\n' {OTHER} {TENANT}"
 # this script empties.
 _POISONED_ROW = f"printf '%s\\n' '../..' {TENANT}"
 
+_INSTALL = """#!/bin/sh
+printf '%s %s\\n' install "$*" >> "$WAKU_CALLS"
+source=""
+target=""
+for argument in "$@"; do source=$target; target=$argument; done
+[ -f "$source" ] && cp "$source" "$target"
+exit 0
+"""
+
 _STUBS = ["docker", "restic", "sqlite3", "flock", "id", "install", "curl", "sleep",
-          "rm"]
+          "rm", "mv"]
 
 _ROOT_DIRECTORIES = ("config", "staging", "control", "ledger")
 _INSTALL_ENV_FULL = ("WAKU_SERVICES_IMAGE=waku-services:current\n"
@@ -166,7 +177,13 @@ def _bodies(*, control=_CONTROL_ONLY, manifest=_MANIFEST_WRITTEN, rows=_ONE_ROW,
         # and succeeds, so the ORDER can be asserted without the test blocking
         # on a lock it also holds.
         "flock": '#!/bin/sh\nprintf "%s %s\\n" flock "$*" >> "$WAKU_CALLS"\nexit 0\n',
-        "install": '#!/bin/sh\nprintf "%s %s\\n" install "$*" >> "$WAKU_CALLS"\nexit 0\n',
+        # IT COPIES, because the line after it renames what it made. A stub
+        # that only recorded would leave `mv` with nothing to rename, and
+        # every --all test would fail on mv's message instead of on the thing
+        # it is about. The last argument is the destination, read by walking
+        # the list -- `${*##* }` looks like it takes the last word and does
+        # not (F3a's finding, in the backup half's stub).
+        "install": _INSTALL,
         "curl": f'#!/bin/sh\nprintf "%s %s\\n" curl "$*" >> "$WAKU_CALLS"\n{curl}\n',
         # NOT RECORDED, and stubbed only so the readiness loop's sixty seconds
         # do not become sixty seconds of test. What is under test is that the
@@ -179,6 +196,10 @@ def _bodies(*, control=_CONTROL_ONLY, manifest=_MANIFEST_WRITTEN, rows=_ONE_ROW,
         # Recording the call puts it in the log where the order shows; exec'ing
         # the real rm keeps the outcome real.
         "rm": '#!/bin/sh\nprintf "%s %s\\n" rm "$*" >> "$WAKU_CALLS"\nexec /bin/rm "$@"\n',
+        # `mv` is what makes the replacement atomic, so the log has to show
+        # where it sits relative to the copy and to the log removal. Recorded
+        # and then really run, like rm.
+        "mv": '#!/bin/sh\nprintf "%s %s\\n" mv "$*" >> "$WAKU_CALLS"\nexec /bin/mv "$@"\n',
     }
 
 
@@ -363,10 +384,22 @@ def test_a_control_db_that_fails_its_integrity_check_is_not_installed(
     assert not _lines(calls, "stop-all")
 
 
-def test_the_old_write_ahead_log_goes_before_the_database_it_belongs_to(tmp_path):
-    """A -wal beside the OLD database is read as part of the NEW one. Removing
-    it first means a run killed in the middle leaves a database that is older
-    and consistent; the other order leaves one that is newer and corrupt."""
+def test_the_database_is_copied_beside_then_the_log_goes_then_it_is_renamed(
+        tmp_path):
+    """Three steps, and the order of all three is load-bearing.
+
+    `install` is NOT atomic on the platform this runs on: GNU coreutils
+    unlinks the destination and reopens it O_CREAT|O_TRUNC, so a kill mid-copy
+    over the live path leaves a truncated database. (BSD install does use a
+    temporary, which is what a maintainer's macOS man page says and why the
+    first version of this block claimed atomicity it did not have.) So the
+    copy lands beside the target under `.new` and `mv` -- rename(2), which is
+    atomic on both -- puts it in place.
+
+    The -wal goes between the two: it belongs to the OLD database and would be
+    read as part of the new one, and with the copy already complete beside it
+    no window leaves a torn file at the live path.
+    """
     root, env = _env(tmp_path)
     stale = root / "control" / "control.db-wal"
     stale.write_text("the old database's log", encoding="utf-8")
@@ -374,7 +407,27 @@ def test_the_old_write_ahead_log_goes_before_the_database_it_belongs_to(tmp_path
     assert done.returncode == 0, done.stderr
     assert not stale.exists()
     calls = shelllib.calls(tmp_path)
-    assert _at(calls, "control.db-wal") < _at(calls, "install -o 10002")
+    copied = _at(calls, "install -o 10002")
+    dropped = _at(calls, "control.db-wal")
+    renamed = _at(calls, "mv -f")
+    assert copied < dropped < renamed
+    # And nothing is left at the temporary name.
+    assert not (root / "control" / "control.db.new").exists()
+
+
+@pytest.mark.parametrize("database, owner", [("control", "10002"), ("ledger", "10003")])
+def test_nothing_is_ever_written_straight_over_a_live_database(
+        tmp_path, database, owner):
+    """The copy's destination is never the live path. This is the assertion
+    that fails if someone puts `install` back over the target directly, which
+    is the shape that reads atomic and is not."""
+    root, env = _env(tmp_path)
+    done = _run(tmp_path, ["--all"], env, control=_CONTROL_AND_LEDGER)
+    assert done.returncode == 0, done.stderr
+    live = f"{root}/{database}/{database}.db"
+    line = _lines(shelllib.calls(tmp_path), f"install -o {owner}")[0]
+    assert line.endswith(f"{live}.new"), line
+    assert _lines(shelllib.calls(tmp_path), f"mv -f {live}.new {live}")
 
 
 def test_a_ledger_that_fails_its_integrity_check_stops_the_restore(tmp_path):
@@ -406,7 +459,8 @@ def test_the_control_database_is_installed_as_the_gateways_own_user(tmp_path):
     assert done.returncode == 0, done.stderr
     line = _lines(shelllib.calls(tmp_path), "install -o 10002")[0]
     assert "-g 10002 -m 0600" in line
-    assert line.endswith(f"{root}/control/control.db")
+    assert line.endswith(f"{root}/control/control.db.new")
+    assert (root / "control" / "control.db").exists()
 
 
 def test_a_ledger_in_the_snapshot_is_installed_as_the_proxys_own_user(tmp_path):
@@ -415,7 +469,8 @@ def test_a_ledger_in_the_snapshot_is_installed_as_the_proxys_own_user(tmp_path):
     assert done.returncode == 0, done.stderr
     line = _lines(shelllib.calls(tmp_path), "install -o 10003")[0]
     assert "-g 10003 -m 0600" in line
-    assert line.endswith(f"{root}/ledger/ledger.db")
+    assert line.endswith(f"{root}/ledger/ledger.db.new")
+    assert (root / "ledger" / "ledger.db").exists()
 
 
 def test_a_snapshot_with_no_ledger_leaves_the_spend_ledger_alone(tmp_path):
@@ -576,12 +631,15 @@ def test_an_address_is_turned_into_an_id_before_it_becomes_a_path(tmp_path):
     done = _run(tmp_path, ["--tenant", "mei@example.com"], env)
     assert done.returncode == 0, done.stderr
     calls = shelllib.calls(tmp_path)
-    lookup = _lines(calls, "where email")
+    lookup = _lines(calls, "admin resolve")
     assert lookup, calls
-    assert "--user 10002:10002 gateway sqlite3" in lookup[0]
+    assert "--user 10002:10002 gateway python -m hosted.gateway.admin" in lookup[0]
     assert _lines(calls, f"--tag tenant:{TENANT}")
     assert _lines(calls, f"admin restore {TENANT}")
-    assert not _lines(calls, "mei@example.com --")
+    # The address itself never becomes a path, a tag or a restic argument.
+    assert not [line for line in calls
+                if "mei@example.com" in line and not line.startswith("docker")]
+    assert not _lines(calls, "staging/mei@example.com")
 
 
 def test_an_address_that_matches_nobody_is_a_refusal_not_a_path(tmp_path):
@@ -589,14 +647,14 @@ def test_an_address_that_matches_nobody_is_a_refusal_not_a_path(tmp_path):
     done = _run(tmp_path, ["--tenant", "nobody@example.com"], env,
                 email=_EMAIL_MISSING)
     assert done.returncode != 0
-    assert "has the email nobody@example.com" in done.stderr
+    assert "could not resolve 'nobody@example.com'" in done.stderr
     assert not _lines(shelllib.calls(tmp_path), "restic")
 
 
 def test_an_address_that_resolves_to_something_that_is_not_an_id_is_refused(
         tmp_path):
-    """The funnel is what makes the lookup safe, not the lookup. Whatever comes
-    back out of control.db is still only a candidate."""
+    """The funnel is what makes the lookup safe, not the lookup. Whatever the
+    gateway answers is still only a candidate."""
     _, env = _env(tmp_path)
     done = _run(tmp_path, ["--tenant", "mei@example.com"], env,
                 email=_EMAIL_POISONED)
@@ -778,3 +836,192 @@ def test_the_slot_is_cleared_once_the_tenant_has_their_data_back(tmp_path):
     calls = shelllib.calls(tmp_path)
     assert _at(calls, f"admin restore {TENANT}") < _at(
         calls, "find /staging -mindepth 1 -delete")
+
+
+# --- a staged backup nobody snapshotted is not something to delete -------------
+
+
+def test_a_slot_holding_an_unsnapshotted_backup_is_refused_before_it_is_emptied(
+        tmp_path):
+    """R-1. backup.sh clears a tenant's slot only AFTER `restic backup`
+    returns, so when the upload fails -- network, object store, credentials,
+    quota -- the slot keeps a complete, manifest-bearing copy and the tenant is
+    reported as a failure. That copy is then the only current copy of that
+    tenant on this VM, and emptying the slot is the first thing a restore would
+    otherwise do: destroy, then discover at the manifest check that there was
+    nothing to replace it with.
+
+    The file has to still be there afterwards. An exit code alone would pass
+    with the refusal placed one line too late.
+    """
+    root, env = _env(tmp_path)
+    slot = root / "staging" / TENANT
+    (slot / "home").mkdir(parents=True)
+    (slot / "home" / "state.db").write_text("the only copy", encoding="utf-8")
+    (slot / "manifest.json").write_text(
+        '{"version":1,"parts":["home","env"],"state_db":true}', encoding="utf-8")
+
+    done = _run(tmp_path, ["--tenant", TENANT], env)
+    assert done.returncode != 0
+    assert "never sent to restic" in done.stderr
+    assert (slot / "home" / "state.db").read_text(encoding="utf-8") == "the only copy"
+    calls = shelllib.calls(tmp_path)
+    assert not _lines(calls, "find /staging -mindepth 1 -delete")
+    assert not _lines(calls, "restic")
+    assert not _lines(calls, "admin restore")
+
+
+def test_a_slot_holding_junk_without_a_manifest_is_still_emptied(tmp_path):
+    """The other side of the closed set. A slot with no manifest is a backup
+    that died, or a previous restore's leftovers -- nothing restorable -- and
+    restic merges into whatever is there, so it must still be emptied. A guard
+    that refused any non-empty slot would make every second restore of a
+    tenant impossible."""
+    root, env = _env(tmp_path)
+    slot = root / "staging" / TENANT
+    (slot / "home").mkdir(parents=True)
+    (slot / "home" / "half-a-backup.txt").write_text("x", encoding="utf-8")
+    done = _run(tmp_path, ["--tenant", TENANT], env)
+    assert done.returncode == 0, done.stderr
+    assert not (slot / "home" / "half-a-backup.txt").exists()
+    assert _lines(shelllib.calls(tmp_path), f"admin restore {TENANT}")
+
+
+def test_a_symlinked_manifest_does_not_make_a_slot_undeletable(tmp_path):
+    """`-f` follows a link. A link where the declaration should be is not a
+    finished backup -- the spawner's _read_manifest refuses one outright -- so
+    it must not be able to wedge the slot against every future restore."""
+    root, env = _env(tmp_path)
+    slot = root / "staging" / TENANT
+    slot.mkdir(parents=True)
+    (slot / "elsewhere.json").write_text("{}", encoding="utf-8")
+    (slot / "manifest.json").symlink_to("elsewhere.json")
+    done = _run(tmp_path, ["--tenant", TENANT], env)
+    assert done.returncode == 0, done.stderr
+    assert _lines(shelllib.calls(tmp_path), f"admin restore {TENANT}")
+
+
+# --- stopping the fleet is load-bearing, and the escape is explicit ------------
+
+
+def _gateway_down_until_started(bodies):
+    """A VM whose gateway is not answering its admin socket, which is the
+    disaster `--all` exists for: control.db is the broken thing, so the
+    gateway will not stay up.
+
+    `python -m hosted.gateway.admin` exits 2 when the socket is unreachable,
+    and it starts answering only once `compose start gateway proxy` has run --
+    which is what the stub reads out of its own call log. Modelling the
+    recovery rather than a permanent failure is the point: it is what makes
+    the difference between stage 1 and stage 3b visible.
+    """
+    body = bodies["docker"]
+    arm = '  *"admin stop-all"*)'
+    assert arm not in body, body
+    return {**bodies, "docker": body.replace(
+        '  *"admin restore"*)',
+        '  *"admin stop-all"*)\n'
+        '    grep -q "start gateway proxy" "$WAKU_CALLS" || exit 2 ;;\n'
+        '  *"admin restore"*)', 1)}
+
+
+def test_a_stop_all_that_fails_stops_the_restore(tmp_path):
+    """R-3. The one line that makes the design doc's second obligation
+    load-bearing. A container that survives into the restore keeps its bind
+    mount into a tree the restore replaces: the dead-inode failure CI
+    produced, whose first symptom is `docker exec` reporting "possible
+    container breakout detected" in the middle of a disaster recovery.
+
+    So a `stop-all` that fails must stop the RUN, before the services go down
+    and long before any database is replaced.
+    """
+    _, env = _env(tmp_path)
+    done = shelllib.run(RESTORE, ["--all"], tmp_path=tmp_path, env=env,
+                        stubs=_STUBS, bodies=_gateway_down_until_started(_bodies()))
+    assert done.returncode != 0
+    calls = shelllib.calls(tmp_path)
+    assert not _lines(calls, "stop gateway proxy")
+    assert not _lines(calls, "install -o")
+    assert not _lines(calls, "admin restore")
+
+
+def test_no_stop_fleet_lets_the_restore_run_when_the_gateway_cannot_answer(
+        tmp_path):
+    """The disaster this command exists for is the one the default cannot run
+    in: `waku_admin` goes through the gateway, so a VM whose gateway is down --
+    because control.db is the broken thing -- refuses at stage 1. The escape is
+    explicit rather than implicit, and it is survivable rather than merely
+    permitted: the fleet is still stopped once the gateway is back on the
+    restored database, BEFORE any tenant tree is touched."""
+    _, env = _env(tmp_path)
+    done = shelllib.run(RESTORE, ["--all", "--no-stop-fleet"], tmp_path=tmp_path,
+                        env=env, stubs=_STUBS, bodies=_gateway_down_until_started(_bodies()))
+    assert done.returncode == 0, done.stderr
+    calls = shelllib.calls(tmp_path)
+    # Nothing was asked of the gateway before it was restarted...
+    assert _at(calls, "stop-all") > _at(calls, "start gateway proxy")
+    # ...and the fleet is stopped before the first tenant is touched.
+    assert _at(calls, "stop-all") < _at(calls, "admin restore")
+
+
+def test_the_fleet_is_stopped_again_once_the_gateway_is_back(tmp_path):
+    """Even on an ordinary run. A sign-in landing between stage 1 and the
+    gateway going down pre-warms a container nothing has stopped, and its bind
+    mount is in the tree the per-tenant restores are about to replace."""
+    _, env = _env(tmp_path)
+    done = _run(tmp_path, ["--all"], env)
+    assert done.returncode == 0, done.stderr
+    calls = shelllib.calls(tmp_path)
+    asked = [i for i, line in enumerate(calls) if "stop-all" in line]
+    assert len(asked) == 2, calls
+    assert asked[0] < _at(calls, "stop gateway proxy")
+    assert _at(calls, "start gateway proxy") < asked[1] < _at(calls, "admin restore")
+
+
+def test_no_stop_fleet_is_refused_for_one_tenant(tmp_path):
+    """A one-tenant restore goes through the gateway for everything it does --
+    it is what stops that tenant's container, inside the admin verb -- so the
+    flag has no reading here, and a flag silently ignored is one an operator
+    will believe."""
+    _, env = _env(tmp_path)
+    done = _run(tmp_path, ["--tenant", TENANT, "--no-stop-fleet"], env)
+    assert done.returncode != 0
+    assert "--no-stop-fleet is for --all only" in done.stderr
+    assert shelllib.calls(tmp_path) == []
+
+
+# --- the second database, and the empty VM ------------------------------------
+
+
+def test_the_ledgers_old_write_ahead_log_goes_too(tmp_path):
+    """R-5. The same corruption class as control.db's, on the database the
+    commit message devotes a paragraph to, and it had no fixture."""
+    root, env = _env(tmp_path)
+    stale = root / "ledger" / "ledger.db-wal"
+    stale.write_text("the old ledger's log", encoding="utf-8")
+    done = _run(tmp_path, ["--all"], env, control=_CONTROL_AND_LEDGER)
+    assert done.returncode == 0, done.stderr
+    assert not stale.exists()
+
+
+def test_the_shared_memory_file_goes_with_the_log(tmp_path):
+    """R-5's other half. `-shm` is the WAL index; left beside a different
+    database it is a second stale fact SQLite would read."""
+    root, env = _env(tmp_path)
+    stale = root / "control" / "control.db-shm"
+    stale.write_text("the old database's wal index", encoding="utf-8")
+    done = _run(tmp_path, ["--all"], env)
+    assert done.returncode == 0, done.stderr
+    assert not stale.exists()
+
+
+def test_a_restore_onto_a_vm_with_no_tenants_succeeds(tmp_path):
+    """R-6. F4's `migrate.sh --in` is exactly this. Without the empty-line
+    guard the here-document's one blank line becomes `restore_tenant ""`, a
+    refusal, and a restore onto a fresh VM reports failure."""
+    _, env = _env(tmp_path)
+    done = _run(tmp_path, ["--all"], env, rows=":")
+    assert done.returncode == 0, done.stderr
+    calls = shelllib.calls(tmp_path)
+    assert not _lines(calls, "admin restore")
+    assert _lines(calls, "install -o 10002")

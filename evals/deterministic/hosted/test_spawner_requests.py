@@ -21,13 +21,19 @@ GOOD_TOKEN = "T" * 43
 # None of them notices the allowlists being WIDENED, which is the direction that
 # matters for a process running as root with CAP_SYS_ADMIN and the data disk's
 # block device. These three literals are the closure, in both directions.
-SPEC_OPERATIONS = {"provision", "start", "stop", "list", "task"}
+SPEC_OPERATIONS = {"provision", "start", "stop", "list", "tenants", "task"}
 SPEC_TASKS = {"backup", "restore", "archive", "inspect", "inspect-stop"}
 SPEC_KEYS = {
     "provision": {"op", "tenant_id", "project_id"},
     "start": {"op", "tenant_id", "project_id", "timezone", "token"},
     "stop": {"op", "tenant_id"},
     "list": {"op"},
+    # Added in group F (F3b). `list` answers "may the gateway forward to this
+    # container?" and drops one with no address on the tenant bridge or at an
+    # address its project id does not derive; `tenants` answers "is this
+    # container ours?", which is what stop-all needs before a restore deletes
+    # the directories under it. Same empty key set; a different question.
+    "tenants": {"op"},
     # Widened in group C, deliberately. The spec's spawner table writes this
     # operation as `task <tenant id> <task>`; restore additionally needs the
     # tenant's project id, because it recreates their two directories empty and
@@ -42,12 +48,13 @@ SPEC_REQUIRED = {
     "start": ("tenant_id", "project_id", "timezone", "token"),
     "stop": ("tenant_id",),
     "list": (),
+    "tenants": (),
     "task": ("tenant_id", "task"),
 }
 
 
-def test_the_spawner_answers_exactly_these_five_operations():
-    """Add a sixth and this fails, which is the point: `exec` slipped into
+def test_the_spawner_answers_exactly_these_six_operations():
+    """Add a seventh and this fails, which is the point: `exec` slipped into
     OPERATIONS leaves every other test in this file green."""
     assert requests.OPERATIONS == SPEC_OPERATIONS
 

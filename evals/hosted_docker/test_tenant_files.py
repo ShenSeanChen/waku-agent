@@ -273,18 +273,43 @@ def _task_ok(spawner, tenant_id: str, project_id: int, task: str) -> dict:
     return answer
 
 
+# NO TRAILING NEWLINE, and that is not a style choice: the value is rendered
+# into a shell command with !r, so a Python "\n" would arrive inside single
+# quotes as a literal backslash and an n and the comparison below would never
+# match what the container wrote.
+_SENTINEL = "the bytes a followed link would have copied"
+
+
+def _plant_target(spawner_root, tenant_id: str, name: str) -> None:
+    """Write a real file into the tenant's env directory, as they would."""
+    env = spawner_root / "tenants" / tenant_id / "env"
+    dockerlib.run_once(
+        SERVICES_TAG,
+        ["bash", "-euc", f"printf '%s' {_SENTINEL!r} > /work/{name}"],
+        read_only=False, binds=[f"{env}:/work"])
+
+
 def test_a_backup_copies_a_planted_symlink_as_a_link_and_does_not_follow_it(
         spawner, spawner_root, tenant):
     """Acceptance 15, the backup half.
 
+    THE TARGET EXISTS, AND THAT IS WHAT MAKES THIS ABLE TO FAIL. The first
+    version of this test pointed `.env` at a path nothing ever created and
+    then asserted that path was absent from the tenant's directory --
+    `_BACKUP_SCRIPT` only ever READS /work (`tar --create`), so that assertion
+    was true whatever tar did, and a dangling link would additionally have
+    made `tar -h` error rather than copy. With a real file behind the link, a
+    tar that followed it puts a REGULAR file holding `_SENTINEL` into the
+    staging slot, and `is_symlink()` is the assertion that tells the two
+    apart. Same fix as `test_backup_restic.py`'s.
+
     THE TARGET IS INSIDE THE TENANT'S OWN MOUNT, for the reason the
-    provisioning tests above give: a target on the read-only root fails
-    whatever the backup does, so the assertion could not tell the guard from
-    the containment. A target under /work is writable, so a backup that
-    followed the link would create it.
+    provisioning tests above give: one on the read-only root fails whatever
+    the backup does, so the assertion could not tell the guard from the
+    containment.
     """
     tenant_id, project_id = tenant
-    env = spawner_root / "tenants" / tenant_id / "env"
+    _plant_target(spawner_root, tenant_id, "backup-link-target.txt")
     _plant(spawner_root, tenant_id, ".env", "/work/backup-link-target.txt")
 
     answer = ask(spawner, {"op": "task", "tenant_id": tenant_id, "task": "backup",
@@ -292,10 +317,16 @@ def test_a_backup_copies_a_planted_symlink_as_a_link_and_does_not_follow_it(
     assert "error" not in answer, answer
 
     slot = spawner_root / "staging" / tenant_id
-    assert _absent(env, "backup-link-target.txt")
-    # The positive half: "the copy keeps symlinks as symlinks".
-    assert (slot / "env" / ".env").is_symlink()
-    assert os.readlink(slot / "env" / ".env") == "/work/backup-link-target.txt"
+    staged = slot / "env" / ".env"
+    # THE DISCRIMINATOR: a followed link is a regular file holding the bytes.
+    assert staged.is_symlink(), (
+        "the backup followed the planted .env symlink and copied its target's "
+        "bytes into the staging slot")
+    assert os.readlink(staged) == "/work/backup-link-target.txt"
+    # And the slot is not empty for some unrelated reason: the target itself
+    # was copied, as an ordinary file, so tar really did walk /work.
+    assert (slot / "env" / "backup-link-target.txt").read_text(
+        encoding="utf-8") == _SENTINEL
     # And the backup declared that it finished.
     manifest = json.loads((slot / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["version"] == 1
@@ -316,6 +347,7 @@ def test_a_restore_puts_the_link_back_as_a_link_and_archives_the_old_tree(
     """
     tenant_id, project_id = tenant
     env = spawner_root / "tenants" / tenant_id / "env"
+    _plant_target(spawner_root, tenant_id, "restore-link-target.txt")
     _plant(spawner_root, tenant_id, ".env", "/work/restore-link-target.txt")
     _task_ok(spawner, tenant_id, project_id, "backup")
 
@@ -323,9 +355,15 @@ def test_a_restore_puts_the_link_back_as_a_link_and_archives_the_old_tree(
                            "project_id": project_id})
     assert "error" not in answer, answer
 
-    assert (env / ".env").is_symlink()
+    # The target exists for the same reason as in the backup half: a restore
+    # that wrote THROUGH the link would leave `.env` a regular file holding
+    # the sentinel, and only `is_symlink()` separates that from a link put
+    # back as a link.
+    assert (env / ".env").is_symlink(), (
+        "the restore replaced the planted .env symlink with a regular file")
     assert os.readlink(env / ".env") == "/work/restore-link-target.txt"
-    assert _absent(env, "restore-link-target.txt")
+    assert (env / "restore-link-target.txt").read_text(
+        encoding="utf-8") == _SENTINEL
     archives = list((spawner_root / "archive" / tenant_id)
                     .glob(f"{tenant_id}-*-pre-restore*"))
     assert archives, "a restore archives the old tree before it removes it"
