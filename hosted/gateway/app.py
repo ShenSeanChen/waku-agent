@@ -288,8 +288,15 @@ class Gateway:
         # Pre-warm: the container boots while the tenant's page loads. A
         # failure here is not a failed sign-in -- the first request on the
         # tenant host starts it again -- so it is logged and passed over.
+        #
+        # `prewarm`, NOT `start`. The running cap lives in Fleet.admit, which
+        # every request path consults and which `start` does not; this call
+        # site is the one that used to skip it, so N sign-ins left N
+        # containers running whatever --max-running said. At the cap the
+        # pre-warm now evicts the least recently active container instead of
+        # over-committing the VM's memory. See Launcher.prewarm.
         try:
-            await self._launcher.start(tenant)
+            await self._launcher.prewarm(tenant)
         except (NotActive, InMaintenance, StartFailed) as exc:
             _LOG.info("pre-warm of tenant=%s did not start it: %s", tenant.id, exc)
         enter = (f"https://{tenant.id}.{self._config.apex_host}"

@@ -39,4 +39,11 @@ async def serve_token_lookup(path: Path, store: ControlStore) -> asyncio.Server:
         tenant_id, status = found
         return {"tenant": tenant_id, "status": status}
 
+    # The directory, the way admin.serve_admin does it. F1's Compose mounts
+    # run/gateway/ so the deployment never needs this -- but without it the
+    # first person to run `python -m hosted.gateway` by hand gets a bare
+    # OSError out of asyncio.start_unix_server, pointing at the socket layer
+    # rather than at the missing directory. The two socket servers in this
+    # package should not differ on it.
+    path.parent.mkdir(parents=True, exist_ok=True)
     return await jsonsock.serve(path, handler, mode=GATEWAY_SOCKET_MODE)

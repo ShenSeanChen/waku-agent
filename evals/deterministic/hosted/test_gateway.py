@@ -16,9 +16,11 @@ import json
 import logging
 from pathlib import Path
 
+import aiohttp
 import pytest
 from aiohttp import web
 from gatewaylib import (
+    SUPABASE_URL,
     FakeContainer,
     FakeSpawner,
     Harness,
@@ -34,6 +36,7 @@ from gatewaylib import (
 from hosted.core import idle, policy, quota
 from hosted.gateway import __main__ as gateway_main
 from hosted.gateway.config import REQUIRED_ENV_NAMES
+from hosted.gateway.forward import ContainerForwarder
 
 ROOT = Path(__file__).resolve().parents[3]
 REPO_ENV_EXAMPLE = ROOT / "hosted" / "deploy" / "gateway.env.example"
@@ -924,7 +927,11 @@ def test_a_blocked_streaming_route_answers_a_done_event_and_not_json(wired):
     assert headers["content-type"].startswith("text/event-stream")
     frame = json.loads(body.decode("utf-8").removeprefix("data: ").strip())
     assert frame["kind"] == "done"
-    assert frame["error"] == policy.ARENA_BLOCKED
+    # The LITERAL, not policy.ARENA_BLOCKED. This was the only reference to
+    # that constant outside policy.py, so comparing to it held for every value
+    # the constant could have -- set it to "MUTATED" and all 1679 tests passed.
+    # Its five sibling block messages each go red somewhere; this one did not.
+    assert frame["error"] == "The arenas are not available on hosted waku."
 
 
 def test_a_platform_provider_payload_carrying_a_key_is_refused(wired):
@@ -969,6 +976,11 @@ def test_a_filtered_body_is_re_serialised_and_sent_with_its_own_length(wired):
     assert int(wired.container.headers[0]["Content-Length"]) == len(
         wired.container.bodies[0])
     assert "Transfer-Encoding" not in wired.container.headers[0]
+    # IF YOU BREAK THIS ON PURPOSE, IT GOES RED AFTER 121 SECONDS, NOT AT ONCE.
+    # Copying the caller's Content-Length hands the container a length longer
+    # than the body; it blocks on bytes that never arrive and the request dies
+    # at forward's 120-second timeout. That is the failure being refused, and
+    # it looks exactly like a hung suite for two minutes first.
 
 
 # --- turns, background requests and the running cap ----------------------
@@ -1071,61 +1083,131 @@ def test_a_background_request_never_touches_the_idle_clock(wired):
     assert stops == [tenant_id]
 
 
-def test_at_the_cap_the_least_recently_used_container_is_stopped_first(
-        wired_one_slot):
-    """Three tenants on a VM whose cap is one, and the LRU of the running ones
-    is what goes.
+def test_a_sign_in_at_the_cap_evicts_rather_than_over_committing(wired_one_slot):
+    """The running cap binds on EVERY path that starts a container, sign-in
+    included.
 
-    `wired_one_slot` builds the Harness with max_running=1 rather than a test
-    writing `fleet._max_running`. A test that reaches into a private attribute
-    to create the state it is about stops being true when the attribute is
-    renamed, and the state it creates is not the state a real one-slot VM is
-    in -- the Gateway's own config would still say four.
+    It did not. `_sign_in` pre-warms with Launcher.start, `start` consults
+    nothing about how many containers are up, and the cap lives in
+    Fleet.admit -- so two sign-ins on a one-slot VM left two containers
+    running. On a t3.large --max-running is derived from memory and the
+    failure mode of exceeding it is the kernel OOM-killing somebody's
+    container mid-turn: a running tenant's work destroyed by a stranger
+    signing in. The pre-warm now goes through the same admission every
+    request uses, and at the cap it evicts.
 
-    WHY THREE TENANTS AND NOT TWO. The sign-in PRE-WARM calls Launcher.start
-    directly, and the running cap is Fleet.admit's, not the launcher's -- so
-    three sign-ins leave three containers running on a one-slot VM, and the
-    cap binds at the first request that finds its OWN container stopped. Two
-    tenants would reach the eviction branch with exactly one candidate in it,
-    where `min` and `max` over last_activity answer the same tenant and the
-    words "least recently used" would be untested. Here the third tenant's
-    request picks between two, and the older one is the claim.
+    THE ASSERTION IS THE FLEET, NOT JUST THE STOP. A `stop` recorded on the
+    spawner would still be true of a gateway that stopped the first container
+    and then started two anyway; `fleet.running()` is what the cap is about.
     """
     wired = wired_one_slot
 
     async def run():
         await wired.start()
-        first_host, first_cookie = await signed_in_on_the_tenant_host(
+        first_host, _first_cookie = await signed_in_on_the_tenant_host(
             wired, sub="sub-one", email="one@example.com")
-        second_host, second_cookie = await signed_in_on_the_tenant_host(
-            wired, sub="sub-two", email="two@example.com")
-        third_host, third_cookie = await signed_in_on_the_tenant_host(
-            wired, sub="sub-three", email="three@example.com")
-        third_id = third_host.split(".", 1)[0]
-        # The third tenant's container is stopped, the way an idle sweep
-        # would have stopped it, so their next request has to be admitted.
-        await wired.launcher.stop(third_id)
-        # First is used, then ten seconds pass, then second is used. Second is
-        # now the more recent of the two running containers.
-        await wired.send("GET", "/api/data", host=first_host, cookie=first_cookie)
         wired.clock.t += 10
-        await wired.send("GET", "/api/data", host=second_host, cookie=second_cookie)
         mark = len(wired.spawner.requests)
-        answer = await wired.send("GET", "/api/data", host=third_host,
-                                  cookie=third_cookie)
+        second_host, _second_cookie = await signed_in_on_the_tenant_host(
+            wired, sub="sub-two", email="two@example.com")
         during = wired.spawner.requests[mark:]
+        running = sorted(wired.fleet.running())
         await wired.stop()
         return (first_host.split(".", 1)[0], second_host.split(".", 1)[0],
-                third_id, answer, during)
+                during, running)
 
-    first_id, second_id, third_id, answer, during = asyncio.run(run())
-    assert answer[0] == 200
-    # Exactly one container was stopped to make room, and it is the older of
-    # the two that were running. `== [first_id]` and not `in`: with `in`, an
-    # eviction that stopped BOTH would still pass.
+    first_id, second_id, during, running = asyncio.run(run())
     assert [r["tenant_id"] for r in during if r["op"] == "stop"] == [first_id]
-    assert [r["tenant_id"] for r in during if r["op"] == "start"] == [third_id]
-    assert second_id not in [r["tenant_id"] for r in during if r["op"] == "stop"]
+    assert [r["tenant_id"] for r in during if r["op"] == "start"] == [second_id]
+    # One slot, one container. This is the line the finding was about.
+    assert running == [second_id]
+
+
+def test_at_the_cap_the_least_recently_used_container_is_stopped_first(
+        wired_two_slots):
+    """Two slots and three tenants, so the eviction is a CHOICE.
+
+    With one slot there is exactly one candidate and `min` and `max` over
+    last_activity answer the same tenant -- "least recently used" would be
+    untested. Here the third sign-in picks between two, and the older one is
+    the claim: swap Fleet._evictable's `min` for `max` and this goes red.
+
+    (Before the sign-in pre-warm went through Fleet.admit this test looked
+    quite different: it signed three people in on a ONE-slot harness, which
+    left all three containers running, and then stopped one by hand so that
+    its next REQUEST would evict. The cap now binds at sign-in, so the
+    eviction is the third sign-in itself and no container has to be stopped
+    by hand to reach it.)
+    """
+    wired = wired_two_slots
+
+    async def run():
+        await wired.start()
+        first_host, _c1 = await signed_in_on_the_tenant_host(
+            wired, sub="sub-one", email="one@example.com")
+        wired.clock.t += 10
+        second_host, _c2 = await signed_in_on_the_tenant_host(
+            wired, sub="sub-two", email="two@example.com")
+        wired.clock.t += 10
+        mark = len(wired.spawner.requests)
+        third_host, third_cookie = await signed_in_on_the_tenant_host(
+            wired, sub="sub-three", email="three@example.com")
+        during = wired.spawner.requests[mark:]
+        # And the third tenant's dashboard works on the container that start
+        # produced, so the eviction was not a container the gateway then
+        # forwarded to anyway.
+        answer = await wired.send("GET", "/api/data", host=third_host,
+                                  cookie=third_cookie)
+        running = sorted(wired.fleet.running())
+        await wired.stop()
+        return ([h.split(".", 1)[0] for h in (first_host, second_host, third_host)],
+                during, answer, running)
+
+    (first_id, second_id, third_id), during, answer, running = asyncio.run(run())
+    assert answer[0] == 200
+    # `== [first_id]` and not `in`: with `in`, an eviction that stopped BOTH
+    # of the running containers would still pass.
+    assert [r["tenant_id"] for r in during if r["op"] == "stop"] == [first_id]
+    assert sorted(running) == sorted([second_id, third_id])
+
+
+def test_at_the_cap_a_request_evicts_too_and_it_is_still_the_least_recent(
+        wired_two_slots):
+    """The other entry point into the same eviction: _reach's
+    `evict_then_start` arm, reached by a REQUEST rather than a sign-in.
+
+    The first tenant has already been evicted by the third sign-in, so their
+    next request finds their own container stopped and the VM full. It must
+    evict the older of the two that are up -- the second tenant, whose last
+    activity is ten seconds before the third's.
+    """
+    wired = wired_two_slots
+
+    async def run():
+        await wired.start()
+        first_host, first_cookie = await signed_in_on_the_tenant_host(
+            wired, sub="sub-one", email="one@example.com")
+        wired.clock.t += 10
+        second_host, _c2 = await signed_in_on_the_tenant_host(
+            wired, sub="sub-two", email="two@example.com")
+        wired.clock.t += 10
+        third_host, _c3 = await signed_in_on_the_tenant_host(
+            wired, sub="sub-three", email="three@example.com")
+        wired.clock.t += 10
+        mark = len(wired.spawner.requests)
+        answer = await wired.send("GET", "/api/data", host=first_host,
+                                  cookie=first_cookie)
+        during = wired.spawner.requests[mark:]
+        running = sorted(wired.fleet.running())
+        await wired.stop()
+        return ([h.split(".", 1)[0] for h in (first_host, second_host, third_host)],
+                during, answer, running)
+
+    (first_id, second_id, third_id), during, answer, running = asyncio.run(run())
+    assert answer[0] == 200
+    assert [r["tenant_id"] for r in during if r["op"] == "stop"] == [second_id]
+    assert [r["tenant_id"] for r in during if r["op"] == "start"] == [first_id]
+    assert sorted(running) == sorted([first_id, third_id])
 
 
 @pytest.mark.parametrize("target", ["/api/chat/streamX", "/api/chatX"])
@@ -1306,6 +1388,94 @@ def test_the_gateway_process_writes_no_hand_off_code_to_its_log(caplog, tmp_path
     assert ours_answer[0] == 302
     assert wrote_by_default, "aiohttp stopped writing %r; this test's control is gone"
     assert not wrote_by_ours
+
+
+def _gateway_env(root) -> dict[str, str]:
+    """A config/gateway.env the process can actually start from.
+
+    Every name in config.REQUIRED_ENV_NAMES, because config_from_env refuses a
+    missing one -- and a short socket directory, because AF_UNIX caps a path
+    at 104 bytes on macOS and pytest spells the test's name into tmp_path.
+    The spawner socket is deliberately absent from disk: the startup resync
+    must log and carry on.
+    """
+    return {
+        "WAKU_APEX_HOST": "agent.waku.one",
+        "WAKU_GATEWAY_BIND": "127.0.0.1",
+        "WAKU_GATEWAY_PORT": "0",
+        "WAKU_CONTROL_DB": str(root / "control.db"),
+        "WAKU_SPAWNER_SOCKET": str(root / "spawner.sock"),
+        "WAKU_GATEWAY_SOCKET": str(root / "g.sock"),
+        "WAKU_PROXY_SOCKET": str(root / "p.sock"),
+        "WAKU_ADMIN_SOCKET": str(root / "a.sock"),
+        "WAKU_MAX_RUNNING": "4",
+        "WAKU_SUPABASE_URL": SUPABASE_URL,
+        "WAKU_SUPABASE_ISSUER": f"{SUPABASE_URL}/auth/v1",
+        "WAKU_SUPABASE_JWKS_URL": f"{SUPABASE_URL}/auth/v1/.well-known/jwks.json",
+        "WAKU_SUPABASE_AUDIENCE": "https://api.waku.one/mcp",
+        "WAKU_SUPABASE_PUBLISHABLE_KEY": "sb_publishable_test",
+        "WAKU_FREE_TURNS_PER_HOUR": "30",
+        "WAKU_BYOK_TURNS_PER_HOUR": "120",
+    }
+
+
+def test_the_gateway_process_serves_with_the_access_log_off(
+        monkeypatch, caplog, sock_dir):
+    """The test above pins build_runner. THIS one pins main(), and the
+    difference is the whole finding.
+
+    build_runner has exactly one caller. Leave it correct and change that one
+    line back to `web.AppRunner(gateway.build())` and the suite above stays
+    green -- measured -- because it drives the helper rather than the process
+    that serves. So this runs the real main(), on a real ephemeral port,
+    sends the real hand-off URL at it, and reads the log.
+
+    TWO ASSERTIONS AND THEY ARE NOT THE SAME ONE. The kwargs say which runner
+    main() built, so the regression is named at the line it happens on; the
+    log says what that runner then did with a query string. The control for
+    the second -- that aiohttp writes this by default at all -- is the test
+    above, which drives both runners and requires the default to write it.
+    """
+    for name, value in _gateway_env(sock_dir).items():
+        monkeypatch.setenv(name, value)
+    built: dict = {}
+
+    class Recorder(web.AppRunner):
+        def __init__(self, app, **kwargs):
+            built["kwargs"] = kwargs
+            super().__init__(app, **kwargs)
+            built["runner"] = self
+
+    # gateway_main.web IS aiohttp.web, so this patches the module every caller
+    # shares -- monkeypatch puts it back, and nothing else runs in between.
+    monkeypatch.setattr(gateway_main.web, "AppRunner", Recorder)
+    code = "mainlevelSEKRIT"
+
+    async def run():
+        task = asyncio.create_task(gateway_main.main())
+        for _ in range(500):
+            if built.get("runner") is not None and built["runner"].addresses:
+                break
+            await asyncio.sleep(0.01)
+        else:
+            task.cancel()
+            raise AssertionError("main() never bound a port")
+        port = built["runner"].addresses[0][1]
+        answer = await send_raw(port, "GET", f"/auth/enter?code={code}",
+                                f"{'a' * 12}.agent.waku.one")
+        task.cancel()
+        try:
+            await asyncio.wait_for(task, timeout=10)
+        except (asyncio.CancelledError, TimeoutError):
+            pass
+        return answer
+
+    with caplog.at_level(logging.INFO):
+        answer = asyncio.run(run())
+
+    assert answer[0] == 302, "the request never reached the gateway"
+    assert built["kwargs"].get("access_log", "NOT PASSED") is None
+    assert code not in caplog.text
 
 
 @pytest.mark.parametrize("sent, passed_on", [
@@ -1503,3 +1673,88 @@ def test_a_stopped_container_with_a_stale_address_is_started_rather_than_used(wi
     answer, starts = asyncio.run(run())
     assert answer[0] == 200
     assert starts == 2          # the pre-warm, and a fresh one for this request
+
+
+def test_a_forwarder_refuses_a_session_that_would_decompress_a_container(tmp_path):
+    """F4. `Content-Encoding` is on RESPONSE_HEADERS on the reasoning that
+    nothing arrives compressed, and if something does, the header must travel
+    with the body it describes. Both halves rest on the session not
+    decompressing, and nothing used to say so: three call sites pass
+    `auto_decompress=False` and a fourth is one forgotten keyword away.
+
+    Driven rather than asserted on the constructor's source: a default session
+    is built and the forwarder refuses it.
+    """
+    harness = Harness(tmp_path, FakeSpawner())
+
+    async def run():
+        default = aiohttp.ClientSession()
+        explicit = aiohttp.ClientSession(auto_decompress=False)
+        try:
+            with pytest.raises(ValueError, match="auto_decompress=False"):
+                ContainerForwarder(
+                    launcher=harness.launcher, turns=harness.turns,
+                    plans=harness.plans, proxy_socket=harness.config.proxy_socket,
+                    session=default, now=harness.clock)
+            # And the control: the one the process actually builds is accepted,
+            # so this is a refusal of a WRONG session and not of every session.
+            ContainerForwarder(
+                launcher=harness.launcher, turns=harness.turns,
+                plans=harness.plans, proxy_socket=harness.config.proxy_socket,
+                session=explicit, now=harness.clock)
+        finally:
+            await default.close()
+            await explicit.close()
+            harness.store.close()
+
+    asyncio.run(run())
+
+
+def test_an_admission_action_forward_py_does_not_handle_is_refused(wired, monkeypatch):
+    """F6. `_reach` names five actions and reaches "forward" through the
+    fall-through, so a sixth invented in group B would be forwarded -- and for
+    a tenant with no address, STARTED, outside whatever cap the new action was
+    added to express. Default-deny instead.
+
+    A seventh action is exactly what cannot be driven without inventing one,
+    so one is invented: Fleet.admit is replaced with a function answering an
+    action forward.py has never heard of.
+    """
+    async def run():
+        await wired.start()
+        host, cookie = await signed_in_on_the_tenant_host(wired)
+        monkeypatch.setattr(wired.fleet, "admit",
+                            lambda tenant_id, *, background: idle.Admission("defer"))
+        answer = await wired.send("GET", "/api/data", host=host, cookie=cookie)
+        forwarded = len(wired.container.targets)
+        starts = len([r for r in wired.spawner.requests if r["op"] == "start"])
+        await wired.stop()
+        return answer, forwarded, starts
+
+    answer, forwarded, starts = asyncio.run(run())
+    assert answer[0] == 503
+    assert json.loads(answer[2])["error"] == "At capacity, try again shortly."
+    assert forwarded == 0      # not forwarded ...
+    assert starts == 1         # ... and not started: the pre-warm only
+
+
+def test_a_policy_verdict_forward_py_does_not_handle_is_refused(wired, monkeypatch):
+    """F6, the other half. `__call__` names refuse, block and rewrite and
+    reaches PASS through the fall-through, so a fifth verdict would be passed
+    to the container -- and a verdict is invented precisely when somebody
+    wants a request handled differently from PASS."""
+    async def run():
+        await wired.start()
+        host, cookie = await signed_in_on_the_tenant_host(wired)
+        monkeypatch.setattr(policy, "decide",
+                            lambda method, raw, payload=None:
+                            policy.Outcome("quarantine", route="/api/data"))
+        answer = await wired.send("GET", "/api/data", host=host, cookie=cookie)
+        forwarded = len(wired.container.targets)
+        await wired.stop()
+        return answer, forwarded
+
+    answer, forwarded = asyncio.run(run())
+    assert answer[0] == 503
+    assert json.loads(answer[2])["error"] == "That request was refused."
+    assert forwarded == 0

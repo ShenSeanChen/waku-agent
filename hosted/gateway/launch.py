@@ -205,6 +205,52 @@ class Launcher:
                   tenant.id, running.address, running.port, log.redact(token))
         return running
 
+    async def prewarm(self, tenant: Tenant) -> RunningContainer | None:
+        """Start a container for a SIGN-IN, inside the running cap.
+
+        WHY THIS EXISTS AND WHY `start` IS NOT ENOUGH. `start` issues a token
+        and asks the spawner; it consults nothing about how many containers
+        are already up, because the cap lives in `Fleet.admit` and every
+        REQUEST path goes through it. The sign-in pre-warm did not, so N
+        sign-ins left N containers running whatever --max-running said. On a
+        t3.large that number is derived from memory, and the failure mode of
+        exceeding it is the kernel OOM-killing somebody's container mid-turn:
+        a running tenant's work destroyed by a stranger signing in. A cap one
+        entry point ignores is not a cap.
+
+        So the pre-warm asks the same question a request asks, and at the cap
+        it evicts the least recently active container with nothing in flight
+        -- which is what the design already does everywhere else, and is
+        recoverable: the evicted tenant's next request starts them again.
+
+        None means "not pre-warmed, and that is fine". The first request on
+        the tenant host goes through the whole ladder again.
+
+        THE DECISION IS STILL Fleet.admit's. This turns it into a container or
+        a None, the way ContainerForwarder._reach turns the same decision into
+        a container or an HTTP response. Neither re-derives it, and the two
+        differ only in what they can answer with -- a pre-warm has no browser
+        waiting on it, so it cannot wait on a start in flight and it has
+        nothing to say `paused` to.
+        """
+        self.require_active(tenant)
+        admission = self._fleet.admit(tenant.id, background=False)
+        if admission.action in ("forward", "wait"):
+            # Already running, or a start this one would only queue behind.
+            return self._addresses.get(tenant.id)
+        if admission.action in ("start", "evict_then_start"):
+            if admission.evict:
+                _LOG.info("at the cap: stopping tenant=%s to pre-warm tenant=%s",
+                          admission.evict, tenant.id)
+                await self.stop(admission.evict)
+            return await self.start(tenant)
+        # A closed set, default-deny: at_capacity (nothing evictable), paused
+        # (which background=False cannot produce), and anything added later.
+        # Not pre-warming is always safe; starting outside the cap is not.
+        _LOG.info("not pre-warming tenant=%s: the fleet answered %s",
+                  tenant.id, admission.action)
+        return None
+
     async def wait_for_start(self, tenant_id: str) -> RunningContainer | None:
         """Wait for a start another request began. None when it did not
         finish in the budget or finished without producing a container."""

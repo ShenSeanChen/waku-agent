@@ -15,8 +15,6 @@ from __future__ import annotations
 
 import asyncio
 import stat
-import tempfile
-from pathlib import Path
 
 import pytest
 from gatewaylib import (
@@ -30,15 +28,6 @@ from gatewaylib import (
 
 from hosted import jsonsock
 from hosted.gateway import admin
-
-
-@pytest.fixture
-def sock_dir():
-    """A short directory: AF_UNIX caps a path at 104 bytes on macOS, and
-    pytest spells the test's name into tmp_path. test_internal_api.py has the
-    same fixture for the same reason."""
-    with tempfile.TemporaryDirectory(prefix="waku") as short:
-        yield Path(short)
 
 
 @pytest.mark.parametrize("request_body, refusal", [

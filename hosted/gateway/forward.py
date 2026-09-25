@@ -169,6 +169,21 @@ class ContainerForwarder:
         self._turns = turns
         self._plans = plans
         self._proxy_socket = proxy_socket
+        # F4: THE SESSION'S CONTRACT, CHECKED RATHER THAN ASSUMED.
+        # Content-Encoding is on RESPONSE_HEADERS because nothing should
+        # arrive compressed and, if something does, the header has to travel
+        # with the body it describes. Both halves rest on the session not
+        # decompressing: one that did would hand this class a plain body while
+        # the allowlist still copies Content-Encoding, and the browser renders
+        # binary -- the exact outcome that comment says it is avoiding. Three
+        # call sites build the session (__main__, gatewaylib, the Docker tier)
+        # and a fourth is one forgotten keyword away, so the contract is a
+        # line of code rather than a sentence.
+        if session.auto_decompress:
+            raise ValueError(
+                "ContainerForwarder needs a session built with "
+                "auto_decompress=False: a container's body is forwarded as "
+                "received, and Content-Encoding travels with it.")
         self._session = session
         self._now = now
 
@@ -269,6 +284,17 @@ class ContainerForwarder:
                                 streaming=outcome.streaming)
         if outcome.verdict == "rewrite":
             body = json.dumps(outcome.payload).encode("utf-8")
+        elif outcome.verdict != policy.PASS:
+            # F6, the other half. policy.Outcome.verdict is one of four
+            # strings; a fifth added in group B would otherwise be PASSED to
+            # the container, and a verdict is invented precisely when somebody
+            # wants a request handled differently from PASS. Refusing what
+            # this module cannot read is the only answer that cannot be the
+            # wrong one.
+            _LOG.error("policy.decide answered verdict %r, which forward.py "
+                       "does not handle; refusing %s", outcome.verdict, path)
+            return self._refuse(request, REFUSED_STATUS, answers.REFUSED,
+                                streaming=streaming)
 
         if is_a_turn(outcome):
             spend = await read_spend(self._proxy_socket, tenant.id)
@@ -330,6 +356,18 @@ class ContainerForwarder:
                           admission.evict, tenant.id)
                 await self._launcher.stop(admission.evict)
             return await self._start(request, tenant, streaming=streaming)
+        if admission.action != "forward":
+            # F6: A CLOSED SET, AND THE DEFAULT IS TO REFUSE. Every action
+            # Fleet.admit can answer is named above or is "forward"; a sixth
+            # one added in another group would otherwise fall through to the
+            # address book and be forwarded -- and, for a tenant with no
+            # address, STARTED, outside whatever cap the new action was
+            # invented to express. Refusing an action this module cannot read
+            # costs one tenant one request and a line in the log.
+            _LOG.error("Fleet.admit answered %r, which forward.py does not "
+                       "handle; refusing tenant=%s", admission.action, tenant.id)
+            return self._refuse(request, REFUSED_STATUS, idle.CAPACITY_MESSAGE,
+                                streaming=streaming)
         running = self._launcher.address(tenant.id)
         if running is not None:
             return running

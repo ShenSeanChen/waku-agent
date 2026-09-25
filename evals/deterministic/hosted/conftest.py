@@ -42,34 +42,59 @@ def harness(tmp_path):
     return Harness(tmp_path, FakeSpawner())
 
 
-@pytest.fixture
-def wired(tmp_path):
-    """A gateway with the real forwarder in front of a fake container.
+def _wired(tmp_path, max_running):
+    """A gateway with the real forwarder in front of a fake container, on a VM
+    with room for `max_running` of them.
 
     Here and not in gatewaylib.py for the reason `harness` gives above: a
     fixture is only collected from a test module or a conftest. test_gateway.py
-    and test_admin.py both take it, so this is what lets them share it without
-    importing a fixture out of a test module.
+    and test_admin.py both take these, so this is what lets them share them
+    without importing a fixture out of a test module.
+
+    The cap is given to the Harness rather than written into
+    `fleet._max_running` by a test. A test that reaches into a private
+    attribute stops being true when the attribute is renamed, and the state it
+    creates is not the state a real small VM is in -- the Gateway's own config
+    would still say four.
     """
     from gatewaylib import FakeContainer, FakeSpawner, Harness
 
     container = FakeContainer()
     container.start()
-    harness = Harness(tmp_path, FakeSpawner())
+    harness = Harness(tmp_path, FakeSpawner(), max_running=max_running)
     harness.use_real_forwarding(container)
     yield harness
     container.stop()
 
 
 @pytest.fixture
-def wired_one_slot(tmp_path):
-    """The same, on a VM with room for exactly one container, so the running
-    cap is reachable without writing to Fleet's private state."""
-    from gatewaylib import FakeContainer, FakeSpawner, Harness
+def wired(tmp_path):
+    yield from _wired(tmp_path, 4)
 
-    container = FakeContainer()
-    container.start()
-    harness = Harness(tmp_path, FakeSpawner(), max_running=1)
-    harness.use_real_forwarding(container)
-    yield harness
-    container.stop()
+
+@pytest.fixture
+def wired_one_slot(tmp_path):
+    """Room for exactly one container: the cap binds on the second tenant."""
+    yield from _wired(tmp_path, 1)
+
+
+@pytest.fixture
+def wired_two_slots(tmp_path):
+    """Room for two, which is the smallest VM on which "least recently used"
+    is a choice rather than the only candidate."""
+    yield from _wired(tmp_path, 2)
+
+
+@pytest.fixture
+def sock_dir():
+    """A short directory for Unix sockets.
+
+    AF_UNIX caps a path at 104 bytes on macOS and pytest spells the test's
+    name into tmp_path, so a socket under tmp_path raises "AF_UNIX path too
+    long" for tests with long names. test_admin.py and test_gateway.py both
+    bind sockets, so it lives here rather than in either of them.
+    """
+    import tempfile
+
+    with tempfile.TemporaryDirectory(prefix="waku") as short:
+        yield Path(short)

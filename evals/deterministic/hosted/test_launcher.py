@@ -468,3 +468,71 @@ def test_restart_all_leaves_each_tenant_with_one_container_and_the_newest_token(
         assert store.tenant_for_token_hash(token_hash(tokens[0])) is None
         assert store.tenant_for_token_hash(token_hash(tokens[1])) == (record.id, "active")
         assert launcher.address(record.id).address == spawner.running[record.id].address
+
+
+def test_prewarm_refuses_a_disabled_tenant_without_evicting_anybody(made):
+    """`prewarm` checks the status FIRST, before Fleet.admit.
+
+    `start` checks it too, so the wrong order still ends in NotActive -- but
+    not before `admit` has chosen a victim and this method has stopped it. A
+    disabled account must not be able to take a working tenant's container
+    down on its way to being refused, so the VM here is FULL: put the status
+    check after `admit` and the spawner is asked to stop somebody before the
+    refusal lands.
+    """
+    _path, store, spawner, _clock, fleet, launcher = made
+
+    async def run():
+        up = []
+        for index in range(2):        # max_running is 2 in `made`
+            record, _ = await launcher.ensure_tenant(
+                sub=f"sub-{index}", email=f"{index}@x.com", timezone="UTC")
+            await launcher.start(record)
+            up.append(record.id)
+        off, _ = await launcher.ensure_tenant(sub="sub-off", email="off@x.com",
+                                              timezone="UTC")
+        store.set_status(off.id, "disabled")
+        disabled = store.tenant_by_id(off.id)
+        before = len(spawner.requests)
+        with pytest.raises(NotActive) as caught:
+            await launcher.prewarm(disabled)
+        return str(caught.value), off.id, spawner.requests[before:], up
+
+    message, off_id, during, up = asyncio.run(run())
+    assert message == DISABLED_MESSAGE
+    assert during == []                       # nobody was stopped to make room
+    assert sorted(fleet.running()) == sorted(up)
+    assert fleet.running_status(off_id) == idle.STOPPED
+
+
+def test_prewarm_does_not_start_when_there_is_nothing_it_may_evict(made):
+    """The cap with no way round it: every running container is busy.
+
+    `Fleet.admit` answers `at_capacity` when the VM is full and nothing is
+    evictable -- a container with a request in flight is not. The pre-warm
+    then does NOT start: it answers None and the tenant's first request tries
+    the whole ladder again. Starting anyway is the over-commit this method
+    exists to refuse, and it would be bought by killing somebody's turn.
+    """
+    _path, _store, spawner, _clock, fleet, launcher = made
+
+    async def run():
+        held = []
+        for index in range(2):        # max_running is 2 in `made`
+            record, _ = await launcher.ensure_tenant(
+                sub=f"sub-{index}", email=f"{index}@x.com", timezone="UTC")
+            await launcher.start(record)
+            fleet.enter(record.id)    # a turn in flight on each
+            held.append(record.id)
+        third, _ = await launcher.ensure_tenant(sub="sub-3", email="3@x.com",
+                                                timezone="UTC")
+        before = len(spawner.requests)
+        answer = await launcher.prewarm(third)
+        return answer, third.id, spawner.requests[before:], held
+
+    answer, third_id, during, held = asyncio.run(run())
+    assert answer is None
+    assert [r for r in during if r["op"] in ("start", "stop")] == []
+    assert fleet.running_status(third_id) == idle.STOPPED
+    # And neither busy container was taken to make room for them.
+    assert sorted(fleet.running()) == sorted(held)
