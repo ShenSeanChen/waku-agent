@@ -62,6 +62,14 @@ class Launcher:
         self._store = store
         self._spawner = spawner
         self._fleet = fleet
+        # E2's own logic never reads this: every clock decision it makes is
+        # a delegate's (Fleet.adopt, Fleet.set_status, ControlDb's own
+        # `now`). It is stored anyway because the brief's signature takes
+        # it, and E1 and E3 build on this class and inject the same fake
+        # clock every other object in this group's tests takes -- a
+        # Launcher built with `time.time` in one test and a fake clock via a
+        # sibling object would be two clocks disagreeing about "now" inside
+        # one wired gateway.
         self._now = now
         self._addresses: dict[str, RunningContainer] = {}
         self._maintenance: set[str] = set()
@@ -137,6 +145,18 @@ class Launcher:
         start that follows would have failed anyway. The order is: status,
         maintenance, then issue.
 
+        MAINTENANCE IS CHECKED TWICE: once here, before a second caller waits
+        on the lock at all, so the common case fails fast without contending
+        for it; and again just inside the lock, because a mark can land while
+        a second caller is queued on `await lock.acquire()` -- the first
+        check ran before the mark existed, and without the second one this
+        caller would resume holding the lock with a now-stale answer and
+        issue a token for a tenant a task, backup, restore or archive
+        already owns. The spawner's own `busy` answer is still the real
+        backstop (the mark is enforced there so it survives a gateway
+        restart), so what the second check narrows is a token issue, not a
+        container start reaching a held tenant.
+
         A FAILED START DOES NOT REVOKE THE TOKEN IT ISSUED, and that is
         deliberate. `start` can fail after the spawner has already created the
         container -- a timeout on the socket read, a gateway restart mid-call
@@ -152,6 +172,8 @@ class Launcher:
             raise InMaintenance(idle.MAINTENANCE_MESSAGE)
         lock = self._locks.setdefault(tenant.id, asyncio.Lock())
         async with lock:
+            if self.in_maintenance(tenant.id):
+                raise InMaintenance(idle.MAINTENANCE_MESSAGE)
             running = self._addresses.get(tenant.id)
             if running is not None and self._fleet.running_status(tenant.id) == idle.RUNNING:
                 return running
@@ -214,6 +236,20 @@ class Launcher:
             # The token is already revoked and the address is already
             # forgotten, so the tenant is safe either way. A container that
             # survives this is picked up by the next resync.
+            #
+            # UNDECIDED, FOR E3: "picked up" is not "fixed". If the container
+            # really did survive, the next resync finds it active at the
+            # address its project id derives and re-adopts it (RUNNING), and
+            # `start`'s fast path then hands that same container straight
+            # back to every request -- with no token, because nothing on
+            # this path re-issues one. The dashboard loads and every model
+            # call 401s, with no self-healing until an idle stop or an
+            # operator `restart-all`. E2 does not decide which of the two
+            # fixes is right -- `resync` refusing to adopt a tenant with no
+            # live token, or a failed stop here marking the tenant for a
+            # forced restart -- because E3 owns the refused-connection
+            # ladder this would slot into. This paragraph is that decision
+            # waiting to be made on purpose rather than found by an operator.
             _LOG.warning("stop of tenant=%s failed: %s", tenant_id, exc)
 
     def _forget_running(self, tenant_id: str) -> None:
