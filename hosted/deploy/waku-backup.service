@@ -1,0 +1,22 @@
+# The nightly backup, run by waku-backup.timer.
+#
+# @WAKU_BACKUP@ IS A PLACEHOLDER AND MUST STAY ONE, for the reason
+# waku-firewall.service carries in capitals: a hardcoded
+# /srv/waku/src/hosted/deploy/backup.sh installs cleanly on a VM whose checkout
+# is somewhere else and then fails at 03:17, in a timer unit, where nobody is
+# looking. install.sh substitutes its own directory's backup.sh -- the file it
+# is installing this unit beside. A hardcoded path here is a red test in
+# evals/deterministic/hosted/test_deploy_scripts.py.
+#
+# NO Restart= AND NO RemainAfterExit=. A backup that failed tonight is a
+# backup to look at, not one to run again in ten seconds against a staging
+# slot it may itself have wedged; the timer brings the next attempt.
+
+[Unit]
+Description=waku nightly backup
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=@WAKU_BACKUP@ --all

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # The shared shell for every operator script. Sourced, never run.
 #
-# EIGHT FUNCTIONS AND NO MORE. Seven of them exist because two or more scripts
+# ELEVEN FUNCTIONS AND NO MORE. Ten of them exist because two or more scripts
 # need them; a helper with one caller belongs in that caller, where a reader
 # can see what it does without opening a second file.
 #
@@ -184,4 +184,98 @@ waku_write_config() {
   # one path where it WOULD matter: a failed write, where the temporary is
   # removed by hand a line above.
   waku_log "wrote $target"
+}
+
+# --- appended by F3: the backup and restore half ------------------------------
+
+# ONE LOCK, SHARED BY backup.sh AND restore.sh (spec, "Work inside a tenant's
+# directories"). They both rewrite the same staging slots, and a backup that
+# ran during a restore would snapshot a half-restored tenant and call it the
+# latest good copy.
+#
+# THE DIRECTORY IS CHECKED FIRST so a missing staging/ is a refusal that names
+# it rather than bash's own redirection error, which names a file descriptor.
+waku_flock_staging() {
+  local lock
+  [ -d "$WAKU_ROOT/staging" ] || waku_die "$WAKU_ROOT/staging is not a directory. tree.sh creates it; run install.sh first."
+  # `>` TRUNCATES THROUGH A SYMLINK and there is no guard on this name for the
+  # same reason backup_control has none: the name is a constant, staging is
+  # 0700 root:root (tree.sh), and only root could plant something here.
+  lock="$WAKU_ROOT/staging/.lock"
+  exec 9>"$lock"
+  flock -w "${1:-3600}" 9 \
+    || waku_die "another backup or restore holds $lock. They share one lock so they never run at once."
+}
+
+# THE REPAIR THE SPAWNER HAS NO VERB FOR (designs/backup-restore-integrity.md).
+# The backup runs as UID 10001 over a tree the tenant's own files made, so a
+# directory the tenant left at mode 0500 with a file under it wedges
+# `find -delete`, and every backup from then on fails at the same line.
+#
+# IN A CONTAINER, AS UID 10001, and that is the spec's rule, not caution: "no
+# host process with more privilege than UID 10001 opens a path inside a tenant's
+# directories", and a staging slot holds a copy of exactly those. The chmod
+# works because 10001 owns what it is repairing. GNU chmod -R ignores symlinks
+# it meets while descending, and `find -delete` implies -depth and unlinks
+# relative to a directory fd it opened itself, so a planted link is removed as a
+# link and never followed.
+waku_reset_staging_slot() {
+  local slot
+  slot=$1
+  [ -L "$slot" ] && waku_die "$slot is a symlink; refusing to empty it"
+  [ -d "$slot" ] || return 0
+  docker run --rm \
+    --network none \
+    --user 10001:10001 \
+    --cap-drop ALL \
+    --security-opt no-new-privileges:true \
+    --volume "$slot:/staging" \
+    "$WAKU_SERVICES_IMAGE" \
+    bash -euc 'chmod -R u+rwX /staging; find /staging -mindepth 1 -delete'
+}
+
+# config/backup.env is restic's own: the repository, the file holding its
+# password, and the object store's credentials. $1 is the file, and every
+# argument after it is one name the CALLER reads -- the same caller-supplied
+# list waku_load_install_env takes, and for the same reason. A fixed superset
+# here would make one script refuse to start over a name only the other one
+# touches, and the list-as-argument puts the contract on the line a diff shows.
+#
+# `set -a` because restic reads these from the ENVIRONMENT, not from a file it
+# is told about. It is turned off again immediately: everything after this
+# point in a caller is ordinary shell state.
+#
+# `:?` REFUSES EMPTY AS WELL AS UNSET. That is the whole point here. A backup
+# that runs with no repository fails loudly; one that runs with an EMPTY
+# password does not fail at all -- restic initialises and writes a repository
+# with it, reports success every night, and the operator learns at restore
+# time, which is the worst moment to learn anything.
+#
+# THE PASSWORD IS ALWAYS A FILE, and that is a closed set with default-deny:
+# install.sh's flag is --restic-password-file, backup.env.example names
+# RESTIC_PASSWORD_FILE, and nothing in this deployment writes an inline
+# RESTIC_PASSWORD. An operator who adds one by hand is refused here rather than
+# handed a second, untested way to hold the credential that can read every
+# tenant's data out of the object store.
+#
+# A REFUSAL NAMES THE FILE, NEVER A LINE AND NEVER A VALUE. This file holds
+# that credential, and an error message about a secret is a place the secret
+# escapes -- into whatever scrollback, timer journal or CI log was capturing
+# stderr at 03:17.
+waku_load_backup_env() {
+  local file name
+  file=$1
+  shift
+  [ -r "$file" ] || waku_die "$file is not readable. install.sh writes it from --restic-repository and --restic-password-file, and only root may read it."
+  set -a
+  # shellcheck disable=SC1090
+  . "$file"
+  set +a
+  for name in "$@"; do
+    eval ": \"\${$name:?$file does not set $name. install.sh writes this file once and never rewrites it, so a name added to the installer later is not in a file written before it -- add the line by hand.}\""
+  done
+  [ -r "${RESTIC_PASSWORD_FILE:-}" ] \
+    || waku_die "the file $file names as RESTIC_PASSWORD_FILE cannot be opened for reading. restic cannot open a repository without it."
+  [ -s "${RESTIC_PASSWORD_FILE:-}" ] \
+    || waku_die "the file $file names as RESTIC_PASSWORD_FILE is empty. restic would initialise and write a repository with an empty password and report success every night; the operator finds out at restore time."
 }

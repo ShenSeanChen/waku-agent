@@ -53,12 +53,20 @@ def _dns_file(tmp_path, text: str = "AWS_ACCESS_KEY_ID=AKIAEXAMPLE\n"
     return path
 
 
+def _restic_password_file(tmp_path, text: str = "a-restic-password\n"):
+    path = tmp_path / "restic-password"
+    path.write_bytes(text.encode("utf-8") if isinstance(text, str) else text)
+    return path
+
+
 def _required(tmp_path, domain: str = "example.test", key=None,
-              dns_env_file=None) -> list[str]:
+              dns_env_file=None, restic_password_file=None) -> list[str]:
     """Every required flag with a plausible value, so a test that is about one
     refusal is not accidentally about a missing flag."""
     key = _key_file(tmp_path) if key is None else key
     dns_env_file = _dns_file(tmp_path) if dns_env_file is None else dns_env_file
+    if restic_password_file is None:
+        restic_password_file = _restic_password_file(tmp_path)
     return [domain,
             "--dns-provider", "route53",
             "--acme-email", "a@b.test",
@@ -68,7 +76,9 @@ def _required(tmp_path, domain: str = "example.test", key=None,
             "--dns-env-file", str(dns_env_file),
             "--supabase-url", "https://p.supabase.co",
             "--supabase-publishable-key", "sb_publishable_x",
-            "--supabase-audience", "https://api.waku.one/mcp"]
+            "--supabase-audience", "https://api.waku.one/mcp",
+            "--restic-repository", "s3:s3.example.test/waku-backups",
+            "--restic-password-file", str(restic_password_file)]
 
 
 # --- checks.sh ---------------------------------------------------------------
@@ -1063,4 +1073,71 @@ def test_a_flag_given_without_a_value_says_so(tmp_path, flag):
                         tmp_path=tmp_path, stubs=OUTSIDE)
     assert done.returncode != 0
     assert f"{flag} needs a value" in done.stderr
+    assert shelllib.calls(tmp_path) == []
+
+
+# --- restic, which nothing exercises until 03:17 on the first night ----------
+
+
+def test_a_restic_password_file_that_is_not_there_is_refused(tmp_path):
+    """config/backup.env NAMES this file rather than copying what is in it, so
+    restic opens it every night inside a timer unit. A missing one is a backup
+    that has never run and an operator who has no way to know."""
+    missing = tmp_path / "nowhere" / "restic-password"
+    done = shelllib.run(INSTALL, _required(tmp_path, restic_password_file=missing),
+                        tmp_path=tmp_path, stubs=OUTSIDE)
+    assert done.returncode != 0
+    assert "is not readable" in done.stderr
+    assert shelllib.calls(tmp_path) == []
+
+
+def test_an_empty_restic_password_file_is_refused(tmp_path):
+    """THE ONE THAT DOES NOT FAIL ON ITS OWN, anywhere, ever. restic will
+    initialise and write a repository with an empty password and report success
+    every night; the operator finds out at restore time, which is the worst
+    moment to find out anything."""
+    path = _restic_password_file(tmp_path, "")
+    done = shelllib.run(INSTALL, _required(tmp_path, restic_password_file=path),
+                        tmp_path=tmp_path, stubs=OUTSIDE)
+    assert done.returncode != 0
+    assert "is empty" in done.stderr
+    assert shelllib.calls(tmp_path) == []
+
+
+def test_a_restic_password_file_is_required(tmp_path):
+    args = _required(tmp_path)
+    at = args.index("--restic-password-file")
+    del args[at:at + 2]
+    done = shelllib.run(INSTALL, args, tmp_path=tmp_path, stubs=OUTSIDE)
+    assert done.returncode != 0
+    assert "--restic-password-file is required" in done.stderr
+    assert shelllib.calls(tmp_path) == []
+
+
+def test_a_restic_repository_is_required(tmp_path):
+    args = _required(tmp_path)
+    at = args.index("--restic-repository")
+    del args[at:at + 2]
+    done = shelllib.run(INSTALL, args, tmp_path=tmp_path, stubs=OUTSIDE)
+    assert done.returncode != 0
+    assert "--restic-repository is required" in done.stderr
+    assert shelllib.calls(tmp_path) == []
+
+
+@pytest.mark.parametrize(
+    ("flag", "value"),
+    [
+        ("--restic-repository", "s3:s3.example.test/waku backups"),
+        ("--restic-repository", "s3:one\nRESTIC_PASSWORD=guessable"),
+        ("--restic-password-file", "/srv/waku/config/restic password"),
+    ])
+def test_a_restic_flag_that_reaches_backup_env_refuses_whitespace(tmp_path, flag, value):
+    """Both end up in config/backup.env as one NAME=VALUE line, which
+    waku_load_backup_env sources with `set -a`. A newline there is a second
+    setting, and RESTIC_PASSWORD is a name that file would otherwise never
+    hold."""
+    args = _required(tmp_path) + [flag, value]
+    done = shelllib.run(INSTALL, args, tmp_path=tmp_path, stubs=OUTSIDE)
+    assert done.returncode != 0
+    assert "printable characters with no space" in done.stderr
     assert shelllib.calls(tmp_path) == []

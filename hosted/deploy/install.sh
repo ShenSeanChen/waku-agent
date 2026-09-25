@@ -24,6 +24,8 @@ domain=""
 dns_provider=""
 acme_email=""
 data_device=""
+restic_repository=""
+restic_password_file=""
 free_model=""
 platform_key=""
 platform_key_file=""
@@ -47,6 +49,7 @@ usage: install.sh <domain> --dns-provider NAME --acme-email ADDRESS
                   --platform-key-file PATH --dns-env-file PATH
                   --supabase-url URL --supabase-publishable-key KEY
                   --supabase-audience AUD
+                  --restic-repository REPO --restic-password-file PATH
                   [--dns-env NAME=VALUE]... [--dns-module-version @v1.2.3]
                   [--max-running N] [--tenant-disk 1G]
                   [--dns-allow 1.2.3.4,5.6.7.8] [--root /srv/waku]
@@ -80,6 +83,17 @@ usage: install.sh <domain> --dns-provider NAME --acme-email ADDRESS
                               Default: (memory - 2 GB) / 150 MB
   --tenant-disk               a size of at least 1 byte, optionally K, M or G.
                               Default: 1G. NOT 0: XFS reads bhard=0 as no limit
+  --restic-repository         restic's repository, for example
+                              s3:s3.amazonaws.com/waku-backups. The object
+                              store's own credentials are added to
+                              config/backup.env by hand afterwards; see
+                              backup.env.example
+  --restic-password-file      a file holding restic's repository password, and
+                              nothing else. It is NOT copied: config/backup.env
+                              names it and restic reads it at 03:17, so keep it
+                              on the VM at mode 0600 and back it up somewhere
+                              else -- a repository whose password is lost is a
+                              repository nobody can read
   --dns-allow                 default: the resolvers in
                               /run/systemd/resolve/resolv.conf
 USAGE
@@ -196,7 +210,8 @@ while [ $# -gt 0 ]; do
   waku_needs_value "$1" "$#" \
     --dns-provider --dns-module-version --acme-email --data-device --free-model \
     --platform-key-file --dns-env-file --supabase-url --supabase-publishable-key \
-    --supabase-audience --max-running --tenant-disk --dns-allow --root --dns-env \
+    --supabase-audience --restic-repository --restic-password-file \
+    --max-running --tenant-disk --dns-allow --root --dns-env \
     || { usage >&2; waku_die "$1 needs a value"; }
   case "$1" in
     --dns-provider)             dns_provider=$2; shift 2 ;;
@@ -243,6 +258,8 @@ while [ $# -gt 0 ]; do
     --supabase-url)             supabase_url=${2%/}; shift 2 ;;
     --supabase-publishable-key) supabase_publishable_key=$2; shift 2 ;;
     --supabase-audience)        supabase_audience=$2; shift 2 ;;
+    --restic-repository)        restic_repository=$2; shift 2 ;;
+    --restic-password-file)     restic_password_file=$2; shift 2 ;;
     --max-running)              max_running=$2; max_running_given=yes; shift 2 ;;
     --tenant-disk)              tenant_disk=$2; shift 2 ;;
     --dns-allow)                dns_allow=$2; shift 2 ;;
@@ -262,7 +279,9 @@ for pair in \
   "--platform-key-file:$platform_key" "--dns-env-file:$dns_env_file" \
   "--supabase-url:$supabase_url" \
   "--supabase-publishable-key:$supabase_publishable_key" \
-  "--supabase-audience:$supabase_audience"
+  "--supabase-audience:$supabase_audience" \
+  "--restic-repository:$restic_repository" \
+  "--restic-password-file:$restic_password_file"
 do
   name=${pair%%:*}
   value=${pair#*:}
@@ -308,6 +327,19 @@ refuse_unprintable "$free_model" --free-model
 refuse_unprintable "$supabase_publishable_key" --supabase-publishable-key
 refuse_unprintable "$supabase_audience" --supabase-audience
 refuse_unprintable "$data_device" --data-device
+refuse_unprintable "$restic_repository" --restic-repository
+refuse_unprintable "$restic_password_file" --restic-password-file
+
+# THE PASSWORD FILE IS CHECKED NOW, NOT AT 03:17. config/backup.env NAMES this
+# file rather than copying what is in it, so restic opens it every night in a
+# timer unit -- the one place on this VM where a failure is a line in a journal
+# nobody reads. Both halves are refusals, and the second is the one that bites:
+# restic will happily initialise and write a repository with an empty password,
+# report success every night, and let the operator find out at restore time.
+[ -r "$restic_password_file" ] \
+  || waku_die "--restic-password-file $restic_password_file is not readable. restic cannot open a repository without it, and a backup that only fails at 03:17 is one nobody sees."
+[ -s "$restic_password_file" ] \
+  || waku_die "--restic-password-file $restic_password_file is empty. restic would initialise and write a repository with an empty password and report success every night; the operator finds out at restore time."
 
 # --dns-provider is TWO THINGS in one string, and that is the documented
 # interface: a caddy-dns module name, and optionally the arguments Caddy's
@@ -505,6 +537,11 @@ waku_gateway_env | waku_write_config "$root/config/gateway.env"
 waku_spawner_env | waku_write_config "$root/config/spawner.env"
 waku_proxy_env   | waku_write_config "$root/config/proxy.env"
 printf '%s' "$dns_env" | waku_write_config "$root/config/caddy.env"
+# THE FOURTH FILE IS ROOT'S OWN, read by no service: backup.sh and restore.sh
+# source it. The object store's credentials are not written here -- there is no
+# flag for them -- and waku_write_config never overwrites, so the lines an
+# operator appends by hand survive every rerun. backup.env.example says so.
+waku_backup_env  | waku_write_config "$root/config/backup.env"
 
 waku_log "the two credentials are now in $root/config/, root-only at 0600: the model key in proxy.env and the DNS credentials in caddy.env. Delete $platform_key_file and $dns_env_file."
 
@@ -539,7 +576,7 @@ DOCKER_BUILDKIT=1 docker build \
 # the fails-at-every-boot outcome the paragraph above says it avoids.
 if [ -x "$here/firewall.sh" ]; then
   case "$here" in
-    *[\|\&]*) waku_die "the checkout path $here contains a character this script cannot substitute into the systemd unit safely. Move the checkout." ;;
+    *[\|\&\\]*) waku_die "the checkout path $here contains a character this script cannot substitute into the systemd unit safely. Move the checkout." ;;
   esac
   install -o 0 -g 0 -m 0644 /dev/null /etc/systemd/system/waku-firewall.service
   sed "s|@WAKU_FIREWALL@|$here/firewall.sh|g" "$here/waku-firewall.service" \
@@ -551,6 +588,24 @@ else
   waku_log "WARNING: $here/firewall.sh is not there, so no firewall unit was installed."
   waku_log "WARNING: task C3 of spec 001 owns that script. Until it lands, a tenant container can reach the VM's private network and the cloud metadata service. Keep this deployment invite-only, and attach no instance role or service account to this VM."
 fi
+
+# --- the nightly backup timer -------------------------------------------------
+#
+# INSTALLED UNCONDITIONALLY, unlike the firewall unit above: this one's
+# ExecStart is in the tree beside this script, so there is no deferred-task
+# case to guard. The path is SUBSTITUTED and not hardcoded, for the reason that
+# block learnt the hard way -- a unit naming /srv/waku/src on a VM installed
+# with --root elsewhere is a unit that fails at 03:17 and nowhere else.
+case "$here" in
+  *[\|\&\\]*) waku_die "the checkout path $here contains a character this script cannot substitute into the systemd unit safely. Move the checkout." ;;
+esac
+install -o 0 -g 0 -m 0644 /dev/null /etc/systemd/system/waku-backup.service
+sed "s|@WAKU_BACKUP@|$here/backup.sh|g" "$here/waku-backup.service" \
+  >/etc/systemd/system/waku-backup.service
+install -o 0 -g 0 -m 0644 "$here/waku-backup.timer" /etc/systemd/system/waku-backup.timer
+systemctl daemon-reload
+systemctl enable --now waku-backup.timer
+waku_log "nightly backup timer enabled: $(systemctl show waku-backup.timer -p NextElapseUSecRealtime --value)"
 
 # --- the stack ---------------------------------------------------------------
 

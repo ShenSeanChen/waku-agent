@@ -128,3 +128,22 @@ WAKU_DATA_DEVICE=$data_device
 WAKU_INSTALLED_COMMIT=$(git -C "$src" rev-parse HEAD 2>/dev/null || echo unknown)
 EOF
 }
+
+# Reads: restic_repository restic_password_file
+#
+# THE FOURTH FILE, AND THE ONLY ONE NO SERVICE READS. config/backup.env is
+# root's: backup.sh and restore.sh source it through waku_load_backup_env and
+# hand it to restic through the environment. It is a body here rather than a
+# heredoc in install.sh for the same reason as the other four -- so a test can
+# run the writer and the reader against each other instead of reading either.
+#
+# THE OBJECT STORE'S CREDENTIALS ARE NOT HERE. install.sh has no flag for
+# them: the operator appends AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY to
+# this file by hand, backup.env.example shows the shape, and waku_write_config
+# never overwrites, so a rerun keeps what they added.
+waku_backup_env() {
+  cat <<EOF
+RESTIC_REPOSITORY=$restic_repository
+RESTIC_PASSWORD_FILE=$restic_password_file
+EOF
+}

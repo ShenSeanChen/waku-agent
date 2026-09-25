@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import configparser
 import json
+import os
 import shutil
 import stat
 import subprocess
@@ -31,8 +32,8 @@ import shelllib
 
 # F2, F3 and F4 each append their own names to this set in the same commit that
 # adds the script. C3's firewall.sh joins it when C3 lands.
-EXPECTED_SCRIPTS = {"checks.sh", "envfiles.sh", "install.sh", "lib.sh",
-                    "networks.sh", "tree.sh", "upgrade.sh"}
+EXPECTED_SCRIPTS = {"backup.sh", "checks.sh", "envfiles.sh", "install.sh",
+                    "lib.sh", "networks.sh", "tree.sh", "upgrade.sh"}
 
 COMPOSE = shelllib.DEPLOY / "compose.yaml"
 SERVICES = ("caddy", "gateway", "proxy", "spawner")
@@ -41,6 +42,24 @@ SERVICES = ("caddy", "gateway", "proxy", "spawner")
 def test_the_deploy_directory_holds_exactly_the_scripts_this_group_wrote():
     found = {path.name for path in shelllib.DEPLOY.glob("*.sh")}
     assert found == EXPECTED_SCRIPTS
+
+
+# The three that are SOURCED and never run, so the partition below is a closed
+# set in both directions rather than a list of the ones somebody remembered.
+SOURCED_SCRIPTS = {"checks.sh", "envfiles.sh", "lib.sh"}
+
+
+@pytest.mark.parametrize("name", sorted(EXPECTED_SCRIPTS))
+def test_every_script_is_runnable_if_and_only_if_it_is_meant_to_be_run(name):
+    """backup.sh's executable bit is what waku-backup.service's ExecStart
+    depends on, and unlike the firewall block install.sh does not test for it
+    before installing the unit -- so a lost bit is a unit that fails at 03:17,
+    inside a timer, which is the failure the @WAKU_BACKUP@ placeholder exists
+    one layer out to prevent. The other direction matters too: a sourced file
+    with the bit set is one somebody will eventually run, and lib.sh run rather
+    than sourced defines eleven functions and exits 0 having done nothing."""
+    path = shelllib.DEPLOY / name
+    assert os.access(path, os.X_OK) is (name not in SOURCED_SCRIPTS)
 
 
 @pytest.mark.parametrize("name", sorted(EXPECTED_SCRIPTS))
@@ -86,6 +105,36 @@ def test_the_firewall_units_execstart_is_a_placeholder_and_not_a_path():
     unit.optionxform = str
     unit.read(shelllib.DEPLOY / "waku-firewall.service")
     assert unit["Service"]["ExecStart"] == "@WAKU_FIREWALL@"
+
+
+def test_the_backup_units_execstart_is_a_placeholder_and_not_a_path():
+    """THE SAME HOLE AS THE FIREWALL UNIT'S, and worth closing before it is dug
+    rather than after. A unit carrying /srv/waku/src/hosted/deploy/backup.sh
+    installs cleanly on a VM whose checkout is anywhere else, and then fails at
+    03:17, in a timer, where nobody is looking. install.sh substitutes the path
+    of the file it is installing the unit beside."""
+    unit = configparser.ConfigParser(strict=False, allow_no_value=True)
+    unit.optionxform = str
+    unit.read(shelllib.DEPLOY / "waku-backup.service")
+    assert unit["Service"]["ExecStart"] == "@WAKU_BACKUP@ --all"
+    assert unit["Service"]["Type"] == "oneshot"
+    # A backup that failed tonight is a backup to look at, not one to run again
+    # in ten seconds against a staging slot it may itself have wedged.
+    assert "Restart" not in unit["Service"]
+
+
+def test_a_vm_that_was_off_at_the_backup_hour_backs_up_when_it_returns():
+    """A DRIFT CHECK on a declarative file. Without Persistent=true a VM that
+    was powered down at 03:17 simply skips that night, and the operator's
+    evidence that backups are running -- a timer that is enabled -- says
+    nothing about whether one ever ran."""
+    unit = configparser.ConfigParser(strict=False, allow_no_value=True)
+    unit.optionxform = str
+    unit.read(shelllib.DEPLOY / "waku-backup.timer")
+    assert unit["Timer"]["Persistent"] == "true"
+    assert unit["Timer"]["OnCalendar"] == "*-*-* 03:17:00"
+    assert unit["Timer"]["RandomizedDelaySec"] == "900"
+    assert unit["Install"]["WantedBy"] == "timers.target"
 
 
 def test_the_caddy_dockerfile_quotes_the_module_it_builds():
@@ -547,6 +596,8 @@ _ENV_GLOBALS = {
     "tenant_disk_bytes": "1073741824",
     "data_device": "/dev/sdb1",
     "platform_key": "sk-ant-envfiles-fixture",
+    "restic_repository": "s3:s3.example.test/waku-backups-fixture",
+    "restic_password_file": "/srv/waku/config/restic-password",
 }
 
 
@@ -567,10 +618,16 @@ exit 128
 """
 
 
-def _env_body(tmp_path, function: str, *, git=_GIT_WITH_A_HEAD) -> dict[str, str]:
-    """Run one envfiles.sh function and parse what it printed."""
+def _env_body(tmp_path, function: str, *, git=_GIT_WITH_A_HEAD,
+              extra: dict[str, str] | None = None) -> dict[str, str]:
+    """Run one envfiles.sh function and parse what it printed.
+
+    `extra` overrides a global for one call -- used where the VALUE has to be
+    a path that exists on the machine running the test, rather than the
+    /srv/waku fixture the others use.
+    """
     assignments = "\n".join(f"{name}={value!r}"
-                            for name, value in _ENV_GLOBALS.items())
+                            for name, value in {**_ENV_GLOBALS, **(extra or {})}.items())
     script = tmp_path / f"{function}.sh"
     script.write_text(
         f"set -euo pipefail\n{assignments}\n. \"{ENVFILES}\"\n{function}\n",
@@ -638,6 +695,33 @@ def test_the_proxy_env_carries_the_platform_key_and_the_specs_free_tier_numbers(
     assert written["WAKU_MAX_TOKENS_CEILING"] == "4096"
     assert written["WAKU_MAX_BODY_BYTES"] == "4194304"
     assert written["WAKU_PROXY_BIND"] == "10.88.0.1"
+
+
+def test_the_backup_env_install_writes_is_accepted_by_the_loader_that_reads_it(tmp_path):
+    """THE WRITER AND THE READER, RUN AGAINST EACH OTHER. config/backup.env is
+    the one config file no service reads -- backup.sh and restore.sh source it
+    and hand it to restic through the ENVIRONMENT -- so the property that
+    matters is not what the file looks like but that the names install.sh
+    writes are the names waku_load_backup_env requires and that they come out
+    the other side EXPORTED. A child process is how "exported" is visible:
+    without `set -a` in the loader, restic sees nothing and the variable is
+    still perfectly present in the shell that checked it.
+    """
+    password = tmp_path / "restic-password"
+    password.write_text("a-restic-password\n", encoding="utf-8")
+    written = _env_body(tmp_path, "waku_backup_env",
+                        extra={"restic_password_file": str(password)})
+    assert list(written) == ["RESTIC_REPOSITORY", "RESTIC_PASSWORD_FILE"]
+
+    env_file = tmp_path / "backup.env"
+    env_file.write_text("".join(f"{name}={value}\n" for name, value in written.items()),
+                        encoding="utf-8")
+    done = shelllib.call_function(
+        shelllib.DEPLOY / "lib.sh",
+        f'waku_load_backup_env "{env_file}" RESTIC_REPOSITORY RESTIC_PASSWORD_FILE; '
+        "sh -c 'printf %s \"$RESTIC_REPOSITORY\"'")
+    assert done.returncode == 0, done.stderr
+    assert done.stdout == written["RESTIC_REPOSITORY"]
 
 
 def test_the_install_env_carries_exactly_what_every_other_script_reads(tmp_path):
