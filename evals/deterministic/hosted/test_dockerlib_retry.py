@@ -25,7 +25,9 @@ from __future__ import annotations
 
 import subprocess
 import sys
+import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -45,9 +47,19 @@ def _proc(returncode: int, stdout: str = "", stderr: str = "") -> subprocess.Com
 @pytest.fixture()
 def quiet(monkeypatch):
     """No `docker logs` shell-out and no real sleeping. Both are the loop's
-    per-iteration cost, and neither is what these tests are about."""
+    per-iteration cost, and neither is what these tests are about.
+
+    The sleep is neutered by replacing dockerlib's OWN `time` binding, not by
+    setting `sleep` on the stdlib time module. `monkeypatch.setattr(
+    dockerlib.time, "sleep", ...)` reaches through to the one shared module
+    object and every other library in the process -- pytest's own timeouts,
+    a plugin's poller -- silently stops sleeping for the duration of the test.
+    It was written that way first; this is module-local instead, and
+    `monotonic` stays real so the deadline is a real deadline.
+    """
     monkeypatch.setattr(dockerlib, "logs", lambda container: "the target's logs")
-    monkeypatch.setattr(dockerlib.time, "sleep", lambda seconds: None)
+    monkeypatch.setattr(dockerlib, "time", SimpleNamespace(
+        monotonic=time.monotonic, sleep=lambda seconds: None))
     return monkeypatch
 
 

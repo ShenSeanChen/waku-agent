@@ -68,11 +68,31 @@ MUST_BE_IN_SERVICES_APP = {
 }
 
 # The context probe. A directory planted INSIDE an admitted tree, holding one
-# file that must arrive and four that must not. See the test for why both
-# halves are needed.
+# innocent file, seven secrets the ignore file refuses, and three it does not.
+# See the test for why all three groups are needed.
 CONTEXT_PROBE_DIR = Path("waku") / "_c1_context_probe"
 CONTEXT_PROBE_KEPT = "README.txt"
-CONTEXT_PROBE_SECRETS = (".env", ".env.local", "deploy.pem", "deploy.key")
+
+# Refused by `**/.*` (every dotfile) and by `**/*.pem` / `**/*.key`. The
+# dotfile half is deliberately broad: an earlier version of this tuple named
+# .env and .env.local only, and a review planted .netrc and .aws beside them
+# and walked through. These are a sample of a rule, not the rule.
+CONTEXT_PROBE_REFUSED = (
+    ".env", ".env.local", ".netrc", ".npmrc", ".aws",
+    "deploy.pem", "deploy.key",
+)
+
+# NOT refused, and pinned here so nobody reads the tuple above as a closed
+# class. None of these is dot-prefixed or ends .pem or .key, so each one rides
+# into the image inside the tree that admits it. That is a stated limit, not an
+# oversight: no pattern tells a secret from a config file by its name, and
+# there is no allowlist version of this rule, because whole trees are what
+# tenant.Dockerfile.dockerignore admits. If a later change DOES refuse one of
+# these, this test goes red and the name moves out of this tuple -- which is
+# the right way round: the limit is visible, and shrinking it is a deliberate
+# edit rather than a silent one.
+CONTEXT_PROBE_GETS_THROUGH = ("id_rsa", "credentials.json", "server.p12")
+
 CONTEXT_PROBE_TAG = "waku-tenant:c1-context-probe"
 
 FAKE_UPSTREAM = r'''
@@ -206,8 +226,19 @@ def test_the_services_image_holds_no_waku(services_image):
 
 @pytest.fixture()
 def planted_context_probe():
-    """A directory inside an ADMITTED tree, holding one innocent file and four
-    secret-shaped ones. Removed, with the image it produces, whatever happens.
+    """A directory inside an ADMITTED tree, holding one innocent file, seven
+    secrets the ignore file refuses and three it does not.
+
+    THE WHOLE DIRECTORY IS GITIGNORED (`.gitignore`, `waku/_c1_context_probe/`)
+    and that line is not tidiness. This fixture writes files called deploy.pem
+    and deploy.key into the checkout of a public repository. If a run is killed
+    between the mkdir and the finally, the next person to type `git add -A`
+    would stage two files named like real private keys, and nobody reads that
+    diff twice. Cleanup handles the normal case; the .gitignore line handles
+    the abnormal one, and evals/deterministic/hosted/test_image_context.py::
+    test_the_context_probes_leftovers_cannot_be_committed checks every name
+    this fixture plants against `git check-ignore`, not just the ones somebody
+    remembered.
     """
     directory = dockerlib.REPO / CONTEXT_PROBE_DIR
     shutil.rmtree(directory, ignore_errors=True)
@@ -216,7 +247,15 @@ def planted_context_probe():
         "Planted by C1's context probe. If you are reading this in a checkout, "
         "a test died before its cleanup ran; delete this directory.\n",
         encoding="utf-8")
-    for name in CONTEXT_PROBE_SECRETS:
+    for name in CONTEXT_PROBE_REFUSED + CONTEXT_PROBE_GETS_THROUGH:
+        if name == ".aws":
+            # A directory, not a file: `**/.*` has to refuse a dot-prefixed
+            # DIRECTORY too, and ~/.aws copied into a checkout is the shape
+            # the tenant ignore file's own header comment names.
+            (directory / name).mkdir()
+            (directory / name / "credentials").write_text(
+                "C1-CONTEXT-PROBE-NOT-A-REAL-SECRET\n", encoding="utf-8")
+            continue
         (directory / name).write_text("C1-CONTEXT-PROBE-NOT-A-REAL-SECRET\n",
                                       encoding="utf-8")
     try:
@@ -232,26 +271,37 @@ def test_a_secret_planted_inside_an_admitted_tree_stays_out_of_the_image(
     tenant.Dockerfile.dockerignore is deleted, neutered or never read.
 
     The allowlist admits whole trees -- `!waku/`, `!skills/` -- so nothing in
-    the top-level listing can tell you whether a .env INSIDE one of them got
-    in. This plants exactly that: waku/_c1_context_probe/ with a README.txt and
-    four secret-shaped files, then builds and looks.
+    the top-level listing can tell you whether a secret INSIDE one of them got
+    in. This plants exactly that: waku/_c1_context_probe/ with a README.txt,
+    seven secrets the ignore file refuses, and three it does not.
 
-    BOTH assertions are needed and neither is enough alone:
+    WHAT IT PROVES, in three assertions, none of which is enough alone:
 
       README.txt MUST be there -- otherwise the whole probe directory failed to
-      reach the image (a stale build cache, a typo in the path, a COPY that
-      does not cover it) and the absence of the four secrets proves nothing.
-      This is the presence assertion that stops the test passing vacuously.
+      reach the image (a stale cache, a typo in the path, a COPY that does not
+      cover it) and every absence below proves nothing. This is the presence
+      assertion that stops the test passing vacuously.
 
-      the four secrets MUST NOT be there -- that is the `**/.env`, `**/.env.*`,
-      `**/*.pem` and `**/*.key` lines at the bottom of
-      tenant.Dockerfile.dockerignore doing their job, below the `!` admissions
-      where last-match-wins makes them count.
+      CONTEXT_PROBE_REFUSED must be absent -- `**/.*`, `**/*.pem` and
+      `**/*.key`, below the `!` admissions where last-match-wins makes them
+      count. `.netrc`, `.npmrc` and the `.aws` DIRECTORY are in that tuple
+      because a review planted exactly those against an earlier version that
+      named only `.env` and `.env.*`, and got seven green tests.
 
-    Cost note: when the re-exclusions work, the planted files never enter the
-    context, so the COPY layer's hash is unchanged and this build is a cache
-    hit on top of the session's tenant_image. It is only slow when it is
-    about to fail.
+      the listing must EQUAL README.txt plus CONTEXT_PROBE_GETS_THROUGH --
+      no more and no less. This is the honest half. id_rsa, credentials.json
+      and server.p12 DO enter the image, because nothing here can tell a
+      secret from a config file by its name and there is no allowlist version
+      of this rule: whole trees are what the ignore file admits. Pinning the
+      survivors exactly means the limit is written down and visible, a NEW
+      shape getting through turns this red, and tightening the rule later also
+      turns it red -- which is correct, because that is an edit to a stated
+      security boundary and it should not happen quietly.
+
+    Cost note, which is why this is affordable in C4: when the re-exclusions
+    work, the refused files never enter the context, so the COPY layer's hash
+    changes only by the four survivors, and this build is close to a cache hit
+    on top of the session's tenant_image.
     """
     tag = dockerlib.build_image("hosted/image/tenant.Dockerfile", CONTEXT_PROBE_TAG)
     inside = f"/app/{CONTEXT_PROBE_DIR.as_posix()}"
@@ -266,16 +316,28 @@ def test_a_secret_planted_inside_an_admitted_tree_stays_out_of_the_image(
     assert CONTEXT_PROBE_KEPT in entries, (
         f"the probe directory is in the image but {CONTEXT_PROBE_KEPT} is not "
         f"({sorted(entries)}), so the build did not see the planted files and "
-        "the assertion below is vacuous.")
+        "every assertion below is vacuous.")
 
-    leaked = entries & set(CONTEXT_PROBE_SECRETS)
+    leaked = entries & set(CONTEXT_PROBE_REFUSED)
     assert not leaked, (
         f"secret-shaped files inside an admitted tree entered the tenant "
         f"image: {sorted(leaked)}\n"
-        "tenant.Dockerfile.dockerignore's `**/.env`, `**/.env.*`, `**/*.pem` "
-        "and `**/*.key` lines are what stop this, and they only count while "
-        "they sit BELOW the `!` admissions -- Docker is last-match-wins. A "
-        "real waku/.env reaches the daemon and the image the same way.")
+        "tenant.Dockerfile.dockerignore's `**/.*`, `**/*.pem` and `**/*.key` "
+        "lines are what stop this, and they only count while they sit BELOW "
+        "the `!` admissions -- Docker is last-match-wins. A real waku/.env "
+        "reaches the daemon and the image the same way.")
+
+    expected = {".", "..", CONTEXT_PROBE_KEPT, *CONTEXT_PROBE_GETS_THROUGH}
+    assert entries == expected, (
+        f"the surviving listing is {sorted(entries)}, this test expects "
+        f"{sorted(expected)}.\n"
+        "If something NEW survived: a secret shape the ignore file does not "
+        "cover just entered the image, and the question is whether the rule "
+        "can grow or whether the limit has to be stated more loudly.\n"
+        "If something EXPECTED is now missing: somebody tightened the rule, "
+        "which is good -- move that name out of CONTEXT_PROBE_GETS_THROUGH in "
+        "the same commit, so the stated limit and the real one stay the same "
+        "sentence.")
 
 
 def test_xfsprogs_sqlite3_and_zstd_are_in_the_services_image(services_image):

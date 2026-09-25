@@ -22,22 +22,32 @@
 !LICENSE
 !LICENSE-BRAND
 
-# Re-excluded inside the admitted trees: build noise, and the maintainers' own
-# runtime state, neither of which belongs in a tenant's image. Last match wins,
-# so these beat the !waku/ above.
+# Re-excluded INSIDE the admitted trees. Last match wins, so every line in
+# this block must stay BELOW the `!` admissions above; move one line up and it
+# is undone by the admission that follows it, silently.
+#
+# Build noise first. `**/.pytest_cache/` and `**/.ruff_cache/` used to be
+# named here and are gone: `**/.*` below covers both, and two rules for one
+# job is how a reader learns to believe the wrong one is load-bearing.
 **/__pycache__/
 **/*.pyc
-**/.pytest_cache/
-**/.ruff_cache/
 
-# Secrets, re-excluded INSIDE the admitted trees. The lines above this block
-# admit whole directories, and an allowlist that only names top-level entries
-# cannot see a waku/.env or a skills/deploy.pem that somebody wrote while
-# debugging -- it rides in with the tree that admits it. These four patterns
-# are the only part of this file that is not about build noise, and they must
-# stay BELOW the `!` lines: Docker is last-match-wins, so the same four lines
-# above the admissions would be undone by them.
-**/.env
-**/.env.*
+# Secrets. `**/.*` replaced a list of four named shapes -- `**/.env`,
+# `**/.env.*` and the two caches -- because that list was a denylist and a
+# review walked through it by planting `.netrc` and `.aws`. Refusing EVERY
+# dotfile inside an admitted tree is the strongest rule available here, and it
+# costs nothing: `git ls-files waku skills` lists no dotfile at all, and
+# `hosted/` has one, a .gitkeep that carries nothing.
+#
+# THIS IS NOT A CLOSED CLASS. A secret that is not dot-prefixed and does not
+# end .pem or .key -- credentials.json, id_rsa, server.p12 -- still rides in
+# with the tree that admits it, and always will: no pattern distinguishes a
+# secret from a config file by name, and there is no allowlist version of this
+# rule, because whole trees are what the lines above admit. Adding one more
+# extension every time somebody thinks of one is the game this project has now
+# lost five times. The limit is stated instead, and
+# evals/hosted_docker/test_image.py plants both classes and pins which get
+# through.
+**/.*
 **/*.pem
 **/*.key

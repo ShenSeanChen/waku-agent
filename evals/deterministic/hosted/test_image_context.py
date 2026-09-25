@@ -25,6 +25,8 @@ next secret is not called .env.
 
 from __future__ import annotations
 
+import subprocess
+import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -48,30 +50,51 @@ ADMITTED = {
 # must appear. Order is not decoration: Docker is last-match-wins, so a
 # re-exclusion above the `!` line that admits its tree is re-admitted by that
 # line and does nothing at all. A review defeated the first version of this
-# file twice with all four tests green -- once by moving these four lines
-# above the admissions, once by deleting them -- so the sequence is pinned
-# here, not just the membership.
+# file twice with all four tests green -- once by moving these lines above the
+# admissions, once by deleting them -- so the sequence is pinned here, not
+# just the membership.
 #
-# The last four are secrets, and they are the reason this list is not only
-# about build noise. The allowlist admits whole trees; without these, a
-# waku/.env or a skills/deploy.pem written by somebody debugging enters the
-# build context and the tenant image, invisible to an allowlist that only
-# names top-level entries. evals/hosted_docker/test_image.py::
-# test_a_secret_planted_inside_an_admitted_tree_stays_out_of_the_image is the
-# guard that drives it; this is the drift check on its shape.
+# `**/.*` IS THE ONE THAT MATTERS, and it replaced a list of four named
+# shapes (`**/.env`, `**/.env.*` and two cache directories). The named list
+# was a denylist: a second review planted `.netrc` and `.aws` beside them and
+# walked straight through. `**/.*` refuses every dotfile inside an admitted
+# tree, including the ones nobody has thought of, and it costs nothing --
+# `git ls-files waku skills` lists no dotfile at all, and `hosted/` has
+# exactly one, a .gitkeep placeholder that carries nothing.
+#
+# IT IS NOT A CLOSED CLASS, AND THE FILES SAY SO. A secret whose name is not
+# dot-prefixed and does not end .pem or .key -- credentials.json, id_rsa,
+# server.p12 -- still enters the context and the image. No pattern can tell a
+# secret from a config file by its name, and the allowlist version of this
+# rule does not exist, because the trees themselves are what is admitted. So
+# this is the strongest available rule plus a stated limit, and
+# evals/hosted_docker/test_image.py::
+# test_a_secret_planted_inside_an_admitted_tree_stays_out_of_the_image plants
+# both classes and pins which ones get through.
 RE_EXCLUDED_INSIDE = (
     "**/__pycache__/",
     "**/*.pyc",
-    "**/.pytest_cache/",
-    "**/.ruff_cache/",
-    "**/.env",
-    "**/.env.*",
+    "**/.*",
     "**/*.pem",
     "**/*.key",
 )
 
 
 def _lines(name: str) -> list[str]:
+    """The file's rules, as this drift check reads them.
+
+    NOT BYTE-FOR-BYTE MOBY'S PARSER, and the difference is worth knowing.
+    moby's dockerignore reader tests for a leading `#` BEFORE trimming
+    whitespace; this trims first. So a line written `   # !waku/` is a comment
+    here and a PATTERN to Docker -- the literal pattern `# !waku/` after its
+    own trim, which matches a file by that name and therefore nothing.
+
+    That divergence is the safe direction and only the safe direction: it can
+    make this parser see FEWER rules than Docker does, and every rule it can
+    miss that way is an inert one. It cannot make this parser see an admission
+    or an exclusion that Docker does not honour. If moby ever trims first, the
+    two agree and nothing here changes.
+    """
     text = (IMAGE / name).read_text(encoding="utf-8")
     return [line.strip() for line in text.splitlines()
             if line.strip() and not line.strip().startswith("#")]
@@ -169,3 +192,44 @@ def test_no_deny_line_hides_among_the_allow_lines():
             "This file excludes everything already. Naming one more thing to "
             "exclude does nothing, and it teaches the next reader that the "
             "file is a denylist, which is when a secret gets in.")
+
+
+def test_the_context_probes_leftovers_cannot_be_committed():
+    """The Docker probe writes files called deploy.pem, deploy.key, id_rsa and
+    .aws/credentials into the checkout of a public repository, and deletes them
+    in a `finally`. This is about the run that never reaches the finally.
+
+    Without a .gitignore line, the next `git add -A` stages two files named
+    like real private keys and nobody reads that diff twice. `git check-ignore`
+    reported exactly one of the twelve as ignored before this test existed
+    (`.env`, and only because `.env` is ignored everywhere).
+
+    IT ASKS THE FIXTURE, NOT A COPY OF ITS LIST. The names come from
+    evals/hosted_docker/test_image.py's own constants, so a name added to the
+    probe and not to .gitignore fails here rather than waiting for the crash
+    that leaves it behind. `git check-ignore` is the authority, not a pattern
+    this test re-implements.
+    """
+    sys.path.insert(0, str(ROOT / "evals" / "hosted_docker"))
+    import test_image  # noqa: E402  -- the probe's own source of truth
+
+    planted = [test_image.CONTEXT_PROBE_KEPT,
+               *test_image.CONTEXT_PROBE_REFUSED,
+               *test_image.CONTEXT_PROBE_GETS_THROUGH,
+               ".aws/credentials"]
+
+    not_ignored = []
+    for name in planted:
+        path = test_image.CONTEXT_PROBE_DIR / name
+        proc = subprocess.run(["git", "check-ignore", "-q", str(path)],
+                              cwd=ROOT, capture_output=True, text=True, check=False)
+        if proc.returncode != 0:
+            not_ignored.append(str(path))
+
+    assert not not_ignored, (
+        f"the context probe plants these where git would offer to commit them: "
+        f"{not_ignored}\n"
+        "Add a .gitignore line covering waku/_c1_context_probe/ -- one line "
+        "covers every name, including the ones nobody has added yet -- rather "
+        "than listing the new file. Files named deploy.pem and id_rsa reaching "
+        "a public repository is not a tidiness problem.")

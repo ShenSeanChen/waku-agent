@@ -183,9 +183,17 @@ def remove(container: str) -> None:
 
 
 def remove_image(tag: str) -> None:
-    """Drop a throwaway tag. Not in the brief's published interface; added for
+    """Drop a THROWAWAY tag. Not in the brief's published interface; added for
     the context probe, which builds a second tag from a planted checkout and
-    must not leave it behind on a maintainer's machine."""
+    must not leave it behind on a maintainer's machine.
+
+    NEVER CALL THIS ON waku-tenant:test OR waku-services:test. The session
+    fixtures in conftest.py build those once and every later test in groups C,
+    E and F reuses them; a fixture that "cleaned up" after itself would make
+    the next file rebuild from scratch, turning a cache hit into a cold
+    `uv sync` per test file. Throwaway tags built inside a single test are the
+    only callers this is for.
+    """
     _run(["image", "rm", "--force", tag], timeout=QUICK_TIMEOUT, check=False)
 
 
