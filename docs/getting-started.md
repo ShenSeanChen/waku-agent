@@ -36,8 +36,8 @@ cp .env.example .env
 ```
 
 Set `WAKU_PROVIDER=` and paste that provider's key. Anthropic is the default;
-OpenAI, Gemini, DeepSeek, MiniMax, Kimi, GLM, OpenRouter, OpenCode Zen and
-OpenCode Go work the same way. You can also paste a key in the dashboard
+OpenAI, Gemini, DeepSeek, MiniMax, Kimi, GLM, OpenRouter, Requesty, OpenCode Zen
+and OpenCode Go work the same way. You can also paste a key in the dashboard
 later. Either way the key stays in a `.env` on your machine and is never sent
 to the browser.
 
