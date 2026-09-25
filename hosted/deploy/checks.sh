@@ -106,20 +106,24 @@ waku_bytes() {
     *K|*k) number=${value%?}; unit=1024 ;;
     *)     number=$value;     unit=1 ;;
   esac
+  # `0*` is what refuses 0 and 0G, and it also refuses 010G, which bash would
+  # otherwise read as octal.
   case "$number" in
     ''|0*|*[!0-9]*) return 1 ;;
   esac
-  # 19 digits or more cannot be compared or multiplied here without wrapping,
-  # so it is refused before any arithmetic touches it.
-  case "$number" in
-    ???????????????????*) return 1 ;;
-  esac
   result=$((number * unit))
-  # The overflow guard. `*[!0-9]*` constrains the characters and says nothing
-  # about the magnitude: 9999999999999G used to come back as
-  # 1413189099967217664. A product that does not divide back has wrapped.
+  # The overflow guard, and the ONLY one: `*[!0-9]*` constrains the characters
+  # and says nothing about the magnitude, so 9999999999999G used to come back
+  # as 1413189099967217664. A product that does not divide back has wrapped.
+  #
+  # Two more checks stood here and both are gone, because both were dead. A
+  # digit-count bound was redundant with this line (measured: every input
+  # 19 digits and longer is refused by the division either way), and a
+  # `[ "$result" -gt 0 ]` was unreachable once `0*` refuses a zero numerator --
+  # a product that wrapped to zero or below fails the division first. A line
+  # that reads as a guard and can never fire is worse than no line, because the
+  # next reader trusts it.
   [ $((result / unit)) -eq "$number" ] || return 1
-  [ "$result" -gt 0 ] || return 1
   echo "$result"
 }
 

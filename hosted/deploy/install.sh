@@ -226,6 +226,26 @@ case "$domain" in
   *) waku_die "<domain> must be a hostname with a dot, for example agent.waku.one; got $domain" ;;
 esac
 
+# THE SAME JUDGEMENT AGAIN, for the same reason. --max-running and
+# --tenant-disk are checked against their VALUES here rather than below with
+# the checks on the machine, because that is what they are: arguments. Both
+# used to sit past waku_require_root, past /etc/os-release and past an XFS
+# /proc/mounts read, which put them out of reach of every offline test -- and
+# an unreachable guard is one nobody can prove works.
+#
+# --tenant-disk always has a value (1G by default), so it is converted here.
+# --max-running may be empty, meaning "derive it from this VM's memory", and
+# that derivation reads /proc/meminfo and so belongs below; waku_max_running
+# floors its own answer at 1, so only a value given by flag needs this.
+if [ -n "$max_running" ]; then
+  case "$max_running" in
+    ''|0*|*[!0-9]*) waku_die "--max-running must be a whole number of at least 1, written without a leading zero; got $max_running. Zero is refused on purpose: WAKU_MAX_RUNNING=0 is a VM on which no tenant can ever start." ;;
+  esac
+fi
+
+tenant_disk_bytes=$(waku_bytes "$tenant_disk") \
+  || waku_die "--tenant-disk takes a whole number of at least 1, written without a leading zero, with an optional K, M or G; got $tenant_disk. Zero is refused on purpose: XFS reads bhard=0 as NO limit, so --tenant-disk 0 would put every tenant on an unbounded disk."
+
 waku_require_root
 
 # --- refusals, before anything is created ---------------------------------
@@ -287,26 +307,18 @@ waku_signup_is_closed "$settings" \
 
 # --- derived values ----------------------------------------------------------
 
+# A value given by flag was checked in the argument block above; this is the
+# derivation for when none was, and waku_max_running floors its answer at 1.
 if [ -z "$max_running" ]; then
   max_running=$(waku_max_running /proc/meminfo) \
     || waku_die "could not read MemTotal from /proc/meminfo; pass --max-running"
 fi
-# A CLOSED SET ON THE VALUE. The earlier shape rejected characters and so
-# admitted `0` while its own message said "positive integer" --
-# WAKU_MAX_RUNNING=0 is a VM on which no tenant can ever start, and
-# waku_max_running's floor of 1 never applies to a value given by flag. A
-# leading zero is refused too: it is how a number becomes octal downstream.
-case "$max_running" in
-  ''|0*|*[!0-9]*) waku_die "--max-running must be a whole number of at least 1, written without a leading zero; got $max_running" ;;
-esac
 
 if [ -z "$dns_allow" ]; then
   dns_allow=$(waku_resolvers /run/systemd/resolve/resolv.conf) \
     || waku_die "no upstream resolver in /run/systemd/resolve/resolv.conf; pass --dns-allow. (/etc/resolv.conf on Ubuntu names only the stub 127.0.0.53, which is not an address a firewall rule can usefully open.)"
 fi
 
-tenant_disk_bytes=$(waku_bytes "$tenant_disk") \
-  || waku_die "--tenant-disk takes a whole number of at least 1, written without a leading zero, with an optional K, M or G; got $tenant_disk. Zero is refused on purpose: XFS reads bhard=0 as NO limit, so --tenant-disk 0 would put every tenant on an unbounded disk."
 
 tenant_image=waku-tenant:current
 services_image=waku-services:current

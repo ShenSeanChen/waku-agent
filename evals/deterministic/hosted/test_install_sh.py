@@ -539,18 +539,21 @@ def test_a_malformed_line_in_the_dns_env_file_is_refused(tmp_path, text):
     assert shelllib.calls(tmp_path) == []
 
 
-def test_a_dns_env_file_with_comments_and_a_final_line_without_a_newline(tmp_path):
-    """Comments and blank lines are skipped, and a last line with no trailing
-    newline is still read -- a file written by `echo -n` or by a heredoc a
-    human truncated is the common accident, and losing its last line silently
-    would lose a credential."""
-    path = _dns_file(
-        tmp_path,
-        "# route53\n\nAWS_ACCESS_KEY_ID=AKIAEXAMPLE\nAWS_REGION=us-east-1")
+def test_a_dns_env_files_last_line_is_read_even_without_a_newline(tmp_path):
+    """A file written by `printf` with no trailing newline, or one a human
+    truncated, is the common accident -- and losing its last line silently
+    would lose a credential.
+
+    The fixture holds ONE pair and no newline after it, so a `read` loop that
+    dropped the last line would leave the file with nothing in it and the
+    empty-file refusal fires. An earlier fixture had three lines, so dropping
+    the last one still left two and this test passed with the bug in place.
+    """
+    path = _dns_file(tmp_path, "# route53\n\nAWS_ACCESS_KEY_ID=AKIAEXAMPLE")
     done = shelllib.run(INSTALL, _required(tmp_path, dns_env_file=path),
                         tmp_path=tmp_path, stubs=OUTSIDE)
+    assert "holds no NAME=VALUE line" not in done.stderr, done.stderr
     assert "expected NAME=VALUE" not in done.stderr
-    assert "holds no NAME=VALUE line" not in done.stderr
 
 
 def test_the_dns_env_flag_takes_the_same_closed_set_as_the_file(tmp_path):
@@ -569,20 +572,50 @@ def test_the_dns_env_flag_takes_the_same_closed_set_as_the_file(tmp_path):
 # --- the two guards that used to name characters instead of values -----------
 
 
-@pytest.mark.parametrize("value", ["0", "00", "01", "-1", "1.5", "", "many"])
+@pytest.mark.parametrize("value", ["0", "00", "01", "-1", "1.5", "many"])
 def test_max_running_is_a_closed_set_on_the_value(tmp_path, value):
     """`--max-running 0` used to pass a check whose own message said "positive
     integer". WAKU_MAX_RUNNING=0 is a VM on which no tenant can ever start,
     and waku_max_running's floor of 1 never applies to a value given by flag.
+
+    An earlier version of this test accepted either the flag's message OR
+    "run this as root", because the check still sat below waku_require_root.
+    That made it pass for every value of every guard: it could not fail. The
+    check moved up into the argument block -- where it belongs, because it is
+    an argument check -- and the assertion is now on the message alone.
     """
     args = _required(tmp_path) + ["--max-running", value]
     done = shelllib.run(INSTALL, args, tmp_path=tmp_path, stubs=OUTSIDE)
     assert done.returncode != 0
-    # The refusal must be about --max-running, not about being non-root: the
-    # check sits below waku_require_root, so this asserts the run got as far
-    # as parsing and no further than the flag.
-    assert ("--max-running must be a whole number of at least 1" in done.stderr
-            or "run this as root" in done.stderr)
+    assert "--max-running must be a whole number of at least 1" in done.stderr
+    assert shelllib.calls(tmp_path) == []
+
+
+@pytest.mark.parametrize("value", ["0", "0G", "010G", "1T", "1.5G", "1GB",
+                                   "9999999999999G"])
+def test_tenant_disk_is_a_closed_set_on_the_value(tmp_path, value):
+    """The same, for the flag whose zero is the dangerous one: XFS reads
+    bhard=0 as NO limit, so `--tenant-disk 0` put every tenant on an unbounded
+    disk. Reachable here because the conversion moved into the argument
+    block."""
+    args = _required(tmp_path) + ["--tenant-disk", value]
+    done = shelllib.run(INSTALL, args, tmp_path=tmp_path, stubs=OUTSIDE)
+    assert done.returncode != 0
+    assert "--tenant-disk takes a whole number of at least 1" in done.stderr
+    assert shelllib.calls(tmp_path) == []
+
+
+def test_a_platform_key_file_stays_a_closed_set_under_a_utf8_locale(tmp_path):
+    """A bracket expression follows LC_CTYPE. Under the UTF-8 locale a root
+    login shell on Ubuntu commonly has, a multibyte character counts as
+    printable and `[:graph:]` admits it -- so a set that is closed only in the
+    C locale is not closed. read_secret_file pins LC_ALL=C for the test."""
+    key = _key_file(tmp_path, "sk-ant-café\n")
+    done = shelllib.run(INSTALL, _required(tmp_path, key=key),
+                        tmp_path=tmp_path, stubs=OUTSIDE,
+                        env={"LC_ALL": "en_US.UTF-8", "LANG": "en_US.UTF-8"})
+    assert done.returncode != 0
+    assert "must hold the value and nothing else" in done.stderr
 
 
 @pytest.mark.parametrize("flag", ["--dns-provider", "--platform-key-file", "--root"])

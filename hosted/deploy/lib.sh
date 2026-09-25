@@ -100,9 +100,14 @@ waku_write_config() {
   fi
   [ -d "$(dirname "$target")" ] || waku_die "cannot write $target: $(dirname "$target") is not a directory"
   tmp=$target.tmp.$$
+  # REMOVED, then CREATED under the umask. Truncating a file that is already
+  # there would keep whatever mode it already had, and a stale $$ from before a
+  # reboot is the way that happens. There is no chmod after this: the umask
+  # above already makes the file 0600 at birth, and a chmod that can never
+  # change anything is a line the next reader would trust.
+  rm -f "$tmp"
   ( umask 077; : >"$tmp" ) || waku_die "cannot create $tmp"
   cat >"$tmp"
-  chmod 0600 "$tmp"
   mv -f "$tmp" "$target"
   waku_log "wrote $target"
 }
