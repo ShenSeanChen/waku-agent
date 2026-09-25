@@ -1,9 +1,17 @@
 #!/usr/bin/env bash
 # The shared shell for every operator script. Sourced, never run.
 #
-# SIX FUNCTIONS AND NO MORE. Every one of them exists because two scripts need
-# it; a helper with one caller belongs in that caller, where a reader can see
-# what it does without opening a second file.
+# SEVEN FUNCTIONS AND NO MORE. Six of them exist because two scripts need them;
+# a helper with one caller belongs in that caller, where a reader can see what
+# it does without opening a second file.
+#
+# waku_write_config is the seventh and it has one caller. It is here anyway,
+# and for a reason worth writing down: it lived inside install.sh, where no
+# test in any tier could reach it, and it is the SOLE implementation of the
+# spec's "a rerun never overwrites existing config" as well as the function
+# that writes both of this deployment's secrets at mode 0600. A function that
+# decides whether a secret is overwritten and that nothing can call is a
+# function nothing can check.
 #
 # Written to parse under bash 3.2, like hosted/image/build.sh. It RUNS on
 # Ubuntu 24.04's bash 5.2.
@@ -49,4 +57,52 @@ waku_compose() {
 # 0700 directory owned by that user.
 waku_admin() {
   waku_compose exec -T --user 10002:10002 gateway python -m hosted.gateway.admin "$@"
+}
+
+# Write one config file from stdin, once. $1 is the full path.
+#
+# NEVER OVERWRITES (spec: "a rerun skips finished steps and never overwrites
+# existing config"). When the file is there it says so, DRAINS STDIN and
+# returns 0 -- draining matters because the caller's body is a heredoc, and a
+# function that returned without reading it would leave the writer blocked or,
+# worse on a short body, silently discard it half-read.
+#
+# ATOMIC, and that is not decoration. The earlier shape created the target and
+# then `cat`ted into it, so a run killed between the two left a TRUNCATED env
+# file -- and the next run's "never overwrite" then kept it, logging "keeping
+# the existing ..." over a half-written gateway.env. That is the one state this
+# design cannot repair by rerunning. The body is written to a temporary file
+# beside the target, in the same directory so the rename cannot cross a
+# filesystem, and appears at its name complete or not at all.
+#
+# WHAT THE RENAME DOES NOT COVER, said out loud: if the PRODUCER on the other
+# end of the pipe emitted half a body and then stopped, the half would be
+# renamed into place and a rerun would keep it. It cannot happen with the four
+# producers in envfiles.sh, because `set -u` makes an unset variable fatal when
+# the heredoc is expanded -- before `cat` writes anything -- and a signal kills
+# the whole pipeline, which is the case the rename does cover. A caller that
+# ever pipes something fallible in here has to check it itself.
+#
+# MODE 0600 FROM BIRTH, set by the umask in the subshell that creates the file
+# rather than by a chmod afterwards: config/proxy.env holds the platform's
+# model key, and a file that is briefly 0644 is a file that was briefly
+# readable. Ownership is root's because install.sh calls waku_require_root
+# before it reaches here and config/ is 0700 root:root from tree.sh; it is not
+# forced with `install -o 0 -g 0`, which would make this function unrunnable --
+# and therefore untestable -- as anyone but root.
+waku_write_config() {
+  local target tmp
+  target=$1
+  if [ -e "$target" ]; then
+    waku_log "keeping the existing $target"
+    cat >/dev/null
+    return 0
+  fi
+  [ -d "$(dirname "$target")" ] || waku_die "cannot write $target: $(dirname "$target") is not a directory"
+  tmp=$target.tmp.$$
+  ( umask 077; : >"$tmp" ) || waku_die "cannot create $tmp"
+  cat >"$tmp"
+  chmod 0600 "$tmp"
+  mv -f "$tmp" "$target"
+  waku_log "wrote $target"
 }

@@ -15,6 +15,15 @@ F1-R1, on the VM. What runs here are the two pieces that change the machine --
 tree.sh and networks.sh -- plus the two kernel facts the Compose stack's users
 and oom_score_adj exist for.
 
+THIS MODULE DESTROYS THE TWO BRIDGES. `test_networks_sh_creates_both_bridges_
+with_icc_off` removes `waku-tenants` and `waku-inspect` before it runs and
+again in a `finally`, because the thing under test is what `networks.sh`
+CREATES and a bridge that is already there would make the script's own
+idempotence path hide it. On a host carrying a live deployment that takes the
+tenant bridge out from under every running tenant container. Run this tier on
+a CI runner or a scratch VM, never on the VM serving tenants -- which is what
+`.github/workflows/hosted-docker.yml` does and why it is a job of its own.
+
 WHAT MOVED OUT OF THIS FILE, and why. The plan's step 13 put the
 `docker compose config` assertions here. They need the Compose CLI and no
 daemon, so they live in evals/deterministic/hosted/test_deploy_scripts.py

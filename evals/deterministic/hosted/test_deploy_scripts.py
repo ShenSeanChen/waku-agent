@@ -22,6 +22,7 @@ from __future__ import annotations
 import configparser
 import json
 import shutil
+import stat
 import subprocess
 from pathlib import Path
 
@@ -30,7 +31,8 @@ import shelllib
 
 # F2, F3 and F4 each append their own names to this set in the same commit that
 # adds the script. C3's firewall.sh joins it when C3 lands.
-EXPECTED_SCRIPTS = {"checks.sh", "install.sh", "lib.sh", "networks.sh", "tree.sh"}
+EXPECTED_SCRIPTS = {"checks.sh", "envfiles.sh", "install.sh", "lib.sh",
+                    "networks.sh", "tree.sh"}
 
 COMPOSE = shelllib.DEPLOY / "compose.yaml"
 SERVICES = ("caddy", "gateway", "proxy", "spawner")
@@ -65,7 +67,25 @@ def test_the_firewall_unit_reapplies_after_a_docker_restart():
     assert unit["Unit"]["Requires"] == "docker.service"
     assert unit["Service"]["Type"] == "oneshot"
     assert unit["Service"]["RemainAfterExit"] == "yes"
-    assert unit["Service"]["ExecStart"].endswith("/hosted/deploy/firewall.sh")
+
+
+def test_the_firewall_units_execstart_is_a_placeholder_and_not_a_path():
+    """THE HOLE THIS CLOSES. The unit used to carry
+    `ExecStart=/srv/waku/src/hosted/deploy/firewall.sh` while install.sh's
+    guard tested `"$here/firewall.sh"` -- its own directory. `--root` is a
+    flag and a checkout can live anywhere, so on any VM whose source is not at
+    /srv/waku/src the guard passed and the unit installed pointed at nothing:
+    a unit that fails at every boot, which is the exact outcome the comment
+    above that guard says it is avoiding.
+
+    The earlier assertion was `ExecStart.endswith("/hosted/deploy/firewall.sh")`,
+    which the hardcoded path satisfies. This one pins the whole value, so any
+    path at all is red and install.sh has to substitute the path it tested.
+    """
+    unit = configparser.ConfigParser(strict=False, allow_no_value=True)
+    unit.optionxform = str
+    unit.read(shelllib.DEPLOY / "waku-firewall.service")
+    assert unit["Service"]["ExecStart"] == "@WAKU_FIREWALL@"
 
 
 # --- tree.sh and networks.sh, driven with a stubbed daemon -------------------
@@ -196,6 +216,22 @@ def _creates(tmp_path) -> dict[str, list[str]]:
     return made
 
 
+def _split_opts(args: list[str]) -> tuple[list[str], dict[str, str]]:
+    """A `docker network create` argument list, split into its `--opt key=value`
+    pairs and everything else in order."""
+    rest: list[str] = []
+    options: dict[str, str] = {}
+    remaining = list(args)
+    while remaining:
+        word = remaining.pop(0)
+        if word == "--opt":
+            key, _, setting = remaining.pop(0).partition("=")
+            options[key] = setting
+        else:
+            rest.append(word)
+    return rest, options
+
+
 def test_networks_sh_hands_the_daemon_the_addresses_core_tenant_py_holds(tmp_path):
     """networks.sh copies hosted/core/tenant.py's addresses into shell,
     because a shell script cannot import a Python constant. THE DUPLICATE IS
@@ -203,8 +239,14 @@ def test_networks_sh_hands_the_daemon_the_addresses_core_tenant_py_holds(tmp_pat
     arguments it actually passed are compared with the module. Nothing here
     reads the script's text.
 
-    The flags are compared as a whole dict, not looked up one at a time: an
-    extra `--opt` nobody reviewed is as much a finding as a missing one.
+    THE OPTIONS ARE COMPARED WITH core/tenant.BRIDGE_OPTIONS AS A WHOLE DICT,
+    not looked up one at a time and not spelt out here. An earlier version
+    pinned `enable_icc=false` as a string literal, so a third option added to
+    the module would land on the test bridges that
+    evals/hosted_docker/conftest.py builds FROM that dict and never on the
+    real ones this script creates, with nothing going red. enable_icc is the
+    tenant-to-tenant isolation pulled forward out of C3, so a silent drift
+    there is the worst kind available.
     """
     from hosted.core import tenant
 
@@ -214,26 +256,23 @@ def test_networks_sh_hands_the_daemon_the_addresses_core_tenant_py_holds(tmp_pat
     made = _creates(tmp_path)
     assert set(made) == {tenant.TENANT_NETWORK, tenant.INSPECT_NETWORK}
 
-    tenants = made[tenant.TENANT_NETWORK]
-    assert tenants == [
+    tenant_flags, tenant_options = _split_opts(made[tenant.TENANT_NETWORK])
+    assert tenant_flags == [
         "--driver", "bridge",
         "--subnet", str(tenant.TENANT_SUBNET),
         "--gateway", str(tenant.TENANT_GATEWAY),
-        "--opt", f"com.docker.network.bridge.name={tenant.TENANT_BRIDGE}",
-        "--opt", "com.docker.network.bridge.enable_icc=false",
         "--ip-range", str(tenant.DYNAMIC_RANGE)]
+    assert tenant_options == tenant.BRIDGE_OPTIONS[tenant.TENANT_NETWORK]
 
-    inspect = made[tenant.INSPECT_NETWORK]
-    assert inspect == [
-        "--driver", "bridge",
-        "--subnet", str(tenant.INSPECT_SUBNET),
-        "--gateway", str(tenant.INSPECT_GATEWAY),
-        "--opt", f"com.docker.network.bridge.name={tenant.INSPECT_BRIDGE}",
-        "--opt", "com.docker.network.bridge.enable_icc=false"]
+    inspect_flags, inspect_options = _split_opts(made[tenant.INSPECT_NETWORK])
     # The inspect bridge takes no --ip-range: an inspect container is given a
     # dynamic address, which is the whole reason it is not on the tenant
     # bridge.
-    assert "--ip-range" not in inspect
+    assert inspect_flags == [
+        "--driver", "bridge",
+        "--subnet", str(tenant.INSPECT_SUBNET),
+        "--gateway", str(tenant.INSPECT_GATEWAY)]
+    assert inspect_options == tenant.BRIDGE_OPTIONS[tenant.INSPECT_NETWORK]
 
 
 def test_networks_sh_creates_nothing_the_second_time(tmp_path):
@@ -254,6 +293,281 @@ def test_networks_sh_stops_on_the_first_bridge_it_could_not_create(tmp_path):
                         bodies={"docker": _DOCKER_CREATE_FAILS})
     assert done.returncode != 0
     assert list(_creates(tmp_path)) == ["waku-tenants"]
+
+
+# --- lib.sh's waku_write_config ----------------------------------------------
+#
+# It was inside install.sh, where no test in any tier could reach it, and it is
+# the sole implementation of the spec's "a rerun never overwrites existing
+# config" as well as the function that writes both of this deployment's
+# secrets. Moving it into lib.sh is what makes these six assertions possible.
+
+LIB = shelllib.DEPLOY / "lib.sh"
+
+
+def _write_config(tmp_path, target, body: str, *, name="call.sh"):
+    script = tmp_path / name
+    script.write_text(
+        f'set -euo pipefail\n. "{LIB}"\n'
+        f'printf %s "$2" | waku_write_config "$1"\n', encoding="utf-8")
+    return shelllib.run(script, [str(target), body], tmp_path=tmp_path)
+
+
+def test_write_config_writes_the_body_it_was_given(tmp_path):
+    target = tmp_path / "config" / "proxy.env"
+    target.parent.mkdir()
+    done = _write_config(tmp_path, target, "WAKU_PLATFORM_KEY=sk-ant-abc\n")
+    assert done.returncode == 0, done.stderr
+    assert target.read_text(encoding="utf-8") == "WAKU_PLATFORM_KEY=sk-ant-abc\n"
+    assert f"wrote {target}" in done.stdout
+
+
+def test_write_config_makes_the_file_readable_only_by_its_owner(tmp_path):
+    """config/proxy.env holds the platform's model key and config/caddy.env
+    holds a credential that can rewrite the DNS zone. 0600 is asserted as a
+    literal, and it is set by the umask that CREATES the file rather than by a
+    chmod afterwards -- a file that is briefly 0644 is a file that was briefly
+    readable."""
+    target = tmp_path / "config" / "caddy.env"
+    target.parent.mkdir()
+    done = _write_config(tmp_path, target, "AWS_SECRET_ACCESS_KEY=x\n")
+    assert done.returncode == 0, done.stderr
+    assert stat.S_IMODE(target.stat().st_mode) == 0o600
+
+
+def test_write_config_never_overwrites_and_says_which_file_it_kept(tmp_path):
+    """The spec's "a rerun skips finished steps and never overwrites existing
+    config". The running services were started from the file that is there."""
+    target = tmp_path / "config" / "gateway.env"
+    target.parent.mkdir()
+    target.write_text("WAKU_MAX_RUNNING=7\n", encoding="utf-8")
+    done = _write_config(tmp_path, target, "WAKU_MAX_RUNNING=99\n")
+    assert done.returncode == 0, done.stderr
+    assert target.read_text(encoding="utf-8") == "WAKU_MAX_RUNNING=7\n"
+    assert f"keeping the existing {target}" in done.stdout
+
+
+def test_write_config_drains_stdin_when_it_keeps_a_file(tmp_path):
+    """The caller's body is a heredoc on the other end of a pipe. A function
+    that returned without reading it would leave the writer blocked, or --
+    worse, and only on a body short enough to fit the pipe buffer -- would
+    work in testing and hang on a longer file."""
+    target = tmp_path / "config" / "gateway.env"
+    target.parent.mkdir()
+    target.write_text("kept\n", encoding="utf-8")
+    done = _write_config(tmp_path, target, "X=1\n" * 20000)
+    assert done.returncode == 0, done.stderr
+    assert target.read_text(encoding="utf-8") == "kept\n"
+
+
+def test_write_config_leaves_nothing_at_the_target_when_the_write_fails(tmp_path):
+    """THE DEFECT THIS EXISTS FOR. The earlier shape created the target and
+    then catted into it, so a write that stopped half way left a TRUNCATED env
+    file -- and the next run's "never overwrite" kept it, logging "keeping the
+    existing ..." over a half-written gateway.env. Rerunning could not repair
+    the one state rerunning is for.
+
+    `cat` is stubbed to emit part of the body and then fail, which is what a
+    killed run looks like from inside the function. The body must not appear
+    at the target's name at all.
+    """
+    target = tmp_path / "config" / "gateway.env"
+    target.parent.mkdir()
+    script = tmp_path / "failing.sh"
+    script.write_text(
+        f'set -euo pipefail\n. "{LIB}"\n'
+        f'waku_write_config "$1" </dev/null\n', encoding="utf-8")
+    done = shelllib.run(
+        script, [str(target)], tmp_path=tmp_path, stubs=["cat"],
+        bodies={"cat": "#!/bin/sh\nprintf 'WAKU_MAX_RU'\nexit 1\n"})
+    assert done.returncode != 0
+    assert not target.exists(), (
+        f"a failed write left {target.read_text() if target.exists() else ''!r} "
+        "at the target's name, and a rerun would keep it")
+
+
+def test_write_config_leaves_no_temporary_file_behind(tmp_path):
+    """The write is atomic: the body goes to a temporary file beside the
+    target, in the same directory so the rename cannot cross a filesystem, and
+    appears at its name complete or not at all. The earlier shape created the
+    target and then catted into it, so a run killed between the two left a
+    TRUNCATED env file -- which the next run's "never overwrite" then kept,
+    logging "keeping the existing ...". That is the one state rerunning cannot
+    repair."""
+    target = tmp_path / "config" / "install.env"
+    target.parent.mkdir()
+    done = _write_config(tmp_path, target, "WAKU_ROOT=/srv/waku\n")
+    assert done.returncode == 0, done.stderr
+    assert {path.name for path in target.parent.iterdir()} == {"install.env"}
+
+
+def test_write_config_refuses_a_target_whose_directory_is_not_there(tmp_path):
+    target = tmp_path / "nothing" / "here" / "proxy.env"
+    done = _write_config(tmp_path, target, "X=1\n")
+    assert done.returncode != 0
+    assert "is not a directory" in done.stderr
+    assert not target.exists()
+
+
+# --- envfiles.sh: the names install.sh writes, pinned against the modules ----
+#
+# The brief's own comment says it: "a name missing here raises at startup; a
+# name MISSPELT here sets nothing and raises nothing". gateway.env.example and
+# spawner.env.example are pinned against their modules in both directions, and
+# install.sh -- the thing that writes the file the services actually read --
+# was pinned against neither, because its heredocs sat inside a script that
+# needs root, an Ubuntu release and a Docker daemon before it reaches them.
+
+ENVFILES = shelllib.DEPLOY / "envfiles.sh"
+
+# Every global the four functions read, with a value whose shape is plausible
+# but obviously a fixture. `set -u` in the caller means a global nobody set is
+# an error rather than an empty line, which is the property that matters.
+_ENV_GLOBALS = {
+    "root": "/srv/waku",
+    "src": "/srv/waku/src",
+    "domain": "agent.example.test",
+    "dns_provider": "route53",
+    "acme_email": "ops@example.test",
+    "gateway_address": "127.0.0.1:8787",
+    "max_running": "95",
+    "supabase_url": "https://p.supabase.co",
+    "supabase_audience": "https://api.waku.one/mcp",
+    "supabase_publishable_key": "sb_publishable_x",
+    "tenant_image": "waku-tenant:current",
+    "services_image": "waku-services:current",
+    "caddy_image": "waku-caddy:current",
+    "free_model": "claude-haiku-4-5",
+    "tenant_disk_bytes": "1073741824",
+    "data_device": "/dev/sdb1",
+    "platform_key": "sk-ant-envfiles-fixture",
+}
+
+
+# A git that answers `rev-parse HEAD`, so waku_install_env's commit line is
+# the shape it has on a real checkout rather than the empty string a recording
+# stub would leave.
+_GIT_WITH_A_HEAD = """#!/bin/sh
+printf '%s %s\\n' "$(basename "$0")" "$*" >> "$WAKU_CALLS"
+echo 0123456789abcdef0123456789abcdef01234567
+"""
+
+# A git that is there and cannot answer -- a tarball with no .git, which is a
+# real way to deploy.
+_GIT_WITHOUT_A_HEAD = """#!/bin/sh
+printf '%s %s\\n' "$(basename "$0")" "$*" >> "$WAKU_CALLS"
+echo "fatal: not a git repository" >&2
+exit 128
+"""
+
+
+def _env_body(tmp_path, function: str, *, git=_GIT_WITH_A_HEAD) -> dict[str, str]:
+    """Run one envfiles.sh function and parse what it printed."""
+    assignments = "\n".join(f"{name}={value!r}"
+                            for name, value in _ENV_GLOBALS.items())
+    script = tmp_path / f"{function}.sh"
+    script.write_text(
+        f"set -euo pipefail\n{assignments}\n. \"{ENVFILES}\"\n{function}\n",
+        encoding="utf-8")
+    done = shelllib.run(script, [], tmp_path=tmp_path, stubs=["git"],
+                        bodies={"git": git})
+    assert done.returncode == 0, done.stderr
+    parsed = {}
+    for line in done.stdout.splitlines():
+        if not line or line.startswith("#"):
+            continue
+        name, separator, value = line.partition("=")
+        assert separator == "=", f"{function} printed a line with no '=': {line!r}"
+        assert name not in parsed, f"{function} printed {name} twice"
+        parsed[name] = value
+    return parsed
+
+
+def test_the_gateway_env_install_writes_carries_every_name_the_gateway_requires(tmp_path):
+    """BOTH DIRECTIONS and in the module's own ORDER. A missing name raises at
+    startup, which is survivable; a misspelt one sets nothing and raises
+    nothing, which is a setting the operator believes they made and the
+    gateway never saw."""
+    from hosted.gateway.config import REQUIRED_ENV_NAMES
+
+    written = _env_body(tmp_path, "waku_gateway_env")
+    assert list(written) == list(REQUIRED_ENV_NAMES)
+
+
+def test_the_spawner_env_install_writes_carries_every_name_the_spawner_requires(tmp_path):
+    """The 11 required names in the module's order, plus WAKU_SPAWNER_SOCKET,
+    which is one of the two in OPTIONAL_ENV_NAMES -- written anyway so the
+    socket the spawner binds and the one the gateway is told about come from
+    one line of one file. Anything else is a finding in either direction."""
+    from hosted.spawner.template import ENV_NAMES, OPTIONAL_ENV_NAMES
+
+    written = _env_body(tmp_path, "waku_spawner_env")
+    assert list(written)[:len(ENV_NAMES)] == list(ENV_NAMES)
+    extra = set(written) - set(ENV_NAMES)
+    assert extra == {"WAKU_SPAWNER_SOCKET"}
+    assert extra <= set(OPTIONAL_ENV_NAMES)
+
+
+def test_the_free_model_reaches_both_the_spawner_and_the_proxy(tmp_path):
+    """The spec's container-template table: --free-model is written into BOTH
+    files "so the two can never disagree". The retrieval gate uses the small
+    model, and a small model outside the proxy's allowlist would be refused on
+    every turn and silently fail open."""
+    spawner = _env_body(tmp_path, "waku_spawner_env")
+    proxy = _env_body(tmp_path, "waku_proxy_env")
+    assert spawner["WAKU_PLATFORM_MODEL"] == "claude-haiku-4-5"
+    assert spawner["WAKU_PLATFORM_SMALL_MODEL"] == "claude-haiku-4-5"
+    assert proxy["WAKU_FREE_MODELS"] == "claude-haiku-4-5"
+
+
+def test_the_proxy_env_carries_the_platform_key_and_the_specs_free_tier_numbers(tmp_path):
+    """Group D is deferred, so no module pins these names; they are group F's
+    and proxy.env.example carries the same warning. The numbers are the
+    spec's, as literals."""
+    written = _env_body(tmp_path, "waku_proxy_env")
+    assert written["WAKU_PLATFORM_KEY"] == "sk-ant-envfiles-fixture"
+    assert written["WAKU_FREE_MONTHLY_CAP_USD"] == "1"
+    assert written["WAKU_FREE_CONCURRENT_CALLS"] == "4"
+    assert written["WAKU_FREE_REQUESTS_PER_MINUTE"] == "60"
+    assert written["WAKU_MAX_TOKENS_CEILING"] == "4096"
+    assert written["WAKU_MAX_BODY_BYTES"] == "4194304"
+    assert written["WAKU_PROXY_BIND"] == "10.88.0.1"
+
+
+def test_the_install_env_carries_exactly_what_every_other_script_reads(tmp_path):
+    """lib.sh's waku_load_install_env refuses without the first four, and
+    `docker compose --env-file` needs the rest to resolve compose.yaml. A
+    closed set in both directions."""
+    written = _env_body(tmp_path, "waku_install_env")
+    assert set(written) == {
+        "WAKU_ROOT", "WAKU_SRC", "WAKU_COMPOSE", "WAKU_DOMAIN",
+        "WAKU_DNS_PROVIDER", "WAKU_ACME_EMAIL", "WAKU_GATEWAY_ADDRESS",
+        "WAKU_TENANT_IMAGE", "WAKU_SERVICES_IMAGE", "WAKU_CADDY_IMAGE",
+        "WAKU_DATA_DEVICE", "WAKU_INSTALLED_COMMIT"}
+    assert written["WAKU_INSTALLED_COMMIT"] == (
+        "0123456789abcdef0123456789abcdef01234567")
+
+
+def test_a_checkout_with_no_git_history_records_the_commit_as_unknown(tmp_path):
+    """A tarball deploy is a real way to install, and `git rev-parse` there
+    exits 128. The value must be the word `unknown` and never the empty
+    string: an env_file line with nothing after the `=` is a variable Compose
+    passes through as empty, and "" is not distinguishable from "nobody wrote
+    this" when somebody is reading the file to find out what is deployed."""
+    written = _env_body(tmp_path, "waku_install_env", git=_GIT_WITHOUT_A_HEAD)
+    assert written["WAKU_INSTALLED_COMMIT"] == "unknown"
+
+
+def test_no_env_file_install_writes_holds_a_value_compose_would_misread(tmp_path):
+    """Every value goes into an env_file that Compose parses line by line. A
+    value with a newline in it writes a second variable; one with a trailing
+    space carries that space into whatever reads it. The fixtures above are
+    the shapes install.sh actually produces."""
+    for function in ("waku_install_env", "waku_gateway_env",
+                     "waku_spawner_env", "waku_proxy_env"):
+        for name, value in _env_body(tmp_path, function).items():
+            assert value == value.strip(), f"{function}: {name} has edge whitespace"
+            assert value, f"{function}: {name} is empty"
 
 
 # --- compose.yaml, rendered ---------------------------------------------------
@@ -329,7 +643,7 @@ def test_each_service_runs_as_the_user_the_socket_modes_need(rendered):
     assert "user" not in config["services"]["caddy"]
 
 
-def test_every_service_outranks_a_tenant_for_the_oom_killer(rendered):
+def test_every_service_carries_the_oom_score_the_spec_gives_it(rendered):
     """-500 as a LITERAL. Comparing the rendered value with
     template.SERVICE_OOM_SCORE_ADJ would hold for every value of that
     constant, zero included. The relation to the tenant's +500 is asserted

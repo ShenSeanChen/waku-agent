@@ -82,11 +82,23 @@ waku_signup_is_closed() {
   jq -e '.disable_signup == true' "$1" >/dev/null
 }
 
-# A number, optionally followed by one of K, M or G. Nothing else: no "1GB", no
-# "1.5G", no "1T", no leading sign, no embedded space. The refusal matters
-# because the result is written into spawner.env as WAKU_TENANT_DISK_BYTES and
-# an unparsed value there is a tenant with no disk limit.
+# A CLOSED SET ON THE VALUE, NOT ON THE CHARACTERS. That distinction cost a
+# finding: an earlier shape refused everything that was not a digit string and
+# so accepted `0`, and `--tenant-disk 0` writes WAKU_TENANT_DISK_BYTES=0, which
+# hosted/spawner/xfsquota.py turns into `xfs_quota -c 'limit -p bhard=0'` --
+# AND bhard=0 MEANS NO LIMIT IN XFS. A flag that reads as "the smallest
+# possible quota" produced an unbounded one, silently, with none of the
+# WAKU_DATA_DEVICE=none warnings to say so. That is the exact outcome the XFS
+# preflight refusal exists to prevent, reached through the one flag whose
+# comment called itself a closed set.
+#
+# What is accepted, and nothing else: a decimal number from 1 upwards with no
+# leading zero, optionally followed by one K, M or G, whose value in bytes
+# fits in the arithmetic that computes it. No "0", no "0G", no "010G" (bash
+# reads a leading zero as octal), no "1.5G", no "1GB", no "1T", no sign, no
+# space, and no magnitude that wraps.
 waku_bytes() {
+  local value number unit result
   value=$1
   case "$value" in
     *G|*g) number=${value%?}; unit=1073741824 ;;
@@ -95,7 +107,48 @@ waku_bytes() {
     *)     number=$value;     unit=1 ;;
   esac
   case "$number" in
-    ''|*[!0-9]*) return 1 ;;
+    ''|0*|*[!0-9]*) return 1 ;;
   esac
-  echo $((number * unit))
+  # 19 digits or more cannot be compared or multiplied here without wrapping,
+  # so it is refused before any arithmetic touches it.
+  case "$number" in
+    ???????????????????*) return 1 ;;
+  esac
+  result=$((number * unit))
+  # The overflow guard. `*[!0-9]*` constrains the characters and says nothing
+  # about the magnitude: 9999999999999G used to come back as
+  # 1413189099967217664. A product that does not divide back has wrapped.
+  [ $((result / unit)) -eq "$number" ] || return 1
+  [ "$result" -gt 0 ] || return 1
+  echo "$result"
+}
+
+# One NAME=VALUE line for an env_file, as a closed set.
+#
+# Compose reads config/caddy.env line by line. A line with no `=` is accepted
+# by Compose and leaves the variable UNSET -- measured against a real
+# `docker compose config` -- so an operator who mistyped a credential comes to
+# believe they set a value they did not, which is the sentence written above
+# install.sh's flag parser. A newline inside a value writes a second variable
+# nobody asked for.
+#
+# NAME: a letter or underscore, then letters, digits and underscores.
+# VALUE: one or more printable, non-space characters, IN THE C LOCALE. The
+# locale matters: a bracket expression follows LC_CTYPE, so under a UTF-8
+# login shell -- which a root shell on Ubuntu 24.04 commonly has -- multibyte
+# characters count as printable and the "closed" set quietly widens. The
+# subshell pins it for the length of the test and nothing else.
+waku_env_pair_ok() {
+  local pair name value
+  pair=$1
+  case "$pair" in
+    [A-Za-z_]*=*) : ;;
+    *) return 1 ;;
+  esac
+  name=${pair%%=*}
+  value=${pair#*=}
+  ( LC_ALL=C
+    case "$name" in *[![:alnum:]_]*) exit 1 ;; esac
+    case "$value" in ''|*[![:graph:]]*) exit 1 ;; esac
+    exit 0 )
 }
