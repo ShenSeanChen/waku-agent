@@ -42,18 +42,13 @@ USAGE
 # that take an id reach waku_reset_staging_slot, which runs
 # `find /staging -mindepth 1 -delete` over whatever "$WAKU_ROOT/staging/$one"
 # resolves to -- so `--reset-staging ..` would empty the staging root itself,
-# and `--tenant ../../srv` would take the retry path there. The shape is
-# core/tenant.TENANT_ID_RE, `^[a-z2-7]{12}$`, and nothing else is a tenant.
+# and `--tenant ../../srv` would take the retry path there.
 #
-# LC_ALL=C because a bracket expression follows LC_CTYPE, and a root login
-# shell on Ubuntu commonly has a UTF-8 one, under which the range quietly
-# widens. The empty string matches no bracket expression at all, which is why
-# the length is measured rather than inferred.
-is_tenant_id() {
-  ( LC_ALL=C
-    case "$1" in *[!a-z2-7]*) exit 1 ;; esac
-    [ "${#1}" -eq 12 ] )
-}
+# THE SET ITSELF IS waku_is_tenant_id IN lib.sh, which is where the one copy
+# lives now: this file and restore.sh each carried their own, byte for byte
+# the same, and F4 would have made it four. AN ID AND NOTHING ELSE IS THIS
+# SCRIPT'S OWN DECISION and stays here -- restore.sh and tenant.sh also accept
+# an email, and this one has nowhere to put one.
 
 while [ $# -gt 0 ]; do
   waku_needs_value "$1" "$#" --tenant --snapshot-staged --reset-staging \
@@ -73,7 +68,7 @@ done
 # a worse script, and this is also what makes the refusal reachable from a test
 # on a maintainer's laptop.
 if [ "$mode" != all ]; then
-  is_tenant_id "$one" \
+  waku_is_tenant_id "$one" \
     || waku_die "a tenant id is twelve characters of a-z and 2-7; got '$one'. It is joined to the staging root to make a path this script empties, so anything else is refused here."
 fi
 
@@ -253,7 +248,7 @@ tenants=$(sqlite3 "$staging/control/control.db" \
 # an id is a failure to report, not a path to act on.
 while IFS= read -r id; do
   [ -n "$id" ] || continue
-  if ! is_tenant_id "$id"; then
+  if ! waku_is_tenant_id "$id"; then
     waku_log "control.db names a tenant '$id' that is not a tenant id; not touching it"
     failures="$failures $id"
     continue

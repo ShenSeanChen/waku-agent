@@ -279,3 +279,69 @@ waku_load_backup_env() {
   [ -s "${RESTIC_PASSWORD_FILE:-}" ] \
     || waku_die "the file $file names as RESTIC_PASSWORD_FILE is empty. restic would initialise and write a repository with an empty password and report success every night; the operator finds out at restore time."
 }
+
+# --- appended by F4: the operator's closed sets --------------------------------
+
+# THE ONE COPY OF EACH. backup.sh and restore.sh each carried their own
+# is_tenant_id, byte for byte the same function, and F4 needed a third for
+# tenant.sh and a fourth for migrate.sh's snapshot. Four copies of a closed set
+# is four places for it to drift, and this directory's whole history is copies
+# drifting: the SQL that resolved an email lived in restore.sh AND in the
+# gateway and had already lost an ORDER BY. So the sets live here and the
+# scripts say which one they accept.
+#
+# A SCRIPT STILL DECIDES ITS OWN SET. backup.sh takes an id and NOT an email;
+# restore.sh and tenant.sh take either. That is a difference in what the script
+# accepts, not in what an id is, so it stays at the call site as
+# `waku_is_tenant_id "$x"` versus `waku_is_tenant_id "$x" || waku_is_tenant_email "$x"`.
+#
+# LC_ALL=C on every one: a bracket expression follows LC_CTYPE, and a root
+# login shell on Ubuntu commonly has a UTF-8 one, under which the ranges
+# quietly widen. Each runs in a subshell so the setting cannot leak.
+
+# core/tenant.TENANT_ID_RE, `^[a-z2-7]{12}$`. This is the shape that names a
+# staging slot, an archive directory, a restic tag and a bind mount, so `..`
+# or a tag with a comma in it is not a bad id, it is a different target. The
+# empty string matches no bracket expression at all, which is why the length is
+# measured rather than inferred.
+waku_is_tenant_id() {
+  ( LC_ALL=C
+    case "$1" in *[!a-z2-7]*) exit 1 ;; esac
+    [ "${#1}" -eq 12 ] )
+}
+
+# AN EMAIL IS NEVER A PATH. It is resolved to a tenant id by the gateway and
+# the ID is what reaches anything. This set exists for the other reasons: the
+# value is one argv word handed to `python -m hosted.gateway.admin`, and
+# tenant.sh prints it back inside a command line an operator copies and pastes.
+# Default-deny over the whole string first, then the structure.
+waku_is_tenant_email() {
+  ( LC_ALL=C
+    case "$1" in *[!A-Za-z0-9._%+@-]*) exit 1 ;; esac
+    local_part=${1%%@*}
+    domain=${1#*@}
+    # Exactly one @: the local part must not be empty, and what follows the
+    # first @ must not hold another.
+    [ -n "$local_part" ] || exit 1
+    [ "$local_part" != "$1" ] || exit 1
+    case "$domain" in
+      *@*) exit 1 ;;
+      *.*) ;;
+      *) exit 1 ;;
+    esac
+    [ "${#1}" -le 254 ] )
+}
+
+# A restic snapshot id is hex: eight characters short, sixty-four long. The
+# only other accepted word is `latest`, which is restic's own.
+#
+# A CLOSED SET FOR THE SAME REASON THE TENANT ID IS ONE: the value is the
+# positional argument of `restic restore`, so a value beginning with `-` is
+# read as a flag -- and restic's restore flags include `--target`, which is
+# where the snapshot's contents land.
+waku_is_snapshot_id() {
+  ( LC_ALL=C
+    [ "$1" = latest ] && exit 0
+    case "$1" in *[!0-9a-f]*) exit 1 ;; esac
+    [ "${#1}" -ge 8 ] && [ "${#1}" -le 64 ] )
+}

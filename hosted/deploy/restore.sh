@@ -62,68 +62,26 @@ refuse() {
   printf 'error: %s\n' "$*" >&2
 }
 
-# A CLOSED SET WITH DEFAULT-DENY, DERIVED FROM THIS SCRIPT'S OWN TEXT and not
-# copied from backup.sh's. What restore.sh does with a tenant id is wider than
-# what backup.sh does with one: it names the staging slot that
-# waku_reset_staging_slot bind-mounts and runs `find /staging -mindepth 1
-# -delete` inside, the `--include` path restic writes, the `tenant:<id>` restic
-# tag, and the argument the gateway acts on. Every one of those is a path or a
-# selector, so `..` or a tag with a comma in it is not a bad id, it is a
-# different target.
+# THE SETS ARE lib.sh's, AND THE CHOICE OF WHICH ONES IS THIS SCRIPT'S.
+# What restore.sh does with a tenant id is wider than what backup.sh does with
+# one: it names the staging slot that waku_reset_staging_slot bind-mounts and
+# runs `find /staging -mindepth 1 -delete` inside, the `--include` path restic
+# writes, the `tenant:<id>` restic tag, and the argument the gateway acts on.
+# Every one of those is a path or a selector, so `..` or a tag with a comma in
+# it is not a bad id, it is a different target.
 #
-# The shape is core/tenant.TENANT_ID_RE, `^[a-z2-7]{12}$`, because that is what
-# names a staging slot -- the spawner's own `<staging_root>/<tenant id>`.
+# THE OTHER HALF OF --tenant's SET IS AN EMAIL, which backup.sh does not take:
+# `restore.sh --tenant mei@example.com` is in the operator guide. An email is
+# never a path -- it is turned into a tenant id below and the id goes through
+# waku_is_tenant_id before it reaches anything.
 #
-# LC_ALL=C because a bracket expression follows LC_CTYPE, and a root login
-# shell on Ubuntu commonly has a UTF-8 one, under which the range quietly
-# widens. The empty string matches no bracket expression at all, which is why
-# the length is measured rather than inferred.
-is_tenant_id() {
-  ( LC_ALL=C
-    case "$1" in *[!a-z2-7]*) exit 1 ;; esac
-    [ "${#1}" -eq 12 ] )
-}
-
-# THE OTHER HALF OF --tenant's SET, and the reason restore.sh cannot reuse
-# backup.sh's guard: `restore.sh --tenant mei@example.com` is in the operator
-# guide, so an email is an accepted value here and is not one there.
-#
-# An email is NEVER a path. It is turned into a tenant id below and the id is
-# put through is_tenant_id before it reaches anything. This set exists for the
-# other reason: the value is embedded in one SQL string literal, so it refuses
-# the quote that would end that literal, along with every other character that
-# is not in an address -- whitespace, a semicolon, a backslash, a dollar sign,
-# a slash. Default-deny over the whole string first, then the structure.
-is_tenant_email() {
-  ( LC_ALL=C
-    case "$1" in *[!A-Za-z0-9._%+@-]*) exit 1 ;; esac
-    local_part=${1%%@*}
-    domain=${1#*@}
-    # Exactly one @: the local part must not be empty, and what follows the
-    # first @ must not hold another.
-    [ -n "$local_part" ] || exit 1
-    [ "$local_part" != "$1" ] || exit 1
-    case "$domain" in
-      *@*) exit 1 ;;
-      *.*) ;;
-      *) exit 1 ;;
-    esac
-    [ "${#1}" -le 254 ] )
-}
-
-# A restic snapshot id is hex: eight characters short, sixty-four long. The
-# only other accepted word is `latest`, which is restic's own.
-#
-# THIS IS A CLOSED SET FOR THE SAME REASON THE TENANT ID IS ONE. The value is
-# handed to restic as the positional argument of `restic restore`, so a value
-# beginning with `-` is read as a flag -- and restic's restore flags include
+# --snapshot HAS ONE TOO, waku_is_snapshot_id, because the value is the
+# positional argument of `restic restore` and restic's restore flags include
 # `--target`, which is where the snapshot's contents land.
-is_snapshot_id() {
-  ( LC_ALL=C
-    [ "$1" = latest ] && exit 0
-    case "$1" in *[!0-9a-f]*) exit 1 ;; esac
-    [ "${#1}" -ge 8 ] && [ "${#1}" -le 64 ] )
-}
+#
+# All three moved into lib.sh in F4: this file and backup.sh each carried the
+# same waku_is_tenant_id byte for byte, and tenant.sh and migrate.sh needed them
+# too. Four copies of a closed set is four places for it to drift.
 
 while [ $# -gt 0 ]; do
   waku_needs_value "$1" "$#" --tenant --snapshot \
@@ -151,10 +109,10 @@ done
 # for the same two reasons: a script that demands root before telling you an
 # argument is wrong is a worse script, and it is what makes these refusals
 # reachable from a test on a maintainer's laptop.
-is_snapshot_id "$snapshot" \
+waku_is_snapshot_id "$snapshot" \
   || waku_die "a snapshot is 'latest' or 8 to 64 hex characters; got '$snapshot'. It is the positional argument of restic restore, so anything else is refused here. List them with: restic snapshots"
 if [ "$mode" = one ]; then
-  is_tenant_id "$one" || is_tenant_email "$one" \
+  waku_is_tenant_id "$one" || waku_is_tenant_email "$one" \
     || waku_die "--tenant takes a tenant id (twelve characters of a-z and 2-7) or an email address; got '$one'"
   # REFUSED RATHER THAN IGNORED. A one-tenant restore goes through the gateway
   # for everything it does -- it is what stops that tenant's container, inside
@@ -205,14 +163,14 @@ waku_flock_staging
 resolve_tenant() {
   local value answer id
   value=$1
-  if is_tenant_id "$value"; then
+  if waku_is_tenant_id "$value"; then
     printf '%s\n' "$value"
     return 0
   fi
   # THROUGH THE GATEWAY'S OWN `resolve` VERB, AND NOT THROUGH SQL OF THIS
   # SCRIPT'S OWN. An earlier version of this function ran
   # `select id from tenant where email = '$value'` inside the gateway's
-  # container. It was not injectable -- is_tenant_email is a closed set that
+  # container. It was not injectable -- waku_is_tenant_email is a closed set that
   # refuses the quote -- but it was a SECOND COPY OF A CONTRACT, and it had
   # already drifted from the one it copied: store.tenant_by_email pins its
   # answer with `ORDER BY created_at, id LIMIT 1` because an address is not
@@ -222,14 +180,14 @@ resolve_tenant() {
   # `tenant.sh disable <email>` and `waku_admin restore <email>` already use.
   #
   # THE ANSWER IS STILL ONLY A CANDIDATE. The extraction takes whatever sits
-  # at the "tenant" key and is_tenant_id in restore_tenant decides -- so a
+  # at the "tenant" key and waku_is_tenant_id in restore_tenant decides -- so a
   # malformed answer, an empty one or two of them is a refusal, not a path.
   answer=$(waku_admin resolve "$value") || {
     refuse "the gateway could not resolve '$value' to a tenant: $answer"
     return 1
   }
   # `[^"]*` rather than an interval expression: BRE `\{12\}` is POSIX and
-  # works on GNU and BSD sed alike, but the id's shape is is_tenant_id's job
+  # works on GNU and BSD sed alike, but the id's shape is waku_is_tenant_id's job
   # and stating it twice is how the two drift apart.
   id=$(printf '%s' "$answer" | sed -n 's/.*"tenant": *"\([^"]*\)".*/\1/p')
   if [ -z "$id" ]; then
@@ -248,7 +206,7 @@ restore_tenant() {
   # of them continues into a bind mount, a `find -delete`, a restic tag and a
   # path restic writes. A row is trusted for its content and checked for its
   # shape, because a poisoned row is the same hole through a different door.
-  if ! is_tenant_id "$id"; then
+  if ! waku_is_tenant_id "$id"; then
     refuse "'$id' is not a tenant id (twelve characters of a-z and 2-7). It would be joined to $staging to make a path this restore empties, so it is refused instead."
     return 1
   fi

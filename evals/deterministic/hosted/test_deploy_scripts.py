@@ -30,11 +30,17 @@ from pathlib import Path
 import pytest
 import shelllib
 
-# F2, F3 and F4 each append their own names to this set in the same commit that
+# F2, F3 and F4 each APPEND their own names to this set in the same commit that
 # adds the script. C3's firewall.sh joins it when C3 lands.
+#
+# APPEND, NEVER PASTE A REPLACEMENT LITERAL. The F2 brief's version of this
+# block dropped envfiles.sh, which already existed and is already covered by
+# every parametrised test below -- so pasting it verbatim would have deleted a
+# script's parse check, its executable-bit check and its membership assertion
+# in one edit, with the suite green. F4 appended migrate.sh and tenant.sh.
 EXPECTED_SCRIPTS = {"backup.sh", "checks.sh", "envfiles.sh", "install.sh",
-                    "lib.sh", "networks.sh", "restore.sh", "tree.sh",
-                    "upgrade.sh"}
+                    "lib.sh", "migrate.sh", "networks.sh", "restore.sh",
+                    "tenant.sh", "tree.sh", "upgrade.sh"}
 
 COMPOSE = shelllib.DEPLOY / "compose.yaml"
 SERVICES = ("caddy", "gateway", "proxy", "spawner")

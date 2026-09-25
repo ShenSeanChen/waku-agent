@@ -428,7 +428,8 @@ class DockerRuntime:
         """The maintenance mark, enforced by the spawner so it survives a
         gateway restart.
 
-        It blocks on template.BLOCKING_KINDS -- KIND_TASK and KIND_INSPECT,
+        THREE CALLERS: `start`, `_restore`, and `_archive`. It blocks on
+        template.BLOCKING_KINDS -- KIND_TASK and KIND_INSPECT,
         which are the OPERATOR's containers. It does NOT block on
         KIND_PROVISION, the spawner's own bookkeeping, which every start
         creates on its way to starting the container: blocking on that would
@@ -444,9 +445,11 @@ class DockerRuntime:
             kind = (entry.get("Labels") or {}).get(template.LABEL_KIND)
             if kind in template.BLOCKING_KINDS:
                 raise Busy(
-                    f"tenant {tenant_id} has a {kind} container running. "
-                    "Starting their dashboard now would put two processes "
-                    "on one state.db.")
+                    f"tenant {tenant_id} has a {kind} container running, and "
+                    "it binds their home and env directories. Starting their "
+                    "dashboard would put two processes on one state.db; "
+                    "archiving or restoring would move those directories out "
+                    "from under a live mount.")
 
     # --- the five file tasks ---------------------------------------------
     #
@@ -803,7 +806,26 @@ class DockerRuntime:
         image, no network, the tenant's two mounts and the ONE extra the task
         needs -- the archive root, which is the platform's own directory and
         not any tenant's.
+
+        IT REFUSES A BUSY TENANT, and that is not the same guard `_restore`
+        already has: `_restore` calls `_refuse_if_busy` and then calls THIS,
+        but `tenant.sh delete` reaches this method through the admin verb
+        `delete`, which runs `archive` on its own and never went past that
+        check. An inspect container is the one that bites -- it is
+        operator-started, AutoRemove is deliberately off, and it lives until
+        `inspect-stop`, so `launcher.stop` and `stop-all` both leave it
+        running with `state.db` open. The archive it would then pack is the
+        ONLY copy a deleted tenant has (backup.sh's own comment: archives are
+        in no restic snapshot), so a torn database here is not recoverable
+        from anywhere. Refusing costs the operator one `tenant.sh
+        inspect-stop`; the admin verb has already set the tenant's status to
+        disabled by this point, which `tenant.sh enable` reverses.
+
+        The double call on the restore path is deliberate and free: the query
+        is one label lookup and nothing between the two creates a blocking
+        container.
         """
+        await self._refuse_if_busy(tenant_id)
         archive = self._tenant_directory_under(self._config.archive_root, tenant_id)
         stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
         name = f"{tenant_id}-{stamp}" + (f"-{suffix}" if suffix else "")

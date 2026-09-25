@@ -892,6 +892,47 @@ def test_a_restore_refuses_while_a_container_holds_the_tenants_mounts(world, kin
     assert list((config.archive_root / TENANT).glob("*pre-restore*")) == []
 
 
+@pytest.mark.parametrize("kind", sorted(template.BLOCKING_KINDS))
+def test_an_archive_refuses_while_a_container_holds_the_tenants_mounts(world, kind):
+    """The same dead-inode exposure as the restore above, through the door
+    `tenant.sh delete` opens.
+
+    `_restore` calls `_refuse_if_busy` and then calls `_archive`; the admin
+    verb `delete` calls `_archive` ON ITS OWN and went past no such check. An
+    inspect container is the one that bites: it is operator-started,
+    AutoRemove is deliberately off, and it lives until `inspect-stop`, so it
+    survives `launcher.stop` and `stop-all` with the tenant's `state.db` open.
+    The archive `delete` takes is the ONLY copy a deleted tenant has --
+    backup.sh puts archives in no restic snapshot -- so a database packed from
+    under a live writer is not recoverable from anywhere.
+
+    NOTHING MAY HAVE BEEN PACKED. An exit code alone would pass with the
+    refusal placed after the tar, which is the point at which the bad copy
+    already exists.
+    """
+    runtime, engine, config, _claimed, _limited = world
+    asyncio.run(runtime.provision(TENANT, PROJECT))
+    _busy_with(engine, kind)
+
+    with pytest.raises(docker_mod.Busy) as refused:
+        asyncio.run(runtime.task(TENANT, "archive"))
+
+    assert kind in str(refused.value)
+    assert list((config.archive_root / TENANT).glob("*")) == []
+
+
+def test_an_archive_is_not_refused_by_the_spawners_own_provision_container(world):
+    """KIND_PROVISION is the spawner's own bookkeeping, and `_refuse_if_busy`
+    has always excluded it. An archive that refused itself over one would make
+    `tenant.sh delete` unrunnable on any tenant whose start had just left one
+    behind."""
+    runtime, engine, _config, _claimed, _limited = world
+    asyncio.run(runtime.provision(TENANT, PROJECT))
+    _busy_with(engine, template.KIND_PROVISION)
+
+    assert "path" in asyncio.run(runtime.task(TENANT, "archive"))
+
+
 def test_a_restore_is_not_refused_by_the_spawners_own_provision_container(world):
     """KIND_PROVISION is the spawner's own bookkeeping, not an operator's
     container, and `_refuse_if_busy` has always excluded it. A restore that

@@ -1,7 +1,7 @@
 """Acceptance 15 -- no privileged process follows a tenant's symlink.
 
-THE PROVISIONING HALF, AND F3'S BACKUP AND RESTORE HALVES. F4 adds archive
-and inspect.
+THE PROVISIONING HALF, F3'S BACKUP AND RESTORE HALVES, AND F4'S ARCHIVE AND
+INSPECT HALVES.
 
 THE SHAPE: plant the symlinks a tenant could plant, run provisioning, and check
 the target by LISTING ITS PARENT rather than by an exit code or a `.exists()`.
@@ -24,6 +24,7 @@ from __future__ import annotations
 import itertools
 import json
 import os
+from pathlib import Path
 
 import dockerlib
 import pytest
@@ -36,7 +37,7 @@ from spawnerlib import (
     capture_task_containers,
 )
 
-from hosted.core.tenant import ALPHABET, FIRST_PROJECT_ID
+from hosted.core.tenant import ALPHABET, FIRST_PROJECT_ID, INSPECT_NETWORK
 from hosted.spawner import template
 
 # Far enough above test_spawner.py's PROJECT_A/PROJECT_B that the two modules
@@ -406,3 +407,116 @@ def test_a_restored_tenant_still_cannot_write_past_their_disk_limit(
     assert over.returncode != 0, (
         "a restored tenant wrote past their disk limit, so the restore did not "
         "give their directories their project id back")
+
+
+_EXTRACT = """
+mkdir -p /tmp/out
+zstd -dc "/archive/$1-env.tar.zst" | tar -x -C /tmp/out
+if [ -L /tmp/out/.env ]; then
+  printf 'LINK %s\\n' "$(readlink /tmp/out/.env)"
+else
+  printf 'FILE\\n'
+fi
+cat /tmp/out/archive-link-target.txt
+printf '\\n'
+"""
+
+
+def test_an_archive_does_not_follow_a_planted_symlink(spawner, spawner_root, tenant):
+    """Acceptance 15, the archive half.
+
+    `tenant.sh delete` archives the tree and the spec then removes it, so a
+    followed link here packs a file from outside the tenant's directories into
+    an archive an operator keeps for 30 days -- and that archive is the only
+    copy a deleted tenant has.
+
+    THE TARGET EXISTS, AND THAT IS WHAT MAKES THIS ABLE TO FAIL, for the
+    reason the backup half above gives. `_ARCHIVE_SCRIPT` only ever READS the
+    two mounts, so asserting that a path is absent from the tenant's directory
+    is true whatever tar did, and a dangling link would additionally make a
+    following tar error rather than copy. With a real file behind the link, a
+    tar that followed it puts a REGULAR file holding `_SENTINEL` into the
+    archive, and reading the entry back out is what tells the two apart.
+    """
+    tenant_id, project_id = tenant
+    _plant_target(spawner_root, tenant_id, "archive-link-target.txt")
+    _plant(spawner_root, tenant_id, ".env", "/work/archive-link-target.txt")
+
+    answer = ask(spawner, {"op": "task", "tenant_id": tenant_id, "task": "archive",
+                           "project_id": project_id})
+    assert "error" not in answer, answer
+
+    base = Path(answer["path"])
+    assert base.parent == spawner_root / "archive" / tenant_id, (
+        "the archive went somewhere other than this tenant's own archive "
+        "directory, so binding the shared root would put every other tenant's "
+        "archives inside a container running tenant-owned code")
+    for part in ("home", "env"):
+        assert base.with_name(f"{base.name}-{part}.tar.zst").exists(), part
+
+    read_back = dockerlib.run_once(
+        SERVICES_TAG, ["bash", "-euc", _EXTRACT, "extract", base.name],
+        read_only=False, network="none",
+        binds=[f"{base.parent}:/archive"])
+    # THE DISCRIMINATOR: a followed link is a regular file holding the bytes.
+    assert read_back.stdout.startswith("LINK /work/archive-link-target.txt"), (
+        f"the archive followed the planted .env symlink: {read_back.stdout!r}")
+    # And the archive is not empty for some unrelated reason: the target itself
+    # was packed, as an ordinary file, so tar really did walk the directory.
+    assert _SENTINEL in read_back.stdout
+
+
+def test_inspect_runs_on_the_inspect_bridge_and_stops_again(
+        spawner, spawner_root, tenant):
+    """Acceptance 15's inspect half, plus the property the separate bridge
+    exists for: an inspect container takes a DYNAMIC address, and the whole
+    fixed-address scheme rests on nothing but tenant containers being on
+    10.88/16.
+
+    The mounts are held to `allowed_bind_sources`' default-deny set, which for
+    `inspect` is the tenant's own two directories and nothing else: an inspect
+    container runs a stock waku dashboard on tenant-owned data, so a third
+    mount here is a path that dashboard can reach.
+    """
+    tenant_id, project_id = tenant
+    answer = ask(spawner, {"op": "task", "tenant_id": tenant_id, "task": "inspect",
+                           "project_id": project_id})
+    assert "error" not in answer, answer
+    assert answer["address"] == "127.0.0.1", (
+        "the inspect dashboard has no authentication and is reached over an "
+        "SSH tunnel, so it is published on the host's loopback only")
+    try:
+        info = dockerlib.inspect(
+            template.container_name(tenant_id, template.KIND_INSPECT))
+        networks = set(info["NetworkSettings"]["Networks"])
+        assert networks == {INSPECT_NETWORK}
+        binds = {bind.split(":", 1)[0].rstrip("/")
+                 for bind in info["HostConfig"]["Binds"]}
+        assert binds == allowed_bind_sources(spawner_root, tenant_id, "inspect")
+    finally:
+        _task_ok(spawner, tenant_id, project_id, "inspect-stop")
+
+
+def test_an_archive_refuses_while_an_inspect_container_holds_the_tenant(
+        spawner, spawner_root, tenant):
+    """`tenant.sh delete` reaches `archive` through the admin verb `delete`,
+    which never went past `_refuse_if_busy`.
+
+    An inspect container is operator-started, AutoRemove is off, and it lives
+    until `inspect-stop`, so it survives `launcher.stop` and `stop-all` with
+    `state.db` open. The archive taken from under it is the only copy a deleted
+    tenant has, so a torn database there is not recoverable from anywhere.
+    """
+    tenant_id, project_id = tenant
+    _task_ok(spawner, tenant_id, project_id, "inspect")
+    try:
+        answer = ask(spawner, {"op": "task", "tenant_id": tenant_id,
+                               "task": "archive", "project_id": project_id})
+        assert answer.get("code") == "busy", answer
+        assert not list((spawner_root / "archive" / tenant_id).glob("*.tar.zst")), (
+            "the refusal landed after the tree had already been packed")
+    finally:
+        _task_ok(spawner, tenant_id, project_id, "inspect-stop")
+    # And the refusal was the inspect container and not something permanent:
+    # once it is gone the archive runs.
+    _task_ok(spawner, tenant_id, project_id, "archive")
