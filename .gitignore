@@ -1,7 +1,6 @@
 __pycache__/
 *.pyc
 .venv/
-.env
 state.db
 traces/
 *.ics
@@ -43,3 +42,5 @@ lab/one-memory-every-agent/grok-plugin/
 lab/**/*.excalidraw
 !lab/kimi-k3/**/*.excalidraw
 !lab/pi-agent/**/*.excalidraw
+config.bat
+node_modules
