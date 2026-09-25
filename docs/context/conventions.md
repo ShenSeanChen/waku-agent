@@ -60,6 +60,20 @@ this ladder either.
   `make gate` does not run it and it has its own CI job.
 - Every behaviour change gets a deterministic eval. A bug fix adds the case
   that would have caught the bug.
+- **Prove the test can fail.** Break the thing it guards, watch it go red, put
+  it back. A test that has never failed has never been tested. Say in the PR
+  what you broke.
+- Three shapes that pass forever, all three found in this repo: comparing a
+  value to the constant that sets it (`assert payload["X"] == module.X` holds
+  for every value of `X`, zero included); resting on a number that happens to
+  equal a library default; and a `pytest.raises(match=...)` needle that matches
+  pytest's `tmp_path`, which spells the test's own name, rather than the
+  message the code writes. Pin the literal, or assert the behaviour.
+- Never assert that a string appears in source. A test that greps for a
+  function's name passes whether or not the function works, and keeps passing
+  after it is deleted and written again wrong. Import it and call it.
+- Write a guard as a closed set: allow what is named, refuse the rest. A guard
+  that enumerates the ways to go wrong is a guess about an open set.
 - A new route in `waku/ops/dashboard.py` needs two things beyond its handler:
   a pin in `evals/deterministic/test_dashboard_routes.py`, and a decision in
   `hosted/core/policy.py` about whether the hosted gateway passes, filters or
