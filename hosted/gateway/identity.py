@@ -13,9 +13,18 @@ upmikpuftlvvpwkvouqr carries:
 So the audience comes from configuration, defaulting to that value, and
 `role == "authenticated"` is checked as its own claim. Both are enforced.
 
-ONE AUDIENCE, NEVER A LIST. An audience list containing both the custom value
-and "authenticated" would accept a token from any Supabase project that has
-not customised its audience, leaving the issuer as the only thing doing work.
+ONE AUDIENCE, NEVER A LIST -- ON BOTH SIDES. The configured audience is one
+string: a list holding both the custom value and "authenticated" would accept
+a token from any Supabase project that has not customised its audience,
+leaving the issuer as the only thing doing work. The TOKEN's own `aud` is held
+to one string too, which PyJWT does not do: it admits a token whose `aud` is a
+list containing the configured value. This project mints a single string --
+waku-memory's 0009_auth_hook.sql stamps one -- so the strict reading costs
+nothing today and refuses a multi-audience token minted for somebody else that
+happens to name us. If Supabase is ever configured to mint a list, THIS is the
+line that has to change, and it will announce itself: every sign-in is refused
+with "that token names more than one audience" in the log, which is a louder
+failure than a quietly widened check.
 
 ASYMMETRIC ALGORITHMS ONLY. ALGORITHMS holds ES256 and RS256 and no HS*: with
 an HMAC algorithm admitted, a JWKS document's own public key bytes become a
@@ -142,6 +151,10 @@ class JwksVerifier:
         except jwt.PyJWTError as exc:
             raise NotSignedIn("that token is not valid here") from exc
         self._check_window(claims)
+        if claims.get("aud") != self._audience:
+            # PyJWT already refused an `aud` that does not CONTAIN the
+            # configured value. What it allows and this does not is a list.
+            raise NotSignedIn("that token names more than one audience")
         if claims.get("role") != AUTHENTICATED_ROLE:
             # The claim the spec calls `aud`. A service-role or anon-role
             # token carries the same signature and must not sign anybody in.

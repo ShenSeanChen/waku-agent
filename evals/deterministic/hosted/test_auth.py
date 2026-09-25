@@ -298,3 +298,21 @@ def test_a_pre_warm_that_fails_is_not_a_failed_sign_in(harness):
     assert apex_cookie != ""
     assert landed[0] == 200
     assert len(ops(harness.spawner, "start")) == 1
+
+
+def test_a_token_naming_more_than_one_audience_is_refused():
+    """PyJWT accepts a token whose `aud` is a LIST containing the configured
+    value; this project mints one string, so the list is held to be somebody
+    else's token that happens to name us.
+
+    If Supabase is ever configured to mint a list, this test is the sentence
+    that has to be rewritten -- deliberately, with the reason in the commit,
+    rather than by a check quietly widening under a green suite.
+    """
+    private, jwks = signing_key()
+    clock = Clock()
+    listed = sign(private, now=clock.t, aud=[AUDIENCE, "https://other.example"])
+    with pytest.raises(NotSignedIn):
+        verifier_for(jwks, clock).verify(listed)
+    # The single string, unchanged, still verifies.
+    assert verifier_for(jwks, clock).verify(sign(private, now=clock.t)).sub == "sub-mei"

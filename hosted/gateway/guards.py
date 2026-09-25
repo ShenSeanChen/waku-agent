@@ -22,6 +22,23 @@ SERVICE_WORKER_HEADER = "Service-Worker"
 SERVICE_WORKER_VALUE = "script"
 HOST_CHARACTERS = frozenset("abcdefghijklmnopqrstuvwxyz0123456789-.")
 
+# The two methods that may cross the door without the CSRF pair, named.
+# EVERYTHING else needs both halves -- PUT, DELETE, PATCH, OPTIONS, TRACE and
+# any verb nobody has thought of. The first draft of this module asked "is it
+# a POST?", which is the open set this spec keeps losing to: a PUT with a
+# foreign Origin and a text/plain body was forwarded with the tenant's cookie
+# on it. Nothing upstream takes a PUT today, which is exactly the kind of
+# sentence that stops being true without anybody editing this file.
+CHECKED_EXEMPT_METHODS = frozenset({"GET", "HEAD"})
+
+# The hand-off navigation is same-site: the apex and a tenant host share
+# agent.waku.one. An absent header is admitted because Fetch Metadata is a
+# browser feature, not a wire guarantee -- Safari only began sending it in
+# 16.4 -- and a sign-in nobody can complete is worse than the narrow window
+# it leaves. Script cannot forge these: Sec-* is a forbidden header name.
+HANDOFF_FETCH_SITES = frozenset({"", "same-site", "same-origin"})
+FETCH_SITE_HEADER = "Sec-Fetch-Site"
+
 
 def normalise_host(raw: str | None) -> str:
     """The host a request was sent to, lowercased, without its port.
@@ -35,10 +52,14 @@ def normalise_host(raw: str | None) -> str:
     """
     if not raw:
         return ""
-    host = raw.strip().lower().rstrip(".")
+    host = raw.strip().lower()
     if host.count(":") > 1:
         return ""
-    host = host.split(":", 1)[0]
+    # The PORT first, THEN the root label's dot. The other order reads
+    # "agent.waku.one.:443" as the host "agent.waku.one." and refuses it 421,
+    # which is fail-closed but makes this docstring false for a name a
+    # resolver treats as ordinary.
+    host = host.split(":", 1)[0].rstrip(".")
     if not host or not host.isascii():
         return ""
     if any(character not in HOST_CHARACTERS for character in host):
@@ -87,11 +108,32 @@ def csrf_refusal(request: web.Request, host: str) -> str:
 
     The scheme is fixed at https because Caddy terminates TLS and a __Host-
     cookie is not sent over anything else.
+
+    AN ALLOWLIST OF METHODS, not a test for one method. GET and HEAD are named
+    as the two that pass without the pair, because they are what a navigation
+    is; every other verb is checked, including the ones this deployment does
+    not serve.
     """
-    if request.method != "POST":
+    if request.method in CHECKED_EXEMPT_METHODS:
         return ""
     if request.content_type != JSON_CONTENT_TYPE:
         return "not json"
     if request.headers.get("Origin", "") != f"https://{host}":
         return "foreign origin"
     return ""
+
+
+def handoff_refusal(request: web.Request) -> str:
+    """Empty when the hand-off navigation may be honoured.
+
+    GET /auth/enter is the one route on a tenant host served WITHOUT a
+    session, so the CSRF pair cannot apply to it -- it is a navigation, and it
+    carries no body. Its own risk runs the other way: an attacker who signs in
+    as themselves can mint a code and navigate somebody else's browser to
+    their tenant host, and that victim then types into the attacker's
+    container. `Sec-Fetch-Site` is what tells the two apart: the real hand-off
+    is `same-site` (the apex and the tenant host share the registrable
+    domain), and a link from anywhere else is `cross-site`.
+    """
+    site = request.headers.get(FETCH_SITE_HEADER, "").strip().lower()
+    return "" if site in HANDOFF_FETCH_SITES else "cross-site hand-off"

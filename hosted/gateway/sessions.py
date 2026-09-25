@@ -31,6 +31,29 @@ APEX_COOKIE = "__Host-waku_session"
 TENANT_COOKIE = "__Host-waku_tenant"
 HANDOFF_TTL_SECONDS = 60.0
 
+# A SESSION IS BOUND TO THE HOST THAT ISSUED IT, in the value that is stored
+# rather than in a column. What the browser holds is the secret; what the
+# store and the cache are keyed on is the secret with its scope in front, so
+# the apex's cookie value replayed as __Host-waku_tenant hashes to a row that
+# does not exist. Before this, the two cookies were one credential with two
+# names: the separation was a naming convention, and any future path that
+# leaked an apex value handed over a tenant session with it.
+#
+# In the value and not in a new column because hosted/gateway/store.py is
+# group B's, `create_session` hashes whatever it is given, and a scope that
+# lives in the string is a scope no caller can forget to pass -- there is no
+# unscoped overload to reach for.
+APEX_SCOPE = "apex:"
+TENANT_SCOPE = "tenant:"
+
+
+def apex_key(value: str) -> str:
+    return APEX_SCOPE + value
+
+
+def tenant_key(tenant_id: str, value: str) -> str:
+    return f"{TENANT_SCOPE}{tenant_id}:{value}"
+
 
 def new_secret() -> str:
     """43 characters of the URL-safe base64 alphabet: a session value or a

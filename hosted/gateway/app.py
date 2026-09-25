@@ -283,9 +283,7 @@ class Gateway:
         except NotActive as exc:
             return answers.json_error(403, str(exc))
         value = sessions.new_secret()
-        self._store.create_session(tenant_id=tenant.id, value=value,
-                                   expires_at=self._now() + SESSION_TTL_SECONDS)
-        self._sessions.put(value, tenant.id)
+        self._remember(sessions.apex_key(value), tenant.id)
         code = self._handoffs.issue(tenant.id)
         # Pre-warm: the container boots while the tenant's page loads. A
         # failure here is not a failed sign-in -- the first request on the
@@ -303,13 +301,21 @@ class Gateway:
 
     def _sign_out(self, request: web.Request) -> web.Response:
         value = request.cookies.get(sessions.APEX_COOKIE, "")
-        tenant_id = self._resolve_session(value) if value else None
+        tenant_id = self._resolve(sessions.apex_key(value)) if value else None
         if tenant_id is not None:
             self.end_sessions(tenant_id)
             _LOG.info("signed out tenant=%s", tenant_id)
+        return self._signed_out_response(sessions.APEX_COOKIE)
+
+    def _signed_out_response(self, cookie_name: str) -> web.Response:
+        """The same answer on both hosts: the cookie deleted with the
+        attributes it was set with, and this origin's cache and storage
+        cleared. Clear-Site-Data is per ORIGIN, so a logout that only ever
+        rides the apex response leaves the tenant origin's storage and its
+        now-dead cookie sitting in the browser."""
         response = answers.json_ok({"ok": True})
         response.headers["Clear-Site-Data"] = CLEAR_SITE_DATA
-        sessions.clear_session_cookie(response, sessions.APEX_COOKIE)
+        sessions.clear_session_cookie(response, cookie_name)
         return response
 
     # --- a tenant host --------------------------------------------------
@@ -320,7 +326,17 @@ class Gateway:
         if request.method == "GET" and path == "/auth/enter":
             return self._enter(request, label)
         value = request.cookies.get(sessions.TENANT_COOKIE, "")
-        tenant_id = self._resolve_session(value) if value else None
+        tenant_id = (self._resolve(sessions.tenant_key(label, value))
+                     if value else None)
+        if request.method == "POST" and path == "/auth/logout":
+            # A logout route on THIS origin, so Clear-Site-Data reaches it.
+            # The gateway answers it rather than forwarding it: the stock
+            # dashboard has no session to end, and this path must work even
+            # when the container is not running.
+            if tenant_id is not None:
+                self.end_sessions(tenant_id)
+                _LOG.info("signed out tenant=%s on its own host", tenant_id)
+            return self._signed_out_response(sessions.TENANT_COOKIE)
         if tenant_id != label:
             # Not signed in here, or signed in as somebody else. The same
             # answer for both: a session that names another tenant tells the
@@ -338,13 +354,29 @@ class Gateway:
 
         The one route on a tenant host served without a session, because it is
         how the session is made (spec, "Host check").
+
+        THREE THINGS ARE CHECKED AND THE ANSWER IS THE SAME FOR ALL THREE.
+        The navigation must not be cross-site, or an attacker mints a code on
+        their own account and walks somebody else's browser into their
+        container. The code must redeem. And the tenant it names must exist
+        and be active -- `redeem` proves only that this gateway issued the
+        code, and a tenant can be disabled between the sign-in and the
+        hand-off, so without this the disable path rests entirely on
+        `end_sessions` burning outstanding codes.
+
+        FOR E3: do not turn on aiohttp's access log without filtering this
+        route. Its default line would write `?code=<43 characters>` into the
+        operator's log file, where it is a live hand-off for sixty seconds.
         """
+        if guards.handoff_refusal(request):
+            return answers.redirect(f"https://{self._config.apex_host}/login")
         if not self._handoffs.redeem(request.query.get("code", ""), label):
             return answers.redirect(f"https://{self._config.apex_host}/login")
+        tenant = self._store.tenant_by_id(label)
+        if tenant is None or tenant.status != "active":
+            return answers.redirect(f"https://{self._config.apex_host}/login")
         value = sessions.new_secret()
-        self._store.create_session(tenant_id=label, value=value,
-                                   expires_at=self._now() + SESSION_TTL_SECONDS)
-        self._sessions.put(value, label)
+        self._remember(sessions.tenant_key(label, value), label)
         response = answers.redirect("/")
         sessions.set_session_cookie(response, sessions.TENANT_COOKIE, value,
                                     max_age=int(SESSION_TTL_SECONDS))
@@ -355,11 +387,23 @@ class Gateway:
             return answers.redirect(f"https://{self._config.apex_host}/login")
         return answers.json_error(401, answers.NO_SESSION)
 
-    def _resolve_session(self, value: str) -> str | None:
-        cached = self._sessions.get(value)
+    def _remember(self, key: str, tenant_id: str) -> None:
+        """One writer for a session: the row and the cache, on the SCOPED key.
+
+        The row is what survives this process; the cache is what keeps a
+        dashboard's burst of requests off SQLite. A caller that wrote one and
+        forgot the other would be a session that works for sixty seconds, or
+        one that works only after a restart.
+        """
+        self._store.create_session(tenant_id=tenant_id, value=key,
+                                   expires_at=self._now() + SESSION_TTL_SECONDS)
+        self._sessions.put(key, tenant_id)
+
+    def _resolve(self, key: str) -> str | None:
+        cached = self._sessions.get(key)
         if cached is not None:
             return cached
-        tenant_id = self._store.session_tenant(value, self._now())
+        tenant_id = self._store.session_tenant(key, self._now())
         if tenant_id is not None:
-            self._sessions.put(value, tenant_id)
+            self._sessions.put(key, tenant_id)
         return tenant_id

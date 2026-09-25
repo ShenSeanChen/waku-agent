@@ -22,9 +22,8 @@ from gatewaylib import (
 )
 
 from hosted.core import policy
-from hosted.gateway import answers, guards
+from hosted.gateway import answers
 from hosted.gateway.config import REQUIRED_ENV_NAMES
-from hosted.gateway.store import SESSION_TTL_SECONDS
 
 ROOT = Path(__file__).resolve().parents[3]
 REPO_ENV_EXAMPLE = ROOT / "hosted" / "deploy" / "gateway.env.example"
@@ -121,8 +120,11 @@ def test_both_cookies_carry_exactly_the_attributes_the_host_prefix_requires(harn
         return (cookie_attributes(apex_headers, "__Host-waku_session"),
                 cookie_attributes(tenant_headers, "__Host-waku_tenant"))
 
+    # 2592000 spelled out: thirty days. Built from SESSION_TTL_SECONDS, this
+    # assertion held for every value of it -- cutting the constant to 60 left
+    # the test green and pinned the cookie's lifetime nowhere.
     expected = {"httponly", "secure", "samesite=lax", "path=/",
-                f"max-age={int(SESSION_TTL_SECONDS)}"}
+                "max-age=2592000"}
     for attributes in asyncio.run(run()):
         assert attributes == expected
 
@@ -200,16 +202,25 @@ def test_logout_on_the_apex_ends_the_tenant_host_session_at_once(harness):
     assert after[0] == 401
 
 
+# 421 as a literal, not as `guards.MISDIRECTED`. Written the second way, the
+# test holds for every value of that constant: setting MISDIRECTED = 200 left
+# all 646 evals green while a wrong host was answered 200.
 @pytest.mark.parametrize("host, expected", [
     ("agent.waku.one", 404),
     ("zzzzzzzzzzzz.agent.waku.one", 401),
-    ("not-a-tenant.agent.waku.one", guards.MISDIRECTED),
-    ("a.zzzzzzzzzzzz.agent.waku.one", guards.MISDIRECTED),
-    ("agent.waku.one.evil.example", guards.MISDIRECTED),
-    ("", guards.MISDIRECTED),
-    ("localhost", guards.MISDIRECTED),
+    ("not-a-tenant.agent.waku.one", 421),
+    ("a.zzzzzzzzzzzz.agent.waku.one", 421),
+    ("agent.waku.one.evil.example", 421),
+    ("", 421),
+    ("localhost", 421),
+    ("zzzzzzzzzzzz.agent.waku.one.evil.example", 421),
     ("AGENT.WAKU.ONE", 404),
     ("agent.waku.one:443", 404),
+    # The root label's dot, with and without a port. A resolver treats both as
+    # the apex, and the port must come off before the dot does.
+    ("agent.waku.one.", 404),
+    ("agent.waku.one.:443", 404),
+    ("zzzzzzzzzzzz.agent.waku.one.:443", 401),
 ])
 def test_only_the_apex_and_a_well_formed_tenant_host_are_served(harness, host, expected):
     async def run():
@@ -404,6 +415,186 @@ def test_a_session_outlives_the_sixty_second_cache_because_it_is_a_row(harness):
     assert late[0] == 200
     assert out[0] == 200
     assert after[0] == 401
+
+
+@pytest.mark.parametrize("method", ["PUT", "DELETE", "PATCH", "OPTIONS", "TRACE"])
+def test_every_method_but_a_navigation_needs_the_csrf_pair(harness, method):
+    """The CSRF check is an allowlist of METHODS, not a test for POST.
+
+    Written as `if request.method != "POST"`, a PUT to /api/settings carrying
+    the tenant's cookie, `Content-Type: text/plain` and
+    `Origin: https://evil.example` was answered 200 and reached the forwarder.
+    Nothing upstream takes a PUT today; that sentence is the whole problem,
+    because nothing in this file would notice the day it stopped being true.
+    """
+    async def run():
+        await harness.start()
+        host, cookie = await signed_in_on_the_tenant_host(harness)
+        bare = await harness.send(method, "/api/settings", host=host,
+                                  cookie=cookie, body=b"{}",
+                                  headers={"Content-Type": "text/plain",
+                                           "Origin": "https://evil.example"})
+        paired = await harness.send(method, "/api/settings", host=host,
+                                    cookie=cookie, body=b"{}",
+                                    headers={"Content-Type": "application/json",
+                                             "Origin": f"https://{host}"})
+        await harness.stop()
+        return bare, paired
+
+    bare, paired = asyncio.run(run())
+    assert bare[0] == 415
+    assert paired[0] == 200
+    assert [path for _tenant, path in harness.forwarder.calls] == ["/api/settings"]
+
+
+def test_a_navigation_is_the_only_thing_exempt_from_the_pair(harness):
+    """GET and HEAD are the two named exemptions, and they are named because a
+    navigation carries neither header. Everything else in the table above is
+    checked; these two are what the exemption is for."""
+    async def run():
+        await harness.start()
+        host, cookie = await signed_in_on_the_tenant_host(harness)
+        got = await harness.send("GET", "/api/data", host=host, cookie=cookie)
+        headed = await harness.send("HEAD", "/api/data", host=host, cookie=cookie)
+        await harness.stop()
+        return got, headed
+
+    got, headed = asyncio.run(run())
+    assert got[0] == 200
+    assert headed[0] == 200
+    assert [path for _tenant, path in harness.forwarder.calls] == ["/api/data"] * 2
+
+
+def test_a_cross_site_hand_off_is_refused(harness):
+    """An attacker signs in as themselves, mints a code, and navigates the
+    victim's browser to their own tenant host; the victim then works inside
+    the attacker's container. The real hand-off is same-site -- the apex and
+    a tenant host share agent.waku.one -- so `Sec-Fetch-Site` tells them
+    apart. A browser that sends no such header is still served, which is what
+    the empty string in HANDOFF_FETCH_SITES is and costs."""
+    async def run():
+        await harness.start()
+        tenant_id, _apex, code = await sign_in(harness)
+        host = f"{tenant_id}.agent.waku.one"
+        target = f"/auth/enter?code={code}"
+        elsewhere = await harness.send(
+            "GET", target, host=host,
+            headers={"Sec-Fetch-Site": "cross-site",
+                     "Referer": "https://evil.example/x"})
+        # And it did NOT burn the code: the owner's own navigation still works.
+        owner = await harness.send("GET", target, host=host,
+                                   headers={"Sec-Fetch-Site": "same-site"})
+        await harness.stop()
+        return elsewhere, owner
+
+    elsewhere, owner = asyncio.run(run())
+    assert elsewhere[0] == 302
+    assert elsewhere[1]["location"] == "https://agent.waku.one/login"
+    assert cookie_value(elsewhere[1], "__Host-waku_tenant") == ""
+    assert cookie_value(owner[1], "__Host-waku_tenant") != ""
+
+
+def test_a_session_is_bound_to_the_host_that_issued_it(harness):
+    """The two cookies are two credentials, not one credential with two names.
+
+    Before the scope went into the stored value, the apex cookie's value
+    replayed as __Host-waku_tenant was accepted on the tenant host with a
+    200. Neither cookie is readable by script, so this was never reachable
+    from a browser -- it is the difference between the separation being a
+    property of the store and being a naming convention.
+    """
+    async def run():
+        await harness.start()
+        tenant_id, apex, code = await sign_in(harness)
+        host = f"{tenant_id}.agent.waku.one"
+        _s, headers, _b = await harness.send("GET", f"/auth/enter?code={code}",
+                                             host=host)
+        tenant_value = cookie_value(headers, "__Host-waku_tenant")
+        replayed = await harness.send("GET", "/api/data", host=host,
+                                      cookie=f"__Host-waku_tenant={apex}")
+        # The reverse: a tenant value at the apex signs nobody out.
+        out = await harness.json_post("/auth/logout", {}, host="agent.waku.one",
+                                      cookie=f"__Host-waku_session={tenant_value}")
+        still_here = await harness.send(
+            "GET", "/api/data", host=host,
+            cookie=f"__Host-waku_tenant={tenant_value}")
+        await harness.stop()
+        return replayed, out, still_here
+
+    replayed, out, still_here = asyncio.run(run())
+    assert replayed[0] == 401
+    assert out[0] == 200
+    assert still_here[0] == 200
+    assert [path for _tenant, path in harness.forwarder.calls] == ["/api/data"]
+
+
+def test_a_tenant_host_has_its_own_logout(harness):
+    """Clear-Site-Data is per ORIGIN. A logout that only ever rides the apex
+    response leaves the tenant origin's cache, its storage and its dead cookie
+    in the browser -- and there was no route on that host to carry one."""
+    async def run():
+        await harness.start()
+        host, cookie = await signed_in_on_the_tenant_host(harness)
+        out = await harness.json_post("/auth/logout", {}, host=host, cookie=cookie)
+        after = await harness.send("GET", "/api/data", host=host, cookie=cookie)
+        await harness.stop()
+        return out, after
+
+    out, after = asyncio.run(run())
+    assert out[0] == 200
+    assert out[1]["clear-site-data"] == '"cache", "storage"'
+    assert {"secure", "httponly", "samesite=lax", "path=/", "max-age=0"} <= (
+        cookie_attributes(out[1], "__Host-waku_tenant"))
+    assert after[0] == 401
+    # The container never sees it: the session it ends is the gateway's, and
+    # the route has to work when there is no container running at all.
+    assert harness.forwarder.calls == []
+
+
+def test_a_status_flipped_outside_this_process_is_honoured_and_ends_the_session(harness):
+    """`disable` is not the only way a status changes: a restore, a second
+    gateway or an operator editing the row does it without going through
+    `end_sessions`. The status check in _tenant_host is what covers that, and
+    until now the disable path's own `end_sessions` covered for it -- delete
+    either and all 646 evals stayed green.
+    """
+    async def run():
+        await harness.start()
+        host, cookie = await signed_in_on_the_tenant_host(harness)
+        tenant_id = host.split(".", 1)[0]
+        harness.store.set_status(tenant_id, "disabled")
+        refused = await harness.send("GET", "/api/data", host=host, cookie=cookie)
+        # Re-enabled by the same back door: the cookie from before must still
+        # be dead, because the refusal above ended the sessions.
+        harness.store.set_status(tenant_id, "active")
+        after = await harness.send("GET", "/api/data", host=host, cookie=cookie)
+        await harness.stop()
+        return refused, after
+
+    refused, after = asyncio.run(run())
+    assert refused[0] == 401
+    assert after[0] == 401
+    assert harness.forwarder.calls == []
+
+
+def test_a_hand_off_into_a_disabled_tenant_is_refused(harness):
+    """`redeem` proves only that this gateway issued the code. The tenant can
+    be disabled between the sign-in and the hand-off, and without a status
+    check here the disable path rests entirely on `end_sessions` burning
+    outstanding codes -- one guard, one line, and nothing measuring it."""
+    async def run():
+        await harness.start()
+        tenant_id, _apex, code = await sign_in(harness)
+        harness.store.set_status(tenant_id, "disabled")
+        landed = await harness.send("GET", f"/auth/enter?code={code}",
+                                    host=f"{tenant_id}.agent.waku.one")
+        await harness.stop()
+        return landed
+
+    landed = asyncio.run(run())
+    assert landed[0] == 302
+    assert landed[1]["location"] == "https://agent.waku.one/login"
+    assert cookie_value(landed[1], "__Host-waku_tenant") == ""
 
 
 def test_the_login_page_carries_this_deployments_supabase_values(harness):

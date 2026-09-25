@@ -18,7 +18,7 @@ import tempfile
 from pathlib import Path
 
 import pytest
-from gatewaylib import sign, signed_in_on_the_tenant_host
+from gatewaylib import cookie_value, sign, sign_in, signed_in_on_the_tenant_host
 
 from hosted import jsonsock
 from hosted.gateway import admin
@@ -189,3 +189,36 @@ def test_enabling_a_tenant_again_does_not_bring_their_old_session_back(harness):
     assert enabled["ok"] is True
     assert after[0] == 401
     assert fresh[0] == 200
+
+
+def test_disable_burns_the_hand_off_codes_that_were_already_minted(harness):
+    """`end_sessions` clears the session rows, the session cache AND the
+    outstanding hand-off codes. The third of those had no test: a code minted
+    before a disable still bought a live session row and a cookie, and only
+    the tenant host's status check then turned the request away. Two guards
+    covering for each other is one guard and one liability.
+
+    The tenant is enabled again before the code is used, so the status check
+    cannot answer for this: what refuses the code has to be the code.
+    """
+    async def run():
+        await harness.start()
+        tenant_id, _apex, code = await sign_in(harness)
+        host = f"{tenant_id}.agent.waku.one"
+        disabled = await admin.handle(harness.gateway,
+                                      {"op": "disable", "tenant": tenant_id})
+        enabled = await admin.handle(harness.gateway,
+                                     {"op": "enable", "tenant": tenant_id})
+        stale = await harness.send("GET", f"/auth/enter?code={code}", host=host)
+        landed = await harness.send(
+            "GET", "/api/data", host=host,
+            cookie=f"__Host-waku_tenant={cookie_value(stale[1], '__Host-waku_tenant')}")
+        await harness.stop()
+        return disabled, enabled, stale, landed
+
+    disabled, enabled, stale, landed = asyncio.run(run())
+    assert disabled["ok"] is True
+    assert enabled["ok"] is True
+    assert stale[1]["location"] == "https://agent.waku.one/login"
+    assert cookie_value(stale[1], "__Host-waku_tenant") == ""
+    assert landed[0] == 401
