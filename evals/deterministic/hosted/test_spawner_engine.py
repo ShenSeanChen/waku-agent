@@ -237,3 +237,48 @@ def test_start_accepts_already_started(status):
     the container the caller wanted is running."""
     engine, _session = _engine_with(status)
     asyncio.run(engine.start("waku-tenant-k3fq7x2mza4b"))
+
+
+def _tenant_ids(entries) -> list[str]:
+    runtime = docker_mod.DockerRuntime(CONFIG, _ListEngine(entries))
+    return asyncio.run(runtime.tenant_ids())
+
+
+def test_tenant_ids_reports_a_container_list_refuses_to_report():
+    """The whole reason this operation exists beside `list`.
+
+    `list` answers "may the gateway forward to this container?" and drops one
+    whose address is not the one its project id derives. `tenant_ids` answers
+    "is this container ours?", which is what stop-all needs before a restore
+    deletes the directories underneath it -- and the container in the
+    difference is exactly the one that would be left on a dead inode.
+
+    Both halves are asserted on the SAME entry, so the test cannot pass by
+    `list` and `tenant_ids` agreeing on an entry neither reports.
+    """
+    off_subnet = _entry(GOOD, "10.99.0.5")
+    assert _listed([off_subnet]) == []
+    assert _tenant_ids([off_subnet]) == [GOOD]
+
+
+def test_tenant_ids_reports_a_container_with_no_address_at_all():
+    """A container mid-create, or one whose network went away. `list` drops it
+    before the address check even runs; stopping still has to reach it."""
+    nowhere = _entry(GOOD, "")
+    assert _listed([nowhere]) == []
+    assert _tenant_ids([nowhere]) == [GOOD]
+
+
+@pytest.mark.parametrize("label", ["", "not-an-id", "K3FQ7X2MZA4B", "k3fq7x2mza4b1"])
+def test_tenant_ids_ignores_a_container_whose_label_is_not_a_tenant_id(label):
+    """The id is joined to a container name and stopped, so it is a closed set
+    here as it is everywhere else. A container carrying our kind label and a
+    tenant label that is not an id is not ours to stop."""
+    assert _tenant_ids([_entry(label, "10.88.0.2")]) == []
+
+
+def test_tenant_ids_reports_each_tenant_once():
+    """A tenant with a task container beside its dashboard container would
+    otherwise be stopped twice, and the answer is a list an operator reads."""
+    address = tenant.address_for_project(tenant.FIRST_PROJECT_ID)
+    assert _tenant_ids([_entry(GOOD, address), _entry(GOOD, address)]) == [GOOD]

@@ -59,6 +59,10 @@ exit 0
 # what hosted/gateway/admin.py's main() does.
 _EMAIL_FOUND = f"""echo '{{"ok": true, "tenant": "{TENANT}"}}'"""
 _EMAIL_MISSING = """echo '{"error": "no tenant matches"}'; exit 1"""
+# The gateway answered, and said nothing about a tenant. A different branch
+# from the one above: `waku_admin` succeeded, so the `||` never fires and only
+# the emptiness check is left between this and a path built from "".
+_EMAIL_WITHOUT_A_TENANT = """echo '{"ok": true}'"""
 # A row control.db should not hold. It would reach the same `find -delete` a
 # flag would, through a different door -- so the funnel checks it too.
 _EMAIL_POISONED = """echo '{"ok": true, "tenant": "../../srv"}'"""
@@ -1025,3 +1029,40 @@ def test_a_restore_onto_a_vm_with_no_tenants_succeeds(tmp_path):
     calls = shelllib.calls(tmp_path)
     assert not _lines(calls, "admin restore")
     assert _lines(calls, "install -o 10002")
+
+
+def test_a_stop_all_that_fails_after_the_restart_stops_the_restore(tmp_path):
+    """Stage 3b, and under --no-stop-fleet it is the ONLY thing that stops the
+    fleet -- so tolerating a failure there puts a live container's bind mount
+    into the tree the per-tenant restores are about to replace.
+
+    The gateway never recovers in this fixture, so the failure lands at 3b
+    rather than at stage 1. The run must stop before the first tenant.
+    """
+    _, env = _env(tmp_path)
+    bodies = _bodies()
+    bodies["docker"] = bodies["docker"].replace(
+        '  *"admin restore"*)', '  *"admin stop-all"*) exit 2 ;;\n  *"admin restore"*)', 1)
+    done = shelllib.run(RESTORE, ["--all", "--no-stop-fleet"], tmp_path=tmp_path,
+                        env=env, stubs=_STUBS, bodies=bodies)
+    assert done.returncode != 0
+    calls = shelllib.calls(tmp_path)
+    assert _lines(calls, "install -o 10002"), "it should have got past stage 2"
+    assert not _lines(calls, "admin restore")
+
+
+def test_a_resolve_that_answers_no_tenant_is_a_refusal(tmp_path):
+    """The other branch of resolve_tenant, and the one the not-found fixture
+    cannot reach: there `waku_admin` exits non-zero and the `||` answers, so
+    the emptiness check below it is never evaluated. Here the gateway exits 0
+    with an answer naming no tenant -- a version skew, a changed key -- and
+    the only thing between that and `$staging/` with nothing after it is this
+    check."""
+    _, env = _env(tmp_path)
+    done = _run(tmp_path, ["--tenant", "mei@example.com"], env,
+                email=_EMAIL_WITHOUT_A_TENANT)
+    assert done.returncode != 0
+    assert "names no tenant" in done.stderr
+    calls = shelllib.calls(tmp_path)
+    assert not _lines(calls, "restic")
+    assert not _lines(calls, "find /staging -mindepth 1 -delete")
