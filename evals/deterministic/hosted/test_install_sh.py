@@ -406,6 +406,16 @@ _L80_FOREIGN = 'LISTEN 0   4096   0.0.0.0:80    0.0.0.0:*   users:(("caddy",pid=
 _L443_FOREIGN = 'LISTEN 0   4096   0.0.0.0:443   0.0.0.0:*   users:(("caddy",pid=999,fd=14))'
 _L80_FOREIGN_V6_ONLY = 'LISTEN 0   4096   [::]:80   [::]:*   users:(("foo",pid=42,fd=9))'
 
+# A socket ss lists in a state that is not LISTEN -- an established
+# connection FROM some other client TO port 80, which `-t` alone does not
+# exclude (that is what `-l` and the state-column check both do). This row
+# must never be read as a listener holding the port.
+_L80_ESTABLISHED = 'ESTAB 0   0   10.0.0.5:80   203.0.113.9:51000   users:(("caddy",pid=999,fd=20))'
+
+# A listener on a port NEITHER call asked about -- proving the port match is
+# a closed set on the two ports given, not "any row ss printed".
+_L8080_FOREIGN = 'LISTEN 0   4096   0.0.0.0:8080   0.0.0.0:*   users:(("nginx",pid=111,fd=7))'
+
 _DOCKER_NONE = ('#!/bin/sh\n'
                  '[ -n "${WAKU_CALLS:-}" ] && printf "%s %s\\n" docker "$*" >> "$WAKU_CALLS"\n'
                  'if [ "$1" = ps ]; then exit 0; fi\n'
@@ -511,6 +521,29 @@ def test_an_ipv6_only_listener_is_still_seen(tmp_path):
         env=_port_env(tmp_path, _ss(_L80_FOREIGN_V6_ONLY)))
     assert done.returncode != 0
     assert ":80" in done.stdout
+
+
+def test_a_socket_that_is_not_listening_is_not_a_conflict(tmp_path):
+    """`-t -l` already asks `ss` for listening TCP sockets only; the state
+    column is checked again here rather than trusted, in case a given `ss`
+    build does not honour `-l`. An inbound connection FROM some other host TO
+    port 80 is not a process holding the port -- it is traffic Caddy itself
+    would be answering."""
+    done = shelllib.call_function(
+        CHECKS, "waku_ports_free_or_ours 80 443",
+        env=_port_env(tmp_path, _ss(_L80_ESTABLISHED)))
+    assert done.returncode == 0, done.stderr
+    assert done.stdout == ""
+
+
+def test_a_listener_on_an_unrelated_port_is_not_a_conflict(tmp_path):
+    """The port match is a closed set on the two ports install.sh asks
+    about, not on every LISTEN row `ss` happens to print."""
+    done = shelllib.call_function(
+        CHECKS, "waku_ports_free_or_ours 80 443",
+        env=_port_env(tmp_path, _ss(_L8080_FOREIGN)))
+    assert done.returncode == 0, done.stderr
+    assert done.stdout == ""
 
 
 def test_ss_missing_is_refused_not_treated_as_free(tmp_path):
