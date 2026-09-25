@@ -391,6 +391,10 @@ def test_a_second_domain_is_refused(tmp_path):
         # A label over 63 characters.
         ("a" * 64 + ".com", False),
         ("a" * 63 + ".com", True),
+        # And the 253-character total, which no label-length rule can catch:
+        # every label here is legal and only the sum is not.
+        (".".join(["a" * 63, "a" * 63, "a" * 63, "a" * 61]), True),
+        (".".join(["a" * 63, "a" * 63, "a" * 63, "a" * 62]), False),
     ])
 def test_the_domain_is_a_closed_set_on_the_value(tmp_path, name, ok):
     script = tmp_path / "call.sh"
