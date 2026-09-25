@@ -32,12 +32,13 @@ _LOG = log.get(__name__)
 ADMIN_SOCKET_MODE = 0o600
 
 ADMIN_OPS = frozenset({"status", "disable", "enable", "delete", "restart-all",
-                       "backup", "restore", "inspect", "inspect-stop"})
+                       "stop-all", "backup", "restore", "inspect", "inspect-stop"})
 _NO_TENANT = frozenset({"op"})
 _ONE_TENANT = frozenset({"op", "tenant"})
 ADMIN_KEYS: dict[str, frozenset[str]] = {
     "status": _NO_TENANT,
     "restart-all": _NO_TENANT,
+    "stop-all": _NO_TENANT,
     "disable": _ONE_TENANT,
     "enable": _ONE_TENANT,
     "delete": _ONE_TENANT,
@@ -77,6 +78,8 @@ async def handle(gateway: Gateway, payload: dict) -> dict:
         return {"running": sorted(gateway.launcher.fleet.running())}
     if op == "restart-all":
         return {"restarted": await gateway.launcher.restart_all()}
+    if op == "stop-all":
+        return {"stopped": await _stop_all(gateway)}
     needle = payload.get("tenant")
     if not isinstance(needle, str) or not needle:
         return {"error": f"{op} needs a tenant id or email"}
@@ -88,6 +91,53 @@ async def handle(gateway: Gateway, payload: dict) -> dict:
     except (SpawnerError, NotActive, InMaintenance, StartFailed, OSError) as exc:
         _LOG.warning("admin %s on tenant=%s failed: %s", op, tenant.id, exc)
         return {"error": str(exc)}
+
+
+async def _stop_all(gateway: Gateway) -> list[str]:
+    """Stop every running tenant container, disabling nobody.
+
+    restore.sh --all needs this and no existing verb does it: `restart-all`
+    restarts, `disable` changes a tenant's status, and `status` reads. A
+    container that survives into a restored control.db holds a proxy token
+    that database may not know, and the gateway would adopt it at startup and
+    forward to it. It is worse than a stale token: its bind mount is inside
+    the tree the restore is about to remove, which is the dead-inode failure
+    designs/backup-restore-integrity.md records -- a restore deleted a running
+    container's directories and the next `docker exec` failed with "possible
+    container breakout detected".
+
+    THE LIST IS THE UNION OF WHAT THE SPAWNER REPORTS AND WHAT THE FLEET
+    BELIEVES, because neither alone is every container. `restart_all` already
+    takes its list from the spawner, "because the point of the call is that
+    the images changed under a gateway that may itself have just restarted" --
+    and that argument is stronger here, since a container this verb misses is
+    one whose directories the restore then deletes underneath it. The fleet is
+    the other half and not a subset of the first: `fleet.running()` also
+    reports STARTING, a tenant whose container `resync` cannot yet see or
+    whose address does not yet match, and `resync` forgets exactly those.
+
+    No new Launcher method: `resync`, `stop` and `fleet.forget` are calls
+    `_act` and `restart-all` already make between them.
+
+    WHAT THIS CANNOT CLOSE, said out loud: a sign-in that lands after this
+    answered pre-warms a new container. restore.sh stops the gateway on the
+    next line, so the window is that one line wide, and nothing inside the
+    gateway can make it narrower.
+    """
+    # THE FLEET IS READ FIRST, AND THAT IS THE WHOLE UNION. `resync` believes
+    # the spawner and calls `_forget_running` on everything the spawner did
+    # not name, which sets those tenants STOPPED in the fleet -- so a
+    # `fleet.running()` read AFTER it returns exactly what `resync` already
+    # returned, and the union collapses into one source with no test able to
+    # see the difference.
+    running = set(gateway.launcher.fleet.running())
+    running.update(await gateway.launcher.resync())
+    stopped = []
+    for tenant_id in sorted(running):
+        await gateway.launcher.stop(tenant_id)
+        gateway.launcher.fleet.forget(tenant_id)
+        stopped.append(tenant_id)
+    return stopped
 
 
 async def _act(gateway: Gateway, op: str, tenant: Tenant) -> dict:

@@ -1,6 +1,7 @@
 """Acceptance 15 -- no privileged process follows a tenant's symlink.
 
-THE PROVISIONING HALF. F3 adds backup and restore, F4 archive and inspect.
+THE PROVISIONING HALF, AND F3'S BACKUP AND RESTORE HALVES. F4 adds archive
+and inspect.
 
 THE SHAPE: plant the symlinks a tenant could plant, run provisioning, and check
 the target by LISTING ITS PARENT rather than by an exit code or a `.exists()`.
@@ -21,6 +22,7 @@ from spawnerlib.py.
 from __future__ import annotations
 
 import itertools
+import json
 import os
 
 import dockerlib
@@ -255,3 +257,114 @@ def test_a_second_start_issues_no_recursive_walk(spawner, tenant):
         "That directory holds whatever the tenant wrote and this process is "
         "root with CAP_SYS_ADMIN.")
     assert "limit -p" in after
+
+
+def _task_ok(spawner, tenant_id: str, project_id: int, task: str) -> dict:
+    """One spawner task, and it HAS to have worked.
+
+    spawnerlib has no ask_ok: a task that failed comes back as a JSON object
+    with an `error` key and exit status nought, so a test that ran a backup and
+    then asserted something about a restore would be asserting against two
+    no-ops. The tests below set up state with this and measure with `ask`.
+    """
+    answer = ask(spawner, {"op": "task", "tenant_id": tenant_id,
+                           "task": task, "project_id": project_id})
+    assert "error" not in answer, f"the {task} task failed: {answer}"
+    return answer
+
+
+def test_a_backup_copies_a_planted_symlink_as_a_link_and_does_not_follow_it(
+        spawner, spawner_root, tenant):
+    """Acceptance 15, the backup half.
+
+    THE TARGET IS INSIDE THE TENANT'S OWN MOUNT, for the reason the
+    provisioning tests above give: a target on the read-only root fails
+    whatever the backup does, so the assertion could not tell the guard from
+    the containment. A target under /work is writable, so a backup that
+    followed the link would create it.
+    """
+    tenant_id, project_id = tenant
+    env = spawner_root / "tenants" / tenant_id / "env"
+    _plant(spawner_root, tenant_id, ".env", "/work/backup-link-target.txt")
+
+    answer = ask(spawner, {"op": "task", "tenant_id": tenant_id, "task": "backup",
+                           "project_id": project_id})
+    assert "error" not in answer, answer
+
+    slot = spawner_root / "staging" / tenant_id
+    assert _absent(env, "backup-link-target.txt")
+    # The positive half: "the copy keeps symlinks as symlinks".
+    assert (slot / "env" / ".env").is_symlink()
+    assert os.readlink(slot / "env" / ".env") == "/work/backup-link-target.txt"
+    # And the backup declared that it finished.
+    manifest = json.loads((slot / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["version"] == 1
+    assert sorted(manifest["parts"]) == ["env", "home"]
+
+
+def test_a_restore_puts_the_link_back_as_a_link_and_archives_the_old_tree(
+        spawner, spawner_root, tenant):
+    """Acceptance 15, the restore half, and the pre-restore archive the spec
+    requires: a moved directory keeps its XFS project id, so an old tree left
+    on disk would keep counting against the tenant's quota.
+
+    THE ARCHIVE LIVES UNDER THE TENANT'S OWN SUBDIRECTORY of the archive root
+    -- `_archive` calls `_tenant_directory_under(archive_root, tenant_id)` and
+    binds that, not the shared root, because the container runs as 10001 and
+    binding the shared root would put every other tenant's archives inside a
+    tenant-owned container. A glob over the root itself finds nothing.
+    """
+    tenant_id, project_id = tenant
+    env = spawner_root / "tenants" / tenant_id / "env"
+    _plant(spawner_root, tenant_id, ".env", "/work/restore-link-target.txt")
+    _task_ok(spawner, tenant_id, project_id, "backup")
+
+    answer = ask(spawner, {"op": "task", "tenant_id": tenant_id, "task": "restore",
+                           "project_id": project_id})
+    assert "error" not in answer, answer
+
+    assert (env / ".env").is_symlink()
+    assert os.readlink(env / ".env") == "/work/restore-link-target.txt"
+    assert _absent(env, "restore-link-target.txt")
+    archives = list((spawner_root / "archive" / tenant_id)
+                    .glob(f"{tenant_id}-*-pre-restore*"))
+    assert archives, "a restore archives the old tree before it removes it"
+
+
+def test_a_restored_tenant_still_cannot_write_past_their_disk_limit(
+        spawner, spawner_root, tenant):
+    """Acceptance 16, after a restore.
+
+    A restore removes the tenant's two directories and re-creates them, and the
+    only place `xfs_quota project -s` ever runs is provision()'s CREATE path. A
+    restore that took provision's repeat path instead would leave a directory on
+    XFS project 0 -- uncounted and unlimited -- for the rest of that tenant's
+    life, and that tenant could then fill the shared disk and stop every other
+    tenant on the VM. The project id is invisible from inside the container; the
+    write is not.
+
+    The same assertion as `test_a_tenant_cannot_write_past_their_disk_limit` in
+    test_isolation.py, on a tenant who HAS been restored. It differs from it
+    only in the two task calls.
+    """
+    dockerlib.require_xfs()
+    tenant_id, project_id = tenant
+    _task_ok(spawner, tenant_id, project_id, "backup")
+    _task_ok(spawner, tenant_id, project_id, "restore")
+
+    home = spawner_root / "tenants" / tenant_id / "home"
+    over = dockerlib.run_once(
+        SERVICES_TAG,
+        ["bash", "-c",
+         # conv=fsync, so a delayed-allocation write cannot report success here
+         # and fail at writeback where nothing is watching. The size is twice
+         # spawnerlib.TEST_DISK_BYTES.
+         "dd if=/dev/zero of=/data/fill bs=1M count=128 conv=fsync"],
+        user="10001:10001", read_only=False, network="none",
+        binds=[f"{home}:/data"],
+        # check=False: dockerlib.run_once RAISES on a non-zero exit by default,
+        # and a non-zero exit is the PASS condition here.
+        check=False)
+    assert over.returncode != 0, (
+        "a restored tenant wrote past their disk limit, so the restore did not "
+        "give their directories their project id back")

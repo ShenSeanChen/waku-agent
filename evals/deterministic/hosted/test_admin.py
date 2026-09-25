@@ -14,10 +14,12 @@ not.
 from __future__ import annotations
 
 import asyncio
+import json
 import stat
 
 import pytest
 from gatewaylib import (
+    APEX,
     FakeContainer,
     cookie_value,
     ops,
@@ -37,6 +39,10 @@ from hosted.gateway import admin
      "disable does not take ['force']"),
     ({"op": "restart-all", "tenant": "a@b.c"},
      "restart-all does not take ['tenant']"),
+    # stop-all takes no tenant either, and the two tables have to be edited
+    # together: an op in ADMIN_OPS with no row in ADMIN_KEYS raises KeyError
+    # inside handle() rather than answering a refusal.
+    ({"op": "stop-all", "tenant": "a@b.c"}, "stop-all does not take ['tenant']"),
     ({"op": "status", "path": "/etc/passwd"}, "status does not take ['path']"),
 ])
 def test_the_admin_socket_refuses_anything_outside_its_allowlist(
@@ -258,3 +264,110 @@ def test_restart_all_leaves_one_container_per_tenant_and_forwards_to_the_new_one
     starts = ops(wired.spawner, "start")
     assert len(starts) == 2
     assert starts[0]["token"] != starts[1]["token"]
+
+async def _signed_in(harness, *, sub: str, email: str) -> str:
+    """One tenant, signed in over the real POST /auth/session, and the id it
+    was given.
+
+    gatewaylib.sign_in always presents sub-mei, and `stop-all` is the one verb
+    whose whole subject is more than one tenant at once. The pre-warm inside
+    /auth/session is what puts the container in the fleet AND in the fake
+    spawner's running set, so both halves of the union below have something
+    real behind them.
+    """
+    token = sign(harness.private, now=harness.clock.t, sub=sub, email=email)
+    status, _headers, body = await harness.json_post(
+        "/auth/session", {"access_token": token, "timezone": "UTC"}, host=APEX)
+    assert status == 200, body
+    return json.loads(body)["enter"].split("//", 1)[1].split(".", 1)[0]
+
+
+def test_stop_all_stops_every_running_container_and_disables_nobody(harness):
+    """The verb restore.sh --all needs. Two tenants running, both stopped, both
+    still active: a restore is not a punishment."""
+    async def run():
+        await harness.start()
+        first = await _signed_in(harness, sub="sub-one", email="one@example.test")
+        second = await _signed_in(harness, sub="sub-two", email="two@example.test")
+        answer = await admin.handle(harness.gateway, {"op": "stop-all"})
+        statuses = sorted(harness.store.tenant_by_id(one).status
+                          for one in (first, second))
+        still = sorted(harness.gateway.launcher.fleet.running())
+        stops = [request["tenant_id"] for request in ops(harness.spawner, "stop")]
+        await harness.stop()
+        return first, second, answer, statuses, still, stops
+
+    first, second, answer, statuses, still, stops = asyncio.run(run())
+    assert first != second, "both sign-ins landed on one tenant"
+    assert answer == {"stopped": sorted([first, second])}
+    assert sorted(stops) == sorted([first, second])
+    assert statuses == ["active", "active"]
+    assert still == []
+
+
+def test_stop_all_stops_a_container_the_gateway_had_forgotten(harness):
+    """The half `fleet.running()` alone cannot see.
+
+    A gateway that restarted knows nothing until it has resynced, and the
+    container that outlives a restart is exactly the one a restore must not
+    leave running: its bind mount is inside the tree the restore removes. The
+    fleet is emptied here and the spawner still holds the container, which is
+    what a fresh gateway process looks like from inside this function.
+    """
+    async def run():
+        await harness.start()
+        tenant_id = await _signed_in(harness, sub="sub-one", email="one@example.test")
+        harness.gateway.launcher.fleet.forget(tenant_id)
+        assert harness.gateway.launcher.fleet.running() == [], (
+            "the fleet still names the tenant, so this test would pass on the "
+            "fleet alone and prove nothing about the spawner's list")
+        answer = await admin.handle(harness.gateway, {"op": "stop-all"})
+        stops = [request["tenant_id"] for request in ops(harness.spawner, "stop")]
+        await harness.stop()
+        return tenant_id, answer, stops
+
+    tenant_id, answer, stops = asyncio.run(run())
+    assert answer == {"stopped": [tenant_id]}
+    assert stops == [tenant_id]
+
+
+def test_stop_all_stops_a_container_the_spawner_does_not_list(harness):
+    """The other half, and the reason this is a union rather than a swap.
+
+    `resync` believes the spawner and forgets everything the spawner does not
+    name -- a container whose address does not match the one its project id
+    derives, a tenant control.db has lost, a start still in flight. The fleet
+    is the only record of those, and a restore that skipped them would delete
+    the directories under a live container.
+    """
+    async def run():
+        await harness.start()
+        tenant_id = await _signed_in(harness, sub="sub-one", email="one@example.test")
+        # The spawner lists nothing; the gateway still believes it is running.
+        harness.spawner.running.clear()
+        assert harness.gateway.launcher.fleet.running() == [tenant_id]
+        answer = await admin.handle(harness.gateway, {"op": "stop-all"})
+        stops = [request["tenant_id"] for request in ops(harness.spawner, "stop")]
+        await harness.stop()
+        return tenant_id, answer, stops
+
+    tenant_id, answer, stops = asyncio.run(run())
+    assert answer == {"stopped": [tenant_id]}
+    assert stops == [tenant_id]
+
+
+def test_stop_all_over_the_socket_answers_an_empty_fleet(harness, sock_dir):
+    """Nothing running is not an error. restore.sh --all runs this first on a
+    VM that may have been rebuilt an hour ago, and a refusal there would stop
+    the restore before it began."""
+    async def run():
+        await harness.start()
+        path = sock_dir / "admin.sock"
+        server = await admin.serve_admin(path, harness.gateway)
+        answer = await jsonsock.ask(path, {"op": "stop-all"})
+        server.close()
+        await server.wait_closed()
+        await harness.stop()
+        return answer
+
+    assert asyncio.run(run()) == {"stopped": []}
