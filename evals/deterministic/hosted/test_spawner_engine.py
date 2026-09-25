@@ -148,7 +148,7 @@ def test_a_backup_refuses_to_chown_through_a_symlinked_staging_directory(tmp_pat
     (tmp_path / "staging").mkdir()
     (tmp_path / "staging" / GOOD).symlink_to(victim)
     runtime = docker_mod.DockerRuntime(config, _ListEngine([]))
-    with pytest.raises(RuntimeError, match="symlink"):
+    with pytest.raises(RuntimeError, match="refusing to use it"):
         asyncio.run(runtime.task(GOOD, "backup"))
 
 

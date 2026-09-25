@@ -239,6 +239,53 @@ def test_an_archive_container_can_write_into_the_directory_it_is_given(
             f"{other}'s archive is in {tenant_id}'s directory: {written}")
 
 
+def test_a_backup_does_not_resurrect_a_file_the_tenant_deleted(spawner, spawner_root):
+    """NEW-2, against the real scripts.
+
+    Staging holds ONE backup. Before this, `rm -f manifest.json` invalidated
+    the old one and nothing emptied the old `home/` and `env/`, so the
+    directories accumulated the union of every backup ever taken: a file the
+    tenant deleted was still in staging, and the next restore put it back.
+
+    Back up a file, delete it from the tenant, back up again, restore, and it
+    must be gone. Every step is asserted so a failure says which one broke --
+    in particular the file must BE there after the first backup, or the absence
+    at the end means only that it never arrived.
+    """
+    dockerlib.require_xfs()
+    ask(spawner, {"op": "stop", "tenant_id": TENANT_A})
+    assert "error" not in ask(spawner, {"op": "provision", "tenant_id": TENANT_A,
+                                        "project_id": PROJECT_A})
+    home = spawner_root / "tenants" / TENANT_A / "home"
+    staged_home = spawner_root / "staging" / TENANT_A / "home"
+
+    dockerlib.run_once(SERVICES_TAG,
+                       ["bash", "-euc", "printf 'old\n' > /data/deleted-later.txt"],
+                       read_only=False, binds=[f"{home}:/data"])
+    assert "error" not in ask(spawner, {"op": "task", "tenant_id": TENANT_A,
+                                        "task": "backup"})
+    assert (staged_home / "deleted-later.txt").is_file(), (
+        "the first backup did not stage the file, so the absence asserted at "
+        "the end of this test would mean nothing")
+
+    dockerlib.run_once(SERVICES_TAG, ["rm", "/data/deleted-later.txt"],
+                       read_only=False, binds=[f"{home}:/data"])
+    assert not (home / "deleted-later.txt").exists()
+
+    assert "error" not in ask(spawner, {"op": "task", "tenant_id": TENANT_A,
+                                        "task": "backup"})
+    assert not (staged_home / "deleted-later.txt").exists(), (
+        "the second backup left the first backup's file in staging. The "
+        "manifest describes this backup and the directories hold every backup "
+        "ever taken.")
+
+    assert "error" not in ask(spawner, {"op": "task", "tenant_id": TENANT_A,
+                                        "task": "restore",
+                                        "project_id": PROJECT_A})
+    assert not (home / "deleted-later.txt").exists(), (
+        "a file the tenant deleted came back through a restore.")
+
+
 def test_the_platform_key_is_in_no_tenant_container(spawner, spawner_root):
     """Acceptance 2.
 

@@ -350,7 +350,7 @@ def test_a_restore_refuses_a_symlinked_staging_directory(world, tmp_path):
     config.staging_root.mkdir(parents=True, exist_ok=True)
     (config.staging_root / TENANT).symlink_to(real)
 
-    with pytest.raises(RuntimeError, match="symlink"):
+    with pytest.raises(RuntimeError, match="refusing to restore through it"):
         asyncio.run(runtime.task(TENANT, "restore", PROJECT))
 
 
@@ -413,9 +413,9 @@ _STUB_OK = "#!/bin/sh\nexit 0\n"
 def _stub_bin(tmp_path, *, failing_tar_create: bool):
     """A PATH holding stand-ins for the tools the three scripts call.
 
-    `tar`, `zstd`, `sqlite3` and `mkdir` are resolved through PATH, so this
-    intercepts them without any of the scripts' absolute container paths having
-    to exist. Every stub APPENDS ITS NAME AND ARGUMENTS to $WAKU_TOOL_LOG, so
+    `tar`, `zstd`, `sqlite3`, `mkdir`, `find` and `rm` are resolved through
+    PATH, so this intercepts them without any of the scripts' absolute
+    container paths having to exist. Every stub APPENDS ITS NAME AND ARGUMENTS to $WAKU_TOOL_LOG, so
     the test can see how far the script got, and `tar --create` -- the SOURCE
     end of every pipeline -- exits 1 when asked to, which is the shape of a
     half-read backup.
@@ -423,7 +423,7 @@ def _stub_bin(tmp_path, *, failing_tar_create: bool):
     binaries = tmp_path / "bin"
     binaries.mkdir(parents=True)
     log_line = 'printf "%s %s\\n" "$(basename "$0")" "$*" >> "$WAKU_TOOL_LOG"\n'
-    for name in ("mkdir", "sqlite3", "zstd"):
+    for name in ("mkdir", "sqlite3", "zstd", "find", "rm"):
         (binaries / name).write_text("#!/bin/sh\n" + log_line + "exit 0\n",
                                      encoding="utf-8")
     code = 1 if failing_tar_create else 0
@@ -572,5 +572,175 @@ def test_a_shared_root_entry_that_is_a_symlink_is_refused(world, tmp_path):
     config.archive_root.mkdir(parents=True, exist_ok=True)
     (config.archive_root / TENANT).symlink_to(victim)
 
-    with pytest.raises(RuntimeError, match="symlink"):
+    with pytest.raises(RuntimeError, match="refusing to use it"):
         asyncio.run(runtime.task(TENANT, "archive"))
+
+
+def test_a_backup_clears_the_previous_one_before_it_writes(tmp_path):
+    """NEW-2. Staging holds ONE backup, not the union of every backup taken.
+
+    `rm -f manifest.json` invalidated the old backup and nothing emptied the
+    old `home/` and `env/`, so the manifest described THIS backup while the
+    directories held everything every previous one had left. A file the tenant
+    deleted came back on the next restore, and a manifest saying
+    `state_db: false` above an earlier backup's `home/state.db` restored a
+    database it said was never copied -- after archiving and wiping the live
+    tree, answering {"ok": True}.
+
+    ORDER IS THE WHOLE OF IT, so order is what this asserts, from the call log
+    of a real bash run:
+
+      1. the manifest goes FIRST, so a backup that dies after this point leaves
+         nothing restorable rather than something that lies;
+      2. both part directories are emptied BEFORE anything is copied in;
+      3. and only then do the tars run.
+
+    The Docker half -- that a deleted file really does not come back -- is
+    test_isolation.py::test_a_backup_does_not_resurrect_a_file_the_tenant_deleted.
+    """
+    import shutil
+    if shutil.which("bash") is None:
+        pytest.skip("no bash on this machine")
+    log = tmp_path / "calls.log"
+    _code, calls = _run_script(docker_mod._BACKUP_SCRIPT, ["backup"],
+                               _stub_bin(tmp_path / "ok", failing_tar_create=False),
+                               log)
+
+    def first(predicate) -> int:
+        for index, line in enumerate(calls):
+            if predicate(line):
+                return index
+        raise AssertionError(f"no call matching that: {calls}")
+
+    removed_manifest = first(lambda line: line.startswith("rm ")
+                             and "manifest.json" in line)
+    cleared = first(lambda line: line.startswith("find ") and "-delete" in line)
+    first_copy = first(lambda line: "--create" in line or line.startswith("sqlite3 "))
+
+    assert removed_manifest < cleared < first_copy, (
+        "a backup must invalidate the old manifest, then empty both part "
+        f"directories, then copy. The order was: {calls}")
+    cleared_line = calls[cleared]
+    for part in ("/staging/home", "/staging/env"):
+        assert part in cleared_line, (
+            f"{part} is not emptied before the copy: {cleared_line!r}. "
+            "Whatever a previous backup left there survives into this one.")
+    assert "-mindepth 1" in cleared_line, (
+        "without -mindepth 1 the mount points themselves go, and the tars then "
+        f"extract into paths that are not there: {cleared_line!r}")
+
+
+# --- the manifest reader's own branches -----------------------------------
+#
+# Three guards were written and none was driven. A guard nobody drove is a
+# guard nobody knows the shape of, which is most of what this task has cost.
+
+_SQLITE_HEADER = b"SQLite format 3\x00"
+
+
+def test_a_symlinked_manifest_is_refused(world, tmp_path):
+    """Written as `O_NOFOLLOW` plus an `is_symlink()` check and never driven.
+
+    This is root opening a path a few directories from tenant data. The tar
+    extraction cannot put a link here -- `tar --extract` refuses absolute and
+    `..` paths and the parts go into home/ and env/ -- so it is not reachable
+    today, which is exactly why it had no test and exactly why it needs one:
+    the next change to where staging comes from is F3's restic restore.
+    """
+    runtime, _engine, config, _claimed, _limited = world
+    asyncio.run(runtime.provision(TENANT, PROJECT))
+    staging = config.staging_root / TENANT
+    _make(staging, {"home": None, "env": None})
+    elsewhere = tmp_path / "somebody-elses-manifest.json"
+    elsewhere.write_text(_WHOLE, encoding="utf-8")
+    (staging / "manifest.json").symlink_to(elsewhere)
+
+    with pytest.raises(RuntimeError, match="refusing to restore through it"):
+        asyncio.run(runtime.task(TENANT, "restore", PROJECT))
+
+
+def test_a_manifest_larger_than_a_manifest_is_refused(world):
+    """The 4 KiB cap, driven. A manifest is under a hundred bytes; the cap is
+    there so a root process never reads an unbounded file sitting beside tenant
+    data, and `_MANIFEST_MAX_BYTES + 1` is read so the cap can be detected
+    rather than silently truncating into a parse error."""
+    runtime, _engine, config, _claimed, _limited = world
+    asyncio.run(runtime.provision(TENANT, PROJECT))
+    staging = config.staging_root / TENANT
+    padding = " " * (docker_mod._MANIFEST_MAX_BYTES + 100)
+    _make(staging, {"home": None, "env": None,
+                    "manifest.json": _WHOLE.rstrip("}") + f', "pad": "{padding}"}}'})
+
+    with pytest.raises(RuntimeError, match="larger than a manifest"):
+        asyncio.run(runtime.task(TENANT, "restore", PROJECT))
+
+
+def test_a_manifest_at_the_cap_is_still_read(world):
+    """The other side of the boundary, so the cap cannot be tightened into
+    refusing manifests that are fine."""
+    runtime, _engine, config, _claimed, _limited = world
+    asyncio.run(runtime.provision(TENANT, PROJECT))
+    staging = config.staging_root / TENANT
+    body = _WHOLE.rstrip("}") + ', "pad": "%s"}'
+    padding = "x" * (docker_mod._MANIFEST_MAX_BYTES - len(body % ""))
+    _make(staging, {"home": None, "env": None, "manifest.json": body % padding})
+    assert len((staging / "manifest.json").read_text(encoding="utf-8")) == \
+        docker_mod._MANIFEST_MAX_BYTES
+
+    assert asyncio.run(runtime.task(TENANT, "restore", PROJECT)) == {"ok": True}
+
+
+@pytest.mark.parametrize("contents,why", [
+    (b"", "a zero-byte file, which is what a killed `sqlite3 .backup` leaves"),
+    (b"not a database at all", "a file that is not a database"),
+    (b"SQLite format 2\x00" + b"\x00" * 100, "an older header this cannot read"),
+])
+def test_a_manifest_claiming_a_database_needs_a_real_one(world, contents, why):
+    """`is_file()` was the check, and a zero-byte state.db satisfies it.
+
+    A backup killed between creating the file and filling it leaves exactly
+    that, and the manifest above it says a database was copied. The restore
+    then archives and wipes the live tree, extracts an empty database, and
+    reports success -- the tenant's assistant comes back with no memory and
+    nothing says why. `sqlite3 .backup` writes a whole database or fails, so
+    the header is what is asked for.
+    """
+    runtime, _engine, config, _claimed, _limited = world
+    asyncio.run(runtime.provision(TENANT, PROJECT))
+    staging = config.staging_root / TENANT
+    _make(staging, {"home": None, "env": None,
+                    "manifest.json": '{"version": 1, "parts": ["home", "env"], '
+                                     '"state_db": true}'})
+    (staging / "home" / "state.db").write_bytes(contents)
+
+    with pytest.raises(RuntimeError, match="SQLite's header") as raised:
+        asyncio.run(runtime.task(TENANT, "restore", PROJECT))
+    assert "state.db" in str(raised.value), why
+
+
+def test_a_manifest_claiming_a_database_accepts_a_real_one(world):
+    """The presence half: a backup that really did copy a database restores."""
+    runtime, _engine, config, _claimed, _limited = world
+    asyncio.run(runtime.provision(TENANT, PROJECT))
+    staging = config.staging_root / TENANT
+    _make(staging, {"home": None, "env": None,
+                    "manifest.json": '{"version": 1, "parts": ["home", "env"], '
+                                     '"state_db": true}'})
+    (staging / "home" / "state.db").write_bytes(_SQLITE_HEADER + b"\x00" * 500)
+
+    assert asyncio.run(runtime.task(TENANT, "restore", PROJECT)) == {"ok": True}
+
+
+def test_a_manifest_denying_a_database_above_one_is_refused(world):
+    """The other direction, which only became checkable once the backup clears
+    its part directories: a `state_db: false` manifest sitting above a real
+    database means this staging holds two backups' worth of truth, and the
+    manifest is the one that is supposed to be authoritative."""
+    runtime, _engine, config, _claimed, _limited = world
+    asyncio.run(runtime.provision(TENANT, PROJECT))
+    staging = config.staging_root / TENANT
+    _make(staging, {"home": None, "env": None, "manifest.json": _WHOLE})
+    (staging / "home" / "state.db").write_bytes(_SQLITE_HEADER + b"\x00" * 500)
+
+    with pytest.raises(RuntimeError, match="disagree"):
+        asyncio.run(runtime.task(TENANT, "restore", PROJECT))

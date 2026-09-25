@@ -94,17 +94,40 @@ NO_QUOTA_DEVICE = "none"
 # is the other half -- without that, a second backup that died halfway would
 # sit under the first backup's manifest, which would say this partial data is
 # whole.
+#
+# AND THE PART DIRECTORIES ARE CLEARED, which is the same mistake one level up.
+# `rm -f` took the old manifest and nothing took the old home/ and env/, so the
+# manifest described THIS backup while the directories held the union of every
+# backup ever taken. Two consequences, both silent: a file the tenant deleted
+# came back on the next restore, and a manifest saying `state_db: false` sitting
+# above an earlier backup's home/state.db restored a database it says was never
+# copied -- after archiving and wiping the live tree, answering {"ok": True}.
+# A fact derived from the wrong source, for the fifth time in this file.
+#
+# It costs nothing that is still worth having: the `rm -f` on the line above
+# has already made the previous backup unrestorable.
+#
+# `find -delete` and not `rm -rf`: -delete implies -depth, traverses
+# FTS_PHYSICAL and unlinks relative to a directory fd it opened itself, so a
+# symlink among a tenant's backed-up files is removed as a link and never
+# descended. `-mindepth 1` keeps the two directories themselves. The same
+# idiom, for the same reasons, as _EMPTY_SCRIPT.
 _MANIFEST_NAME = "manifest.json"
 _MANIFEST_VERSION = 1
 _BACKUP_PARTS = ("home", "env")
 # A manifest is under a hundred bytes. The cap is here so a root
 # process never reads an unbounded file that sits beside tenant data.
 _MANIFEST_MAX_BYTES = 4096
+# The first sixteen bytes of every SQLite database. Checked because
+# is_file() is satisfied by a zero-byte file, which is what a killed
+# backup leaves behind.
+_SQLITE_MAGIC = b"SQLite format 3\x00"
 
 _BACKUP_SCRIPT = """
 set -o pipefail
 rm -f /staging/manifest.json
 mkdir -p /staging/home /staging/env
+find /staging/home /staging/env -mindepth 1 -delete
 if [ -f /data/state.db ]; then
   sqlite3 /data/state.db ".backup '/staging/home/state.db'"
   state_db=true
@@ -478,15 +501,14 @@ class DockerRuntime:
         return directory
 
     async def _backup(self, tenant_id: str) -> dict:
-        staging = self._staging(tenant_id)
-        if staging.is_symlink():
-            # Path.mkdir(exist_ok=True) re-checks with is_dir(), which FOLLOWS
-            # a link, and os.chown follows too. Nothing a tenant can write to
-            # includes staging_root today, so this is not reachable -- but this
-            # process is root, the subject of the whole file is planted links,
-            # and refusing costs one stat.
-            raise RuntimeError(f"{staging} is a symlink; refusing to chown through it")
-        self._tenant_directory_under(self._config.staging_root, tenant_id)
+        # THE PATH COMES FROM THE HELPER, and that is not tidiness: the first
+        # version called the helper for its side effect and then bound a path
+        # it had computed separately. Two expressions for one location is
+        # exactly the asymmetry GC-1 was -- `_backup` chowning one path while
+        # `_archive` bound another -- coming back through the door beside it.
+        # The helper does the symlink refusal, the mkdir, the mode and the
+        # chown, and returns the one path all four applied to.
+        staging = self._tenant_directory_under(self._config.staging_root, tenant_id)
         body = template.task_container(
             self._config, tenant_id=tenant_id,
             command=["bash", "-euc", _BACKUP_SCRIPT],
@@ -630,12 +652,43 @@ class DockerRuntime:
                     f"{manifest} names {part!r} and {staging / part} is not "
                     "there. The backup and what is on disk disagree; refusing "
                     "rather than restoring half of it.")
-        if parsed.get("state_db") is True and not (staging / "home" / "state.db").is_file():
-            raise RuntimeError(
-                f"{manifest} says this backup copied a database and "
-                f"{staging / 'home' / 'state.db'} is not there. Restoring "
-                "would give the tenant an empty assistant and report success.")
+        self._check_state_db(manifest, staging, parsed.get("state_db"))
         return parsed
+
+    @staticmethod
+    def _check_state_db(manifest: Path, staging: Path, claimed: object) -> None:
+        """The manifest and the file on disk must agree, BOTH WAYS.
+
+        `is_file()` was not enough: a zero-byte state.db, or a truncated one,
+        satisfies it and restores an assistant with no memory while the
+        manifest says a database was copied. `sqlite3 .backup` writes a whole
+        database or fails, so the header is what is checked.
+
+        The `false` direction matters too, now that the backup clears its part
+        directories: a manifest saying no database was copied, sitting above a
+        file that is one, means the two disagree about what this backup is --
+        and the whole point of the manifest is that IT, not the filesystem,
+        says what happened.
+        """
+        state_db = staging / "home" / "state.db"
+        if claimed is True:
+            if not state_db.is_file():
+                raise RuntimeError(
+                    f"{manifest} says this backup copied a database and "
+                    f"{state_db} is not there. Restoring would give the tenant "
+                    "an empty assistant and report success.")
+            with open(state_db, "rb") as handle:
+                header = handle.read(len(_SQLITE_MAGIC))
+            if header != _SQLITE_MAGIC:
+                raise RuntimeError(
+                    f"{state_db} does not begin with SQLite's header, so it is "
+                    "empty or truncated. `sqlite3 .backup` writes a whole "
+                    "database or fails; this is what a killed backup leaves.")
+        elif state_db.exists():
+            raise RuntimeError(
+                f"{manifest} says this backup copied no database and "
+                f"{state_db} is there. The manifest and the staging directory "
+                "disagree about what this backup is.")
 
     async def _archive(self, tenant_id: str, suffix: str = "") -> dict:
         """Pack both of a tenant's directories into the archive root, zstd.
