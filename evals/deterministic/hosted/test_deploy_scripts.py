@@ -380,30 +380,39 @@ def test_write_config_drains_stdin_when_it_keeps_a_file(tmp_path):
     assert target.read_text(encoding="utf-8") == "kept\n"
 
 
-def test_write_config_leaves_nothing_at_the_target_when_the_write_fails(tmp_path):
-    """THE DEFECT THIS EXISTS FOR. The earlier shape created the target and
-    then catted into it, so a write that stopped half way left a TRUNCATED env
-    file -- and the next run's "never overwrite" kept it, logging "keeping the
-    existing ..." over a half-written gateway.env. Rerunning could not repair
-    the one state rerunning is for.
+def test_a_killed_run_leaves_nothing_at_the_targets_name(tmp_path):
+    """THE DEFECT waku_write_config's RENAME EXISTS FOR. The earlier shape
+    created the target and then catted into it, so a run that stopped half way
+    left a TRUNCATED env file -- and the next run's "never overwrite" kept it,
+    logging "keeping the existing ..." over a half-written gateway.env.
+    Rerunning could not repair the one state rerunning is for.
 
-    `cat` is stubbed to emit part of the body and then fail, which is what a
-    killed run looks like from inside the function. The body must not appear
-    at the target's name at all.
+    THE SIGNAL MATTERS AND A FAILING `cat` WOULD NOT DO. An earlier version of
+    this test stubbed `cat` to exit 1, and it passed with the rename deleted:
+    the `|| rm -f "$tmp"` cleanup removes the target too when the temporary IS
+    the target. It was carried by the cleanup branch, not by the guard it was
+    named for. SIGKILL is the one path where neither that branch nor an EXIT
+    trap runs, so it is the rename alone that decides -- and it is also what a
+    reboot or an OOM kill looks like from inside the function.
+
+    The leftover temporary is asserted too: it is the evidence that the body
+    was being written somewhere other than the target's name.
     """
     target = tmp_path / "config" / "gateway.env"
     target.parent.mkdir()
-    script = tmp_path / "failing.sh"
+    script = tmp_path / "killed.sh"
     script.write_text(
         f'set -euo pipefail\n. "{LIB}"\n'
         f'waku_write_config "$1" </dev/null\n', encoding="utf-8")
     done = shelllib.run(
         script, [str(target)], tmp_path=tmp_path, stubs=["cat"],
-        bodies={"cat": "#!/bin/sh\nprintf 'WAKU_MAX_RU'\nexit 1\n"})
+        bodies={"cat": "#!/bin/sh\nprintf 'WAKU_MAX_RU'\nkill -9 $PPID\n"})
     assert done.returncode != 0
     assert not target.exists(), (
-        f"a failed write left {target.read_text() if target.exists() else ''!r} "
-        "at the target's name, and a rerun would keep it")
+        "a killed run left an env file at the target's name; the next run's "
+        '"never overwrite" would keep it and nothing could repair it')
+    left = [path.name for path in target.parent.iterdir()]
+    assert left and all(".tmp." in name for name in left), left
 
 
 def test_a_failed_write_takes_its_partial_secret_with_it(tmp_path):

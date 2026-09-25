@@ -59,6 +59,11 @@ waku_admin() {
   waku_compose exec -T --user 10002:10002 gateway python -m hosted.gateway.admin "$@"
 }
 
+# The temporary a config write is part way through, so a caller's EXIT trap
+# can take it away when a signal lands between the create and the rename.
+# Empty at every other moment.
+WAKU_WRITE_TMP=""
+
 # Write one config file from stdin, once. $1 is the full path.
 #
 # NEVER OVERWRITES (spec: "a rerun skips finished steps and never overwrites
@@ -90,8 +95,6 @@ waku_admin() {
 # before it reaches here and config/ is 0700 root:root from tree.sh; it is not
 # forced with `install -o 0 -g 0`, which would make this function unrunnable --
 # and therefore untestable -- as anyone but root.
-WAKU_WRITE_TMP=""
-
 waku_write_config() {
   local target tmp
   target=$1

@@ -367,7 +367,7 @@ if [ "$max_running_given" = yes ]; then
 fi
 
 tenant_disk_bytes=$(waku_bytes "$tenant_disk") \
-  || waku_die "--tenant-disk takes a whole number of at least 1, written without a leading zero, with an optional K, M or G; got $tenant_disk. Zero is refused on purpose: XFS reads bhard=0 as NO limit, so --tenant-disk 0 would put every tenant on an unbounded disk."
+  || waku_die "--tenant-disk takes a whole number of at least 1, written without a leading zero, with an optional K, M or G; got '$tenant_disk'. Zero is refused on purpose: XFS reads bhard=0 as NO limit, so --tenant-disk 0 would put every tenant on an unbounded disk."
 
 waku_require_root
 
