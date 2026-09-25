@@ -90,6 +90,13 @@ class Fleet:
         """Record a transition the gateway made. Touches no clock."""
         self._state(tenant_id).status = status
 
+    def running_status(self, tenant_id: str) -> str:
+        """The status the gateway believes, without creating a state for a
+        tenant nobody has asked about. `_state` is a setdefault, so a bare
+        read through it would grow the fleet by one entry per probe."""
+        state = self._states.get(tenant_id)
+        return state.status if state is not None else STOPPED
+
     def adopt(self, tenant_id: str) -> None:
         """A container the spawner's `list` reports as running.
 
@@ -133,7 +140,55 @@ class Fleet:
             return None
         return min(candidates, key=lambda s: (s.last_activity, s.tenant_id)).tenant_id
 
+    def release_start(self, tenant_id: str) -> None:
+        """Give back a slot admit() reserved for a start that never happened.
+
+        ONLY while the fleet still says STARTING. A start that got as far as a
+        container has already moved the status on, and a tenant whose
+        container is RUNNING must not be recorded as stopped because some
+        other caller was refused.
+        """
+        state = self._states.get(tenant_id)
+        if state is not None and state.status == STARTING:
+            state.status = STOPPED
+
     def admit(self, tenant_id: str, *, background: bool) -> Admission:
+        """The decision AND the reservation, in one synchronous call.
+
+        THIS METHOD TAKES THE SLOT IT GRANTS. It used to only answer, and the
+        caller then suspended -- on a unix socket to the spawner, and on the
+        `stop` of an evicted container before that -- while the fleet still
+        said a slot was free. Measured at max_running=1: two interleaved
+        POST /auth/session produced two containers, and so did two interleaved
+        requests for different tenants through the real forwarder. The cap is
+        derived from the VM's memory, so exceeding it is the kernel
+        OOM-killing a stranger's container mid-turn; a cap that a second
+        caller can walk through is not a cap.
+
+        So both start arms mark the tenant STARTING, which running() already
+        counts. After this call the arithmetic is settled and nothing a caller
+        does while suspended can change it.
+
+        The evict arm ALSO marks the evicted tenant STOPPED, and that half is
+        belt and braces rather than load-bearing today -- said here because it
+        was measured, not guessed. Launcher.stop calls _forget_running
+        (status STOPPED) before its first await, so through the gateway the
+        victim is already out of running() by the time any second caller can
+        be scheduled: deleting this line leaves both interleaved gateway tests
+        green. It is kept because admit's answer should be self-consistent on
+        its own -- a caller that admitted and then yielded before stopping,
+        or a future stop() that awaited the spawner first, would otherwise
+        find the same victim RUNNING and evict it twice. That property is
+        pinned at this level instead, by
+        test_admit_settles_the_cap_without_any_help_from_the_caller.
+
+        WHO GIVES THE SLOT BACK. Every path out of Launcher.start either
+        reaches a container (RUNNING) or calls _forget_running/release_start
+        (STOPPED). A reservation that leaked would not over-commit the VM --
+        it would shrink it by one container for the life of the process --
+        but it would be just as wrong, so it is closed rather than argued
+        about.
+        """
         state = self._state(tenant_id)
         if state.status == RUNNING:
             if not background:
@@ -151,11 +206,18 @@ class Fleet:
         # next sweep stops it sixty seconds later.
         if len(self.running()) < self._max_running:
             self.touch(tenant_id)
+            self.set_status(tenant_id, STARTING)
             return Admission("start")
         evict = self._evictable()
         if evict is None:
             return Admission("at_capacity", message=CAPACITY_MESSAGE)
         self.touch(tenant_id)
+        # The slot changes hands HERE. The caller still has to ask the spawner
+        # to stop the evicted container, and Launcher.stop marks it STOPPED
+        # again on the way -- but by then the decision has already been made
+        # on a fleet that cannot offer the same slot twice.
+        self.set_status(evict, STOPPED)
+        self.set_status(tenant_id, STARTING)
         return Admission("evict_then_start", evict=evict)
 
 

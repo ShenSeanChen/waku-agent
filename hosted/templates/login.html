@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sign in to waku</title>
+<link rel="stylesheet" href="/auth/static/login.css">
+</head>
+<body data-supabase-url="@@SUPABASE_URL@@" data-supabase-key="@@SUPABASE_KEY@@">
+<main>
+  <h1>waku</h1>
+  <p id="lede">Sign in with a link sent to your email.</p>
+  <form id="form">
+    <label for="email">Email</label>
+    <input id="email" name="email" type="email" autocomplete="email" required>
+    <button id="send" type="submit">Send me a link</button>
+  </form>
+  <p id="status" role="status"></p>
+</main>
+<script src="/auth/static/supabase.js"></script>
+<script src="/auth/static/login.js"></script>
+</body>
+</html>

@@ -278,6 +278,24 @@ class ControlDb:
             "UPDATE proxy_token SET revoked_at = ? WHERE tenant_id = ? AND revoked_at IS NULL",
             (self._now(), tenant_id))
 
+    def has_live_token(self, tenant_id: str) -> bool:
+        """Whether this tenant has an un-revoked proxy token.
+
+        THE INVARIANT resync ENFORCES: a running container holds its tenant's
+        current token. The gateway never sees the plaintext a container was
+        given, so it cannot compare them -- but issue_token revokes the
+        previous token in the same transaction as it writes the new one, so
+        exactly one row per tenant is ever live, and a running container whose
+        tenant has NO live row is a container whose token was revoked out from
+        under it.
+        """
+        self._require_tenant_id(tenant_id)
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT 1 FROM proxy_token WHERE tenant_id = ? AND revoked_at IS NULL "
+                "LIMIT 1", (tenant_id,)).fetchone()
+        return row is not None
+
     def tenant_for_token_hash(self, digest: str) -> tuple[str, str] | None:
         """(tenant id, status) for a live token. The proxy's only question."""
         with self._lock:

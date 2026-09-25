@@ -256,3 +256,64 @@ def test_the_three_sentences_are_the_specs_sentences():
         "Your assistant is taking too long to start. Try again.")
     assert idle.MAINTENANCE_MESSAGE == (
         "Your assistant is under maintenance. Try again in a few minutes.")
+
+
+def test_reading_a_status_does_not_invent_a_container():
+    """Fleet.running_status must not grow the fleet.
+
+    `_state` is a setdefault, so a read through it creates a ContainerState
+    for every tenant anybody asks about -- and `running()` counts STARTING and
+    RUNNING, `idle_stops()` walks every entry, and the running cap is a length
+    comparison against that walk. A probe that leaves a STOPPED entry behind
+    is invisible until the day the dict is the thing being measured.
+    """
+    f = idle.Fleet(lambda: 0.0, max_running=1)
+    assert f.running_status("aaaaaaaaaaaa") == idle.STOPPED
+    # A private read, on purpose: "the fleet did not grow" has no public
+    # expression on Fleet, and this is a shape check, not a guard.
+    assert len(f._states) == 0
+    assert f.running() == []
+    assert f.idle_stops() == []
+    f.set_status("bbbbbbbbbbbb", idle.RUNNING)
+    assert f.running() == ["bbbbbbbbbbbb"]
+
+
+def test_admit_settles_the_cap_without_any_help_from_the_caller():
+    """Two admissions, no caller in between, one slot.
+
+    `admit` decides AND reserves, so the second call must see a full fleet
+    even though nothing has been stopped or started yet -- the caller of the
+    first is still suspended on the spawner's socket. This is the property at
+    the level it lives at: through the gateway, Launcher.stop happens to mark
+    the evicted tenant STOPPED before its first await, so the gateway's own
+    interleaving tests stay green with the evict-side line deleted. Here they
+    do not.
+    """
+    _clock, f = fleet(max_running=1)
+    f.adopt("aaaaaaaaaaaa")
+    first = f.admit("bbbbbbbbbbbb", background=False)
+    assert (first.action, first.evict) == ("evict_then_start", "aaaaaaaaaaaa")
+    # Nothing has been stopped or started. The slot is still spoken for.
+    second = f.admit("cccccccccccc", background=False)
+    assert second.action == "at_capacity"
+    assert second.message == idle.CAPACITY_MESSAGE
+    # And the one being evicted is not offered up a second time.
+    assert f.running() == ["bbbbbbbbbbbb"]
+
+
+def test_a_reserved_slot_is_given_back_by_release_start():
+    """release_start is what a refused start calls. It must move a STARTING
+    tenant back to STOPPED and leave every other status alone -- a caller
+    refused on its way to a container must not be able to record somebody
+    else's RUNNING container as stopped."""
+    _clock, f = fleet(max_running=2)
+    assert f.admit("aaaaaaaaaaaa", background=False).action == "start"
+    assert f.running() == ["aaaaaaaaaaaa"]
+    f.release_start("aaaaaaaaaaaa")
+    assert f.running() == []
+
+    f.adopt("bbbbbbbbbbbb")
+    f.release_start("bbbbbbbbbbbb")
+    assert f.running() == ["bbbbbbbbbbbb"]     # RUNNING is not touched
+    f.release_start("never-seen")              # and an unknown tenant is a no-op
+    assert f.running() == ["bbbbbbbbbbbb"]

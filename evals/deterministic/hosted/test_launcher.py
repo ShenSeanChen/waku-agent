@@ -1,0 +1,692 @@
+"""The launcher: who gets a token, who gets a container, and who does not.
+
+A FAKE SPAWNER, NOT A FAKE LAUNCHER. Every test here drives the real
+Launcher against a recording spawner and a real ControlDb on a temp file, and
+then reads what the spawner was asked for. Nothing asserts that a method was
+called; the assertions are on the requests that reached the wire-facing
+object, which is the only thing the real spawner would ever see.
+
+asyncio.run around each coroutine: the repo has no pytest-asyncio and two
+sockets did not need one (test_internal_api.py). Neither does this.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import sqlite3
+
+import pytest
+from gatewaylib import Clock, FakeSpawner, ops
+
+from hosted.core import idle
+from hosted.core.tenant import token_hash
+from hosted.gateway.launch import (
+    DISABLED_MESSAGE,
+    InMaintenance,
+    Launcher,
+    NotActive,
+    StartFailed,
+)
+from hosted.gateway.spawner_client import SpawnerBusy, SpawnerError
+from hosted.gateway.store import ControlDb
+from hosted.ports.runtime import RunningContainer
+
+
+@pytest.fixture
+def made(tmp_path):
+    """A database path, a store, a fake spawner, a fleet on a fake clock and a
+    Launcher. The path is yielded too, for the one test that counts rows with
+    raw SQL rather than reaching into ControlDb's connection."""
+    path = tmp_path / "control.db"
+    store = ControlDb(path)
+    spawner = FakeSpawner()
+    clock = Clock()
+    fleet = idle.Fleet(clock, max_running=2)
+    launcher = Launcher(store=store, spawner=spawner, fleet=fleet, now=clock)
+    yield path, store, spawner, clock, fleet, launcher
+    store.close()
+
+
+def test_a_first_login_creates_the_row_and_provisions_it(made):
+    _path, store, spawner, _clock, _fleet, launcher = made
+
+    async def run():
+        return await launcher.ensure_tenant(sub="sub-1", email="mei@example.com",
+                                            timezone="Asia/Shanghai")
+
+    record, created = asyncio.run(run())
+    assert created is True
+    assert record.timezone == "Asia/Shanghai"
+    assert store.tenant_by_sub("sub-1").id == record.id
+    assert ops(spawner, "provision") == [
+        {"op": "provision", "tenant_id": record.id, "project_id": record.project_id}]
+
+
+def test_a_second_login_does_not_reprovision_or_move_the_time_zone(made):
+    _path, store, spawner, _clock, _fleet, launcher = made
+
+    async def run():
+        first, _ = await launcher.ensure_tenant(
+            sub="sub-1", email="mei@example.com", timezone="Asia/Shanghai")
+        store.set_timezone(first.id, "Europe/Berlin")
+        return await launcher.ensure_tenant(
+            sub="sub-1", email="mei@example.com", timezone="UTC")
+
+    record, created = asyncio.run(run())
+    assert created is False
+    assert record.timezone == "Europe/Berlin"
+    assert len(ops(spawner, "provision")) == 1
+
+
+def test_an_unknown_zone_from_the_browser_is_stored_as_utc(made):
+    _path, _store, _spawner, _clock, _fleet, launcher = made
+
+    async def run():
+        return await launcher.ensure_tenant(sub="sub-1", email="mei@example.com",
+                                            timezone="Middle/Earth")
+
+    record, _created = asyncio.run(run())
+    assert record.timezone == "UTC"
+
+
+def test_a_failed_first_provision_still_leaves_the_row(made):
+    _path, store, spawner, _clock, _fleet, launcher = made
+    spawner.fail_provision = SpawnerError("no such image")
+
+    async def run():
+        return await launcher.ensure_tenant(sub="sub-1", email="mei@example.com",
+                                            timezone="UTC")
+
+    record, created = asyncio.run(run())
+    assert created is True
+    assert store.tenant_by_id(record.id) is not None
+
+
+def test_a_disabled_tenant_cannot_log_in(made):
+    _path, store, _spawner, _clock, _fleet, launcher = made
+
+    async def run():
+        record, _ = await launcher.ensure_tenant(sub="sub-1", email="m@x.com",
+                                                 timezone="UTC")
+        store.set_status(record.id, "disabled")
+        with pytest.raises(NotActive) as caught:
+            await launcher.ensure_tenant(sub="sub-1", email="m@x.com", timezone="UTC")
+        return str(caught.value)
+
+    assert asyncio.run(run()) == DISABLED_MESSAGE
+
+
+def test_the_token_the_spawner_was_handed_is_the_one_control_db_holds(made):
+    _path, store, spawner, _clock, _fleet, launcher = made
+
+    async def run():
+        record, _ = await launcher.ensure_tenant(sub="s", email="m@x.com",
+                                                 timezone="UTC")
+        await launcher.start(record)
+        return record
+
+    record = asyncio.run(run())
+    sent = ops(spawner, "start")[0]["token"]
+    assert store.tenant_for_token_hash(token_hash(sent)) == (record.id, "active")
+
+
+def test_a_second_start_revokes_the_first_tenants_token(made):
+    _path, store, spawner, _clock, _fleet, launcher = made
+
+    async def run():
+        record, _ = await launcher.ensure_tenant(sub="s", email="m@x.com",
+                                                 timezone="UTC")
+        await launcher.start(record)
+        # The fleet says RUNNING, so start() returns the cached container
+        # rather than issuing again -- a stop is what makes the next start
+        # real, which is also what restart_all does.
+        await launcher.stop(record.id)
+        await launcher.start(record)
+        return record
+
+    record = asyncio.run(run())
+    first, second = (r["token"] for r in ops(spawner, "start"))
+    assert first != second
+    assert store.tenant_for_token_hash(token_hash(first)) is None
+    assert store.tenant_for_token_hash(token_hash(second)) == (record.id, "active")
+
+
+def test_a_second_start_with_no_stop_between_reuses_the_running_container(made):
+    """The running-container fast path in `start`, isolated from every other
+    test that touches it.
+
+    EVERY OTHER TEST HERE THAT CALLS `start` TWICE STOPS IN BETWEEN, so the
+    fast path -- `if running is not None and ... == RUNNING: return running`
+    -- has never been the reason a test passed. Without it, a second `start`
+    on an already-running tenant falls through to `_start_locked` and issues
+    a fresh token, which `ControlDb.issue_token` revokes the first one for:
+    the container the tenant is actively using goes on serving stale traffic
+    while its own gateway has just cut it off, with nothing in any log to say
+    why until the next model call 401s. That is the exact disaster the
+    module's docstring opens with, on the path E1's `/auth/session` takes on
+    every login, including a login by a tenant whose container is already up.
+    """
+    _path, store, spawner, _clock, _fleet, launcher = made
+
+    async def run():
+        record, _ = await launcher.ensure_tenant(sub="s", email="m@x.com",
+                                                 timezone="UTC")
+        first = await launcher.start(record)
+        second = await launcher.start(record)
+        return first, second
+
+    first, second = asyncio.run(run())
+    assert first is second
+    assert len(ops(spawner, "start")) == 1
+    sent = ops(spawner, "start")[0]["token"]
+    assert store.tenant_for_token_hash(token_hash(sent)) is not None
+
+
+def test_a_disabled_tenant_is_never_issued_a_token_and_never_started(made):
+    path, store, spawner, _clock, _fleet, launcher = made
+
+    async def run():
+        record, _ = await launcher.ensure_tenant(sub="s", email="m@x.com",
+                                                 timezone="UTC")
+        store.set_status(record.id, "disabled")
+        stale = store.tenant_by_id(record.id)
+        with pytest.raises(NotActive):
+            await launcher.start(stale)
+        return record
+
+    record = asyncio.run(run())
+    assert ops(spawner, "start") == []
+    # Raw SQL, against the path the fixture yielded: "no live token exists"
+    # has no public expression on ControlStore, and counting rows is the only
+    # way to say it without reaching into ControlDb's own connection.
+    with sqlite3.connect(path) as conn:
+        live = conn.execute(
+            "SELECT COUNT(*) FROM proxy_token WHERE tenant_id = ? "
+            "AND revoked_at IS NULL", (record.id,)).fetchone()[0]
+    assert live == 0
+
+
+def test_a_tenant_in_maintenance_is_never_issued_a_token_and_never_started(made):
+    _path, _store, spawner, _clock, _fleet, launcher = made
+
+    async def run():
+        record, _ = await launcher.ensure_tenant(sub="s", email="m@x.com",
+                                                 timezone="UTC")
+        launcher.mark_maintenance(record.id)
+        with pytest.raises(InMaintenance):
+            await launcher.start(record)
+        launcher.clear_maintenance(record.id)
+        await launcher.start(record)
+
+    asyncio.run(run())
+    assert len(ops(spawner, "start")) == 1
+
+
+def test_a_maintenance_mark_that_lands_while_a_second_start_waits_on_the_lock_is_still_honoured(made):
+    """The outer `in_maintenance` check in `start` runs before a second
+    caller even reaches `await lock.acquire()`. If that were the only check,
+    a mark landing during the wait would be invisible to the caller that
+    resumes holding the lock: it already passed its check on stale
+    information.
+
+    Forced with two starts on one tenant and no stop between them: the first
+    fails (holding the lock through the failure, so the address is never
+    set), the mark lands while the second is parked on the lock, and only
+    then does the first release it. The second must see the mark, not the
+    stale answer it read before it ever queued.
+    """
+    _path, _store, spawner, _clock, _fleet, launcher = made
+    spawner.fail_start = SpawnerError("no such image")
+    spawner.start_delay = 0.05
+
+    async def run():
+        record, _ = await launcher.ensure_tenant(sub="s", email="m@x.com",
+                                                 timezone="UTC")
+        first = asyncio.create_task(launcher.start(record))
+        await asyncio.sleep(0)      # first acquires the lock, begins the delay
+        second = asyncio.create_task(launcher.start(record))
+        await asyncio.sleep(0)      # second passes its outer check, queues on the lock
+        launcher.mark_maintenance(record.id)
+        with pytest.raises(StartFailed):
+            await first
+        with pytest.raises(InMaintenance):
+            await second
+
+    asyncio.run(run())
+    assert len(ops(spawner, "start")) == 1
+
+
+def test_a_start_the_spawner_calls_busy_reads_as_maintenance(made):
+    _path, _store, spawner, _clock, _fleet, launcher = made
+    spawner.fail_start = SpawnerBusy("a task container holds this tenant")
+
+    async def run():
+        record, _ = await launcher.ensure_tenant(sub="s", email="m@x.com",
+                                                 timezone="UTC")
+        with pytest.raises(InMaintenance) as caught:
+            await launcher.start(record)
+        return str(caught.value)
+
+    assert asyncio.run(run()) == idle.MAINTENANCE_MESSAGE
+
+
+def test_a_failed_start_leaves_the_tenant_stopped_and_startable(made):
+    _path, _store, spawner, _clock, fleet, launcher = made
+
+    async def run():
+        record, _ = await launcher.ensure_tenant(sub="s", email="m@x.com",
+                                                 timezone="UTC")
+        spawner.fail_start = SpawnerError("no such image")
+        with pytest.raises(StartFailed) as caught:
+            await launcher.start(record)
+        message = str(caught.value)
+        assert fleet.running_status(record.id) == idle.STOPPED
+        assert launcher.address(record.id) is None
+        spawner.fail_start = None
+        running = await launcher.start(record)
+        return message, record, running
+
+    message, record, running = asyncio.run(run())
+    assert message == idle.START_TIMEOUT_MESSAGE
+    # Not `running.port == 7777`: that number is FakeSpawner.port's own
+    # default, so it would pass even if the retry never reached the spawner
+    # at all. The retry's own evidence is that the fleet, the spawner's
+    # record and the launcher's own address book all agree on the SAME
+    # container -- which fails if the retry silently returns the failed
+    # attempt's stale state instead of the spawner's fresh answer.
+    assert running == spawner.running[record.id]
+    assert launcher.address(record.id) == running
+    assert fleet.running_status(record.id) == idle.RUNNING
+
+
+def test_stop_revokes_before_it_asks_the_spawner(made):
+    _path, store, spawner, _clock, _fleet, launcher = made
+    order: list[str] = []
+    original = spawner.stop
+
+    async def watched(tenant_id: str) -> None:
+        order.append("spawner-stop")
+        await original(tenant_id)
+
+    spawner.stop = watched
+
+    async def run():
+        record, _ = await launcher.ensure_tenant(sub="s", email="m@x.com",
+                                                 timezone="UTC")
+        await launcher.start(record)
+        sent = ops(spawner, "start")[0]["token"]
+
+        def revoked() -> bool:
+            return store.tenant_for_token_hash(token_hash(sent)) is None
+
+        async def watcher() -> None:
+            # Sampled the moment the spawner is asked: the revoke must already
+            # have happened, not be racing it.
+            order.append("revoked" if revoked() else "still-live")
+
+        spawner.stop = lambda tid: _both(watched(tid), watcher())
+        await launcher.stop(record.id)
+
+    async def _both(first, second):
+        await second
+        await first
+
+    asyncio.run(run())
+    assert order[0] == "revoked"
+
+
+def test_a_second_request_waits_for_the_start_the_first_one_began(made):
+    _path, _store, spawner, _clock, fleet, launcher = made
+    spawner.start_delay = 0.05
+
+    async def run():
+        record, _ = await launcher.ensure_tenant(sub="s", email="m@x.com",
+                                                 timezone="UTC")
+        first = asyncio.create_task(launcher.start(record))
+        await asyncio.sleep(0)          # let the start reach STARTING
+        assert fleet.running_status(record.id) == idle.STARTING
+        waited = await launcher.wait_for_start(record.id)
+        started = await first
+        return waited, started
+
+    waited, started = asyncio.run(run())
+    assert waited == started
+    assert len(ops(spawner, "start")) == 1
+
+
+def test_wait_for_start_with_nothing_in_flight_answers_from_the_address_book(made):
+    """The other half of `wait_for_start`: when `self._starts` holds no event
+    for the tenant, it must answer from `self._addresses` directly. Two
+    shapes of "nothing in flight" -- a tenant that has never started, and one
+    whose start already finished -- exercise the same early-return line
+    (`if event is None: return self._addresses.get(tenant_id)`). Changing
+    that line to an unconditional `return None` leaves `never_started`
+    unchanged (it was already `None`) but turns `already_done` from the
+    running container into `None` too, which is what this test is for.
+    """
+    _path, _store, _spawner, _clock, _fleet, launcher = made
+
+    async def run():
+        never_started = await launcher.wait_for_start("aaaaaaaaaaaa")
+        record, _ = await launcher.ensure_tenant(sub="s", email="m@x.com",
+                                                 timezone="UTC")
+        running = await launcher.start(record)
+        already_done = await launcher.wait_for_start(record.id)
+        return never_started, running, already_done
+
+    never_started, running, already_done = asyncio.run(run())
+    assert never_started is None
+    assert already_done == running
+
+
+def test_resync_adopts_what_the_spawner_reports_and_forgets_what_it_does_not(made):
+    _path, _store, spawner, clock, fleet, launcher = made
+
+    async def run():
+        one, _ = await launcher.ensure_tenant(sub="a", email="a@x.com", timezone="UTC")
+        two, _ = await launcher.ensure_tenant(sub="b", email="b@x.com", timezone="UTC")
+        await launcher.start(one)
+        await launcher.start(two)
+        # The spawner loses one of them: a kernel OOM kill, say.
+        spawner.running.pop(two.id)
+        clock.t += 60
+        adopted = await launcher.resync()
+        return one, two, adopted
+
+    one, two, adopted = asyncio.run(run())
+    assert sorted(adopted) == [one.id]
+    assert launcher.address(two.id) is None
+    assert fleet.running_status(two.id) == idle.STOPPED
+
+
+def test_resync_at_startup_gives_every_adopted_container_a_fresh_idle_clock(made):
+    _path, store, spawner, clock, _fleet, launcher = made
+
+    async def run():
+        record, _ = await launcher.ensure_tenant(sub="a", email="a@x.com",
+                                                 timezone="UTC")
+        await launcher.start(record)
+        # A new gateway process: same spawner, same store, empty fleet.
+        cold_fleet = idle.Fleet(clock, max_running=2)
+        cold = Launcher(store=store, spawner=spawner, fleet=cold_fleet, now=clock)
+        clock.t += 3600                 # an hour passes with the gateway down
+        await cold.resync()
+        return record, cold_fleet
+
+    record, cold_fleet = asyncio.run(run())
+    assert cold_fleet.running_status(record.id) == idle.RUNNING
+    assert cold_fleet.idle_stops() == []
+
+
+def test_resync_refuses_a_container_at_an_address_its_project_id_does_not_derive(made):
+    _path, _store, spawner, _clock, _fleet, launcher = made
+
+    async def run():
+        record, _ = await launcher.ensure_tenant(sub="a", email="a@x.com",
+                                                 timezone="UTC")
+        await launcher.start(record)
+        spawner.running[record.id] = RunningContainer(
+            tenant_id=record.id, address="10.88.9.9", port=7777)
+        await launcher.resync()
+        return record
+
+    record = asyncio.run(run())
+    assert launcher.address(record.id) is None
+
+
+def test_resync_stops_a_container_whose_tenant_is_no_longer_active(made):
+    _path, store, spawner, _clock, _fleet, launcher = made
+
+    async def run():
+        record, _ = await launcher.ensure_tenant(sub="a", email="a@x.com",
+                                                 timezone="UTC")
+        await launcher.start(record)
+        store.set_status(record.id, "disabled")
+        await launcher.resync()
+        return record
+
+    record = asyncio.run(run())
+    assert launcher.address(record.id) is None
+    assert ops(spawner, "stop") == [{"op": "stop", "tenant_id": record.id}]
+
+
+def test_restart_all_leaves_each_tenant_with_one_container_and_the_newest_token(made):
+    _path, store, spawner, _clock, _fleet, launcher = made
+
+    async def run():
+        one, _ = await launcher.ensure_tenant(sub="a", email="a@x.com", timezone="UTC")
+        two, _ = await launcher.ensure_tenant(sub="b", email="b@x.com", timezone="UTC")
+        await launcher.start(one)
+        await launcher.start(two)
+        return one, two, await launcher.restart_all()
+
+    one, two, restarted = asyncio.run(run())
+    assert restarted == sorted([one.id, two.id])
+    for record in (one, two):
+        tokens = [r["token"] for r in ops(spawner, "start") if r["tenant_id"] == record.id]
+        assert len(tokens) == 2
+        assert store.tenant_for_token_hash(token_hash(tokens[0])) is None
+        assert store.tenant_for_token_hash(token_hash(tokens[1])) == (record.id, "active")
+        assert launcher.address(record.id).address == spawner.running[record.id].address
+
+
+def test_prewarm_refuses_a_disabled_tenant_without_evicting_anybody(made):
+    """`prewarm` checks the status FIRST, before Fleet.admit.
+
+    `start` checks it too, so the wrong order still ends in NotActive -- but
+    not before `admit` has chosen a victim and this method has stopped it. A
+    disabled account must not be able to take a working tenant's container
+    down on its way to being refused, so the VM here is FULL: put the status
+    check after `admit` and the spawner is asked to stop somebody before the
+    refusal lands.
+    """
+    _path, store, spawner, _clock, fleet, launcher = made
+
+    async def run():
+        up = []
+        for index in range(2):        # max_running is 2 in `made`
+            record, _ = await launcher.ensure_tenant(
+                sub=f"sub-{index}", email=f"{index}@x.com", timezone="UTC")
+            await launcher.start(record)
+            up.append(record.id)
+        off, _ = await launcher.ensure_tenant(sub="sub-off", email="off@x.com",
+                                              timezone="UTC")
+        store.set_status(off.id, "disabled")
+        disabled = store.tenant_by_id(off.id)
+        before = len(spawner.requests)
+        with pytest.raises(NotActive) as caught:
+            await launcher.prewarm(disabled)
+        return str(caught.value), off.id, spawner.requests[before:], up
+
+    message, off_id, during, up = asyncio.run(run())
+    assert message == DISABLED_MESSAGE
+    assert during == []                       # nobody was stopped to make room
+    assert sorted(fleet.running()) == sorted(up)
+    assert fleet.running_status(off_id) == idle.STOPPED
+
+
+def test_prewarm_does_not_start_when_there_is_nothing_it_may_evict(made):
+    """The cap with no way round it: every running container is busy.
+
+    `Fleet.admit` answers `at_capacity` when the VM is full and nothing is
+    evictable -- a container with a request in flight is not. The pre-warm
+    then does NOT start: it answers None and the tenant's first request tries
+    the whole ladder again. Starting anyway is the over-commit this method
+    exists to refuse, and it would be bought by killing somebody's turn.
+    """
+    _path, _store, spawner, _clock, fleet, launcher = made
+
+    async def run():
+        held = []
+        for index in range(2):        # max_running is 2 in `made`
+            record, _ = await launcher.ensure_tenant(
+                sub=f"sub-{index}", email=f"{index}@x.com", timezone="UTC")
+            await launcher.start(record)
+            fleet.enter(record.id)    # a turn in flight on each
+            held.append(record.id)
+        third, _ = await launcher.ensure_tenant(sub="sub-3", email="3@x.com",
+                                                timezone="UTC")
+        before = len(spawner.requests)
+        answer = await launcher.prewarm(third)
+        return answer, third.id, spawner.requests[before:], held
+
+    answer, third_id, during, held = asyncio.run(run())
+    assert answer is None
+    assert [r for r in during if r["op"] in ("start", "stop")] == []
+    assert fleet.running_status(third_id) == idle.STOPPED
+    # And neither busy container was taken to make room for them.
+    assert sorted(fleet.running()) == sorted(held)
+
+
+def test_resync_stops_a_running_container_whose_token_was_revoked(made):
+    """The invariant: a running container holds its tenant's current token.
+
+    E2 left this as a paragraph headed "UNDECIDED, FOR E3" and E3 did not take
+    it. `stop` revokes the token first and then asks the spawner; when the
+    spawner call fails the container survives with a revoked token, the next
+    resync re-adopts it at the address its project id derives, and `start`'s
+    fast path hands it to every request. The dashboard loads and every model
+    call 401s, with no self-healing at all.
+
+    The fix is on the STATE, not on the route that produced it: whatever left
+    a container running without a live token -- a failed stop, an eviction, an
+    idle sweep, a restore -- resync stops it.
+    """
+    _path, store, spawner, _clock, fleet, launcher = made
+
+    async def run():
+        record, _ = await launcher.ensure_tenant(sub="sub-1", email="m@x.com",
+                                                 timezone="UTC")
+        await launcher.start(record)
+        spawner.fail_stop = SpawnerError("the daemon said no")
+        await launcher.stop(record.id)          # revokes, then fails
+        survived = record.id in spawner.running
+        spawner.fail_stop = None
+        mark = len(spawner.requests)
+        adopted = await launcher.resync()
+        return record.id, survived, adopted, spawner.requests[mark:]
+
+    tenant_id, survived, adopted, during = asyncio.run(run())
+    assert survived, "the fake did not keep the container; nothing was tested"
+    assert store.has_live_token(tenant_id) is False
+    assert adopted == {}                       # not handed back to anybody
+    assert launcher.address(tenant_id) is None
+    assert fleet.running() == []
+    assert [r["tenant_id"] for r in during if r["op"] == "stop"] == [tenant_id]
+
+
+def test_resync_adopts_a_running_container_that_still_has_its_token(made):
+    """The control for the test above. Without it, a resync that stopped
+    every container it was told about would pass -- and the gateway would come
+    back from a restart with nothing running and no idea why."""
+    _path, store, spawner, clock, _fleet, launcher = made
+
+    async def run():
+        record, _ = await launcher.ensure_tenant(sub="sub-1", email="m@x.com",
+                                                 timezone="UTC")
+        await launcher.start(record)
+        # A FRESH GATEWAY on the same control.db and the same spawner, which
+        # is what a restart is. A second Launcher rather than a private write
+        # into this one's address book: its fleet and its addresses are empty
+        # because they are new, which is the state being tested.
+        restarted = Launcher(store=store, spawner=spawner,
+                             fleet=idle.Fleet(clock, max_running=2), now=clock)
+        return record.id, await restarted.resync(), restarted
+
+    tenant_id, adopted, restarted = asyncio.run(run())
+    assert store.has_live_token(tenant_id) is True
+    assert sorted(adopted) == [tenant_id]
+    assert restarted.fleet.running() == [tenant_id]
+    assert restarted.address(tenant_id) is not None
+
+
+@pytest.mark.parametrize("refusal, raises", [
+    ("maintenance", InMaintenance),
+    ("disabled", NotActive),
+])
+def test_a_start_refused_before_it_begins_gives_its_reserved_slot_back(
+        made, refusal, raises):
+    """The claim the reservation is named for, and nothing drove it.
+
+    Fleet.admit reserves the slot; `_start_locked`'s own failure paths release
+    it everywhere else. The two refusals at the TOP of `start` -- a tenant
+    under maintenance and a disabled one -- never reach `_start_locked`, so
+    they are the only paths that have to release it themselves. Deleting both
+    `_abandon_start` calls left the entire suite green.
+
+    NO CANCELLATION IS INVOLVED, which is what makes it worth a test: an
+    operator runs `admin backup`, the tenant clicks something, and the slot is
+    gone for the life of the process. Worse than gone -- the tenant is WEDGED,
+    because every later admit answers `wait` on a start nobody is performing.
+    Both halves are asserted: the slot comes back, and the next admission is a
+    start rather than a wait.
+
+    "ZERO CONTAINERS WHERE ONE WAS ALLOWED" IS THE SILENT HALF of the cap. The
+    interleaved tests catch two where one was allowed, which is loud; this is
+    the direction nothing shouts about.
+    """
+    _path, store, spawner, _clock, fleet, launcher = made
+
+    async def run():
+        record, _ = await launcher.ensure_tenant(sub="s", email="m@x.com",
+                                                 timezone="UTC")
+        if refusal == "maintenance":
+            launcher.mark_maintenance(record.id)
+            tenant = record
+        else:
+            store.set_status(record.id, "disabled")
+            tenant = store.tenant_by_id(record.id)
+        admission = fleet.admit(record.id, background=False)
+        reserved = fleet.running()
+        before = len(spawner.requests)
+        with pytest.raises(raises):
+            await launcher.start(tenant)
+        return (record.id, admission.action, reserved, fleet.running(),
+                fleet.admit(record.id, background=False).action,
+                spawner.requests[before:])
+
+    tenant_id, action, reserved, after, again, during = asyncio.run(run())
+    assert action == "start"
+    assert reserved == [tenant_id]     # the slot really was held
+    assert after == []                 # and handed back when the start was refused
+    assert again == "start"            # so the tenant is not wedged on `wait`
+    assert during == []                # and the spawner was never asked
+
+
+def test_resync_stops_a_container_whose_tenant_row_is_gone(made):
+    """G2. `admin delete` stops, archives, then deletes the row -- and
+    `Launcher.stop` swallows a spawner failure, so the row goes whether the
+    container died or not. `resync` used to take the "control.db does not
+    know" branch, decline to adopt, and leave it running: memory and a mounted
+    data volume held for ever against a cap derived from memory, with the same
+    warning logged on every later resync.
+
+    Not exposure -- no row means no session and no token, so nothing can reach
+    it. Waste, of exactly the kind the running cap exists to bound, and the
+    one route the token invariant did not cover.
+
+    The control is the test above: a container whose tenant IS known and whose
+    token IS live must still be adopted, or "stop everything" would pass here.
+    """
+    _path, store, spawner, _clock, fleet, launcher = made
+
+    async def run():
+        record, _ = await launcher.ensure_tenant(sub="s", email="m@x.com",
+                                                 timezone="UTC")
+        await launcher.start(record)
+        spawner.fail_stop = SpawnerError("the daemon said no")
+        await launcher.stop(record.id)          # the delete's stop, which fails
+        store.delete_tenant(record.id)          # ... and the row goes anyway
+        survived = record.id in spawner.running
+        spawner.fail_stop = None
+        mark = len(spawner.requests)
+        adopted = await launcher.resync()
+        return record.id, survived, adopted, spawner.requests[mark:]
+
+    tenant_id, survived, adopted, during = asyncio.run(run())
+    assert survived, "the fake did not keep the container; nothing was tested"
+    assert store.tenant_by_id(tenant_id) is None
+    assert adopted == {}
+    assert [r["tenant_id"] for r in during if r["op"] == "stop"] == [tenant_id]
+    assert tenant_id not in spawner.running     # and it really is gone now
+    assert fleet.running() == []

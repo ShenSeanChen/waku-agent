@@ -599,3 +599,33 @@ def test_a_peer_that_never_sends_a_newline_cannot_grow_the_server(tmp_path, sock
             ledger.close()
 
     asyncio.run(run())
+
+
+def test_the_token_socket_creates_its_own_directory(tmp_path, sock_dir):
+    """G2. admin.serve_admin mkdirs its socket's parent and this did not, so
+    the two socket servers in one package disagreed about whose job it is.
+
+    F1's Compose mounts run/gateway/, so the deployment never needed it -- and
+    the first person to start the gateway by hand got a bare OSError out of
+    asyncio.start_unix_server naming the socket rather than the directory.
+    """
+    store = ControlDb(tmp_path / "control.db")
+    missing = sock_dir / "run" / "gateway"
+    assert not missing.exists()
+
+    async def run():
+        server = await serve_token_lookup(missing / "gateway.sock", store)
+        # And it is a working socket, not just a path that exists: one real
+        # question over the wire, so "the directory was created" cannot pass
+        # on a server that failed to bind.
+        answer = await jsonsock.ask(missing / "gateway.sock",
+                                    {"op": "token", "hash": "0" * 64})
+        server.close()
+        await server.wait_closed()
+        return answer
+
+    try:
+        answer = asyncio.run(run())
+    finally:
+        store.close()
+    assert answer == {"tenant": None}
