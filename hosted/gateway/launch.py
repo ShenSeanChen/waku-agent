@@ -242,6 +242,22 @@ class Launcher:
             # slot, so leaving the mark behind would shrink the VM by one
             # container for the life of the process. Fail-closed rather than
             # over-committing, but still wrong, so it is closed here.
+            #
+            # ONE SIBLING WINDOW IS STILL OPEN, AND ONE ASSUMPTION KEEPS IT
+            # SHUT. A caller cancelled between Fleet.admit's reservation and
+            # this line -- that is, during `await stop(admission.evict)` in
+            # _reach or prewarm -- releases nothing: _abandon_start is not
+            # reached, idle_stops() sweeps only RUNNING, and resync touches
+            # only _addresses, which a never-started tenant is not in. The
+            # slot is gone and that tenant is wedged on `wait`. It is not
+            # reachable today because aiohttp 3.14 defaults
+            # handler_cancellation=False and hosted/gateway/__main__.py does
+            # not set it, so a client disconnect does not cancel a handler;
+            # the live trigger is runner cleanup at shutdown, when an
+            # in-memory slot matters least. Turning handler_cancellation on,
+            # or wrapping a request in asyncio.wait_for, makes it live -- so
+            # the reservation would have to move inside a try/finally that
+            # spans the stop as well.
             self._forget_running(tenant.id)
             raise
         finally:
@@ -391,6 +407,15 @@ class Launcher:
         A second function differing only in that would be two places to get it
         wrong.
 
+        AND IT IS WHERE THE TOKEN INVARIANT IS ENFORCED: a running container
+        holds its tenant's current token, and belongs to a tenant this
+        gateway knows. A container that fails either is stopped, whatever put
+        it in that state -- a stop whose spawner call failed, an eviction, an
+        idle sweep, a restore, a delete. On this branch that means it is
+        repaired at gateway startup, on a refused connection, and on
+        `restart-all`; the once-a-minute sweep that would also call this is
+        E4's and E4 is deferred.
+
         THE ADDRESS IS CHECKED AGAINST THE PROJECT ID. DockerRuntime.list
         already refuses an address outside the tenant subnet, and this is the
         stronger check it says it cannot make: here the tenant row is
@@ -406,8 +431,20 @@ class Launcher:
         for container in containers:
             record = self._store.tenant_by_id(container.tenant_id)
             if record is None:
+                # THE SAME INVARIANT, AND THE ROUTE THAT USED TO ESCAPE IT.
+                # `admin delete` stops, archives and then deletes the row --
+                # and Launcher.stop swallows a spawner failure, so the row
+                # goes whether the container died or not. This branch used to
+                # decline to adopt and leave it running: memory and a mounted
+                # data volume held for ever against a cap derived from memory,
+                # logging the same line on every resync. No row means no
+                # session and no token, so nothing can reach it -- it is waste
+                # rather than exposure, but it is waste with no self-healing.
                 _LOG.warning("spawner lists tenant=%s, which control.db does "
-                             "not know; not adopting it", container.tenant_id)
+                             "not know; stopping it", container.tenant_id)
+                await self.stop(container.tenant_id)
+                self._fleet.forget(container.tenant_id)
+                self.forget_tenant(container.tenant_id)
                 continue
             if record.status != "active":
                 _LOG.warning("spawner lists tenant=%s whose status is %s; "

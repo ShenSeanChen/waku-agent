@@ -2055,7 +2055,10 @@ def test_a_quote_in_a_config_value_cannot_break_out_of_the_login_page(tmp_path):
         harness.config,
         supabase_url='https://x.example/a?b=1&c=2"><script>alert(1)</script>',
         supabase_publishable_key='sb_"onload="alert(2)')
-    harness.gateway = harness._build_gateway()      # noqa: SLF001 - see below
+    # A private call, and the alternative is worse: GatewayConfig is frozen,
+    # so the only public route to a Gateway with a hostile config is a second
+    # Harness constructor argument that exists for one test.
+    harness.gateway = harness._build_gateway()      # noqa: SLF001
 
     async def run():
         await harness.start()
@@ -2088,11 +2091,12 @@ def test_a_container_that_dies_mid_body_ends_the_response_it_already_started(wir
     reason.
 
     WITHOUT THIS BRANCH the exception escapes to _deliver, which tries to
-    build a 503 on a response that is already prepared -- and that raises
-    inside the handler, so the browser gets aiohttp's 500 appended to a body
-    it had already begun reading. The assertion is that the answer is a clean,
-    short 200: the status the container chose, and no second response after
-    it.
+    build a 503 on a response that is already prepared. Measured, the artefact
+    is the gateway's OWN status line spliced into the chunked body the browser
+    had already begun reading -- the wire read is
+    `b'HTTP/1.1 503 Service Unavailable'` where a chunk size should be, not
+    aiohttp's 500. The assertion is that the answer is a clean, short 200: the
+    status the container chose, and no second response after it.
     """
     async def run():
         await wired.start()
@@ -2106,6 +2110,69 @@ def test_a_container_that_dies_mid_body_ends_the_response_it_already_started(wir
     assert status == 200
     assert headers["content-type"] == "application/json"
     # What the container managed to send, and nothing appended after it.
+    # An equality, and no `b"503" not in body` beside it: that would sit after
+    # this line and could never fail on its own.
     assert body == b'{"path": "/api/data"}'
-    assert b"500" not in body
     assert headers["x-frame-options"] == "DENY"
+
+
+def test_a_second_request_during_the_evict_stop_window_waits_for_the_container(
+        wired_one_slot):
+    """The other half of the reservation, and the suite stayed green without
+    it.
+
+    Fleet.admit marks the tenant STARTING before the caller that won the slot
+    has done anything -- and on the evict arm that caller then awaits the
+    spawner's `stop` for the container it displaced. A second request for the
+    SAME tenant arriving in that window is correctly told to wait. It used to
+    be told the start was already over: `wait_for_start` inferred "no start"
+    from the absence of an event that the winner had not created yet, read an
+    address that was not there, and answered 503 -- on a container seconds
+    from running.
+
+    Now the FLEET is the authority on whether a start is under way, because
+    Fleet.admit is what marks it, and the event is created by whichever of the
+    waiter and the starter gets there first. Reverting either half puts the
+    503 back.
+
+    THE SECOND REQUEST MUST REACH THE WAIT BRANCH, so the assertions include
+    the evidence that it did: one start for this tenant, not two, and one
+    container served to both.
+    """
+    wired = wired_one_slot
+
+    async def run():
+        await wired.start()
+        host, cookie = await signed_in_on_the_tenant_host(
+            wired, sub="sub-one", email="one@example.com")
+        # The SECOND sign-in evicts the first on a one-slot VM, which leaves
+        # exactly the state the window needs: the tenant below is stopped and
+        # somebody else holds the only slot, so their next request must evict
+        # before it can start. A `launcher.stop` here instead would empty the
+        # fleet and the admission would be a plain `start` with nothing to
+        # await -- no window, and this test would pass against the bug.
+        await signed_in_on_the_tenant_host(wired, sub="sub-two",
+                                           email="two@example.com")
+        tenant_id = host.split(".", 1)[0]
+        wired.spawner.stop_delay = 0.05
+        wired.spawner.start_delay = 0.05
+        mark = len(wired.spawner.requests)
+        answers = await asyncio.gather(
+            wired.send("GET", "/api/data", host=host, cookie=cookie),
+            wired.send("GET", "/api/query", host=host, cookie=cookie))
+        during = wired.spawner.requests[mark:]
+        await wired.stop()
+        return tenant_id, answers, during, sorted(wired.container.targets)
+
+    tenant_id, answers, during, targets = asyncio.run(run())
+    # Both are served. Neither gets "taking too long to start" on a container
+    # that was starting.
+    assert [a[0] for a in answers] == [200, 200]
+    # One start, shared: the second request waited for it rather than being
+    # refused, and rather than starting a second container inside a one-slot
+    # cap.
+    assert [r["tenant_id"] for r in during if r["op"] == "start"] == [tenant_id]
+    assert targets == ["/api/data", "/api/query"]
+    # And the eviction really did happen, so the window really was open: the
+    # winner was inside `stop` when the waiter arrived.
+    assert [r["op"] for r in during][:2] == ["stop", "start"]

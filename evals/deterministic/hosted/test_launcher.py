@@ -598,3 +598,95 @@ def test_resync_adopts_a_running_container_that_still_has_its_token(made):
     assert sorted(adopted) == [tenant_id]
     assert restarted.fleet.running() == [tenant_id]
     assert restarted.address(tenant_id) is not None
+
+
+@pytest.mark.parametrize("refusal, raises", [
+    ("maintenance", InMaintenance),
+    ("disabled", NotActive),
+])
+def test_a_start_refused_before_it_begins_gives_its_reserved_slot_back(
+        made, refusal, raises):
+    """The claim the reservation is named for, and nothing drove it.
+
+    Fleet.admit reserves the slot; `_start_locked`'s own failure paths release
+    it everywhere else. The two refusals at the TOP of `start` -- a tenant
+    under maintenance and a disabled one -- never reach `_start_locked`, so
+    they are the only paths that have to release it themselves. Deleting both
+    `_abandon_start` calls left the entire suite green.
+
+    NO CANCELLATION IS INVOLVED, which is what makes it worth a test: an
+    operator runs `admin backup`, the tenant clicks something, and the slot is
+    gone for the life of the process. Worse than gone -- the tenant is WEDGED,
+    because every later admit answers `wait` on a start nobody is performing.
+    Both halves are asserted: the slot comes back, and the next admission is a
+    start rather than a wait.
+
+    "ZERO CONTAINERS WHERE ONE WAS ALLOWED" IS THE SILENT HALF of the cap. The
+    interleaved tests catch two where one was allowed, which is loud; this is
+    the direction nothing shouts about.
+    """
+    _path, store, spawner, _clock, fleet, launcher = made
+
+    async def run():
+        record, _ = await launcher.ensure_tenant(sub="s", email="m@x.com",
+                                                 timezone="UTC")
+        if refusal == "maintenance":
+            launcher.mark_maintenance(record.id)
+            tenant = record
+        else:
+            store.set_status(record.id, "disabled")
+            tenant = store.tenant_by_id(record.id)
+        admission = fleet.admit(record.id, background=False)
+        reserved = fleet.running()
+        before = len(spawner.requests)
+        with pytest.raises(raises):
+            await launcher.start(tenant)
+        return (record.id, admission.action, reserved, fleet.running(),
+                fleet.admit(record.id, background=False).action,
+                spawner.requests[before:])
+
+    tenant_id, action, reserved, after, again, during = asyncio.run(run())
+    assert action == "start"
+    assert reserved == [tenant_id]     # the slot really was held
+    assert after == []                 # and handed back when the start was refused
+    assert again == "start"            # so the tenant is not wedged on `wait`
+    assert during == []                # and the spawner was never asked
+
+
+def test_resync_stops_a_container_whose_tenant_row_is_gone(made):
+    """G2. `admin delete` stops, archives, then deletes the row -- and
+    `Launcher.stop` swallows a spawner failure, so the row goes whether the
+    container died or not. `resync` used to take the "control.db does not
+    know" branch, decline to adopt, and leave it running: memory and a mounted
+    data volume held for ever against a cap derived from memory, with the same
+    warning logged on every later resync.
+
+    Not exposure -- no row means no session and no token, so nothing can reach
+    it. Waste, of exactly the kind the running cap exists to bound, and the
+    one route the token invariant did not cover.
+
+    The control is the test above: a container whose tenant IS known and whose
+    token IS live must still be adopted, or "stop everything" would pass here.
+    """
+    _path, store, spawner, _clock, fleet, launcher = made
+
+    async def run():
+        record, _ = await launcher.ensure_tenant(sub="s", email="m@x.com",
+                                                 timezone="UTC")
+        await launcher.start(record)
+        spawner.fail_stop = SpawnerError("the daemon said no")
+        await launcher.stop(record.id)          # the delete's stop, which fails
+        store.delete_tenant(record.id)          # ... and the row goes anyway
+        survived = record.id in spawner.running
+        spawner.fail_stop = None
+        mark = len(spawner.requests)
+        adopted = await launcher.resync()
+        return record.id, survived, adopted, spawner.requests[mark:]
+
+    tenant_id, survived, adopted, during = asyncio.run(run())
+    assert survived, "the fake did not keep the container; nothing was tested"
+    assert store.tenant_by_id(tenant_id) is None
+    assert adopted == {}
+    assert [r["tenant_id"] for r in during if r["op"] == "stop"] == [tenant_id]
+    assert tenant_id not in spawner.running     # and it really is gone now
+    assert fleet.running() == []
