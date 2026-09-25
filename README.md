@@ -102,7 +102,7 @@ read and change. Versus the big open-source assistants (OpenClaw, Hermes)? Same 
 | [Architecture](docs/architecture.md) | every box on the whiteboard, and the file behind it |
 | [Integrations](docs/integrations.md) | voice, Telegram, calendars, MCP servers, Waku Memory |
 | [Commands](docs/commands.md) | every `waku` and `make` command |
-| [Evals & tracing](docs/evals.md) | the two kinds of eval, the release gate, traces and spend |
+| [Evals & tracing](docs/evals.md) | the two kinds of eval, the Docker tier, the release gate, traces and spend |
 | [Roadmap](docs/roadmap.md) | what is live, what is still a skeleton, upgrade paths |
 | [Whiteboards](docs/README.md#whiteboards) | the editable system-design charts from the videos |
 | [lab/](lab/README.md) | Waku meets other agents and models: the video experiments |

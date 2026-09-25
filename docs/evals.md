@@ -1,7 +1,7 @@
 # Evals and tracing
 
-The LLM-Ops pillar: two kinds of eval, a release gate that needs both, and a
-trace of every turn.
+The LLM-Ops pillar: two kinds of eval, a third tier that needs Docker, a
+release gate that needs the first two, and a trace of every turn.
 
 ## Two kinds of eval, never mixed
 
@@ -20,6 +20,12 @@ Deterministic tests are plain pytest in
 [`evals/deterministic/`](../evals/deterministic); judged ones use DeepEval in
 [`evals/judge/`](../evals/judge). CI runs the deterministic tier on every PR.
 The judge tier needs an API key, so `make gate` runs it locally.
+
+There is a third directory, [`evals/hosted_docker/`](../evals/hosted_docker):
+0/1 and offline like the deterministic tier, but it needs a Docker daemon, so
+it runs in its own `hosted-docker` CI job and not in `make gate`. It is only
+for `hosted/`, the deployment that runs waku for other people on a server. With
+no daemon, it skips the whole directory and says why.
 
 **Where the results show:** the terminal, and the dashboard's **Ops** tab — the
 release-gate verdict, an **eval-history** table (one row per `make gate`), the

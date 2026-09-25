@@ -37,9 +37,9 @@ covers.
 | `gateway/` | the front door: login, sessions, routing by host, `control.db` |
 | `proxy/` | the metering proxy in front of the model API, and `ledger.db` |
 | `spawner/` | the one process that talks to Docker |
-| `image/` | the tenant and services Dockerfiles and their allowlist ignore files |
+| `image/` | the tenant and services Dockerfiles, their allowlist ignore files, and the seccomp profile every container runs under |
 | `templates/` | the hosted `SOUL.md` and the gateway's own pages |
-| `deploy/` | `install.sh`, Compose, Caddy and the operator scripts |
+| `deploy/` | `install.sh`, Compose, Caddy, the operator scripts, and the example env files they write |
 
 ## Running it
 

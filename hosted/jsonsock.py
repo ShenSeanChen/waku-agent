@@ -19,6 +19,8 @@ import os
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 
+from hosted import log
+
 # A peer that never sends a newline must not be able to grow the proxy's
 # memory. Both requests are well under a hundred bytes.
 #
@@ -61,6 +63,12 @@ async def _answer(handler: Callable[[dict], Awaitable[dict]], request: dict) -> 
     try:
         return await handler(request)
     except Exception:                          # noqa: BLE001 - answered, not swallowed
+        # The wire stays opaque (see this function's docstring); the operator
+        # gets the traceback. Before this line, a spawner whose Docker socket
+        # had gone away answered every request with "the handler failed" and
+        # printed nothing anywhere -- the review that asked for a logging
+        # convention named exactly this case.
+        log.get(__name__).exception("handler failed for op=%r", request.get("op"))
         return {"error": HANDLER_FAILED}
 
 

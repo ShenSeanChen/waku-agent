@@ -114,7 +114,8 @@ friendly view; the **Data** tab shows the raw `state.db` tables.
   [context/design-system.md](context/design-system.md) before changing how
   anything looks.
 - `evals/deterministic/` (0/1, pytest) and `evals/judge/` (DeepEval, scored).
-  The two never mix.
+  The two never mix. `evals/hosted_docker/` is a third tier for `hosted/`:
+  0/1 and offline, but it needs a Docker daemon and its own CI job.
 - `examples/` — teaching material, not product; one folder per topic.
 - `.waku/` — runtime state: `state.db`, `calendar.ics`, `outbox/`, `traces/`.
   Gitignored.

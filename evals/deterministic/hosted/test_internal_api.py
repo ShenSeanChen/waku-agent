@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import sqlite3
 import stat
 import tempfile
@@ -274,6 +275,49 @@ def test_a_handler_that_raises_answers_an_error_rather_than_going_quiet(tmp_path
             await _closing(server)
 
     asyncio.run(run())
+
+
+def test_a_handler_that_raises_writes_the_traceback_the_wire_hides(tmp_path, sock_dir,
+                                                                   caplog):
+    """The asymmetry hosted/log.py exists for, asserted in BOTH directions.
+
+    The wire stays opaque -- the peer is another service, but the request that
+    reached it came from a tenant -- and the OPERATOR gets the traceback and
+    the operation name. Before jsonsock logged this, a spawner whose Docker
+    socket had gone away answered every request with "the handler failed" and
+    printed nothing anywhere.
+
+    One assertion each way, so a future "tidy up the logging" cannot remove
+    either half silently: the opaque body without the record is the bug this
+    fixes, and the record without the opaque body is a host path reaching a
+    caller whose own request came from a tenant.
+    """
+    async def run():
+        sock = sock_dir / "gateway.sock"
+        server = await serve_token_lookup(sock, _SickStore())
+        try:
+            with caplog.at_level(logging.ERROR, logger="hosted.jsonsock"):
+                answer = await jsonsock.ask(sock, {"op": "token", "hash": "a" * 64})
+        finally:
+            await _closing(server)
+        return answer
+
+    answer = asyncio.run(run())
+    assert answer == {"error": jsonsock.HANDLER_FAILED}, "the wire stopped being opaque"
+
+    records = [record for record in caplog.records
+               if record.name == "hosted.jsonsock"]
+    assert records, (
+        "the handler raised and nothing was logged. The wire says only 'the "
+        "handler failed' on purpose, so a log that says nothing either leaves "
+        "the operator with no way to tell a sick database from a sick socket.")
+    written = "\n".join(record.getMessage() for record in records)
+    assert "token" in written, (
+        f"the record does not name the operation: {written!r}. `grep` on an "
+        "operation name is how an operator finds which verb is failing.")
+    assert any(record.exc_info for record in records), (
+        "the record carries no traceback, which is the whole thing the wire "
+        "is withholding.")
 
 
 def test_a_sick_gateway_is_unreachable_at_the_proxy_not_a_bad_key(tmp_path, sock_dir):

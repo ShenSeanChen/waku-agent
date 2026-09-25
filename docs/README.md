@@ -36,7 +36,7 @@ into four groups.
 | [benchmarks.md](benchmarks.md) | what has been measured, and how |
 | [integrations.md](integrations.md) | voice, Telegram, Apple, Google Calendar, MCP, Waku Memory — all opt-in |
 | [commands.md](commands.md) | every `waku` and `make` command |
-| [evals.md](evals.md) | the two kinds of eval, the release gate, traces and spend |
+| [evals.md](evals.md) | the two kinds of eval, the Docker tier, the release gate, traces and spend |
 | [roadmap.md](roadmap.md) | what is live, what is still a skeleton, upgrade paths |
 
 ## Whiteboards

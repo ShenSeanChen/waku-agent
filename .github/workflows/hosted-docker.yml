@@ -1,0 +1,191 @@
+name: hosted-docker
+
+# The THIRD eval tier: offline, deterministic, 0/1 -- and needing a Docker
+# daemon, which `validate` does not have and does not want. It runs beside
+# `validate` rather than inside it, because a community skill PR should not
+# wait five minutes for an image build, and because the two fail for different
+# reasons and should say so separately.
+#
+# NO `paths:` FILTER, on purpose. The tenant image is built from waku/ and
+# skills/, the services image from hosted/, and both from pyproject.toml and
+# uv.lock -- so the list of paths that can break this job is very nearly the
+# whole repo, and a `paths:` list that is nearly everything is a list that goes
+# stale silently and skips the job on the one PR that needed it.
+#
+# THIS JOB IS ADVISORY UNTIL IT IS REQUIRED. Only `skills-and-evals` is in
+# main's required checks (docs/context/maintainers.md). A red run here does not
+# block a merge until Sean adds `hosted-docker` to the branch protection rule.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# A second push to the same PR cancels the first: this job builds two images
+# and mounts a filesystem, and two of them racing for /srv/waku on one runner
+# is a flake nobody will reproduce.
+concurrency:
+  group: hosted-docker-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  hosted-docker:
+    # Pinned, not `ubuntu-latest`. The XFS half of this job depends on the
+    # runner's kernel and on xfsprogs' spelling of the mount options, and a
+    # label that moves under us would move both without a commit.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: pip install -e '.[dev,hosted]'
+
+      # GitHub's runners have no XFS filesystem, so the job makes one. This is
+      # the only place in CI where a project quota is real: a 1 GB tenant limit
+      # that is enforced by the same kernel mechanism the VM will use, rather
+      # than by a mock that agrees with whatever the code does.
+      #
+      # 2 GB is deliberate and small: acceptance 16 asks for a tenant writing
+      # past 1 GB to get an error and a tenant using 700 MB to restore and
+      # still have about 300 MB free. Both fit, and a bug that leaks disk
+      # fails fast instead of filling the runner.
+      - name: An XFS filesystem with project quotas
+        run: |
+          set -euxo pipefail
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends xfsprogs
+          sudo modprobe xfs
+          sudo mkdir -p /srv/waku
+          sudo truncate -s 2G /var/tmp/waku-xfs.img
+          loop=$(sudo losetup --find --show /var/tmp/waku-xfs.img)
+          sudo mkfs.xfs -q "$loop"
+          sudo mount -o prjquota "$loop" /srv/waku
+          sudo chmod 0755 /srv/waku
+          # Assert the mount is ENFORCING, not merely mounted. A filesystem
+          # without prjquota accepts every xfs_quota command and enforces
+          # nothing, so every quota test would pass while proving the opposite.
+          sudo xfs_quota -x -c 'state -p' /srv/waku | tee /tmp/xfs-state
+          grep -q 'Enforcement: ON' /tmp/xfs-state
+          # The other half of the same verdict, in the form a non-root process
+          # can read. dockerlib.xfs_root() refuses a mount whose /proc/mounts
+          # options do not include `prjquota`, so if this kernel ever spells it
+          # differently the JOB says so here -- loudly -- instead of every
+          # quota test skipping and the job going green on an empty suite.
+          grep " /srv/waku xfs " /proc/mounts | tee /tmp/xfs-mountline
+          grep -q 'prjquota' /tmp/xfs-mountline
+          echo "WAKU_XFS_MOUNT=/srv/waku" >> "$GITHUB_ENV"
+          echo "WAKU_XFS_DEVICE=$loop"    >> "$GITHUB_ENV"
+
+      - name: Build both images
+        run: hosted/image/build.sh
+
+      # The spawner will run exactly this, as root with CAP_SYS_ADMIN and the
+      # data disk's block device passed in, from inside its own container. If
+      # it does not work here, F1 cannot rely on it and C2 has nothing to
+      # build on -- and C2 does not land for two more commits, so this step is
+      # what keeps this job from being green-because-empty.
+      - name: xfs_quota binds a project limit from inside a container
+        run: |
+          set -euxo pipefail
+          sudo mkdir -p /srv/waku/smoke
+          docker run --rm \
+            --user 0:0 \
+            --cap-add SYS_ADMIN \
+            --device "$WAKU_XFS_DEVICE" \
+            --volume /srv/waku:/srv/waku \
+            waku-services:test \
+            bash -euxc '
+              cat /proc/mounts | grep waku
+              xfs_quota -x -c "project -s -p /srv/waku/smoke 4242" /srv/waku
+              xfs_quota -x -c "limit -p bhard=1m 4242" /srv/waku
+              xfs_quota -x -c "report -p" /srv/waku
+              # conv=fsync so a delayed-allocation write cannot report success
+              # here and fail at writeback, where nothing is watching.
+              if dd if=/dev/zero of=/srv/waku/smoke/fill bs=64k count=64 conv=fsync; then
+                echo "FAIL: wrote 4 MiB into a 1 MiB project; the limit did not bind"
+                exit 1
+              fi
+              echo "the project limit bound"
+            '
+          sudo rm -rf /srv/waku/smoke
+
+      # The suite must COLLECT something. pytest exits 5 on "no tests ran",
+      # and on this runner that means the conftest skipped the whole directory
+      # -- which on a machine with a daemon can only be a bug in the skip
+      # logic. Locally that same exit 5 is the correct, expected outcome with
+      # the daemon down (C1 step 9); here it is a failure, and the difference
+      # is the whole reason this job exists.
+      #
+      # -rs prints every skip reason in this step's own log, beside the result
+      # it belongs to. The junitxml is what the next step reads.
+      # AS ROOT, and that is not laziness. This tier is the only place the
+      # spawner's real privileges exist:
+      #
+      #   - the XFS mount is /srv/waku, created above with sudo and left
+      #     root:root 0755. The `spawner` fixture mkdirs tenants/, archive/,
+      #     staging/ and run/spawner/ under it.
+      #   - provision() hands each tenant directory to UID 10001 at mode 0700
+      #     (hosted/spawner/docker.py), so every host-side read in
+      #     test_tenant_files.py crosses a directory `runner` cannot traverse
+      #     -- and Path.exists() SWALLOWS that PermissionError and returns
+      #     False, which turns an absence assertion into one that cannot fail.
+      #   - the retained-log cap reads the daemon's own storage directory.
+      #
+      # The alternative -- loosening the tenant tree so an unprivileged test
+      # can read it -- would change the thing under test. So the tests run
+      # with the privileges the spawner has, and `sudo -E env "PATH=$PATH"`
+      # is what carries setup-python's interpreter and the two WAKU_XFS_*
+      # variables across sudo, which resets both by default.
+      - name: Third-tier evals (Docker)
+        run: |
+          set -euo pipefail
+          sudo -E env "PATH=$PATH" \
+            python -m pytest evals/hosted_docker -q -rs --durations=10 \
+              --junitxml=/tmp/hosted-docker.xml
+          # pytest's own exit code already fails the step on 1-4; the `set -e`
+          # above turns exit 5 into a failure too, which is what we want here.
+          sudo chown -R "$(id -u):$(id -g)" /tmp/hosted-docker.xml
+
+      # THE TWO WAYS THIS JOB COULD LIE, both of which look like a green tick:
+      # it collected nothing, or it collected everything and skipped it all.
+      # This runner has a daemon, an enforcing XFS and both images, so every
+      # capability the suite asks for is present and a skip here is a finding
+      # -- most likely dockerlib's skip contract disagreeing with the step
+      # above about what "enforcing" looks like. Zero skips is an allowlist of
+      # one, deliberately: an "allowed skips" list is a list that grows.
+      - name: The suite ran, and nothing in it skipped
+        if: always()
+        run: |
+          python - <<'PY'
+          import sys
+          import xml.etree.ElementTree as ET
+          from pathlib import Path
+
+          report = Path("/tmp/hosted-docker.xml")
+          if not report.exists():
+              sys.exit(
+                  "no junit report: pytest never got far enough to write one. Read the "
+                  "previous step; if it says 'no tests ran' (exit 5), then "
+                  "evals/hosted_docker/conftest.py skipped the whole directory on a "
+                  "runner that HAS a daemon, which is a bug in the skip logic.")
+          suite = ET.parse(report).getroot().find("testsuite")
+          tests = int(suite.get("tests", 0))
+          skipped = int(suite.get("skipped", 0))
+          print(f"collected {tests}, skipped {skipped}")
+          if tests == 0:
+              sys.exit("the Docker tier collected 0 tests on a runner with a daemon.")
+          if skipped:
+              names = [
+                  f"{case.get('classname')}::{case.get('name')}"
+                  for case in suite.iter("testcase")
+                  if case.find("skipped") is not None
+              ]
+              sys.exit(
+                  "this runner has a Docker daemon, an XFS mount with project quotas "
+                  "ENFORCING, and both images built, so nothing in the Docker tier "
+                  "should skip. These did, and a skipped test is not a passing one:\n  "
+                  + "\n  ".join(names))
+          PY

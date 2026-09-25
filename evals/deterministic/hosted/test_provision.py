@@ -159,3 +159,28 @@ def test_a_broken_env_symlink_does_not_create_the_target(dirs, template, tmp_pat
 
     provision(dirs, template)
     assert not target.exists(), "provisioning wrote through a dangling symlink"
+
+
+def test_a_broken_soul_symlink_does_not_create_the_target(dirs, template, tmp_path):
+    """The SOUL.md half of the .env case directly above. exists() follows a
+    link, so a DANGLING one reads as absent and write_text opens the target."""
+    dirs.home.mkdir(parents=True, exist_ok=True)
+    target = tmp_path / "gotcha.txt"
+    (dirs.home / "SOUL.md").symlink_to(target)
+    written = provision(dirs, template)
+    assert not target.exists(), (
+        "provisioning wrote through a planted symlink to a path outside both "
+        "tenant directories")
+    assert (dirs.home / "SOUL.md") not in written
+
+
+def test_a_soul_symlink_to_an_existing_file_is_left_alone(dirs, template, tmp_path):
+    """The other half. exists() already reported this one as present, so it
+    was never written through -- and it must stay that way once the branch
+    above starts short-circuiting on is_symlink()."""
+    dirs.home.mkdir(parents=True, exist_ok=True)
+    target = tmp_path / "mine.txt"
+    target.write_text("UNTOUCHED\n", encoding="utf-8")
+    (dirs.home / "SOUL.md").symlink_to(target)
+    provision(dirs, template)
+    assert target.read_text(encoding="utf-8") == "UNTOUCHED\n"

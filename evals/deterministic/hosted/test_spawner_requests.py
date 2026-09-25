@@ -28,7 +28,14 @@ SPEC_KEYS = {
     "start": {"op", "tenant_id", "project_id", "timezone", "token"},
     "stop": {"op", "tenant_id"},
     "list": {"op"},
-    "task": {"op", "tenant_id", "task"},
+    # Widened in group C, deliberately. The spec's spawner table writes this
+    # operation as `task <tenant id> <task>`; restore additionally needs the
+    # tenant's project id, because it recreates their two directories empty and
+    # the spawner has no database to read the id from. Sending it is strictly
+    # better than the alternatives: reading control.db is what the architecture
+    # forbids, and allocating a new id gives the restored tenant a new disk
+    # bucket and a new bridge address.
+    "task": {"op", "tenant_id", "task", "project_id"},
 }
 SPEC_REQUIRED = {
     "provision": ("tenant_id", "project_id"),
