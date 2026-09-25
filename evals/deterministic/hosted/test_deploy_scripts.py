@@ -415,6 +415,64 @@ def test_a_killed_run_leaves_nothing_at_the_targets_name(tmp_path):
     assert left and all(".tmp." in name for name in left), left
 
 
+def test_a_stale_temporary_does_not_lend_the_target_its_mode(tmp_path):
+    """`rm -f "$tmp"` before the create, and it had no fixture at all.
+
+    Truncating a file that is already there keeps whatever mode it already
+    had, so the umask that is supposed to make the file 0600 at birth does
+    nothing and the target inherits the stale file's mode. A `$$` that repeats
+    across a reboot is how a stale temporary comes to exist.
+
+    The script makes the stale file itself, because only the shell that runs
+    waku_write_config knows the `$$` the name is built from.
+    """
+    target = tmp_path / "config" / "proxy.env"
+    target.parent.mkdir()
+    script = tmp_path / "stale.sh"
+    script.write_text(
+        f'set -euo pipefail\n. "{LIB}"\n'
+        'stale=$1.tmp.$$\n'
+        ': >"$stale"\nchmod 0666 "$stale"\n'
+        'printf %s "$2" | waku_write_config "$1"\n', encoding="utf-8")
+    done = shelllib.run(script, [str(target), "WAKU_PLATFORM_KEY=sk-ant-abc\n"],
+                        tmp_path=tmp_path)
+    assert done.returncode == 0, done.stderr
+    assert stat.S_IMODE(target.stat().st_mode) == 0o600
+
+
+def test_the_callers_exit_trap_can_find_the_temporary_to_remove(tmp_path):
+    """`WAKU_WRITE_TMP=$tmp`, which also had no fixture.
+
+    SIGTERM, not SIGKILL: a catchable signal is the case where the caller's
+    EXIT trap runs, and the trap can only remove the temporary if
+    waku_write_config published its name. install.sh's trap line itself sits
+    below waku_require_root, so what is proved here is the mechanism, with the
+    test supplying its own caller exactly as every other waku_write_config
+    test does.
+
+    The pair is complementary: the SIGKILL test asserts the temporary IS left
+    -- evidence the body went somewhere other than the target's name -- and
+    this one asserts a caller that traps can then take it away, rather than
+    leaving a 0600 file holding part of a platform key.
+    """
+    target = tmp_path / "config" / "proxy.env"
+    target.parent.mkdir()
+    script = tmp_path / "termed.sh"
+    script.write_text(
+        f'set -euo pipefail\n. "{LIB}"\n'
+        'trap \'rm -f ${WAKU_WRITE_TMP:+"$WAKU_WRITE_TMP"}\' EXIT\n'
+        'waku_write_config "$1" </dev/null\n', encoding="utf-8")
+    done = shelllib.run(
+        script, [str(target)], tmp_path=tmp_path, stubs=["cat"],
+        bodies={"cat": "#!/bin/sh\nprintf 'WAKU_PLATFORM_KEY=sk-ant-par'\n"
+                       "kill -TERM $PPID\n"})
+    assert done.returncode != 0
+    left = [path.name for path in target.parent.iterdir()]
+    assert left == [], (
+        f"a terminated run left {left}; the caller's trap could not find the "
+        "temporary, which holds part of the platform key at 0600")
+
+
 def test_a_failed_write_takes_its_partial_secret_with_it(tmp_path):
     """The temporary is 0600 and holds PART OF A SECRET between the create and
     the rename. A failed `cat` used to leave it there under a name nothing

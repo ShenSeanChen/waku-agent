@@ -144,6 +144,33 @@ def test_a_nameserver_line_with_no_address_is_refused(tmp_path):
     assert done.stdout.strip() == ""
 
 
+@pytest.mark.parametrize(
+    ("body", "expected"),
+    [
+        # THE ::1 ARM HAD NO FIXTURE ANYWHERE. Deleting it left the suite
+        # green, and the docstring below named "the two loopback filters"
+        # while only one of them was ever reached.
+        ("nameserver ::1\n", None),
+        ("nameserver ::1\nnameserver 127.0.0.53\n", None),
+        ("nameserver ::1\nnameserver 1.1.1.1\n", "1.1.1.1"),
+        ("nameserver ::1\nnameserver 127.0.0.53\nnameserver 10.0.0.2\n", "10.0.0.2"),
+    ])
+def test_the_ipv6_loopback_is_dropped_like_the_ipv4_one(tmp_path, body, expected):
+    """systemd writes `nameserver ::1` on a host whose stub listens on IPv6.
+    A firewall rule opening DNS to a loopback address lets nothing through
+    while looking as though it had, and that is as true of ::1 as of
+    127.0.0.53."""
+    path = tmp_path / "resolv.conf"
+    path.write_text(body, encoding="utf-8")
+    done = shelllib.call_function(CHECKS, f'waku_resolvers "{path}"')
+    if expected is None:
+        assert done.returncode != 0
+        assert done.stdout.strip() == ""
+    else:
+        assert done.returncode == 0, done.stderr
+        assert done.stdout.strip() == expected
+
+
 def test_the_real_resolvers_come_back_comma_separated(tmp_path):
     real = tmp_path / "resolv.conf"
     real.write_text(
@@ -438,6 +465,27 @@ def test_an_unreadable_platform_key_file_is_refused(tmp_path):
                         tmp_path=tmp_path, stubs=OUTSIDE)
     assert done.returncode != 0
     assert f"--platform-key-file: cannot read {key}" in done.stderr
+    assert shelllib.calls(tmp_path) == []
+
+
+def test_an_unreadable_dns_env_file_is_refused(tmp_path):
+    """--platform-key-file had this test and --dns-env-file did not: the N-2
+    asymmetry again, two guards on the same class of input with one proved.
+
+    Measured with the guard removed: refuse_a_nul_byte silently PASSES an
+    unreadable file -- both `wc -c` and `tr` fail, both produce empty output,
+    and the two empty strings compare equal -- bash prints two Permission
+    denied lines, and the run reaches "holds no NAME=VALUE line", telling the
+    operator the file is empty when it is unreadable.
+    """
+    if os.geteuid() == 0:
+        pytest.skip("root can read a 0000 file, so this refusal is unreachable as root")
+    path = _dns_file(tmp_path)
+    path.chmod(0o000)
+    done = shelllib.run(INSTALL, _required(tmp_path, dns_env_file=path),
+                        tmp_path=tmp_path, stubs=OUTSIDE)
+    assert done.returncode != 0
+    assert f"--dns-env-file: cannot read {path}" in done.stderr
     assert shelllib.calls(tmp_path) == []
 
 
@@ -820,6 +868,8 @@ def test_a_flag_whose_value_reaches_an_env_file_refuses_whitespace(
 def test_the_supabase_url_is_a_closed_set(tmp_path, value, ok):
     args = _required(tmp_path) + ["--supabase-url", value]
     done = shelllib.run(INSTALL, args, tmp_path=tmp_path, stubs=OUTSIDE)
+    # The guard's own sentence, not the flag's name: the usage block names
+    # every flag, so any refusal that dumps it would satisfy a name match.
     refused = "--supabase-url must" in done.stderr
     assert refused is not ok, done.stderr
 
@@ -840,7 +890,9 @@ def test_the_acme_email_is_a_closed_set(tmp_path, value, ok):
     discovered when a certificate silently stops renewing."""
     args = _required(tmp_path) + ["--acme-email", value]
     done = shelllib.run(INSTALL, args, tmp_path=tmp_path, stubs=OUTSIDE)
-    refused = "--acme-email" in done.stderr
+    # The guard's own sentence, not the flag's name. "--acme-email" alone
+    # appears in the usage block that every required-flag refusal prints.
+    refused = "--acme-email must" in done.stderr or "--acme-email's" in done.stderr
     assert refused is not ok, done.stderr
 
 
@@ -857,13 +909,79 @@ def test_the_acme_email_is_a_closed_set(tmp_path, value, ok):
         ("caddy-dns/route53", False),
         ("-route53", False),
         ("route53-", False),
-        ("", False),
     ])
 def test_the_dns_provider_module_is_a_closed_set(tmp_path, value, ok):
+    """THE ASSERTION IS ON THE GUARD'S OWN SENTENCE, not on the flag's name.
+    A fixture refused anywhere else -- the required-flag loop, for instance,
+    which dumps the whole usage block, and the usage block names every flag --
+    would satisfy `"--dns-provider" in done.stderr` without this guard ever
+    running. An empty fixture did exactly that and has been removed; the
+    missing-flag case is `test_a_missing_required_flag_is_refused`'s.
+    """
     args = _required(tmp_path) + ["--dns-provider", value]
     done = shelllib.run(INSTALL, args, tmp_path=tmp_path, stubs=OUTSIDE)
-    refused = "--dns-provider" in done.stderr
+    refused = "--dns-provider's module name" in done.stderr
     assert refused is not ok, done.stderr
+
+
+def test_a_dns_provider_cannot_inject_a_second_line_into_install_env(tmp_path):
+    """THE GUARD WITH THE MOST TEETH AND, UNTIL NOW, NO FIXTURE AT ALL.
+
+    `--dns-provider` is two things in one string, so the module check only
+    looks at the first word -- and every fixture above is a single word, which
+    left the printable-ASCII check on the WHOLE string exercised zero times.
+
+    Measured with that check neutered: `route53 {env.X}\\nWAKU_EVIL=1` passes
+    the module check, because the first word is `route53`, and the run carries
+    on. On a real root run the whole string is written into
+    `config/install.env` as one line -- so `install.env` would gain a second
+    line, `WAKU_EVIL=1`, which `waku_load_install_env` SOURCES and
+    `docker compose --env-file` reads. Operator-on-self rather than remote,
+    but it is a variable-injection guard into a file that is sourced.
+    """
+    injected = "route53 {env.X}\nWAKU_EVIL=1"
+    args = _required(tmp_path) + ["--dns-provider", injected]
+    done = shelllib.run(INSTALL, args, tmp_path=tmp_path, stubs=OUTSIDE)
+    assert done.returncode != 0
+    assert "--dns-provider must be printable text on one line" in done.stderr
+    assert shelllib.calls(tmp_path) == []
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        # EVERY FIXTURE HOLDS A SPACE, deliberately. `dns_module` is the first
+        # word, so a string with no space IS its own module name and the
+        # module-name class check refuses it first -- which is correct, and
+        # which means a no-space fixture would never reach the guard this test
+        # is named for. Measured: `route53\\tx` is refused by the module check.
+        "route53 x\ty",
+        "route53 x\ry",
+        "route53 {env.X}\nWAKU_EVIL=1",
+        "route53 \x01x",
+        "route53 x\x7f",
+    ])
+def test_the_whole_dns_provider_string_is_printable_ascii_on_one_line(
+        tmp_path, value):
+    """A space is the one whitespace character this string may hold, because
+    that is how the directive's arguments are written. Everything else --
+    tab, carriage return, newline, any control character -- is refused."""
+    args = _required(tmp_path) + ["--dns-provider", value]
+    done = shelllib.run(INSTALL, args, tmp_path=tmp_path, stubs=OUTSIDE)
+    assert done.returncode != 0
+    assert "must be printable text on one line" in done.stderr
+
+
+@pytest.mark.parametrize("value", ["route53\tx", "route53\nWAKU_EVIL=1"])
+def test_a_dns_provider_with_no_space_is_caught_by_the_module_check(
+        tmp_path, value):
+    """The other half of the pair, so the division of labour between the two
+    checks is pinned rather than assumed: with no space the whole string is
+    the module name, and the class check refuses it there."""
+    args = _required(tmp_path) + ["--dns-provider", value]
+    done = shelllib.run(INSTALL, args, tmp_path=tmp_path, stubs=OUTSIDE)
+    assert done.returncode != 0
+    assert "--dns-provider's module name" in done.stderr
 
 
 @pytest.mark.parametrize(
@@ -883,7 +1001,9 @@ def test_the_dns_provider_module_is_a_closed_set(tmp_path, value, ok):
 def test_the_dns_module_version_is_a_closed_set(tmp_path, value, ok):
     args = _required(tmp_path) + ["--dns-module-version", value]
     done = shelllib.run(INSTALL, args, tmp_path=tmp_path, stubs=OUTSIDE)
-    refused = "--dns-module-version" in done.stderr
+    # The guard's own sentence, not the flag's name.
+    refused = ("--dns-module-version must begin" in done.stderr
+               or "--dns-module-version may hold" in done.stderr)
     assert refused is not ok, done.stderr
 
 

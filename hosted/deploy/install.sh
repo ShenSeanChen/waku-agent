@@ -115,8 +115,15 @@ needs_value() {
 # BOTH credential files go through it. An earlier version had it on
 # --platform-key-file only, and two guards on the same class of input that
 # disagree are worse than one, because the operator learns the wrong rule.
+# LC_ALL=C like every other guard in this file that inspects bytes. `tr`
+# reading a byte sequence that is not valid in the ambient locale is the
+# failure this pins out: measured on macOS, `tr -d '\000'` over a file holding
+# a high byte returns "Illegal byte sequence" under a UTF-8 locale and the two
+# counts then disagree for a reason that has nothing to do with NUL. GNU `tr`
+# is byte-oriented and would be fine; the pin means both behave the same, and
+# it costs a subshell.
 refuse_a_nul_byte() {
-  [ "$(wc -c <"$1")" = "$(tr -d '\000' <"$1" | wc -c)" ] \
+  ( LC_ALL=C; [ "$(wc -c <"$1")" = "$(tr -d '\000' <"$1" | wc -c)" ] ) \
     || waku_die "$2: $1 holds a NUL byte, so it is not a text file. Reading it would silently drop that byte and use whatever was left, which is a credential that looks written and is wrong."
 }
 
