@@ -161,6 +161,13 @@ def test_a_nameserver_line_with_no_address_is_refused(tmp_path):
         ("nameserver 2001:4860:4860::8888\n", "2001:4860:4860::8888"),
         ("nameserver ::1\nnameserver 2001:4860:4860::8888\n",
          "2001:4860:4860::8888"),
+        # AND ONE THAT BEGINS WITH A COLON WITHOUT BEING ::1. The two fixtures
+        # above both start with a digit, so `^:` and `^::1$` agree on them and
+        # the widening stayed green anyway -- the same defect one level down.
+        # `::10` is the minimal address that tells the anchored form from the
+        # unanchored one: `grep -v '^::1'` without the `$` drops it too.
+        ("nameserver ::10\n", "::10"),
+        ("nameserver ::1\nnameserver ::10\n", "::10"),
     ])
 def test_the_ipv6_loopback_is_dropped_like_the_ipv4_one(tmp_path, body, expected):
     """systemd writes `nameserver ::1` on a host whose stub listens on IPv6.
