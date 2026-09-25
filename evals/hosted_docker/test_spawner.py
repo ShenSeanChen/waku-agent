@@ -12,8 +12,6 @@ the plain helpers are in spawnerlib.py. Neither is defined twice.
 
 from __future__ import annotations
 
-import time
-
 import dockerlib
 import pytest
 from spawnerlib import (
@@ -277,49 +275,81 @@ def test_every_task_container_is_throwaway_and_holds_only_that_tenants_mounts(
                           "task": "inspect-stop"})
 
 
+LOG_FLOOD_CONTAINER = "waku-log-flood"
+
+# 60 MiB down stdout, from the container's MAIN process.
+_LOG_FLOOD = ("import sys\n"
+              "line = 'x' * 1024 + '\\n'\n"
+              "for _ in range(60 * 1024):\n"
+              "    sys.stdout.write(line)\n")
+
+
 def test_a_tenants_logs_are_capped(spawner):
     """Acceptance 16's log clause: Docker's `local` driver, 10 MB per file,
     3 files, so at most 30 MB on disk however much the tenant writes.
 
-    IT READS THE FILES, not `docker logs`, because the cap is a property of
-    what is RETAINED on disk and the stream reports what was written. That
-    needs the daemon's storage directory to be on this filesystem, which it is
-    not on Docker Desktop, where the daemon lives in a VM. So it skips there,
-    with the reason named: this group's own rule is that an absent capability,
-    a failed build and a healthy container are three distinguishable outcomes,
-    and a test that ERRORS on the first machine anybody runs it on breaks that
-    rule before any of the others get a chance to.
+    TWO HALVES, and the first version had only the second.
+
+      1. The spawner ASKS for the cap: the tenant container the spawner created
+         carries template.LOG_DRIVER / LOG_MAX_SIZE / LOG_MAX_FILE.
+      2. The cap BINDS: a container flooding 60 MiB keeps at most ~30 MB.
+
+    THE FLOOD COMES FROM A CONTAINER'S MAIN PROCESS, and that is GC-4. The
+    first version flooded through `docker exec`, whose stdio is attached to the
+    API caller and is NOT routed through the container's logging driver (moby
+    has had the open request since #8662). So 60 MiB went into the test's own
+    subprocess pipe, `local-logs/` grew by nothing, and the test went red on
+    its own lower bound -- honest, but the clause stayed unproven.
+
+    The flooding container is started HERE with the driver and options read
+    from template.py, not typed again, so this measures the values the spawner
+    puts on a tenant container. It reads the FILES, not `docker logs`, because
+    the cap is a property of what is RETAINED and the stream reports what was
+    written -- which needs the daemon's storage directory to be on this
+    filesystem, and it is not on Docker Desktop, where the daemon lives in a
+    VM. It skips there with the reason named.
     """
     docker_root = dockerlib.require_docker_root_dir()
+
+    # 1. What the spawner asked for.
     ask(spawner, {"op": "start", "tenant_id": TENANT_A, "project_id": PROJECT_A,
                   "timezone": "UTC", "token": TOKEN_ONE})
     name = template.container_name(TENANT_A, template.KIND_TENANT)
     dockerlib.wait_for_listener(name, "127.0.0.1", template.DASHBOARD_PORT)
+    assert dockerlib.inspect(name)["HostConfig"]["LogConfig"] == {
+        "Type": template.LOG_DRIVER,
+        "Config": {"max-size": template.LOG_MAX_SIZE,
+                   "max-file": template.LOG_MAX_FILE}}
 
-    info = dockerlib.inspect(name)
-    assert info["HostConfig"]["LogConfig"] == {
-        "Type": "local", "Config": {"max-size": "10m", "max-file": "3"}}
+    # 2. What the daemon keeps, for a container carrying exactly those values.
+    dockerlib.remove(LOG_FLOOD_CONTAINER)
+    try:
+        flooder = dockerlib.start_detached(
+            SERVICES_TAG, ["python", "-c", _LOG_FLOOD],
+            name=LOG_FLOOD_CONTAINER, user="0:0", read_only=False,
+            extra=["--log-driver", template.LOG_DRIVER,
+                   "--log-opt", f"max-size={template.LOG_MAX_SIZE}",
+                   "--log-opt", f"max-file={template.LOG_MAX_FILE}"])
+        assert dockerlib.wait_for_exit(flooder) == 0, (
+            "the flooding container did not exit cleanly, so what it wrote is "
+            "not the 60 MiB this measures against:\n"
+            + dockerlib.logs(LOG_FLOOD_CONTAINER)[-2000:])
 
-    flood = ("import sys\n"
-             "line = 'x' * 1024 + '\\n'\n"
-             "for _ in range(60 * 1024):\n"
-             "    sys.stdout.write(line)\n")
-    dockerlib.exec_in(name, ["python", "-c", flood], check=False)
-    time.sleep(2)
-
-    # The `local` driver leaves .LogPath EMPTY -- that field belongs to
-    # json-file -- so the path is composed from the daemon's storage directory
-    # and the container id. An earlier draft read .LogPath and would have run
-    # `dirname` on an empty string, then measured /host.
-    logs = docker_root / "containers" / info["Id"] / "local-logs"
-    assert logs.is_dir(), (
-        f"no local-logs directory at {logs}; either the driver is not `local` "
-        "or the daemon stores its containers somewhere else")
-    size = sum(entry.stat().st_size for entry in logs.iterdir() if entry.is_file())
-    assert size <= 33 * 1024 * 1024, (
-        f"{size} bytes of logs for one tenant. The cap is 10 MB across 3 files; "
-        "the 3 MB of slack is the driver's own framing and the file it is "
-        "mid-rotation on.")
-    assert size > 1024 * 1024, (
-        f"only {size} bytes of logs, so the 60 MB write never reached the "
-        "driver and the ceiling above is asserting against nothing.")
+        logs = docker_root / "containers" / dockerlib.inspect(
+            LOG_FLOOD_CONTAINER)["Id"] / "local-logs"
+        assert logs.is_dir(), (
+            f"no local-logs directory at {logs}; either the driver is not "
+            f"{template.LOG_DRIVER!r} or the daemon stores its containers "
+            "somewhere else")
+        size = sum(entry.stat().st_size for entry in logs.iterdir()
+                   if entry.is_file())
+        assert size > 1024 * 1024, (
+            f"only {size} bytes of logs, so the 60 MiB write never reached the "
+            "driver and the ceiling below is asserting against nothing.")
+        assert size <= 33 * 1024 * 1024, (
+            f"{size} bytes of logs for one container. The cap is "
+            f"{template.LOG_MAX_SIZE} across {template.LOG_MAX_FILE} files; "
+            "the 3 MB of slack is the driver's own framing and the file it is "
+            "mid-rotation on.")
+    finally:
+        dockerlib.remove(LOG_FLOOD_CONTAINER)

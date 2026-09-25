@@ -457,3 +457,28 @@ def require_docker_root_dir() -> Path:
         "Desktop and any remote daemon look like -- the daemon lives in a VM. "
         "The retained-log cap is measured in the hosted-docker CI job, where "
         "the daemon is on the runner's own filesystem.")
+
+
+def wait_for_exit(container: str, *, timeout: float = 120.0) -> int:
+    """Block until `container` has exited, and return its exit code.
+
+    Added by C2 for the retained-log test, which needs a container's MAIN
+    process to finish writing before it measures what the log driver kept.
+    Raises rather than returning a sentinel if the container never exits: a
+    timeout here and a clean exit are different things, and a test that could
+    not tell them apart would report a log cap for a container still writing.
+    """
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        proc = _run(["inspect", "--format", "{{.State.Running}} {{.State.ExitCode}}",
+                     container], timeout=QUICK_TIMEOUT, check=False)
+        if proc.returncode != 0:
+            raise DockerError(
+                f"{container} is not there: {proc.stderr.strip()[:300]}")
+        running, _, code = proc.stdout.strip().partition(" ")
+        if running == "false":
+            return int(code)
+        time.sleep(0.2)
+    raise DockerError(
+        f"{container} was still running after {timeout}s, so anything measured "
+        "about it now is about a container that has not finished.")

@@ -88,6 +88,15 @@ BLOCKING_KINDS = frozenset({KIND_TASK, KIND_INSPECT})
 # test_container_template.py, because without the pin a misspelling in F1's
 # install.sh is silent: config_from_env raises on a missing name, but a name
 # nobody reads is a value the operator set and the spawner ignored.
+#
+# TWO MORE ARE READ AND ARE NOT HERE, deliberately: WAKU_SPAWNER_SOCKET
+# (service.py) and WAKU_LOG_LEVEL (log.py). Both have working defaults, so
+# config_from_env must NOT refuse a file without them -- which is exactly what
+# adding them to this tuple would do. They are listed, commented out, in
+# hosted/deploy/spawner.env.example so F1 knows they exist, and
+# OPTIONAL_ENV_NAMES keeps that list and this comment in step.
+OPTIONAL_ENV_NAMES = ("WAKU_SPAWNER_SOCKET", "WAKU_LOG_LEVEL")
+
 ENV_NAMES = (
     "WAKU_TENANT_ROOT",
     "WAKU_ARCHIVE_ROOT",

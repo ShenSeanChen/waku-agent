@@ -121,13 +121,14 @@ def _stage(config) -> None:
 
     FakeEngine runs no script -- it is a model of the daemon's bookkeeping, not
     of bash -- so a `backup` through it creates the staging directory and
-    nothing in it. The two subdirectories a real backup writes are made here,
-    so the restore guard passes and the test that follows is about what it says
-    it is about rather than about the guard.
+    nothing in it. What a FINISHED backup leaves is made here: the two
+    directories AND the manifest it writes last. Without the manifest the
+    restore guard refuses, which is GC-3 and is what the table above covers.
     """
     staging = config.staging_root / TENANT
     (staging / "home").mkdir(parents=True, exist_ok=True)
     (staging / "env").mkdir(parents=True, exist_ok=True)
+    (staging / "manifest.json").write_text(_WHOLE, encoding="utf-8")
 
 
 def _backed_up(runtime, config) -> None:
@@ -226,7 +227,7 @@ def test_a_restore_with_nothing_staged_refuses_instead_of_erasing_the_tenant(wor
     asyncio.run(runtime.provision(TENANT, PROJECT))
     before = len(engine.created)
 
-    with pytest.raises(RuntimeError, match="staged"):
+    with pytest.raises(RuntimeError, match="backup|manifest"):
         asyncio.run(runtime.task(TENANT, "restore", PROJECT))
 
     assert len(engine.created) == before, (
@@ -235,51 +236,105 @@ def test_a_restore_with_nothing_staged_refuses_instead_of_erasing_the_tenant(wor
         "data.")
 
 
-@pytest.mark.parametrize("staged", [
-    # Nothing at all -- the common case, and the one the first guard caught.
-    (),
-    # A directory that exists and is EMPTY. The guard that only asked "is it a
-    # directory" let this through, and the destruction then happened: the old
-    # tree archived, both directories removed, and the restore container left
-    # to fail afterwards. Same shape as C2-1 -- the guard looks right and the
-    # dangerous case walks through it.
-    ("",),
-    # Half a backup. _BACKUP_SCRIPT makes both; one without the other is an
-    # interrupted backup, and restoring from it silently drops the other mount.
-    ("home",),
-    ("env",),
-    # Named like the backup's output but not directories.
-    ("home/", "env-file"),
-])
-def test_a_restore_refuses_anything_that_is_not_a_whole_backup(world, staged):
-    """NEW-1. The guard has to test CONTENT, not existence.
+def _make(staging, layout) -> None:
+    """Build one staging shape. `layout` is a dict of path -> contents, where
+    None means "a directory" and a string means "a file with this text"."""
+    staging.mkdir(parents=True, exist_ok=True)
+    for relative, contents in layout.items():
+        target = staging / relative
+        if contents is None:
+            target.mkdir(parents=True, exist_ok=True)
+        else:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(contents, encoding="utf-8")
 
-    _BACKUP_SCRIPT writes `<staging>/home` and `<staging>/env`, so that pair is
-    what a restore consumes and what this asks for. Everything short of it is
-    refused BEFORE `_archive` runs, because by the time the archive container
-    has packed the old tree away and the trees have been removed, a restore
-    that cannot finish has already destroyed what it was restoring.
+
+_WHOLE = '{"version": 1, "parts": ["home", "env"], "state_db": false}'
+
+# Every shape a backup can leave behind short of a finished one. THE THIRD ROW
+# IS THE ONE THAT COST A ROUND: `_BACKUP_SCRIPT`'s FIRST line is
+# `mkdir -p /staging/home /staging/env`, so both directories exist -- empty --
+# from the first instant of a backup, before the sqlite3 copy and before either
+# tar. A guard that asked whether they were directories therefore accepted
+# every backup that died after line one: a locked or corrupt state.db failing
+# under `set -e`, a full disk, a killed container, a restarted spawner. The
+# restore then archived the live tree, emptied both mounts, re-provisioned them
+# empty, ran two `tar | tar` pipelines over empty sources that SUCCEEDED --
+# pipefail does not help, because nothing failed -- and answered {"ok": True}.
+# The tenant came back with an empty state.db and the operator was told it
+# worked.
+#
+# Shape cannot tell a finished backup from an interrupted one. Only the backup
+# can say, and it says it last.
+_PARTIAL = {
+    "nothing at all": {},
+    "the staging root and nothing in it": {".keep": ""},
+    # mkdir -p ran and then the backup died. The dangerous one.
+    "both directories, empty, no manifest": {"home": None, "env": None},
+    "both directories with data, no manifest": {"home/state.db": "x",
+                                                "env/.env": "y"},
+    "a manifest naming a part that is not there": {
+        "home": None, "manifest.json": _WHOLE},
+    "a manifest that does not parse": {
+        "home": None, "env": None, "manifest.json": "{not json"},
+    "a manifest that is not an object": {
+        "home": None, "env": None, "manifest.json": "[1, 2, 3]"},
+    "a manifest from a version this cannot read": {
+        "home": None, "env": None,
+        "manifest.json": '{"version": 99, "parts": ["home", "env"]}'},
+    "a manifest naming no parts": {
+        "home": None, "env": None, "manifest.json": '{"version": 1, "parts": []}'},
+    "a manifest claiming a state.db that is not there": {
+        "home": None, "env": None,
+        "manifest.json": '{"version": 1, "parts": ["home", "env"], '
+                         '"state_db": true}'},
+}
+
+
+@pytest.mark.parametrize("shape", sorted(_PARTIAL))
+def test_a_restore_refuses_anything_that_is_not_a_whole_backup(world, shape):
+    """GC-3. The guard must ask the BACKUP whether it finished, not the
+    filesystem what it looks like.
+
+    `_BACKUP_SCRIPT` writes `manifest.json` as its LAST action -- after the
+    database copy and after both tars -- and removes any previous one as its
+    FIRST, so a re-run that dies halfway cannot leave the previous run's
+    manifest standing over this run's partial data. A backup that died has no
+    manifest and cannot be restored from, which is the property three rounds of
+    shape checks were reaching for.
+
+    Everything short of a whole backup is refused BEFORE `_archive` runs,
+    because once the old tree is packed away and the two directories are gone,
+    a restore that cannot finish has already destroyed what it was restoring.
     """
     runtime, engine, config, _claimed, _limited = world
     asyncio.run(runtime.provision(TENANT, PROJECT))
-    staging = config.staging_root / TENANT
-    for entry in staged:
-        if entry == "":
-            staging.mkdir(parents=True, exist_ok=True)
-        elif entry.endswith("/"):
-            (staging / entry.rstrip("/")).mkdir(parents=True, exist_ok=True)
-        else:
-            staging.mkdir(parents=True, exist_ok=True)
-            (staging / entry).write_text("not a directory", encoding="utf-8")
+    _make(config.staging_root / TENANT, _PARTIAL[shape])
     before = len(engine.created)
 
-    with pytest.raises(RuntimeError, match="staged"):
+    with pytest.raises(RuntimeError, match="backup|manifest"):
         asyncio.run(runtime.task(TENANT, "restore", PROJECT))
 
     assert len(engine.created) == before, (
-        "the refusal came after containers had already run; a restore that "
-        "cannot finish must not start by archiving and removing the tenant's "
-        "data.")
+        f"{shape!r} was refused only after containers had already run; a "
+        "restore that cannot finish must not start by archiving and removing "
+        "the tenant's data.")
+
+
+def test_a_restore_accepts_a_whole_backup_of_an_empty_tenant(world):
+    """The other direction, and the reason the manifest has to be the test
+    rather than the directories' contents: a tenant who has written nothing has
+    a backup of two EMPTY directories, and that is a complete backup. Shape
+    cannot tell it from an interrupted one; the manifest can."""
+    runtime, _engine, config, claimed, _limited = world
+    asyncio.run(runtime.provision(TENANT, PROJECT))
+    _make(config.staging_root / TENANT,
+          {"home": None, "env": None, "manifest.json": _WHOLE})
+    claimed.clear()
+
+    assert asyncio.run(runtime.task(TENANT, "restore", PROJECT)) == {"ok": True}
+    dirs = docker_mod.tenant_dirs(config.tenant_root, TENANT)
+    assert set(claimed) == {str(dirs.home), str(dirs.env)}
 
 
 def test_a_restore_refuses_a_symlinked_staging_directory(world, tmp_path):
@@ -358,36 +413,43 @@ _STUB_OK = "#!/bin/sh\nexit 0\n"
 def _stub_bin(tmp_path, *, failing_tar_create: bool):
     """A PATH holding stand-ins for the tools the three scripts call.
 
-    `tar` is resolved through PATH, so this intercepts it without any of the
-    scripts' absolute paths having to exist: the stub never touches the
-    filesystem. With `failing_tar_create`, the `--create` end of each pipeline
-    -- the SOURCE -- exits 1 and everything else succeeds, which is the exact
-    shape of a half-read backup.
+    `tar`, `zstd`, `sqlite3` and `mkdir` are resolved through PATH, so this
+    intercepts them without any of the scripts' absolute container paths having
+    to exist. Every stub APPENDS ITS NAME AND ARGUMENTS to $WAKU_TOOL_LOG, so
+    the test can see how far the script got, and `tar --create` -- the SOURCE
+    end of every pipeline -- exits 1 when asked to, which is the shape of a
+    half-read backup.
     """
     binaries = tmp_path / "bin"
     binaries.mkdir(parents=True)
+    log_line = 'printf "%s %s\\n" "$(basename "$0")" "$*" >> "$WAKU_TOOL_LOG"\n'
     for name in ("mkdir", "sqlite3", "zstd"):
-        (binaries / name).write_text(_STUB_OK, encoding="utf-8")
+        (binaries / name).write_text("#!/bin/sh\n" + log_line + "exit 0\n",
+                                     encoding="utf-8")
     code = 1 if failing_tar_create else 0
     (binaries / "tar").write_text(
-        "#!/bin/sh\n"
-        'for arg in "$@"; do\n'
-        f'  if [ "$arg" = "--create" ]; then exit {code}; fi\n'
-        "done\n"
-        "exit 0\n",
+        "#!/bin/sh\n" + log_line
+        + 'for arg in "$@"; do\n'
+          f'  if [ "$arg" = "--create" ]; then exit {code}; fi\n'
+          "done\n"
+          "exit 0\n",
         encoding="utf-8")
     for entry in binaries.iterdir():
         entry.chmod(0o755)
     return binaries
 
 
-def _run_script(script: str, argv: list[str], binaries) -> int:
+def _run_script(script: str, argv: list[str], binaries, log: Path):
     import os as _os
     import subprocess
-    return subprocess.run(
+    log.write_text("", encoding="utf-8")
+    proc = subprocess.run(
         ["bash", "-euc", script, *argv],
-        env={**_os.environ, "PATH": f"{binaries}:{_os.environ['PATH']}"},
-        capture_output=True, text=True, timeout=30, check=False).returncode
+        env={**_os.environ, "PATH": f"{binaries}:{_os.environ['PATH']}",
+             "WAKU_TOOL_LOG": str(log)},
+        capture_output=True, text=True, timeout=30, check=False)
+    calls = [line for line in log.read_text(encoding="utf-8").splitlines() if line]
+    return proc.returncode, calls
 
 
 _SCRIPTS = {
@@ -398,38 +460,117 @@ _SCRIPTS = {
 
 
 @pytest.mark.parametrize("name", sorted(_SCRIPTS))
-def test_a_failing_source_fails_the_whole_pipeline(tmp_path, name):
+def test_a_failing_source_stops_the_script_at_the_first_pipeline(tmp_path, name):
     """`bash -euc` alone does NOT fail a pipeline whose FIRST stage failed.
 
-    Measured, not assumed: without `set -o pipefail`,
+    Measured, not assumed:
 
-        tar --create --file - --directory /gone . | tar --extract ... ; echo $?
+        bash -euc 'tar --create --directory /gone . | tar --extract ...'  -> 0
+        bash -euc 'set -o pipefail
+                   tar --create --directory /gone . | tar --extract ...'  -> 1
 
-    prints 0. So a restore that read nothing would have reported SUCCESS and
-    the operation would have returned {"ok": True} over a tenant whose old tree
-    had just been archived and removed. The review called this a diagnostics
-    problem -- a source error masked into a sink error -- and it is worse than
-    that: the exit code is 0 and _run_to_completion never raises at all.
+    Exit ZERO -- not "fails with the sink's error". _run_to_completion only
+    raises on a non-zero exit, so without pipefail a restore that read nothing
+    would have returned {"ok": True} over a tenant whose tree had just been
+    archived and removed, and a backup that copied nothing would have reported
+    a path an operator would later restore from.
 
-    This DRIVES the real script constants through a real bash, with `tar` stubbed
-    on PATH so none of their absolute paths has to exist. It is not a check that
-    the string "pipefail" appears in the source.
+    THE DISCRIMINATOR IS HOW FAR THE SCRIPT GOT, not its exit code alone. Each
+    of these scripts has TWO pipelines. With pipefail, a failing source stops
+    the script at the first and the second never runs; without it, both run and
+    the script carries on to the end. Counting `tar --create` invocations says
+    which happened, and it does not depend on any of the scripts' absolute
+    container paths existing.
+
+    It drives the three real constants through a real bash. It is not a check
+    that the string "pipefail" appears in a source file.
     """
     import shutil
     if shutil.which("bash") is None:
         pytest.skip("no bash on this machine; the spawner's scripts run under "
                     "bash -euc inside the services image")
     script, argv = _SCRIPTS[name]
+    log = tmp_path / "calls.log"
 
-    healthy = _run_script(script, argv, _stub_bin(tmp_path / "ok",
-                                                  failing_tar_create=False))
-    assert healthy == 0, (
-        f"the {name} script fails even when every tool succeeds, so the "
-        "assertion below would pass for the wrong reason")
+    _code, healthy = _run_script(script, argv,
+                                 _stub_bin(tmp_path / "ok", failing_tar_create=False),
+                                 log)
+    creates = [line for line in healthy if "--create" in line]
+    assert len(creates) == 2, (
+        f"the {name} script ran {len(creates)} `tar --create` with every tool "
+        f"succeeding, not 2: {healthy}. The count below is meaningless unless "
+        "this script really does have two pipelines.")
 
-    broken = _run_script(script, argv, _stub_bin(tmp_path / "bad",
-                                                 failing_tar_create=True))
-    assert broken != 0, (
+    code, broken = _run_script(script, argv,
+                               _stub_bin(tmp_path / "bad", failing_tar_create=True),
+                               log)
+    creates = [line for line in broken if "--create" in line]
+    assert code != 0, (
         f"the {name} script exited 0 with its source `tar --create` failing. "
         "_run_to_completion only raises on a non-zero exit, so this operation "
         "would report success having moved no data.")
+    assert len(creates) == 1, (
+        f"the {name} script carried on to its second pipeline after the first "
+        f"one's source failed: {broken}. `bash -euc` does not fail a pipeline "
+        "on its first stage; `set -o pipefail` is what makes the script stop.")
+
+
+# --- the shared roots, per tenant ----------------------------------------
+
+
+@pytest.mark.parametrize("task,root,binds_at", [
+    ("backup", "staging_root", "/staging"),
+    ("archive", "archive_root", "/archive"),
+])
+def test_a_task_is_handed_its_own_directory_under_a_shared_root(world, task, root,
+                                                                binds_at):
+    """GC-1. A task container runs as UID 10001 and creates files in what it is
+    given, so what it is given must be writable by 10001 -- and it must be THIS
+    tenant's directory, not the shared root, or every tenant's staging and
+    every tenant's archive sit inside every other tenant's task container.
+
+    `_backup` chowned its staging; `_archive` never learned that and was handed
+    the shared archive root, root-owned at 0755, so `zstd -o /archive/...` was
+    EACCES, `bash -euc` exited non-zero, and every archive -- and therefore
+    every restore, which archives first -- failed with jsonsock's opaque error.
+    """
+    runtime, engine, config, _claimed, _limited = world
+    asyncio.run(runtime.provision(TENANT, PROJECT))
+    engine.created.clear()
+
+    asyncio.run(runtime.task(TENANT, task))
+
+    shared = getattr(config, root)
+    mine = shared / TENANT
+    assert mine.is_dir(), f"{task} did not create {mine}"
+    assert mine.stat().st_mode & 0o777 == docker_mod.TENANT_DIR_MODE, (
+        f"{mine} is not {oct(docker_mod.TENANT_DIR_MODE)}, so another tenant's "
+        "task container could read it if a bind is ever wider than it should be")
+
+    binds = [bind for _name, body in engine.created
+             for bind in body["HostConfig"]["Binds"]]
+    assert f"{mine}:{binds_at}" in binds, (
+        f"{task} did not mount its own directory at {binds_at}: {binds}")
+    assert f"{shared}:{binds_at}" not in binds, (
+        f"{task} mounted the SHARED {root} at {binds_at}. Every other tenant's "
+        "data under it is then inside a container running as 10001 with this "
+        "tenant's files.")
+    for bind in binds:
+        source = bind.split(":", 1)[0]
+        assert source != str(shared), (
+            f"{task} mounted the shared {root}: {bind}")
+
+
+def test_a_shared_root_entry_that_is_a_symlink_is_refused(world, tmp_path):
+    """The same guard `_backup` already had, now on the shared path both tasks
+    go through. This process is root: `mkdir(exist_ok=True)` re-checks with
+    `is_dir()`, which follows a link, and `chown` follows too."""
+    runtime, _engine, config, _claimed, _limited = world
+    asyncio.run(runtime.provision(TENANT, PROJECT))
+    victim = tmp_path / "victim"
+    victim.mkdir()
+    config.archive_root.mkdir(parents=True, exist_ok=True)
+    (config.archive_root / TENANT).symlink_to(victim)
+
+    with pytest.raises(RuntimeError, match="symlink"):
+        asyncio.run(runtime.task(TENANT, "archive"))

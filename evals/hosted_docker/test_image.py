@@ -324,10 +324,19 @@ def test_a_secret_planted_inside_an_admitted_tree_stays_out_of_the_image(
       turns it red -- which is correct, because that is an edit to a stated
       security boundary and it should not happen quietly.
 
-    Cost note, which is why this is affordable in C4: when the re-exclusions
-    work, the refused files never enter the context, so the COPY layer's hash
-    changes only by the four survivors, and this build is close to a cache hit
-    on top of the session's tenant_image.
+    COST NOTE, CORRECTED. An earlier version of this docstring said this build
+    is "close to a cache hit on top of the session's tenant_image". It is not.
+    tenant.Dockerfile does `COPY waku ./waku` BEFORE `RUN uv sync --frozen
+    --extra notion`, so planting waku/_c1_context_probe/ changes the COPY
+    layer's hash and invalidates every layer after it -- including a full cold
+    `uv sync` of the whole lock, over the network. That is the largest single
+    item in the hosted-docker job's budget after the two first builds, and
+    `timeout-minutes: 30` is not generous with it there.
+
+    It is still worth it: this is the only test in C1 that fails if the
+    per-Dockerfile ignore file is deleted or neutered. But if the job starts
+    timing out, this is the first place to look, and the fix is to move the
+    COPY of waku/ after the sync rather than to drop the test.
     """
     tag = dockerlib.build_image("hosted/image/tenant.Dockerfile", CONTEXT_PROBE_TAG)
     inside = f"/app/{CONTEXT_PROBE_DIR.as_posix()}"

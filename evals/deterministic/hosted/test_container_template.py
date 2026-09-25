@@ -311,11 +311,31 @@ def test_the_typed_escape_sets_no_quota_at_all(monkeypatch, caplog):
     assert TENANT in caplog.text and "NO DISK QUOTA" in caplog.text
 
 
-def test_set_limit_names_no_path():
-    """The reason the repeat path is safe: there is nothing in the argv for
-    xfs_quota to walk."""
-    argv = xfsquota.limit_argv("/dev/sdb1", 7, 1073741824)
-    assert not any("/srv/waku/tenants" in part for part in argv)
+def test_set_limit_cannot_be_given_a_path_to_walk():
+    """GC-9. The reason the repeat path is safe: there is no path in it.
+
+    The first version of this asserted that "/srv/waku/tenants" was absent from
+    an argv built out of a device, an int and an int. No input could have put
+    it there, so it could not fail. This asserts the property that actually
+    holds it: `set_limit` TAKES no path, while `claim` and `repair` -- the two
+    that issue the recursive `project -s` -- do. The day somebody adds one,
+    this goes red, which is the moment worth catching.
+    """
+    import inspect as _stdlib_inspect
+
+    def parameters(function):
+        return set(_stdlib_inspect.signature(function).parameters)
+
+    assert parameters(xfsquota.set_limit) == {"device", "project_id", "hard_bytes"}, (
+        "set_limit's signature changed. It runs on EVERY start, on a directory "
+        "full of whatever the tenant wrote; a path parameter here is a root, "
+        "CAP_SYS_ADMIN walk over that tree on the platform's hot path.")
+    for walker in (xfsquota.claim, xfsquota.repair):
+        assert "path" in parameters(walker), (
+            f"{walker.__name__} stopped taking a path. It is one of the two "
+            "that issue `project -s`, and the whole distinction this module "
+            "draws is between the calls that name a path and the one that "
+            "does not.")
 
 
 def test_the_repair_walk_is_not_a_spawner_verb():
@@ -349,120 +369,105 @@ def test_the_repair_walk_is_not_a_spawner_verb():
     assert callable(xfsquota.repair)
 
 
-def test_nothing_in_the_spawner_frees_or_reuses_a_project_id():
-    """The retired-project-id tombstone is never pruned.
+def test_the_spawner_never_mints_a_project_id_of_its_own():
+    """GC-10. The spawner RECEIVES project ids; it does not allocate them.
 
-    next_project_id is monotonic and hosted/core/tenant.py's docstring gives
-    the reason: a directory that is moved or deleted keeps its XFS project id,
-    so a reused id bills a new tenant for what the old one left behind. A
-    tenant's BRIDGE ADDRESS derives from the same id, so a reused id also hands
-    a new tenant a deleted tenant's fixed address -- and the fixed-address
-    scheme's whole safety claim is that a stale address in the gateway's memory
-    "can only reach nothing or the same tenant".
+    `next_project_id` lives in hosted/core/tenant.py and the gateway calls it,
+    once, when a tenant is created. If the spawner ever called it, a restore or
+    a repair could hand a tenant a DIFFERENT id from the one control.db has --
+    and the id carries both an XFS accounting bucket and a fixed bridge
+    address, so the tenant would come back with someone else's disk accounting
+    and an address the gateway does not expect.
 
-    The spawner is where a "reclaim unused ids" helper would be written,
-    because it is the process that sees the directories. So this reads the
-    spawner package and refuses the vocabulary. It is a shape check, not a
-    proof -- named as such -- and it is here because the defect it guards
-    against is silent, permanent and cross-tenant.
+    THE FIRST VERSION OF THIS TEST WAS A BLOCKLIST of six invented function
+    names -- free_project_id, reclaim_project_id and so on -- none of which had
+    ever existed anywhere, so anyone writing such a helper would have called it
+    something else and walked straight past. It could not fail. This names a
+    symbol that DOES exist and asserts no module under hosted/spawner/ reaches
+    it, by AST rather than by substring, so a mention in prose passes and a
+    call fails.
+
+    Still a shape check, and said so: "nobody allocated an id here" has no
+    runtime state to observe. But it is a shape check on a real name.
     """
     spawner = Path(__file__).resolve().parents[3] / "hosted" / "spawner"
-    forbidden = {"free_project_id", "release_project_id", "reclaim_project_id",
-                 "reuse_project_id", "compact_project_ids", "prune_project_ids"}
-    offenders = {}
+    offenders: dict[str, int] = {}
     for py in sorted(spawner.rglob("*.py")):
-        names = {node.name for node in ast.walk(ast.parse(py.read_text(encoding="utf-8")))
-                 if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))}
-        if found := sorted(names & forbidden):
-            offenders[py.name] = found
+        tree = ast.parse(py.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            reached = (isinstance(node, ast.Attribute)
+                       and node.attr == "next_project_id")
+            imported = (isinstance(node, ast.ImportFrom)
+                        and any(alias.name == "next_project_id"
+                                for alias in node.names))
+            called = (isinstance(node, ast.Name)
+                      and node.id == "next_project_id")
+            if reached or imported or called:
+                offenders[py.name] = node.lineno
     assert not offenders, (
-        f"the spawner defines {offenders}. Project ids are monotonic and a "
-        "freed one is never reused: it carries both an XFS quota and a bridge "
-        "address, and reusing it gives a new tenant the old tenant's disk "
-        "accounting and the old tenant's address.")
+        f"the spawner reaches next_project_id in {offenders}. Project ids come "
+        "from the gateway, which holds control.db; one minted here would give "
+        "a tenant an XFS accounting bucket and a fixed bridge address that "
+        "nothing else in the platform agrees with.")
 
 
-def test_the_committed_seccomp_profile_makes_exactly_the_one_edit():
-    """DRIFT CHECK on hosted/image/seccomp.json.
+def test_the_only_project_id_the_spawner_uses_is_the_one_it_was_handed():
+    """The behavioural half of the test above, which a shape check cannot give.
 
-    The GUARD is test_isolation.py::test_changing_the_project_id_of_ones_own_file_fails,
-    which runs the two ioctls one value apart inside a real container and has a
-    seccomp=unconfined control beside it. This is the offline half: it reads
-    the committed profile and asserts the shape make_seccomp.py produces.
-
-    WHY THE SHAPE MATTERS RATHER THAN THE COUNT. The profile's defaultAction is
-    SCMP_ACT_ERRNO, so its rules are ALLOWANCES: an added deny for ioctl would
-    lose to the unconditional allow it was meant to override. So `ioctl` must
-    appear exactly once, in an allow carrying the condition -- not twice, and
-    not once unconditionally with a deny somewhere below it.
-
-    IT ASSERTS THE STATED GUARD AND NOT A STRONGER ONE. SCMP_CMP_NE compares
-    the full 64-bit register while the kernel reads ioctl's request as a 32-bit
-    unsigned int, so an aliased 0x1_401c5820 passes the filter and truncates
-    back. seccomp has no masked-not-equal; the residual is named in
-    make_seccomp.py's docstring and on G4's checklist, and this test does not
-    pretend it is closed.
+    Drives `task ... restore` through the service with a recording runtime and
+    asserts the id that comes out is the id that went in -- no derivation, no
+    allocation, no arithmetic. Reverting to a minted id fails here, and this
+    one has runtime state to observe.
     """
-    import json
+    import asyncio as _asyncio
 
-    profile = json.loads((Path(__file__).resolve().parents[3] / "hosted" / "image"
-                          / "seccomp.json").read_text(encoding="utf-8"))
-    assert profile["defaultAction"] == "SCMP_ACT_ERRNO", (
-        "the profile's default is no longer a refusal, so every rule in it "
-        "became decoration and `ioctl`'s condition stops meaning anything")
+    from hosted.spawner import service as _service
 
-    carrying = [entry for entry in profile["syscalls"]
-                if "ioctl" in entry.get("names", [])]
-    assert len(carrying) == 1, (
-        f"`ioctl` appears in {len(carrying)} rule blocks. make_seccomp.py takes "
-        "it out of the unconditional allow and puts it back once, with a "
-        "condition; two blocks means one of them is unconditional and wins.")
-    only = carrying[0]
-    assert only["names"] == ["ioctl"], only["names"]
-    assert only["action"] == "SCMP_ACT_ALLOW"
-    assert only["args"] == [{"index": 1, "value": 0x401C5820, "op": "SCMP_CMP_NE"}], (
-        f"the condition is {only['args']}, not 'argument 1 is not "
-        "FS_IOC_FSSETXATTR'. Without exactly this, a tenant can move their own "
-        "file into another XFS project and write past their disk limit.")
+    seen: list[int] = []
+
+    class _Recorder:
+        async def task(self, tenant_id, task, project_id=0):
+            seen.append(project_id)
+            return {"ok": True}
+
+    for given in (2, 4242, 65279):
+        seen.clear()
+        answer = _asyncio.run(_service.handle(
+            _Recorder(), {"op": "task", "tenant_id": TENANT, "task": "restore",
+                          "project_id": given}))
+        assert "error" not in answer, answer
+        assert seen == [given], (
+            f"the runtime was handed {seen} for a request carrying {given}")
 
 
-def test_both_bridges_turn_inter_container_traffic_off():
-    """A tenant's dashboard has NO AUTHENTICATION of its own -- the gateway in
-    front of it is the whole of it -- and a user-defined Docker bridge allows
-    container-to-container traffic by DEFAULT. With ICC on, tenant A opens TCP
-    to 10.88.0.<B>:7777 and reads tenant B's chat log, memory and SQL console.
+def test_the_two_optional_variables_are_documented_and_not_required():
+    """GC-12. `service.py` reads WAKU_SPAWNER_SOCKET and `log.py` reads
+    WAKU_LOG_LEVEL, and neither is in ENV_NAMES -- so the both-directions pin
+    against spawner.env.example does not cover them and F1 could ship without
+    knowing they exist.
 
-    Pinned as a value in hosted/core/tenant.py because C3's networks.sh, F1's
-    install.sh and the Docker tests must all read one source; the Docker half
-    is evals/hosted_docker/test_isolation.py::
-    test_a_tenant_cannot_open_a_socket_to_another_tenants_dashboard, which
-    tries the connection.
-
-    WHAT THIS DOES NOT COVER, so nobody reads a green tick as isolation: the
-    DOCKER-USER forward rules, the dropped private and link-local ranges, the
-    DNS exception and the host's INPUT rules are all C3's firewall.sh, and C3
-    is deferred. enable_icc closes tenant-to-tenant on the bridge, and that is
-    all it closes.
+    They must NOT join ENV_NAMES: config_from_env refuses a file missing any
+    name in it, and both of these have working defaults. So they are named in
+    OPTIONAL_ENV_NAMES, commented out in the example file, and this holds the
+    three in step -- including that they stay OPTIONAL, which is the half that
+    matters to an operator whose install.sh does not write them.
     """
-    for network in (tenant.TENANT_NETWORK, tenant.INSPECT_NETWORK):
-        options = tenant.BRIDGE_OPTIONS[network]
-        assert options["com.docker.network.bridge.enable_icc"] == "false", (
-            f"{network} allows inter-container traffic. Two tenants on it can "
-            "reach each other's unauthenticated dashboards.")
-    assert set(tenant.BRIDGE_OPTIONS) == {tenant.TENANT_NETWORK,
-                                          tenant.INSPECT_NETWORK}, (
-        "a bridge with no options entry is a bridge created with Docker's "
-        "defaults, which means ICC on")
+    example_path = (Path(__file__).resolve().parents[3]
+                    / "hosted" / "deploy" / "spawner.env.example")
+    example = example_path.read_text(encoding="utf-8")
+    for name in template.OPTIONAL_ENV_NAMES:
+        assert name not in template.ENV_NAMES, (
+            f"{name} is in ENV_NAMES, so config_from_env now refuses a "
+            "spawner.env without it -- and it has a default, so no operator "
+            "has any reason to set it.")
+        assert f"# {name}=" in example, (
+            f"{name} is read by the spawner and is not in "
+            f"{example_path.name}, so F1 has no way to know it exists.")
 
-
-def test_each_bridges_interface_name_matches_its_network_name():
-    """firewall.sh writes `iptables -i waku-tenants` against the LINUX
-    interface, and Docker names that interface `br-<id>` unless it is told
-    otherwise. The two are set to the same string so the rule means what it
-    looks like it means."""
-    assert (tenant.BRIDGE_OPTIONS[tenant.TENANT_NETWORK]
-            ["com.docker.network.bridge.name"]) == tenant.TENANT_BRIDGE
-    assert (tenant.BRIDGE_OPTIONS[tenant.INSPECT_NETWORK]
-            ["com.docker.network.bridge.name"]) == tenant.INSPECT_BRIDGE
-    for name in (tenant.TENANT_BRIDGE, tenant.INSPECT_BRIDGE):
-        assert len(name) < 16, f"{name} is past Linux's IFNAMSIZ of 15"
+    # It really is optional: a config with the eleven and neither of these
+    # builds. Asserted by BUILDING one rather than by reading config_from_env.
+    env = {entry: "x" for entry in template.ENV_NAMES}
+    env["WAKU_TENANT_DISK_BYTES"] = "1073741824"
+    profile = example_path.parent.parent / "image" / "seccomp.json"
+    env["WAKU_SECCOMP_PROFILE"] = str(profile)
+    assert template.config_from_env(env).tenant_root == Path("x")

@@ -125,9 +125,19 @@ class Engine:
                          params={"t": str(timeout)}, expect=(204, 304, 404))
 
     async def remove(self, container: str, *, force: bool = True) -> None:
+        """204 removed, 404 already gone, 409 REMOVAL ALREADY IN PROGRESS.
+
+        All three mean the caller's intent holds. 409 is the AutoRemove
+        reaper: a tenant container that has just exited is being removed by
+        the daemon, and a DELETE that arrives during that window answers
+        "removal of container ... is already in progress". `stop()` calls this
+        on the start hot path precisely to clear a name the reaper may be
+        mid-way through, so treating that as an error turns the race it exists
+        to absorb into an EngineError on every affected start.
+        """
         await self._call("DELETE", f"/containers/{container}",
                          params={"force": "true" if force else "false", "v": "true"},
-                         expect=(204, 404))
+                         expect=(204, 404, 409))
 
     async def wait(self, container: str) -> int:
         answer = await self._call("POST", f"/containers/{container}/wait", expect=(200,))

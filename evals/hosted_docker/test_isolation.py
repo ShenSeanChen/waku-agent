@@ -17,9 +17,11 @@ import contextlib
 
 import dockerlib
 from spawnerlib import (
+    PLANTED_PLATFORM_KEY,
     PROJECT_A,
     PROJECT_B,
     SERVICES_TAG,
+    SPAWNER_CONTAINER,
     TENANT_A,
     TENANT_B,
     TOKEN_ONE,
@@ -165,6 +167,16 @@ def test_a_restored_tenant_keeps_their_own_project_id(spawner, spawner_root):
                                         "project_id": PROJECT_A})
     assert "error" not in ask(spawner, {"op": "task", "tenant_id": TENANT_A,
                                         "task": "backup"})
+    # The backup declares itself finished by writing this LAST, and the restore
+    # below refuses without it. Asserted here so a backup that stopped writing
+    # the manifest reads as that, rather than as a restore that mysteriously
+    # refuses -- the offline half models the manifest, and this is the only
+    # place the real _BACKUP_SCRIPT is what writes one.
+    manifest = spawner_root / "staging" / TENANT_A / "manifest.json"
+    assert manifest.is_file(), (
+        f"{manifest} is not there after a backup. _BACKUP_SCRIPT writes it as "
+        "its last action; without it the restore below correctly refuses and "
+        "this test would fail for the wrong reason.")
     home = spawner_root / "tenants" / TENANT_A / "home"
     env = spawner_root / "tenants" / TENANT_A / "env"
     before = (_project_id_of_path(home), _project_id_of_path(env))
@@ -183,6 +195,50 @@ def test_a_restored_tenant_keeps_their_own_project_id(spawner, spawner_root):
         "limit at all, and the tenant can fill the shared data disk.")
 
 
+def test_an_archive_container_can_write_into_the_directory_it_is_given(
+        spawner, spawner_root):
+    """GC-1, the half no offline test can see.
+
+    `_archive` hands a container running as UID 10001 a directory and the
+    container creates two files in it. Before this, that directory was the
+    SHARED archive root, mkdir'd by the spawner as root at 0755 -- so `zstd -o`
+    was EACCES, `bash -euc` exited non-zero, and every archive, and therefore
+    every restore, failed with jsonsock's opaque error.
+
+    The files are checked by NAME ON THE HOST, not by the task's exit code: a
+    task that answered without writing is the shape this whole group has been
+    paying for.
+
+    It also archives a SECOND tenant and asserts neither directory holds the
+    other's files. With every tenant on UID 10001, the mode separates them from
+    other host users and not from each other -- the mount is what separates
+    tenants, and `allowed_bind_sources` is where that is asserted. This is the
+    end state that mount produces.
+    """
+    for tenant_id, project_id, token in ((TENANT_A, PROJECT_A, TOKEN_ONE),
+                                         (TENANT_B, PROJECT_B, TOKEN_TWO)):
+        assert "error" not in ask(spawner, {"op": "provision",
+                                            "tenant_id": tenant_id,
+                                            "project_id": project_id}), token
+        answer = ask(spawner, {"op": "task", "tenant_id": tenant_id,
+                               "task": "archive"})
+        assert "error" not in answer, (
+            f"archiving {tenant_id} failed: {answer}. If this is EACCES, the "
+            "archive directory was not handed to UID 10001.")
+
+    for tenant_id, other in ((TENANT_A, TENANT_B), (TENANT_B, TENANT_A)):
+        directory = spawner_root / "archive" / tenant_id
+        written = sorted(entry.name for entry in directory.iterdir())
+        assert written, (
+            f"{directory} is empty after an archive, so the task reported "
+            "success without writing anything")
+        assert all(name.endswith(".tar.zst") for name in written), written
+        assert all(name.startswith(tenant_id) for name in written), (
+            f"{directory} holds {written}, which is not all this tenant's")
+        assert not [name for name in written if other in name], (
+            f"{other}'s archive is in {tenant_id}'s directory: {written}")
+
+
 def test_the_platform_key_is_in_no_tenant_container(spawner, spawner_root):
     """Acceptance 2.
 
@@ -190,19 +246,36 @@ def test_the_platform_key_is_in_no_tenant_container(spawner, spawner_root):
     a tenant container holds is a per-container proxy TOKEN, useless anywhere
     but the proxy and revoked when the container stops.
 
-    The key is PLANTED in a real environment on this host for the test, so the
-    assertion is about a value that exists and must not be in the container --
-    not an absence asserted against a string nobody ever set, which passes on
-    a typo.
+    THE KEY IS REALLY PLANTED, and the first assertion is that it is. The
+    `spawner` fixture puts PLANTED_PLATFORM_KEY in the SPAWNER's environment --
+    the privileged process that builds every container's Env -- so a template
+    that passed its own environment through, or a future `**os.environ`, is
+    caught here. An earlier version of this test declared the key as a local
+    string that was never introduced anywhere: every absence below was an
+    absence with no source, and the three assertions could not fail. The
+    docstring claimed the opposite, which is what made it worth finding.
+
+    Four assertions and two controls:
+
+      CONTROL A -- the key IS in the spawner's own environment, so "not in the
+      tenant's" is a statement about something that exists.
+      CONTROL B -- the same `grep` finds the key when it is there.
     """
-    key = "sk-ant-PLANTED-PLATFORM-KEY-do-not-ship"
+    key = PLANTED_PLATFORM_KEY
+    spawner_env = dockerlib.inspect(SPAWNER_CONTAINER)["Config"]["Env"]
+    assert [entry for entry in spawner_env if key in entry], (
+        "the planted key is not in the spawner's own environment, so every "
+        "absence below is an absence with no source and none of it can fail. "
+        "conftest.py's `spawner` fixture is what plants it.")
+
     ask(spawner, {"op": "start", "tenant_id": TENANT_A, "project_id": PROJECT_A,
                   "timezone": "UTC", "token": TOKEN_ONE})
     name = template.container_name(TENANT_A, template.KIND_TENANT)
     dockerlib.wait_for_listener(name, "127.0.0.1", template.DASHBOARD_PORT)
 
     env = dockerlib.inspect(name)["Config"]["Env"]
-    assert not [entry for entry in env if key in entry], env
+    assert not [entry for entry in env if key in entry], (
+        f"the platform key reached the tenant container's environment: {env}")
 
     found = dockerlib.run_once(
         SERVICES_TAG,
@@ -214,15 +287,16 @@ def test_the_platform_key_is_in_no_tenant_container(spawner, spawner_root):
 
     assert key not in dockerlib.logs(name)
 
-    # The control that makes the three assertions above able to fail: the same
-    # grep finds the key when it IS there.
+    # CONTROL B: the same grep, over a directory the key IS in.
     (spawner_root / "canary.txt").write_text(key, encoding="utf-8")
-    control = dockerlib.run_once(
-        SERVICES_TAG,
-        ["bash", "-c", f"grep -rl {key!r} /probe 2>/dev/null || true"],
-        read_only=False, binds=[f"{spawner_root}:/probe"]).stdout.strip()
-    assert control, "the grep finds nothing even when the key is there"
-    (spawner_root / "canary.txt").unlink()
+    try:
+        control = dockerlib.run_once(
+            SERVICES_TAG,
+            ["bash", "-c", f"grep -rl {key!r} /probe 2>/dev/null || true"],
+            read_only=False, binds=[f"{spawner_root}:/probe"]).stdout.strip()
+        assert control, "the grep finds nothing even when the key is there"
+    finally:
+        (spawner_root / "canary.txt").unlink()
 
 
 def test_a_tenant_cannot_write_past_their_disk_limit(spawner, spawner_root):

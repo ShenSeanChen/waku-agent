@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import asyncio
 import ipaddress
+import json
 import os
 import socket
 import time
@@ -80,11 +81,35 @@ NO_QUOTA_DEVICE = "none"
 # left out on purpose -- they belong to the live database and would corrupt the
 # copy on restore -- and every other file is copied as-is, symlinks kept as
 # symlinks, because restic stores a symlink as a symlink and never follows it.
+# THE MANIFEST IS WRITTEN LAST AND REMOVED FIRST, and that ordering is the
+# whole of GC-3. `mkdir -p /staging/home /staging/env` is line one, so both
+# directories exist -- empty -- from the first instant of a backup, before the
+# database copy and before either tar. Every guard that asked what staging
+# LOOKED LIKE therefore accepted a backup that died after line one, and the
+# restore then destroyed a live tenant and answered {"ok": True}.
+#
+# Shape cannot tell a finished backup from an interrupted one. So the backup
+# DECLARES it: manifest.json is the last thing written, naming the parts it
+# wrote and whether it copied a database. Removing any previous manifest FIRST
+# is the other half -- without that, a second backup that died halfway would
+# sit under the first backup's manifest, which would say this partial data is
+# whole.
+_MANIFEST_NAME = "manifest.json"
+_MANIFEST_VERSION = 1
+_BACKUP_PARTS = ("home", "env")
+# A manifest is under a hundred bytes. The cap is here so a root
+# process never reads an unbounded file that sits beside tenant data.
+_MANIFEST_MAX_BYTES = 4096
+
 _BACKUP_SCRIPT = """
 set -o pipefail
+rm -f /staging/manifest.json
 mkdir -p /staging/home /staging/env
 if [ -f /data/state.db ]; then
   sqlite3 /data/state.db ".backup '/staging/home/state.db'"
+  state_db=true
+else
+  state_db=false
 fi
 tar --create --file - --directory /data \
     --exclude 'state.db' --exclude '*-wal' --exclude '*-shm' --exclude '*-journal' . \
@@ -92,6 +117,8 @@ tar --create --file - --directory /data \
 tar --create --file - --directory /work \
     --exclude '*-wal' --exclude '*-shm' --exclude '*-journal' . \
   | tar --extract --file - --directory /staging/env
+printf '{"version":1,"parts":["home","env"],"state_db":%s}\n' "$state_db" \
+  > /staging/manifest.json
 """
 
 _RESTORE_SCRIPT = """
@@ -279,9 +306,12 @@ class DockerRuntime:
             self._config, tenant_id=tenant_id, project_id=project_id,
             timezone=timezone, token=token)
         name = template.container_name(tenant_id, template.KIND_TENANT)
-        # A previous container with this name may be mid-removal; the daemon
-        # answers 409 and the name frees a moment later. Remove by name first,
-        # which is a no-op when it is already gone.
+        # A previous container with this name may be mid-removal by the
+        # AutoRemove reaper. Removing by name first clears it when it is still
+        # there and is a no-op when it is gone -- and Engine.remove accepts the
+        # daemon's 409 "removal already in progress", which is what that window
+        # actually answers. Without that, this line raised EngineError on the
+        # start hot path for the exact race it was written to absorb.
         await self._engine.remove(name)
         container = await self._engine.create(name, body)
         await self._engine.start(container)
@@ -412,6 +442,41 @@ class DockerRuntime:
     def _staging(self, tenant_id: str) -> Path:
         return self._config.staging_root / tenant_id
 
+    def _tenant_directory_under(self, root: Path, tenant_id: str) -> Path:
+        """A per-tenant directory under one of the platform's shared roots,
+        created and handed to UID 10001.
+
+        PER TENANT, NOT THE SHARED ROOT. A task container runs as 10001 and has
+        to create files in whatever it is given, so the directory it is given
+        must be writable by 10001 -- and chowning the SHARED root would hand
+        every tenant's staging and every tenant's archive to every tenant's
+        task container in one go.
+
+        WHAT SEPARATES TWO TENANTS HERE IS THE MOUNT, NOT THE MODE. Every
+        tenant's container runs as the same UID 10001, so 0700 does not keep
+        tenant A out of tenant B's archive -- it keeps other UIDS on the host
+        out of both. The only thing that stops A reaching B's files is that no
+        container is ever given B's directory, which is why
+        evals/hosted_docker's `allowed_bind_sources` is an exact set and why
+        this returns one tenant's path rather than a root.
+
+        `_backup` learned this and `_archive` did not, which is how every
+        archive -- and therefore every restore, which archives first -- failed
+        with EACCES and reached the operator as jsonsock's opaque error.
+        """
+        directory = root / tenant_id
+        if directory.is_symlink():
+            # Path.mkdir(exist_ok=True) re-checks with is_dir(), which FOLLOWS
+            # a link, and os.chown follows too. Nothing a tenant can write to
+            # includes these roots today; refused anyway, because this process
+            # is root and the subject of this file is planted links.
+            raise RuntimeError(f"{directory} is a symlink; refusing to use it")
+        directory.mkdir(parents=True, exist_ok=True)
+        os.chmod(directory, TENANT_DIR_MODE)
+        os.chown(directory, template.TENANT_UID, template.TENANT_UID,
+                 follow_symlinks=False)
+        return directory
+
     async def _backup(self, tenant_id: str) -> dict:
         staging = self._staging(tenant_id)
         if staging.is_symlink():
@@ -421,9 +486,7 @@ class DockerRuntime:
             # process is root, the subject of the whole file is planted links,
             # and refusing costs one stat.
             raise RuntimeError(f"{staging} is a symlink; refusing to chown through it")
-        staging.mkdir(parents=True, exist_ok=True)
-        os.chown(staging, template.TENANT_UID, template.TENANT_UID,
-                 follow_symlinks=False)
+        self._tenant_directory_under(self._config.staging_root, tenant_id)
         body = template.task_container(
             self._config, tenant_id=tenant_id,
             command=["bash", "-euc", _BACKUP_SCRIPT],
@@ -470,6 +533,14 @@ class DockerRuntime:
         empty directories -- the only place in this class where `project -s`
         runs, on exactly what the spec describes. The check below is what makes
         a future regression loud instead of silent.
+
+        NOTHING HERE STOPS A RUNNING TENANT CONTAINER, and F3 must. A task is
+        not a start, and _refuse_if_busy is one-way -- a task blocks a start, a
+        start does not block a task -- so a single-tenant restore empties /data
+        and /work under a live dashboard holding state.db open. The spec puts
+        "stop every tenant container first" on `restore.sh --all`, which is
+        F3's; a per-tenant restore needs the same, and the sequencing belongs
+        with the caller, which already has `stop` as a verb.
         """
         staging = self._staging(tenant_id)
         if staging.is_symlink():
@@ -477,26 +548,15 @@ class DockerRuntime:
             # on the same path must not disagree about the same class of input.
             raise RuntimeError(
                 f"{staging} is a symlink; refusing to restore through it")
-        if not all((staging / part).is_dir() for part in ("home", "env")):
-            # CONTENT, NOT EXISTENCE, and the difference is the whole finding.
-            # The same daemon behaviour as the tenant directories, one bind
-            # further along: with <staging>/<id> absent the daemon CREATES it
-            # empty, so the restore extracts nothing over a tenant whose tree
-            # has just been archived and removed. But a directory that merely
-            # EXISTS -- empty, or half a backup interrupted between its two
-            # tars -- walked straight through the first version of this guard
-            # and the destruction happened anyway.
-            #
-            # `home` and `env` is exactly the pair _BACKUP_SCRIPT writes, so
-            # this asks for a whole backup and nothing less. It runs BEFORE
-            # _archive, because once the old tree is packed away and the two
-            # directories are gone, a restore that cannot finish has already
-            # destroyed what it was restoring.
-            raise RuntimeError(
-                f"nothing whole staged for {tenant_id} at {staging}: a restore "
-                "needs both home/ and env/, which is what a backup writes. "
-                "Refusing before anything is archived or removed -- a restore "
-                "that cannot finish must not erase the tenant first.")
+        # THE BACKUP SAYS WHETHER IT FINISHED. Nothing about the shape of
+        # staging can: `mkdir -p /staging/home /staging/env` is the backup's
+        # first line, so two empty directories are what a backup that died
+        # immediately leaves AND what a backup of an empty tenant leaves, and
+        # no amount of looking tells them apart. This reads the manifest the
+        # backup writes last. It runs BEFORE _archive, because once the old
+        # tree is packed away and the two directories are gone, a restore that
+        # cannot finish has already destroyed what it was restoring.
+        self._read_manifest(tenant_id, staging)
         archive = await self._archive(tenant_id, suffix="pre-restore")
         dirs = tenant_dirs(self._config.tenant_root, tenant_id)
         await self._empty_and_remove_trees(tenant_id, dirs)
@@ -521,6 +581,62 @@ class DockerRuntime:
         _LOG.info("restored tenant=%s (old tree at %s)", tenant_id, archive["path"])
         return {"ok": True}
 
+    def _read_manifest(self, tenant_id: str, staging: Path) -> dict:
+        """The backup's own declaration that it finished, or a refusal.
+
+        Read on the HOST, as root, and that is allowed: <staging_root>/<id> is
+        the platform's own directory, the manifest sits at its top level under
+        a name the platform chose, and the tenant's data goes into home/ and
+        env/ beneath it -- `tar --extract` refuses absolute and `..` paths, so
+        nothing a tenant wrote can become this file. O_NOFOLLOW and the
+        is_symlink check are there anyway, because this is root opening a path
+        near tenant data and the cost is one flag.
+        """
+        manifest = staging / _MANIFEST_NAME
+        if manifest.is_symlink():
+            raise RuntimeError(
+                f"{manifest} is a symlink; refusing to restore through it")
+        try:
+            with open(os.open(manifest, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)),
+                      encoding="utf-8") as handle:
+                raw = handle.read(_MANIFEST_MAX_BYTES + 1)
+        except OSError as exc:
+            raise RuntimeError(
+                f"no usable backup for {tenant_id} at {staging}: {exc}. A "
+                "backup writes manifest.json LAST, so one that is missing "
+                "means the backup never finished -- restoring from it would "
+                "archive this tenant's live data and then replace it with "
+                "whatever the interrupted run managed to copy.") from exc
+        if len(raw) > _MANIFEST_MAX_BYTES:
+            raise RuntimeError(f"{manifest} is larger than a manifest should be")
+        try:
+            parsed = json.loads(raw)
+        except ValueError as exc:
+            raise RuntimeError(
+                f"{manifest} is not JSON, so this backup cannot be read: "
+                f"{exc}") from exc
+        if not isinstance(parsed, dict) or parsed.get("version") != _MANIFEST_VERSION:
+            raise RuntimeError(
+                f"{manifest} is not a version {_MANIFEST_VERSION} backup "
+                f"manifest: {parsed!r}")
+        parts = parsed.get("parts")
+        if not isinstance(parts, list) or sorted(parts) != sorted(_BACKUP_PARTS):
+            raise RuntimeError(
+                f"{manifest} names parts {parts!r}; a backup writes "
+                f"{list(_BACKUP_PARTS)}.")
+        for part in _BACKUP_PARTS:
+            if not (staging / part).is_dir():
+                raise RuntimeError(
+                    f"{manifest} names {part!r} and {staging / part} is not "
+                    "there. The backup and what is on disk disagree; refusing "
+                    "rather than restoring half of it.")
+        if parsed.get("state_db") is True and not (staging / "home" / "state.db").is_file():
+            raise RuntimeError(
+                f"{manifest} says this backup copied a database and "
+                f"{staging / 'home' / 'state.db'} is not there. Restoring "
+                "would give the tenant an empty assistant and report success.")
+        return parsed
+
     async def _archive(self, tenant_id: str, suffix: str = "") -> dict:
         """Pack both of a tenant's directories into the archive root, zstd.
 
@@ -529,15 +645,19 @@ class DockerRuntime:
         needs -- the archive root, which is the platform's own directory and
         not any tenant's.
         """
-        self._config.archive_root.mkdir(parents=True, exist_ok=True)
+        archive = self._tenant_directory_under(self._config.archive_root, tenant_id)
         stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
         name = f"{tenant_id}-{stamp}" + (f"-{suffix}" if suffix else "")
         body = template.task_container(
             self._config, tenant_id=tenant_id,
             command=["bash", "-euc", _ARCHIVE_SCRIPT, "archive", name],
-            extra_binds=(f"{self._config.archive_root}:/archive",))
+            # THIS TENANT'S archive directory, not the shared root. The
+            # container runs as 10001 and creates two files here, so it must be
+            # writable by 10001 -- and binding the shared root would put every
+            # other tenant's archives inside a tenant-owned container.
+            extra_binds=(f"{archive}:/archive",))
         await self._run_to_completion(body, tenant_id, "archive")
-        path = self._config.archive_root / name
+        path = archive / name
         _LOG.info("archived tenant=%s to %s-{home,env}.tar.zst", tenant_id, path)
         return {"path": str(path)}
 

@@ -32,6 +32,16 @@ PROJECT_B = FIRST_PROJECT_ID + 1
 TOKEN_ONE = "a" * 43
 TOKEN_TWO = "b" * 43
 
+# THE PLATFORM'S OWN KEY, planted in the spawner's environment by the
+# `spawner` fixture so that acceptance 2 is an assertion about a value that
+# EXISTS somewhere it must not spread from -- not an absence asserted against a
+# string nobody ever set, which passes on a typo and passes on a template that
+# leaks every variable it has. The spawner is the process that builds every
+# container's Env, so its own environment is the right place to plant it.
+#
+# Not a real key and not a real shape anybody would mistake for one.
+PLANTED_PLATFORM_KEY = "sk-ant-PLANTED-PLATFORM-KEY-do-not-ship"
+
 TENANT_TAG = "waku-tenant:test"
 SERVICES_TAG = "waku-services:test"
 
@@ -73,7 +83,13 @@ def allowed_bind_sources(spawner_root, tenant_id: str, task: str) -> set[str]:
     if task in ("archive", "restore"):
         # restore packs the old tree away before it recreates the directories,
         # so its operation legitimately runs an archive container too.
-        allowed.add(str(spawner_root / "archive"))
+        #
+        # THIS TENANT'S archive directory, not the shared archive root. The
+        # shared root would put every other tenant's archives inside a
+        # container running tenant-owned code -- and before GC-1 the archive
+        # container was handed exactly that, root-owned at 0755, so it could
+        # not write to it at all and every archive and every restore failed.
+        allowed.add(str(spawner_root / "archive" / tenant_id))
     return allowed
 
 
@@ -119,3 +135,40 @@ def capture_task_containers(spawner, payload: dict, tenant_id: str) -> list[dict
         "This is not a pass: every assertion below would be about a container "
         "that never existed.")
     return [dockerlib.inspect(cid) for cid in seen]
+
+
+def remove_every_waku_container() -> None:
+    """Every container carrying the spawner's kind label, whatever its state.
+
+    The `spawner` fixture's teardown runs BEFORE `bridges`', and a network with
+    a live endpoint cannot be removed -- so a tenant container left running by
+    any test takes the whole next module down at fixture setup. Removing by
+    LABEL rather than by a list of names is what makes this total: the spawner
+    names its containers itself, and a test does not know which it created.
+    """
+    listed = dockerlib._run(
+        ["ps", "-aq", "--filter", f"label={template.LABEL_KIND}"],
+        timeout=60, check=False).stdout.split()
+    for container in listed:
+        dockerlib.remove(container)
+
+
+def remove_network_or_say_why(name: str) -> None:
+    """Remove a Docker network, and fail loudly if it is still there.
+
+    `dockerlib.network_remove` is check=False, which is right for "it may not
+    exist yet". It is wrong here: a network that will not go is a container
+    still attached to it, and the next module's `network_create` then fails
+    with "already exists" -- an error about the wrong thing entirely.
+    """
+    dockerlib.network_remove(name)
+    still = dockerlib._run(["network", "ls", "--filter", f"name=^{name}$",
+                            "--format", "{{.Name}}"], timeout=60, check=False)
+    assert name not in still.stdout.split(), (
+        f"the {name} network survived its teardown, which means something is "
+        "still attached to it. The next module's network_create will fail "
+        "with 'already exists', which is an error about the wrong thing. "
+        "Containers still present: "
+        + dockerlib._run(["ps", "-a", "--filter", f"network={name}",
+                          "--format", "{{.Names}}"],
+                         timeout=60, check=False).stdout.strip())

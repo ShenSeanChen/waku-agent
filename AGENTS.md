@@ -63,7 +63,7 @@ Each of these fails one of them:
 | a lint error in `waku/`, `evals/`, `scripts/` or `hosted/` | `ruff check` |
 | an import between `waku/` and `hosted/`, in either direction | `evals/deterministic/test_hosted_boundary.py` |
 | a dashboard route with no hosted policy entry | `evals/deterministic/hosted/test_route_contract.py` |
-| a hosted change that breaks a tenant container, a bridge rule or a disk limit | `.github/workflows/hosted-docker.yml` |
+| a hosted change that breaks a tenant container or a tenant's disk limit (advisory: not yet a required check) | `.github/workflows/hosted-docker.yml` |
 | a skill that fails validation | `scripts/validate_skills.py` |
 | a skill that loads on everyday or another skill's messages | `evals/deterministic/test_skill_triggers.py` |
 | `.env.example` out of step with the integrations registry | `scripts/generate_env_example.py` |
@@ -76,7 +76,10 @@ Everything else in the rulebook is checked in review. The judge evals in
 `evals/judge/` need an API key, so `make gate` runs them locally and CI does not.
 
 `hosted-docker` needs a Docker daemon and an XFS filesystem, so it is a job of
-its own; it is advisory until it is added to `main`'s required checks.
+its own, and its row above says "advisory" because it is: a red run there does
+not block a merge until `hosted-docker` is added to `main`'s required checks.
+It says nothing yet about the bridge rules -- `firewall.sh` and `networks.sh`
+arrive with the rest of spec 001's group C.
 
 ## Commands
 

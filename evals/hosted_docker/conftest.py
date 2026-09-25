@@ -105,8 +105,12 @@ else:
                 name, "--driver", "bridge", "--subnet", subnet,
                 "--gateway", gateway, *options, *extra)
         yield
+        # LOUD, not check=False. A network that would not go is how the next
+        # module's create fails with "already exists", and swallowing the
+        # reason is what made that look like a mystery rather than a leftover
+        # container.
         for name in (_tenant.TENANT_NETWORK, _tenant.INSPECT_NETWORK):
-            _dockerlib.network_remove(name)
+            _spawnerlib.remove_network_or_say_why(name)
 
     @pytest.fixture(scope="module")
     def spawner(services_image, tenant_image, tmp_path_factory, bridges):
@@ -176,6 +180,12 @@ else:
             "WAKU_SECCOMP_PROFILE": "/app/hosted/image/seccomp.json",
             "WAKU_SPAWNER_SOCKET": f"{root}/run/spawner/spawner.sock",
             "WAKU_LOG_LEVEL": "DEBUG",
+            # Planted so acceptance 2 has a real value to be absent. The
+            # spawner builds every container's Env from its SpawnerConfig and
+            # never from its own environment, so this must not appear in any
+            # tenant container -- and test_isolation.py asserts it is in the
+            # spawner's own Env first, so "not there" cannot mean "never set".
+            "ANTHROPIC_API_KEY": _spawnerlib.PLANTED_PLATFORM_KEY,
         }
         extra = ["--cap-add", "SYS_ADMIN"]
         if device:
@@ -203,6 +213,14 @@ else:
         finally:
             print(_dockerlib.logs(_spawnerlib.SPAWNER_CONTAINER))
             _dockerlib.remove(_spawnerlib.SPAWNER_CONTAINER)
+            # EVERY CONTAINER THE SPAWNER MADE, not just the spawner. This
+            # fixture finalises BEFORE `bridges`, and `docker network rm`
+            # fails with "has active endpoints" while any container is still
+            # attached -- which network_remove swallowed, so the network
+            # survived, the next module's network_create hit "already exists"
+            # and raised inside the fixture. Three of five modules errored at
+            # setup that way.
+            _spawnerlib.remove_every_waku_container()
 
     @pytest.fixture(scope="module")
     def spawner_root(spawner):

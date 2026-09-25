@@ -150,3 +150,90 @@ def test_a_backup_refuses_to_chown_through_a_symlinked_staging_directory(tmp_pat
     runtime = docker_mod.DockerRuntime(config, _ListEngine([]))
     with pytest.raises(RuntimeError, match="symlink"):
         asyncio.run(runtime.task(GOOD, "backup"))
+
+
+# --- which Docker statuses each verb treats as "the intent holds" ----------
+
+
+class _Answer:
+    def __init__(self, status: int, body: bytes = b"") -> None:
+        self.status = status
+        self._body = body
+
+    async def read(self) -> bytes:
+        return self._body
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc) -> None:
+        return None
+
+
+class _FakeSession:
+    """Just enough aiohttp for Engine._call: a request() returning an async
+    context manager with .status and .read()."""
+
+    def __init__(self, status: int, body: bytes = b"") -> None:
+        self._answer = _Answer(status, body)
+        self.seen: list[tuple] = []
+
+    def request(self, method, url, json=None, params=None):
+        self.seen.append((method, url, params))
+        return self._answer
+
+
+def _engine_with(status: int, body: bytes = b""):
+    from hosted.spawner.engine import Engine
+    engine = Engine()
+    session = _FakeSession(status, body)
+    engine._session = session
+    return engine, session
+
+
+@pytest.mark.parametrize("status", [204, 404, 409])
+def test_remove_accepts_every_status_that_means_the_container_is_going(status):
+    """GC-8. 204 removed, 404 already gone, 409 REMOVAL ALREADY IN PROGRESS.
+
+    409 is the AutoRemove reaper: a tenant container that has just exited is
+    being removed by the daemon, and a DELETE arriving in that window answers
+    "removal of container ... is already in progress". `stop()` calls remove on
+    the START HOT PATH precisely to clear a name the reaper may be mid-way
+    through, so treating 409 as an error turned the race it exists to absorb
+    into an EngineError on every affected start.
+
+    The comment above that call claimed the removal closed the 409 race while
+    `expect` did not include 409, which is the third over-claiming docstring
+    this task has had to correct.
+    """
+    engine, session = _engine_with(status)
+    asyncio.run(engine.remove("waku-tenant-k3fq7x2mza4b"))
+    assert session.seen[0][0] == "DELETE"
+
+
+@pytest.mark.parametrize("status", [500, 502, 400])
+def test_remove_still_raises_on_a_status_that_means_something_went_wrong(status):
+    """The other direction: widening `expect` must not turn into accepting
+    everything. A 500 from the daemon is a real failure and the spawner has to
+    hear it."""
+    from hosted.spawner.engine import EngineError
+
+    engine, _session = _engine_with(status, b"boom")
+    with pytest.raises(EngineError):
+        asyncio.run(engine.remove("waku-tenant-k3fq7x2mza4b"))
+
+
+@pytest.mark.parametrize("status", [204, 304, 404])
+def test_stop_accepts_every_status_that_means_the_container_is_not_running(status):
+    """304 already stopped, 404 already gone (AutoRemove). `stop` has to be
+    idempotent because the gateway calls it before every start."""
+    engine, _session = _engine_with(status)
+    asyncio.run(engine.stop("waku-tenant-k3fq7x2mza4b"))
+
+
+@pytest.mark.parametrize("status", [204, 304])
+def test_start_accepts_already_started(status):
+    """304 is what a retry after a timeout reaches, and it is not an error:
+    the container the caller wanted is running."""
+    engine, _session = _engine_with(status)
+    asyncio.run(engine.start("waku-tenant-k3fq7x2mza4b"))
