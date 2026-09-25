@@ -88,6 +88,26 @@ def test_the_firewall_units_execstart_is_a_placeholder_and_not_a_path():
     assert unit["Service"]["ExecStart"] == "@WAKU_FIREWALL@"
 
 
+def test_the_caddy_dockerfile_quotes_the_module_it_builds():
+    """Both ARGs are substituted by the shell the RUN starts, so an unquoted
+    expansion would let a value with a space in it become extra words in the
+    command. install.sh keeps both to closed sets and this is the other half,
+    at the place the value is used.
+
+    A Dockerfile has no parser to drive the way `bash -n` drives a script, so
+    this reads the instruction. It is the one declarative-file read in the
+    file, like the systemd unit above, and it is pinned whole rather than
+    searched for a substring.
+    """
+    text = (shelllib.DEPLOY.parent / "image" / "caddy.Dockerfile").read_text(
+        encoding="utf-8")
+    runs = [line.strip() for line in text.splitlines()
+            if line.startswith("RUN ")]
+    expected = ('RUN xcaddy build --with "github.com/caddy-dns/'
+                '${DNS_PROVIDER}${DNS_PROVIDER_VERSION}"')
+    assert runs == [expected]
+
+
 # --- tree.sh and networks.sh, driven with a stubbed daemon -------------------
 #
 # What tree.sh actually creates -- real owners, real modes -- needs root and is
@@ -384,6 +404,25 @@ def test_write_config_leaves_nothing_at_the_target_when_the_write_fails(tmp_path
     assert not target.exists(), (
         f"a failed write left {target.read_text() if target.exists() else ''!r} "
         "at the target's name, and a rerun would keep it")
+
+
+def test_a_failed_write_takes_its_partial_secret_with_it(tmp_path):
+    """The temporary is 0600 and holds PART OF A SECRET between the create and
+    the rename. A failed `cat` used to leave it there under a name nothing
+    would ever clean up or look at again, beside the target it was going to
+    become."""
+    target = tmp_path / "config" / "proxy.env"
+    target.parent.mkdir()
+    script = tmp_path / "failing.sh"
+    script.write_text(
+        f'set -euo pipefail\n. "{LIB}"\nwaku_write_config "$1" </dev/null\n',
+        encoding="utf-8")
+    done = shelllib.run(
+        script, [str(target)], tmp_path=tmp_path, stubs=["cat"],
+        bodies={"cat": "#!/bin/sh\nprintf 'WAKU_PLATFORM_KEY=sk-ant-par'\nexit 1\n"})
+    assert done.returncode != 0
+    left = sorted(path.name for path in target.parent.iterdir())
+    assert left == [], f"a failed write left {left} holding part of a secret"
 
 
 def test_write_config_leaves_no_temporary_file_behind(tmp_path):

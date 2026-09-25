@@ -18,7 +18,13 @@ FROM caddy:${CADDY_VERSION}-builder AS builder
 # not in scope in a build stage until it is named again.
 ARG DNS_PROVIDER
 ARG DNS_PROVIDER_VERSION=""
-RUN xcaddy build --with github.com/caddy-dns/${DNS_PROVIDER}${DNS_PROVIDER_VERSION}
+# QUOTED. Both ARGs are substituted by the shell this RUN starts, so an
+# unquoted expansion would let a value with a space or a metacharacter in it
+# become extra words in the command. install.sh keeps both to closed sets --
+# DNS_PROVIDER is the module name alone, lowercase letters, digits and
+# hyphens, and DNS_PROVIDER_VERSION is "@" and a Go version suffix -- and
+# this is the second half of that, at the place the value is used.
+RUN xcaddy build --with "github.com/caddy-dns/${DNS_PROVIDER}${DNS_PROVIDER_VERSION}"
 
 FROM caddy:${CADDY_VERSION}
 COPY --from=builder /usr/bin/caddy /usr/bin/caddy

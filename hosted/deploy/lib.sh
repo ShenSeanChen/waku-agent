@@ -90,6 +90,8 @@ waku_admin() {
 # before it reaches here and config/ is 0700 root:root from tree.sh; it is not
 # forced with `install -o 0 -g 0`, which would make this function unrunnable --
 # and therefore untestable -- as anyone but root.
+WAKU_WRITE_TMP=""
+
 waku_write_config() {
   local target tmp
   target=$1
@@ -107,7 +109,17 @@ waku_write_config() {
   # change anything is a line the next reader would trust.
   rm -f "$tmp"
   ( umask 077; : >"$tmp" ) || waku_die "cannot create $tmp"
-  cat >"$tmp"
+  # WAKU_WRITE_TMP so the caller's EXIT trap can take the temporary away when
+  # a signal ends the run between the create and the rename. install.sh sets
+  # that trap; a caller that does not is left with one 0600 file in a 0700
+  # root-only directory, which is the same exposure as the target it was
+  # going to become.
+  WAKU_WRITE_TMP=$tmp
+  # A FAILED WRITE TAKES ITS TEMPORARY WITH IT. Without this the run stopped
+  # with a 0600 file holding PART OF A SECRET sitting beside the target under
+  # a name nothing would ever clean up or look at again.
+  cat >"$tmp" || { rm -f "$tmp"; WAKU_WRITE_TMP=""; waku_die "could not write $tmp"; }
   mv -f "$tmp" "$target"
+  WAKU_WRITE_TMP=""
   waku_log "wrote $target"
 }

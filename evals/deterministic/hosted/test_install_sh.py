@@ -348,14 +348,59 @@ def test_a_second_domain_is_refused(tmp_path):
     assert shelllib.calls(tmp_path) == []
 
 
-def test_a_domain_with_no_dot_is_refused(tmp_path):
-    """A tenant host is <id>.<domain>, and <id> is a DNS label. A single-label
-    apex cannot carry a wildcard certificate, so this fails at ACME time --
-    after the VM is built -- unless it fails here."""
-    done = shelllib.run(INSTALL, _required(tmp_path, domain="localhost"),
+@pytest.mark.parametrize(
+    ("name", "ok"),
+    [
+        ("agent.waku.one", True),
+        ("waku.example.com", True),
+        ("a.io", True),
+        ("x-y.z-w.io", True),
+        # A single label cannot carry a wildcard certificate.
+        ("localhost", False),
+        # `*.*` used to be the whole of this check, and every one of these
+        # satisfied it and then failed at Caddy or at ACME -- after the VM was
+        # built, which is precisely what a preflight exists to prevent.
+        (".", False),
+        ("..", False),
+        ("a..b", False),
+        ("a b.c", False),
+        ("*.waku.one", False),
+        ("http://a.b", False),
+        ("a.b:8443", False),
+        # A trailing dot is a valid FQDN and not a valid site address here.
+        ("agent.waku.one.", False),
+        (".agent.waku.one", False),
+        # A hyphen may not begin or end a label.
+        ("-a.b", False),
+        ("a-.b", False),
+        # An IP address: the last label is all digits.
+        ("1.2.3.4", False),
+        ("a.4", False),
+        # Upper case: gateway/config.py lowercases WAKU_APEX_HOST when it
+        # reads it, so a mixed-case value would leave install.env saying one
+        # thing and the running gateway using another.
+        ("Agent.Waku.One", False),
+        # A label over 63 characters.
+        ("a" * 64 + ".com", False),
+        ("a" * 63 + ".com", True),
+    ])
+def test_the_domain_is_a_closed_set_on_the_value(tmp_path, name, ok):
+    script = tmp_path / "call.sh"
+    script.write_text(f'. "{CHECKS}"\nwaku_is_hostname "$1"\n', encoding="utf-8")
+    done = shelllib.run(script, [name], tmp_path=tmp_path)
+    assert (done.returncode == 0) is ok
+
+
+@pytest.mark.parametrize("name", ["localhost", "*.waku.one", "http://a.b",
+                                  "1.2.3.4", "Agent.Waku.One", "a..b"])
+def test_install_sh_refuses_a_domain_that_is_not_a_hostname(tmp_path, name):
+    """A tenant host is <id>.<domain>, and <id> is a DNS label. An apex that
+    cannot carry a wildcard certificate fails at ACME time -- after the VM is
+    built -- unless it fails here."""
+    done = shelllib.run(INSTALL, _required(tmp_path, domain=name),
                         tmp_path=tmp_path, stubs=OUTSIDE)
     assert done.returncode != 0
-    assert "must be a hostname with a dot" in done.stderr
+    assert "must be a hostname with at least two labels" in done.stderr
     assert shelllib.calls(tmp_path) == []
 
 
@@ -534,8 +579,80 @@ def test_a_malformed_line_in_the_dns_env_file_is_refused(tmp_path, text):
     done = shelllib.run(INSTALL, _required(tmp_path, dns_env_file=path),
                         tmp_path=tmp_path, stubs=OUTSIDE)
     assert done.returncode != 0
-    assert "expected NAME=VALUE" in done.stderr
-    assert "--dns-env-file" in done.stderr
+    assert str(path) in done.stderr
+    assert shelllib.calls(tmp_path) == []
+
+
+# THE REFUSAL PATH IS WHERE A SECRET ESCAPES, and it is the path nobody tests
+# because it is the one that is supposed to fail. `add_dns_env` used to end its
+# message with `got: $1`, and $1 is the credential line -- so the first
+# realistic operator mistake, a stray trailing space or a file saved on
+# Windows, put the whole zone-rewriting AWS secret on stderr and into whatever
+# scrollback, CI log or `tee` was capturing it.
+
+_SECRET = "wJalrXUtnFEMIsecretK7MDENGbPxRfiCY"
+
+
+@pytest.mark.parametrize(
+    ("text", "line"),
+    [
+        # A trailing space: the likeliest mistake of all.
+        (f"AWS_ACCESS_KEY_ID=AKIAEXAMPLE\nAWS_SECRET_ACCESS_KEY={_SECRET} \n", 2),
+        # A file saved on Windows.
+        (f"AWS_SECRET_ACCESS_KEY={_SECRET}\r\n", 1),
+        # A missing '=' -- the whole line is then the secret and there is no
+        # name to show, so the message must fall back to the position alone.
+        (f"AWS_SECRET_ACCESS_KEY{_SECRET}\n", 1),
+        # A blank first line and a comment, so the number is the editor's and
+        # not the count of lines that carried a pair.
+        (f"\n# route53\nAWS_SECRET_ACCESS_KEY={_SECRET}\t\n", 3),
+    ])
+def test_a_refusal_names_the_file_and_the_line_number_and_never_the_secret(
+        tmp_path, text, line):
+    path = _dns_file(tmp_path, text)
+    done = shelllib.run(INSTALL, _required(tmp_path, dns_env_file=path),
+                        tmp_path=tmp_path, stubs=OUTSIDE)
+    assert done.returncode != 0
+    assert _SECRET not in done.stderr, "the credential reached the terminal"
+    assert _SECRET not in done.stdout, "the credential reached the terminal"
+    assert f"{path} line {line}" in done.stderr
+    assert shelllib.calls(tmp_path) == []
+
+
+def test_a_refusal_may_name_the_variable_because_a_name_is_not_a_secret(tmp_path):
+    """The other half: refusing without saying anything useful sends the
+    operator to read a file with `cat`, which is worse. A variable's NAME is
+    safe to print and is shown when it can be recovered through the same
+    closed set the value goes through."""
+    path = _dns_file(tmp_path, f"AWS_SECRET_ACCESS_KEY={_SECRET} \n")
+    done = shelllib.run(INSTALL, _required(tmp_path, dns_env_file=path),
+                        tmp_path=tmp_path, stubs=OUTSIDE)
+    assert "the value of AWS_SECRET_ACCESS_KEY is not usable" in done.stderr
+    assert _SECRET not in done.stderr
+
+
+def test_the_dns_env_flag_refuses_without_printing_its_value_either(tmp_path):
+    """--dns-env is for non-secrets, but an operator who puts a credential
+    there has already made one mistake and the refusal must not make a second
+    one by copying it somewhere argv is not."""
+    args = _required(tmp_path) + ["--dns-env", f"AWS_SECRET_ACCESS_KEY={_SECRET} "]
+    done = shelllib.run(INSTALL, args, tmp_path=tmp_path, stubs=OUTSIDE)
+    assert done.returncode != 0
+    assert _SECRET not in done.stderr
+    assert "--dns-env:" in done.stderr
+
+
+def test_a_dns_env_file_with_a_nul_byte_is_refused(tmp_path):
+    """The same guard --platform-key-file has. Measured before the fix:
+    `abc\\0def` was accepted and silently truncated to `abc` in caddy.env -- a
+    credential that looks written and is wrong, failing at ACME hours later
+    with no clue why. Two guards on the same class of input must not
+    disagree."""
+    path = _dns_file(tmp_path, b"AWS_SECRET_ACCESS_KEY=abc\x00def\n")
+    done = shelllib.run(INSTALL, _required(tmp_path, dns_env_file=path),
+                        tmp_path=tmp_path, stubs=OUTSIDE)
+    assert done.returncode != 0
+    assert "holds a NUL byte" in done.stderr
     assert shelllib.calls(tmp_path) == []
 
 
@@ -616,6 +733,131 @@ def test_a_platform_key_file_stays_a_closed_set_under_a_utf8_locale(tmp_path):
                         env={"LC_ALL": "en_US.UTF-8", "LANG": "en_US.UTF-8"})
     assert done.returncode != 0
     assert "must hold the value and nothing else" in done.stderr
+
+
+def test_max_running_given_as_an_empty_string_is_refused(tmp_path):
+    """It used to fall through `[ -n "$max_running" ]` and be silently
+    replaced by the value derived from memory, so an operator who fumbled a
+    shell variable got a number they did not choose and no word about it.
+    Empty is a value given, not a value withheld."""
+    args = _required(tmp_path) + ["--max-running", ""]
+    done = shelllib.run(INSTALL, args, tmp_path=tmp_path, stubs=OUTSIDE)
+    assert done.returncode != 0
+    assert "--max-running must be a whole number of at least 1" in done.stderr
+
+
+# --- the flags whose values are written into env files unvalidated ----------
+#
+# Every one of these becomes one NAME=VALUE line in config/. Whitespace there
+# is carried into whatever reads it, and a newline writes a second setting.
+# They are not credentials, so these refusals do print what was typed.
+
+
+@pytest.mark.parametrize(
+    ("flag", "value"),
+    [
+        ("--free-model", "claude haiku"),
+        ("--free-model", "claude-haiku\nWAKU_FREE_MONTHLY_CAP_USD=1000"),
+        ("--free-model", "claude-haiku-4-5 "),
+        ("--supabase-publishable-key", "sb_publishable_x y"),
+        ("--supabase-publishable-key", "sb_x\nWAKU_SUPABASE_AUDIENCE=evil"),
+        ("--supabase-audience", "https://api.waku.one/mcp extra"),
+        ("--data-device", "/dev/sdb1 "),
+        ("--acme-email", "ops@example.test "),
+    ])
+def test_a_flag_whose_value_reaches_an_env_file_refuses_whitespace(
+        tmp_path, flag, value):
+    args = _required(tmp_path) + [flag, value]
+    done = shelllib.run(INSTALL, args, tmp_path=tmp_path, stubs=OUTSIDE)
+    assert done.returncode != 0
+    assert "printable characters with no space" in done.stderr
+    assert shelllib.calls(tmp_path) == []
+
+
+@pytest.mark.parametrize(
+    ("value", "ok"),
+    [
+        ("https://p.supabase.co", True),
+        # The parser strips one trailing slash, so this is the same URL.
+        ("https://p.supabase.co/", True),
+        # The gateway appends /auth/v1 to it, so a path here builds a URL that
+        # fetches nothing.
+        ("https://p.supabase.co/auth", False),
+        ("https://p.supabase.co:8443", False),
+        # http would send an access token in clear.
+        ("http://p.supabase.co", False),
+        ("p.supabase.co", False),
+        ("https://", False),
+        ("https://localhost", False),
+    ])
+def test_the_supabase_url_is_a_closed_set(tmp_path, value, ok):
+    args = _required(tmp_path) + ["--supabase-url", value]
+    done = shelllib.run(INSTALL, args, tmp_path=tmp_path, stubs=OUTSIDE)
+    refused = "--supabase-url must" in done.stderr
+    assert refused is not ok, done.stderr
+
+
+@pytest.mark.parametrize(
+    ("value", "ok"),
+    [
+        ("ops@example.test", True),
+        ("ops+waku@example.test", True),
+        ("ops@example", False),
+        ("ops@@example.test", False),
+        ("@example.test", False),
+        ("ops@", False),
+        ("ops.example.test", False),
+    ])
+def test_the_acme_email_is_a_closed_set(tmp_path, value, ok):
+    """Let's Encrypt sends expiry warnings there, and a wrong one is only
+    discovered when a certificate silently stops renewing."""
+    args = _required(tmp_path) + ["--acme-email", value]
+    done = shelllib.run(INSTALL, args, tmp_path=tmp_path, stubs=OUTSIDE)
+    refused = "--acme-email" in done.stderr
+    assert refused is not ok, done.stderr
+
+
+@pytest.mark.parametrize(
+    ("value", "ok"),
+    [
+        ("route53", True),
+        # The documented Cloudflare recipe: the module is the first word and
+        # the rest is the argument Caddy's dns directive takes inline. The
+        # whole string used to go to xcaddy as well, so this could not build.
+        ("cloudflare {env.CLOUDFLARE_API_TOKEN}", True),
+        ("digitalocean", True),
+        ("Route53", False),
+        ("caddy-dns/route53", False),
+        ("-route53", False),
+        ("route53-", False),
+        ("", False),
+    ])
+def test_the_dns_provider_module_is_a_closed_set(tmp_path, value, ok):
+    args = _required(tmp_path) + ["--dns-provider", value]
+    done = shelllib.run(INSTALL, args, tmp_path=tmp_path, stubs=OUTSIDE)
+    refused = "--dns-provider" in done.stderr
+    assert refused is not ok, done.stderr
+
+
+@pytest.mark.parametrize(
+    ("value", "ok"),
+    [
+        ("@v1.5.0", True),
+        ("@latest", True),
+        ("@v1.5.0-beta.1", True),
+        # It is expanded inside the Dockerfile's RUN, where it is quoted -- and
+        # a closed set here is the other half of that.
+        ("v1.5.0", False),
+        ("@v1.5.0 && curl evil.test", False),
+        ("@", False),
+        ("@$(id)", False),
+        ("@v1;rm -rf /", False),
+    ])
+def test_the_dns_module_version_is_a_closed_set(tmp_path, value, ok):
+    args = _required(tmp_path) + ["--dns-module-version", value]
+    done = shelllib.run(INSTALL, args, tmp_path=tmp_path, stubs=OUTSIDE)
+    refused = "--dns-module-version" in done.stderr
+    assert refused is not ok, done.stderr
 
 
 @pytest.mark.parametrize("flag", ["--dns-provider", "--platform-key-file", "--root"])

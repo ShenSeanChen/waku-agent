@@ -28,8 +28,10 @@ free_model=""
 platform_key=""
 platform_key_file=""
 dns_env_file=""
+dns_env_number=0
 secret_value=""
 line=""
+max_running_given=no
 supabase_url=""
 supabase_publishable_key=""
 supabase_audience=""
@@ -51,7 +53,13 @@ usage: install.sh <domain> --dns-provider NAME --acme-email ADDRESS
 
   <domain>                    the apex, for example agent.waku.one. Tenants get
                               <id>.<domain>, so a wildcard record must exist.
-  --dns-provider              a caddy-dns module name, for example route53
+                              Lowercase, at least two labels, no scheme and no
+                              wildcard: the wildcard is this script's to write.
+  --dns-provider              a caddy-dns module name, for example route53. A
+                              module whose Caddy directive takes an inline
+                              argument names it here too, for example
+                              'cloudflare {env.CLOUDFLARE_API_TOKEN}'; the
+                              first word is the module xcaddy builds
   --dns-module-version        pin that module, for example @v1.5.0. Default:
                               whatever xcaddy resolves on the day it builds
   --dns-env-file PATH         a file of NAME=VALUE lines: the DNS provider's
@@ -67,7 +75,8 @@ usage: install.sh <domain> --dns-provider NAME --acme-email ADDRESS
                               BOTH spawner.env and proxy.env
   --platform-key-file         a file holding the platform's model key, and
                               nothing else. Delete it once this has run
-  --max-running               a whole number of at least 1.
+  --max-running               a whole number of at least 1. No upper limit:
+                              oversubscribing is the operator's decision.
                               Default: (memory - 2 GB) / 150 MB
   --tenant-disk               a size of at least 1 byte, optionally K, M or G.
                               Default: 1G. NOT 0: XFS reads bhard=0 as no limit
@@ -92,26 +101,36 @@ needs_value() {
   esac
 }
 
+# A file that must be a credential file and not a binary one.
+#
+# It cannot be folded into any character set that looks at the VALUE, because
+# command substitution DROPS NUL bytes: a file holding `abc\0def` is read as
+# `abc`, which every later check happily accepts, and the operator gets a
+# credential that looks written and is wrong -- failing at ACME hours later
+# with no clue why. A closed set cannot refuse a character that no longer
+# exists by the time it looks, so the file is measured in bytes before it is
+# read. `tr -d` and `wc -c` are in coreutils on Ubuntu and in the base system
+# on macOS, so this runs wherever the tests do.
+#
+# BOTH credential files go through it. An earlier version had it on
+# --platform-key-file only, and two guards on the same class of input that
+# disagree are worse than one, because the operator learns the wrong rule.
+refuse_a_nul_byte() {
+  [ "$(wc -c <"$1")" = "$(tr -d '\000' <"$1" | wc -c)" ] \
+    || waku_die "$2: $1 holds a NUL byte, so it is not a text file. Reading it would silently drop that byte and use whatever was left, which is a credential that looks written and is wrong."
+}
+
 # Read one credential out of a file and leave it in $secret_value. $2 is the
 # flag's name, so the refusals say which file the operator should look at.
 #
 # NOTHING HERE EVER PRINTS THE VALUE. Every message names the path.
-#
-# The NUL check is first and it cannot be folded into the character set below:
-# command substitution DROPS NUL bytes, so a binary file yields a shorter,
-# silently mangled value that the character set then happily accepts
-# (sk-ant\0abc becomes sk-antabc). A closed set cannot refuse a character that
-# no longer exists by the time it looks, so the file is measured before it is
-# read. `tr -d` and `wc -c` are in coreutils on Ubuntu and in the base system
-# on macOS, so this check runs wherever the tests do.
 read_secret_file() {
   local path flag
   path=$1
   flag=$2
   [ -f "$path" ] || waku_die "$flag: no such file: $path"
   [ -r "$path" ] || waku_die "$flag: cannot read $path"
-  [ "$(wc -c <"$path")" = "$(tr -d '\000' <"$path" | wc -c)" ] \
-    || waku_die "$flag: $path holds a NUL byte, so it is not a text file. Reading it would silently drop that byte and use whatever was left."
+  refuse_a_nul_byte "$path" "$flag"
   # Command substitution removes EVERY trailing newline, which is exactly what
   # an editor's trailing newline needs and the only reason a separate strip
   # would exist. There is no separate strip line here because it would be dead
@@ -129,16 +148,47 @@ read_secret_file() {
     || waku_die "$flag: $path must hold the value and nothing else -- one line, no spaces or tabs, no blank line before it, and no carriage return (a file saved on Windows ends every line CR LF; run: sed -i 's/\r\$//' $path)"
 }
 
-# One --dns-env NAME=VALUE, checked and appended. Shared by the flag and by
-# every line of --dns-env-file so the two cannot diverge: the flag is the
-# convenient one and the file is the safe one, and an operator who moves a
-# variable from one to the other must not find it accepted in one place and
-# refused in the other.
+# One --dns-env NAME=VALUE, checked and appended. $2 says WHERE it came from:
+# a flag's name, or a path and a line number.
+#
+# A REFUSAL NAMES THE FILE AND THE LINE NUMBER, NEVER THE LINE. This function
+# used to end its message with `got: $1`, and $1 is the credential -- so the
+# first realistic operator mistake, a stray trailing space or a file saved on
+# Windows, put the whole zone-rewriting AWS secret on stderr and into whatever
+# scrollback, CI log or `tee` was capturing it. That undoes the entire reason
+# --dns-env-file exists. An error message about a secret is a place the secret
+# can escape, and it is the place nobody tests, because it is the path that is
+# supposed to fail.
+#
+# The variable's NAME is not a secret and is shown when it can be recovered
+# safely; when it cannot -- a line with no `=`, or a name that is not a name --
+# there is nothing showable and the message is the position alone.
+#
+# Shared by the flag and by every line of the file so the two cannot diverge:
+# an operator who moves a variable from one to the other must not find it
+# accepted in one place and refused in the other.
 add_dns_env() {
-  waku_env_pair_ok "$1" \
-    || waku_die "$2: expected NAME=VALUE with a printable, space-free value, got: $1. A line with no '=' is accepted by Compose and leaves the variable UNSET, which looks exactly like a credential you set."
-  dns_env="$dns_env$1
+  local where name
+  where=$2
+  if waku_env_pair_ok "$1"; then
+    dns_env="$dns_env$1
 "
+    return 0
+  fi
+  if name=$(waku_env_pair_name "$1"); then
+    waku_die "$where: the value of $name is not usable. It must be one or more printable characters with no space, tab, carriage return or newline in it. (The value itself is deliberately not printed here: it is a credential.)"
+  fi
+  waku_die "$where: expected NAME=VALUE -- a name of letters, digits and underscores starting with a letter or underscore, then '=', then the value. A line with no '=' is accepted by Compose and leaves the variable UNSET, which looks exactly like a credential you set. (The line itself is deliberately not printed here: it is a credential.)"
+}
+
+# A flag's value that is written into an env file, as a closed set.
+#
+# Not a credential, so the value IS printed -- an operator who mistyped a model
+# name needs to see what they typed. Every one of these ends up as one
+# NAME=VALUE line, so the same rule applies: printable, no whitespace.
+refuse_unprintable() {
+  ( LC_ALL=C; case "$1" in ''|*[![:graph:]]*) exit 1 ;; esac ) \
+    || waku_die "$2 must be one or more printable characters with no space or tab in it; got: '$1'. It is written into a config file as one NAME=VALUE line, and whitespace there is carried into whatever reads it."
 }
 
 # A CLOSED SET. An unknown flag is a refusal, not something to ignore: an
@@ -174,11 +224,16 @@ while [ $# -gt 0 ]; do
       dns_env_file=$2
       [ -f "$dns_env_file" ] || waku_die "--dns-env-file: no such file: $dns_env_file"
       [ -r "$dns_env_file" ] || waku_die "--dns-env-file: cannot read $dns_env_file"
+      refuse_a_nul_byte "$dns_env_file" --dns-env-file
       dns_env_lines=0
+      dns_env_number=0
       # `|| [ -n "$line" ]` so a final line with no newline is still read.
+      # The counter counts EVERY line, comments and blanks included, so the
+      # number in a refusal is the number an editor shows.
       while IFS= read -r line || [ -n "$line" ]; do
+        dns_env_number=$((dns_env_number + 1))
         case "$line" in ''|'#'*) continue ;; esac
-        add_dns_env "$line" "--dns-env-file $dns_env_file"
+        add_dns_env "$line" "$dns_env_file line $dns_env_number"
         dns_env_lines=$((dns_env_lines + 1))
       done <"$dns_env_file"
       [ "$dns_env_lines" -gt 0 ] \
@@ -187,7 +242,7 @@ while [ $# -gt 0 ]; do
     --supabase-url)             supabase_url=${2%/}; shift 2 ;;
     --supabase-publishable-key) supabase_publishable_key=$2; shift 2 ;;
     --supabase-audience)        supabase_audience=$2; shift 2 ;;
-    --max-running)              max_running=$2; shift 2 ;;
+    --max-running)              max_running=$2; max_running_given=yes; shift 2 ;;
     --tenant-disk)              tenant_disk=$2; shift 2 ;;
     --dns-allow)                dns_allow=$2; shift 2 ;;
     --root)                     root=$2; shift 2 ;;
@@ -221,9 +276,66 @@ done
 # putting the flag parser above it -- a script that demands root before telling
 # you an argument is wrong is a worse script, and it is also what makes this
 # refusal reachable from a test on a maintainer's laptop.
-case "$domain" in
-  *.*) : ;;
-  *) waku_die "<domain> must be a hostname with a dot, for example agent.waku.one; got $domain" ;;
+waku_is_hostname "$domain" \
+  || waku_die "<domain> must be a hostname with at least two labels, for example agent.waku.one; got '$domain'. Lowercase letters, digits and hyphens only; no scheme, no wildcard, no trailing dot, no space, and not an IP address. A tenant host is <id>.<domain> and <id> is a DNS label, so an apex that cannot carry a wildcard certificate fails at ACME time -- after the VM is built -- unless it fails here."
+
+# EVERY FLAG WHOSE VALUE ENDS UP IN AN ENV FILE, checked here. These five are
+# not credentials, so their refusals print what was typed; --dns-env's and the
+# two credential files' do not. The shapes come from what reads them:
+# WAKU_SUPABASE_ISSUER and WAKU_SUPABASE_JWKS_URL are built by appending paths
+# to --supabase-url, so a trailing slash or a path in it produces a URL the
+# gateway cannot fetch, and a non-https one would send an access token in
+# clear.
+case "$supabase_url" in
+  https://*) : ;;
+  *) waku_die "--supabase-url must begin with https://; got '$supabase_url'. The gateway appends /auth/v1 to it and fetches the project's public keys over it." ;;
+esac
+supabase_host=${supabase_url#https://}
+waku_is_hostname "$supabase_host" \
+  || waku_die "--supabase-url must be https:// followed by a hostname and nothing else -- no path, no port, no trailing slash; got '$supabase_url'."
+
+case "$acme_email" in
+  *@*@*|@*|*@) waku_die "--acme-email must be one local part, one '@' and a hostname; got '$acme_email'." ;;
+  *@*) : ;;
+  *) waku_die "--acme-email must be an email address; got '$acme_email'. Let's Encrypt sends expiry warnings there." ;;
+esac
+refuse_unprintable "$acme_email" --acme-email
+waku_is_hostname "${acme_email#*@}" \
+  || waku_die "--acme-email's domain must be a hostname; got '${acme_email#*@}'."
+
+refuse_unprintable "$free_model" --free-model
+refuse_unprintable "$supabase_publishable_key" --supabase-publishable-key
+refuse_unprintable "$supabase_audience" --supabase-audience
+refuse_unprintable "$data_device" --data-device
+
+# --dns-provider is TWO THINGS in one string, and that is the documented
+# interface: a caddy-dns module name, and optionally the arguments Caddy's
+# `dns` directive takes inline -- `cloudflare {env.CLOUDFLARE_API_TOKEN}` is
+# the example in caddy.env.example. The Caddyfile substitutes the whole string;
+# xcaddy can only be given the module. The whole string used to go to both, so
+# the documented Cloudflare recipe could not build at all: xcaddy was handed
+# `github.com/caddy-dns/cloudflare {env.CLOUDFLARE_API_TOKEN}`. The module is
+# the first word.
+dns_module=${dns_provider%% *}
+case "$dns_module" in
+  ''|*[!a-z0-9-]*|-*|*-) waku_die "--dns-provider's module name must be lowercase letters, digits and hyphens, as it appears under github.com/caddy-dns/; got '$dns_module'." ;;
+esac
+# The whole string may carry spaces -- that is how the directive's arguments
+# are written -- but nothing outside printable ASCII, because it is written
+# into config/install.env as one line and substituted into the Caddyfile.
+( LC_ALL=C; case "$dns_provider" in *[![:print:]]*) exit 1 ;; esac ) \
+  || waku_die "--dns-provider must be printable text on one line: a caddy-dns module name, optionally followed by the arguments Caddy's dns directive takes inline."
+
+# A Go module version suffix, and empty means "whatever xcaddy resolves today".
+# It is expanded inside the Dockerfile's RUN, so it is a closed set here as
+# well as quoted there.
+case "$dns_module_version" in
+  '') : ;;
+  @[A-Za-z0-9]*)
+    case "$dns_module_version" in
+      *[!A-Za-z0-9@._/+-]*) waku_die "--dns-module-version may hold letters, digits and . _ - + / only after its '@'; got '$dns_module_version'." ;;
+    esac ;;
+  *) waku_die "--dns-module-version must begin with '@' and a letter or digit, for example @v1.5.0; got '$dns_module_version'." ;;
 esac
 
 # THE SAME JUDGEMENT AGAIN, for the same reason. --max-running and
@@ -237,9 +349,20 @@ esac
 # --max-running may be empty, meaning "derive it from this VM's memory", and
 # that derivation reads /proc/meminfo and so belongs below; waku_max_running
 # floors its own answer at 1, so only a value given by flag needs this.
-if [ -n "$max_running" ]; then
+# `$max_running_given`, not `[ -n "$max_running" ]`: `--max-running ""` used to
+# fall through the emptiness test and be silently replaced by the value derived
+# from memory, so an operator who fumbled a shell variable got a number they
+# did not choose and no word about it.
+#
+# THERE IS A FLOOR AND NO CEILING, deliberately. Zero refuses every tenant on a
+# VM that can obviously run one, which is never what anybody means. A ceiling
+# would have to be either arbitrary or derived from this VM's memory -- and an
+# operator who oversubscribes on purpose, knowing their tenants idle, is making
+# a policy decision this script has no standing to overrule. The real limits
+# are memory, the idle loop, and the 65,278 addresses on the tenant bridge.
+if [ "$max_running_given" = yes ]; then
   case "$max_running" in
-    ''|0*|*[!0-9]*) waku_die "--max-running must be a whole number of at least 1, written without a leading zero; got $max_running. Zero is refused on purpose: WAKU_MAX_RUNNING=0 is a VM on which no tenant can ever start." ;;
+    ''|0*|*[!0-9]*) waku_die "--max-running must be a whole number of at least 1, written without a leading zero; got '$max_running'. Zero is refused on purpose: WAKU_MAX_RUNNING=0 is a VM on which no tenant can ever start. There is no upper limit: oversubscribing is a policy decision." ;;
   esac
 fi
 
@@ -295,7 +418,10 @@ systemctl enable --now docker >/dev/null
 # tree is created: an operator whose project has open signup should find out
 # before they have a half-built machine.
 jwks=$(mktemp) settings=$(mktemp)
-trap 'rm -f "$jwks" "$settings"' EXIT
+# WAKU_WRITE_TMP is lib.sh's: the temporary a config write is part way through,
+# which holds part of a secret between the create and the rename. A signal in
+# that window is the only way it survives, and this is what takes it away.
+trap 'rm -f "$jwks" "$settings" ${WAKU_WRITE_TMP:+"$WAKU_WRITE_TMP"}' EXIT
 curl -fsS "$supabase_url/auth/v1/.well-known/jwks.json" -o "$jwks" \
   || waku_die "could not read the project's JWKS at $supabase_url/auth/v1/.well-known/jwks.json"
 waku_jwks_is_asymmetric "$jwks" \
@@ -309,7 +435,7 @@ waku_signup_is_closed "$settings" \
 
 # A value given by flag was checked in the argument block above; this is the
 # derivation for when none was, and waku_max_running floors its answer at 1.
-if [ -z "$max_running" ]; then
+if [ "$max_running_given" = no ]; then
   max_running=$(waku_max_running /proc/meminfo) \
     || waku_die "could not read MemTotal from /proc/meminfo; pass --max-running"
 fi
@@ -390,7 +516,7 @@ waku_log "building caddy with the $dns_provider${dns_module_version} module"
 [ -n "$dns_module_version" ] \
   || waku_log "NOTE: --dns-module-version was not given, so xcaddy resolves the caddy-dns module's latest version at build time and a rebuild on another day can produce a different Caddy."
 DOCKER_BUILDKIT=1 docker build \
-  --build-arg "DNS_PROVIDER=$dns_provider" \
+  --build-arg "DNS_PROVIDER=$dns_module" \
   --build-arg "DNS_PROVIDER_VERSION=$dns_module_version" \
   --file "$src/hosted/image/caddy.Dockerfile" \
   --tag "$caddy_image" \

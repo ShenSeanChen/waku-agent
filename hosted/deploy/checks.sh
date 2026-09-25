@@ -156,3 +156,69 @@ waku_env_pair_ok() {
     case "$value" in ''|*[![:graph:]]*) exit 1 ;; esac
     exit 0 )
 }
+
+# The NAME half of a NAME=VALUE line, printed only when it is safe to print.
+#
+# A REFUSAL ABOUT A CREDENTIAL MUST NAME THE FILE AND THE LINE, NEVER THE LINE'S
+# CONTENT. This exists so that install.sh can still say something useful about
+# which setting is wrong: a variable's NAME is not a secret, its VALUE is. The
+# name comes back only when it passes the same closed set waku_env_pair_ok
+# applies to it -- if the line has no `=`, or the part before the `=` is not a
+# name, there is nothing here that can be shown and this prints nothing, so the
+# caller falls back to the position alone.
+waku_env_pair_name() {
+  local name
+  case "$1" in
+    [A-Za-z_]*=*) name=${1%%=*} ;;
+    *) return 1 ;;
+  esac
+  ( LC_ALL=C; case "$name" in *[![:alnum:]_]*) exit 1 ;; esac ) || return 1
+  printf '%s\n' "$name"
+}
+
+# A hostname, as a CLOSED SET ON THE VALUE.
+#
+# `*.*` was the whole of this check and it is not a check: `.`, `..`, `a..b`,
+# `a b.c`, `*.waku.one` and `http://a.b` all satisfy it, and each of them then
+# fails at Caddy or at ACME -- AFTER the VM is built, which is precisely what a
+# preflight exists to prevent.
+#
+# What is accepted: two or more labels separated by single dots; each label
+# 1 to 63 characters of lowercase letters, digits and hyphens, not beginning or
+# ending with a hyphen; 253 characters in total at most; and a last label of at
+# least two characters that is not all digits, which is what stops an IPv4
+# address. No leading or trailing dot, no empty label, no wildcard, no scheme,
+# no space, no upper case -- every one of those falls out of the set rather
+# than being listed as a way to be wrong.
+#
+# LOWERCASE ONLY, deliberately. hosted/gateway/config.py lowercases
+# WAKU_APEX_HOST when it reads it, so a mixed-case value would leave
+# config/install.env saying one thing and the running gateway using another,
+# and the operator reading the file would be reading the wrong answer.
+waku_is_hostname() {
+  local name
+  name=$1
+  case "$name" in
+    ''|*[!a-z0-9.-]*) return 1 ;;
+    .*|*.|*..*) return 1 ;;
+    *.*) : ;;
+    *) return 1 ;;
+  esac
+  [ ${#name} -le 253 ] || return 1
+  ( LC_ALL=C
+    IFS=.
+    set -f
+    last=""
+    for label in $name; do
+      case "$label" in
+        -*|*-) exit 1 ;;
+      esac
+      [ ${#label} -le 63 ] || exit 1
+      last=$label
+    done
+    [ ${#last} -ge 2 ] || exit 1
+    case "$last" in
+      *[!0-9]*) exit 0 ;;
+      *) exit 1 ;;
+    esac )
+}
