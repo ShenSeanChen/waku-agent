@@ -501,6 +501,28 @@ class DockerRuntime:
         return directory
 
     async def _backup(self, tenant_id: str) -> dict:
+        """Copy the tenant's two directories into their staging slot.
+
+        ONE SLOT PER TENANT, AND STARTING A BACKUP INVALIDATES IT. The first
+        two lines of _BACKUP_SCRIPT remove the manifest and empty both part
+        directories, so a backup that dies leaves no restorable backup at all
+        -- not the old one and not the new one. That is survivable only because
+        staging is a HANDOFF area: F3's backup.sh takes a restic snapshot from
+        it and restic keeps every snapshot. Nothing here enforces that, so an
+        operator running `task backup` twice by hand with no restic in between
+        has destroyed their only copy and been told twice that it worked. The
+        shape that fixes it -- staging into <staging_root>/<id>/<timestamp>/,
+        with restore naming the directory -- adds a key to the task request and
+        is a spec decision, not a fix.
+
+        AND NOTHING REPAIRS STAGING. The script runs as UID 10001 over a tree
+        this tenant's own files made, so a directory mode 10001 cannot traverse
+        -- an 0500 directory with a file under it -- wedges `find -delete`, and
+        every backup from then on fails at the same line with no verb to clear
+        it. This is not a regression: the previous shape wedged identically at
+        `tar --extract`. It is worth F3 knowing that `backup.sh` needs a way to
+        reset a tenant's staging slot, because the spawner has none.
+        """
         # THE PATH COMES FROM THE HELPER, and that is not tidiness: the first
         # version called the helper for its side effect and then bound a path
         # it had computed separately. Two expressions for one location is
@@ -670,14 +692,39 @@ class DockerRuntime:
         and the whole point of the manifest is that IT, not the filesystem,
         says what happened.
         """
+        # A TYPE CHECK, like every other field. `state_db` was the one field
+        # read with `.get()` and compared to True, so `"true"` as a string, `1`,
+        # and a missing key all fell through to "no database" -- the lenient
+        # answer, reached by three different kinds of malformed manifest. F3
+        # writes these from restic, so "malformed" stops being hypothetical.
+        if not isinstance(claimed, bool):
+            # RuntimeError and not TypeError (ruff TRY004), because EVERY
+            # refusal this reader makes is one class: the caller is
+            # service.handle, which lets them all propagate to jsonsock's
+            # opaque answer, and a second exception type here is a second thing
+            # for some future caller to catch differently.
+            raise RuntimeError(  # noqa: TRY004
+                f"{manifest} has state_db={claimed!r}, which is not a boolean. "
+                "A manifest this process cannot read exactly is one it will not "
+                "restore from.")
         state_db = staging / "home" / "state.db"
-        if claimed is True:
+        if claimed:
+            # THE SAME CARE AS manifest.json, TWO LEVELS UP. That one gets an
+            # is_symlink() refusal and O_NOFOLLOW; this was a bare root open
+            # inside `home/`, which is the tenant-derived half of staging. Not
+            # reachable today -- `tar --extract` refuses absolute and `..`
+            # paths -- and reachable through F3's restic path, which writes
+            # these directories from somewhere this process did not control.
+            if state_db.is_symlink():
+                raise RuntimeError(
+                    f"{state_db} is a symlink; refusing to read through it")
             if not state_db.is_file():
                 raise RuntimeError(
                     f"{manifest} says this backup copied a database and "
                     f"{state_db} is not there. Restoring would give the tenant "
                     "an empty assistant and report success.")
-            with open(state_db, "rb") as handle:
+            flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+            with open(os.open(state_db, flags), "rb") as handle:
                 header = handle.read(len(_SQLITE_MAGIC))
             if header != _SQLITE_MAGIC:
                 raise RuntimeError(

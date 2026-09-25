@@ -24,6 +24,7 @@ from spawnerlib import (
     TOKEN_TWO,
     allowed_bind_sources,
     ask,
+    ask_ok,
     capture_task_containers,
 )
 
@@ -44,10 +45,10 @@ def test_start_puts_the_container_at_the_address_the_project_id_derives(spawner)
 
 
 def test_a_second_start_replaces_the_first_and_only_one_container_exists(spawner):
-    ask(spawner, {"op": "start", "tenant_id": TENANT_A, "project_id": PROJECT_A,
+    ask_ok(spawner, {"op": "start", "tenant_id": TENANT_A, "project_id": PROJECT_A,
                   "timezone": "UTC", "token": TOKEN_ONE})
-    ask(spawner, {"op": "start", "tenant_id": TENANT_A, "project_id": PROJECT_A,
-                  "timezone": "UTC", "token": TOKEN_TWO})
+    ask_ok(spawner, {"op": "start", "tenant_id": TENANT_A, "project_id": PROJECT_A,
+                     "timezone": "UTC", "token": TOKEN_TWO})
     listed = ask(spawner, {"op": "list"})["containers"]
     mine = [c for c in listed if c["tenant_id"] == TENANT_A]
     assert len(mine) == 1, f"two containers for one tenant: {listed}"
@@ -62,7 +63,7 @@ def test_a_second_start_replaces_the_first_and_only_one_container_exists(spawner
 def test_the_kernel_honoured_capdrop_and_no_new_privileges(spawner):
     """The kernel's own view, not `docker inspect`. A field can be set and
     ignored; /proc/self/status is what the process actually has."""
-    ask(spawner, {"op": "start", "tenant_id": TENANT_A, "project_id": PROJECT_A,
+    ask_ok(spawner, {"op": "start", "tenant_id": TENANT_A, "project_id": PROJECT_A,
                   "timezone": "UTC", "token": TOKEN_ONE})
     name = template.container_name(TENANT_A, template.KIND_TENANT)
     dockerlib.wait_for_listener(name, "127.0.0.1", template.DASHBOARD_PORT)
@@ -77,7 +78,7 @@ def test_the_kernel_honoured_capdrop_and_no_new_privileges(spawner):
 
 
 def test_the_root_filesystem_is_read_only_and_tmp_is_a_256mb_tmpfs(spawner):
-    ask(spawner, {"op": "start", "tenant_id": TENANT_A, "project_id": PROJECT_A,
+    ask_ok(spawner, {"op": "start", "tenant_id": TENANT_A, "project_id": PROJECT_A,
                   "timezone": "UTC", "token": TOKEN_ONE})
     name = template.container_name(TENANT_A, template.KIND_TENANT)
     dockerlib.wait_for_listener(name, "127.0.0.1", template.DASHBOARD_PORT)
@@ -96,7 +97,7 @@ def test_the_root_filesystem_is_read_only_and_tmp_is_a_256mb_tmpfs(spawner):
 def test_the_pids_limit_binds(spawner):
     """Both halves. Without the 100-thread case, a container that could spawn
     nothing at all would pass the 300-thread case."""
-    ask(spawner, {"op": "start", "tenant_id": TENANT_A, "project_id": PROJECT_A,
+    ask_ok(spawner, {"op": "start", "tenant_id": TENANT_A, "project_id": PROJECT_A,
                   "timezone": "UTC", "token": TOKEN_ONE})
     name = template.container_name(TENANT_A, template.KIND_TENANT)
     dockerlib.wait_for_listener(name, "127.0.0.1", template.DASHBOARD_PORT)
@@ -121,7 +122,7 @@ def test_the_pids_limit_binds(spawner):
 
 
 def test_stop_removes_the_container(spawner):
-    ask(spawner, {"op": "start", "tenant_id": TENANT_A, "project_id": PROJECT_A,
+    ask_ok(spawner, {"op": "start", "tenant_id": TENANT_A, "project_id": PROJECT_A,
                   "timezone": "UTC", "token": TOKEN_ONE})
     assert ask(spawner, {"op": "stop", "tenant_id": TENANT_A}) == {"ok": True}
     listed = ask(spawner, {"op": "list"})["containers"]
@@ -150,7 +151,7 @@ def test_list_ignores_a_container_that_is_not_ours(spawner, tenant_image):
 
 def test_start_is_refused_while_an_inspect_container_holds_the_tenant(spawner):
     """Refused must mean DID NOTHING, not created-it-and-then-complained."""
-    ask(spawner, {"op": "stop", "tenant_id": TENANT_A})
+    ask_ok(spawner, {"op": "stop", "tenant_id": TENANT_A})
     assert "port" in ask(spawner, {"op": "task", "tenant_id": TENANT_A,
                                    "task": "inspect"})
     try:
@@ -173,7 +174,7 @@ def test_a_tenants_own_start_is_not_refused_by_its_own_provisioning(spawner):
     gateway's documented retry -- 'a start that does not answer within 15
     seconds ... Try again.' -- lands on Busy and the tenant is told they are
     under maintenance by their own first request."""
-    ask(spawner, {"op": "stop", "tenant_id": TENANT_A})
+    ask_ok(spawner, {"op": "stop", "tenant_id": TENANT_A})
     for token in (TOKEN_ONE, TOKEN_TWO):
         answer = ask(spawner, {"op": "start", "tenant_id": TENANT_A,
                                "project_id": PROJECT_A, "timezone": "UTC",
@@ -234,9 +235,21 @@ def test_every_task_container_is_throwaway_and_holds_only_that_tenants_mounts(
     payload = {"op": "task", "tenant_id": TENANT_A, "task": task}
     if task == "restore":
         payload["project_id"] = PROJECT_A
+        # STOP THE TENANT FIRST, and this is not tidiness -- run 1 proved it.
+        # A restore removes and recreates <tenant>/home and <tenant>/env on the
+        # host. A running container has those bind-mounted, so replacing the
+        # directories leaves its mount namespace pointing at inodes that are
+        # gone: every later `docker exec` into it fails with "current working
+        # directory is outside of container mount namespace root -- possible
+        # container breakout detected", which is what killed
+        # test_a_tenants_logs_are_capped two tests later. GC-11 is a live break
+        # and not hygiene; the spawner does not stop the container for you,
+        # because sequencing belongs to the caller, and this test IS a caller.
+        assert "error" not in ask(spawner, {"op": "stop", "tenant_id": TENANT_A})
         # A restore extracts what a backup staged, and refuses outright when
         # nothing is staged -- so the backup is setup, not part of the test.
-        ask(spawner, {"op": "task", "tenant_id": TENANT_A, "task": "backup"})
+        assert "error" not in ask(spawner, {"op": "task", "tenant_id": TENANT_A,
+                                            "task": "backup"})
     seen = capture_task_containers(spawner, payload, TENANT_A)
     allowed = allowed_bind_sources(spawner_root, TENANT_A, task)
     try:
@@ -312,8 +325,17 @@ def test_a_tenants_logs_are_capped(spawner):
     docker_root = dockerlib.require_docker_root_dir()
 
     # 1. What the spawner asked for.
-    ask(spawner, {"op": "start", "tenant_id": TENANT_A, "project_id": PROJECT_A,
-                  "timezone": "UTC", "token": TOKEN_ONE})
+    #
+    # THE ANSWER IS CHECKED. In run 1 this line ignored it, the start left no
+    # trace in the spawner's log, and the failure surfaced two calls later as
+    # an OCI exec error against whatever container still held the name -- so
+    # the log said "container breakout detected" when what had happened was a
+    # start that did not happen. An unchecked answer turns the failure you have
+    # into a failure somewhere else.
+    answer = ask(spawner, {"op": "start", "tenant_id": TENANT_A,
+                           "project_id": PROJECT_A, "timezone": "UTC",
+                           "token": TOKEN_ONE})
+    assert "error" not in answer, answer
     name = template.container_name(TENANT_A, template.KIND_TENANT)
     dockerlib.wait_for_listener(name, "127.0.0.1", template.DASHBOARD_PORT)
     assert dockerlib.inspect(name)["HostConfig"]["LogConfig"] == {

@@ -30,6 +30,7 @@ from spawnerlib import (
     SPAWNER_CONTAINER,
     allowed_bind_sources,
     ask,
+    ask_ok,
     capture_task_containers,
 )
 
@@ -209,8 +210,8 @@ def test_provisioning_repairs_a_loosened_env_mode(spawner, spawner_root, tenant)
                        read_only=False,
                        binds=[f"{env_file.parent}:/work"])
     assert env_file.stat().st_mode & 0o777 == 0o644, "the loosening did not take"
-    ask(spawner, {"op": "provision", "tenant_id": tenant_id,
-                  "project_id": project_id})
+    ask_ok(spawner, {"op": "provision", "tenant_id": tenant_id,
+                     "project_id": project_id})
     assert env_file.stat().st_mode & 0o777 == 0o600
 
 
@@ -225,8 +226,8 @@ def test_provisioning_is_idempotent(spawner, spawner_root, tenant):
         read_only=False, binds=[f"{soul.parent}:/data"])
     mine = soul.read_text(encoding="utf-8")
     assert mine == "MINE\n"
-    ask(spawner, {"op": "provision", "tenant_id": tenant_id,
-                  "project_id": project_id})
+    ask_ok(spawner, {"op": "provision", "tenant_id": tenant_id,
+                     "project_id": project_id})
     assert soul.read_text(encoding="utf-8") == mine
 
 
@@ -246,8 +247,8 @@ def test_a_second_start_issues_no_recursive_walk(spawner, tenant):
         "the spawner logged no `project -s` at all, so the count below is "
         "asserting against nothing -- check WAKU_LOG_LEVEL and that the "
         "fixture's first provision took the create path")
-    ask(spawner, {"op": "provision", "tenant_id": tenant_id,
-                  "project_id": project_id})
+    ask_ok(spawner, {"op": "provision", "tenant_id": tenant_id,
+                     "project_id": project_id})
     after = dockerlib.logs(SPAWNER_CONTAINER)
     assert after.count(marker) == before, (
         "provisioning an existing directory issued a recursive project walk. "

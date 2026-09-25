@@ -705,7 +705,7 @@ def test_a_manifest_claiming_a_database_needs_a_real_one(world, contents, why):
     nothing says why. `sqlite3 .backup` writes a whole database or fails, so
     the header is what is asked for.
     """
-    runtime, _engine, config, _claimed, _limited = world
+    runtime, engine, config, _claimed, _limited = world
     asyncio.run(runtime.provision(TENANT, PROJECT))
     staging = config.staging_root / TENANT
     _make(staging, {"home": None, "env": None,
@@ -713,9 +713,18 @@ def test_a_manifest_claiming_a_database_needs_a_real_one(world, contents, why):
                                      '"state_db": true}'})
     (staging / "home" / "state.db").write_bytes(contents)
 
-    with pytest.raises(RuntimeError, match="SQLite's header") as raised:
+    before = len(engine.created)
+    with pytest.raises(RuntimeError, match="SQLite's header"):
         asyncio.run(runtime.task(TENANT, "restore", PROJECT))
-    assert "state.db" in str(raised.value), why
+    # NF-3. The old second assertion was `"state.db" in str(exc)`, which cannot
+    # fail while the `match=` above passes: the message interpolates the path,
+    # and the path ends in state.db. What is worth asserting instead is what
+    # the refusal PREVENTED -- no container ran, so the tenant's live tree was
+    # never archived or removed for a backup that could not restore. `why`
+    # names which malformed database this parameter is.
+    assert len(engine.created) == before, (
+        f"the restore ran containers before refusing {why}; the refusal has to "
+        "come before the archive, or the tenant has already been destroyed.")
 
 
 def test_a_manifest_claiming_a_database_accepts_a_real_one(world):
@@ -744,3 +753,90 @@ def test_a_manifest_denying_a_database_above_one_is_refused(world):
 
     with pytest.raises(RuntimeError, match="disagree"):
         asyncio.run(runtime.task(TENANT, "restore", PROJECT))
+
+
+@pytest.mark.parametrize("claimed", ['"true"', "1", "0", "null", '"yes"', "[]"])
+def test_a_manifest_whose_state_db_is_not_a_boolean_is_refused(world, claimed):
+    """NF-2. `state_db` was the one field read with `.get()` and compared to
+    `True`, so `"true"` as a string, `1`, and a missing key all fell through to
+    the LENIENT answer -- "this backup copied no database" -- reached by three
+    different kinds of malformed manifest.
+
+    Every other field is type-checked. F3 writes these manifests from restic
+    snapshots, so a manifest this process did not produce stops being
+    hypothetical the moment that lands.
+    """
+    runtime, engine, config, _claimed, _limited = world
+    asyncio.run(runtime.provision(TENANT, PROJECT))
+    _make(config.staging_root / TENANT,
+          {"home": None, "env": None,
+           "manifest.json": '{"version": 1, "parts": ["home", "env"], '
+                            f'"state_db": {claimed}}}'})
+    before = len(engine.created)
+
+    with pytest.raises(RuntimeError, match="not a boolean"):
+        asyncio.run(runtime.task(TENANT, "restore", PROJECT))
+    assert len(engine.created) == before
+
+
+def test_a_manifest_with_no_state_db_key_is_refused(world):
+    """The missing-key case, which is the one a hand-written or older manifest
+    actually has. It used to mean "no database", which is a decision this
+    process was making on the manifest's behalf."""
+    runtime, _engine, config, _claimed, _limited = world
+    asyncio.run(runtime.provision(TENANT, PROJECT))
+    _make(config.staging_root / TENANT,
+          {"home": None, "env": None,
+           "manifest.json": '{"version": 1, "parts": ["home", "env"]}'})
+
+    with pytest.raises(RuntimeError, match="not a boolean"):
+        asyncio.run(runtime.task(TENANT, "restore", PROJECT))
+
+
+def test_a_symlinked_state_db_is_refused(world, tmp_path):
+    """NF-2's other half. `manifest.json` gets an is_symlink() refusal and
+    O_NOFOLLOW two levels up; `home/state.db` was a bare root open, inside the
+    half of staging that comes from the tenant's own files. Unreachable through
+    `tar --extract`, which refuses absolute and `..` paths -- and reachable
+    through F3's restic path, which fills these directories from somewhere this
+    process did not control."""
+    runtime, _engine, config, _claimed, _limited = world
+    asyncio.run(runtime.provision(TENANT, PROJECT))
+    staging = config.staging_root / TENANT
+    _make(staging, {"home": None, "env": None,
+                    "manifest.json": '{"version": 1, "parts": ["home", "env"], '
+                                     '"state_db": true}'})
+    real = tmp_path / "somebody-elses.db"
+    real.write_bytes(_SQLITE_HEADER + b"\x00" * 500)
+    (staging / "home" / "state.db").symlink_to(real)
+
+    with pytest.raises(RuntimeError, match="refusing to read through it"):
+        asyncio.run(runtime.task(TENANT, "restore", PROJECT))
+
+
+def test_backup_and_archive_mount_the_directory_the_helper_prepared(world):
+    """NF-4. The NEW-5 fix -- `_backup` taking the shared helper's return value
+    instead of computing a second path beside it -- was the only change in that
+    commit with no eval, so reverting it left the suite green. That is GC-1's
+    asymmetry exactly: one expression chowns and another one binds.
+
+    Asserted as an IDENTITY between what the helper prepared and what the
+    container was given, for both callers, rather than by comparing two strings
+    that happen to agree today.
+    """
+    runtime, engine, config, _claimed, _limited = world
+    asyncio.run(runtime.provision(TENANT, PROJECT))
+
+    for task, root, mount in (("backup", config.staging_root, "/staging"),
+                              ("archive", config.archive_root, "/archive")):
+        engine.created.clear()
+        prepared = runtime._tenant_directory_under(root, TENANT)
+        asyncio.run(runtime.task(TENANT, task))
+        bound = {bind.split(":", 1)[0] for _name, body in engine.created
+                 for bind in body["HostConfig"]["Binds"]
+                 if bind.split(":")[1] == mount}
+        assert bound == {str(prepared)}, (
+            f"{task} mounted {bound} at {mount}, and the helper prepared "
+            f"{prepared}. Whatever the helper chowned to 10001 is not what the "
+            "container was handed, which is EACCES for one of them and a "
+            "second expression for one location for both.")

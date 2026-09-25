@@ -14,6 +14,8 @@ plain helpers live here and are imported as a module. Nothing is defined twice.
 from __future__ import annotations
 
 import asyncio
+import json
+import subprocess
 import threading
 import time
 
@@ -57,6 +59,27 @@ def ask(spawner, payload: dict) -> dict:
     return asyncio.run(jsonsock.ask(spawner, payload, timeout=180))
 
 
+def ask_ok(spawner, payload: dict) -> dict:
+    """Ask, and refuse to carry on if the spawner said no.
+
+    THE SETUP CALL THAT IGNORES ITS ANSWER IS THE ONE THAT COSTS THE MOST. In
+    run 1 a `start` used as setup dropped its answer; the start did not happen;
+    and the failure surfaced two calls later as an OCI exec error against
+    whatever container still held the name. The log said "possible container
+    breakout detected" about a start that never ran.
+
+    Every call whose answer the test does not examine goes through this. Calls
+    that are ABOUT the answer -- a busy refusal, a bad request -- keep using
+    `ask` directly, because for those the error IS the assertion.
+    """
+    answer = ask(spawner, payload)
+    assert "error" not in answer, (
+        f"{payload.get('op')} {payload.get('task', '')} was refused: {answer}. "
+        "This call is setup for the assertions below, so the test stops here "
+        "rather than measuring a state that was never reached.")
+    return answer
+
+
 def allowed_bind_sources(spawner_root, tenant_id: str, task: str) -> set[str]:
     """DEFAULT-DENY: the exact set of host paths a task container may mount.
 
@@ -97,30 +120,57 @@ def capture_task_containers(spawner, payload: dict, tenant_id: str) -> list[dict
     """Run an operation and return `docker inspect` for EVERY container it
     created for this tenant, except the tenant's own dashboard.
 
-    Every kind, not just KIND_TASK: a restore runs an archive container and a
-    provision container on its way, and each of them mounts a tenant's data.
-    Filtering to one kind would have left two of the three unexamined.
+    Every kind, not just KIND_TASK: a restore runs an archive container, an
+    empty container and a provision container on its way, and each of them
+    mounts a tenant's data. Filtering to one kind would leave three of four
+    unexamined.
 
-    These containers are short-lived, so this polls `docker ps -a` by the
-    tenant label from a thread while the request runs, and RAISES if it never
-    saw one -- "the operation made no container" must not read as "the
-    operation made a correct container".
+    IT READS `docker events`, NOT `docker ps`, AND IT INSPECTS ON SIGHT.
+    The first version polled `docker ps -a` every 200 ms and inspected the ids
+    afterwards. The spawner's throwaway containers are created, run and removed
+    inside one `_run_to_completion`, so that lost both ways, and run 1 showed
+    both: `archive` and `inspect` were missed entirely ("created no labelled
+    container"), and `backup` and `restore` were seen and then inspected after
+    removal ("Error: No such object").
+
+    `docker events --since <before the request>` is REPLAYED by the daemon from
+    that timestamp, so detection cannot miss a container however short-lived it
+    was -- the reader starting late is fine. Inspection still races the
+    spawner's own removal, because the spawner removes what it makes and
+    nothing here can hold it open; so each id is inspected the instant its
+    create event arrives, and an id that loses that race is reported AS a lost
+    race rather than as a bare DockerError from somewhere else.
     """
-    seen: list[str] = []
+    since = f"{time.time():.3f}"
+    seen: dict[str, dict] = {}
+    lost: list[str] = []
     stop = threading.Event()
 
+    events = subprocess.Popen(
+        ["docker", "events", "--since", since,
+         "--filter", f"label={template.LABEL_TENANT}={tenant_id}",
+         "--filter", "event=create", "--format", "{{json .}}"],
+        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+
     def watch():
-        while not stop.is_set():
-            out = dockerlib._run(
-                ["ps", "-a", "--filter", f"label={template.LABEL_TENANT}={tenant_id}",
-                 "--format", '{{.ID}} {{.Label "waku.kind"}}'],
-                timeout=30, check=False).stdout.splitlines()
-            for line in out:
-                parts = line.split()
-                if len(parts) == 2 and parts[1] != template.KIND_TENANT \
-                        and parts[0] not in seen:
-                    seen.append(parts[0])
-            time.sleep(0.2)
+        for line in events.stdout:               # blocks; closed by terminate()
+            if stop.is_set():
+                return
+            try:
+                event = json.loads(line)
+            except ValueError:
+                continue
+            container = event.get("id") or event.get("Actor", {}).get("ID", "")
+            kind = event.get("Actor", {}).get("Attributes", {}).get(template.LABEL_KIND)
+            if not container or kind == template.KIND_TENANT or container in seen:
+                continue
+            try:
+                seen[container] = dockerlib.inspect(container)
+            except dockerlib.DockerError:
+                # Removed between its create event and this inspect. Recorded,
+                # not swallowed: "I saw it and could not read it" and "there
+                # was nothing" are different answers.
+                lost.append(container)
 
     thread = threading.Thread(target=watch, daemon=True)
     thread.start()
@@ -128,13 +178,24 @@ def capture_task_containers(spawner, payload: dict, tenant_id: str) -> list[dict
         answer = ask(spawner, payload)
         assert "error" not in answer, answer
     finally:
+        # Give the stream a moment to deliver events for containers created
+        # just before the answer came back, then close it.
+        time.sleep(0.5)
         stop.set()
-        thread.join(timeout=5)
-    assert seen, (
-        f"{payload.get('task', payload['op'])} created no labelled container. "
-        "This is not a pass: every assertion below would be about a container "
-        "that never existed.")
-    return [dockerlib.inspect(cid) for cid in seen]
+        events.terminate()
+        thread.join(timeout=10)
+        events.wait(timeout=10)
+
+    what = payload.get("task", payload["op"])
+    assert seen or lost, (
+        f"{what} created no labelled container. This is not a pass: every "
+        "assertion below would be about a container that never existed.")
+    assert not lost, (
+        f"{what} created {len(lost)} container(s) that were removed before "
+        f"they could be inspected: {lost}. The spawner removes its own "
+        "throwaway containers, so this is a lost race and not a missing "
+        f"container -- {len(seen)} other(s) were read successfully.")
+    return list(seen.values())
 
 
 def remove_every_waku_container() -> None:
@@ -172,3 +233,50 @@ def remove_network_or_say_why(name: str) -> None:
         + dockerlib._run(["ps", "-a", "--filter", f"network={name}",
                           "--format", "{{.Names}}"],
                          timeout=60, check=False).stdout.strip())
+
+
+def wait_until_the_spawner_answers(socket_path, *, timeout: float = 60.0) -> None:
+    """Block until the spawner ANSWERS, not until its socket file exists.
+
+    THE FILE IS NOT THE SERVICE. `<root>/run/spawner/spawner.sock` is on a bind
+    mount under the shared root, so it outlives the container that made it: the
+    previous module's socket file is sitting there, with nothing behind it,
+    before the new spawner has finished importing. An `exists()` check passes
+    on that file immediately and hands the tests a socket that answers
+    ECONNREFUSED -- which is what run 1's first fifteen failures were.
+
+    So this asks the spawner a question and waits for an answer. `list` is the
+    cheapest one: it takes no arguments, touches no tenant, and its refusal
+    surface is already covered offline.
+
+    IT ALSO WATCHES THE CONTAINER. A spawner that exited -- a bad config, a
+    missing device, an unreadable seccomp profile -- would otherwise be a
+    60-second wait ending in a timeout that says nothing. If the container is
+    gone, this says so at once, with its logs.
+    """
+    deadline = time.monotonic() + timeout
+    last: Exception | None = None
+    while time.monotonic() < deadline:
+        state = dockerlib._run(
+            ["inspect", "--format", "{{.State.Running}}", SPAWNER_CONTAINER],
+            timeout=30, check=False)
+        if state.returncode != 0 or state.stdout.strip() != "true":
+            raise AssertionError(
+                f"the spawner container is not running ({state.stdout.strip()!r}), "
+                "so nothing below this line is a test of anything:\n"
+                + dockerlib.logs(SPAWNER_CONTAINER)[-4000:])
+        try:
+            answer = asyncio.run(jsonsock.ask(socket_path, {"op": "list"}, timeout=5))
+        except jsonsock.Unreachable as exc:      # not bound yet
+            last = exc
+            time.sleep(0.2)
+            continue
+        assert "containers" in answer, (
+            f"the spawner answered {answer!r} to a list, which is not the shape "
+            "the spec's table names. Everything below would be testing a "
+            "service that is not this one.")
+        return
+    raise AssertionError(
+        f"the spawner never answered on {socket_path} within {timeout}s "
+        f"(last: {last!r}). It is running, so it is stuck before serve():\n"
+        + dockerlib.logs(SPAWNER_CONTAINER)[-4000:])

@@ -27,6 +27,7 @@ from spawnerlib import (
     TOKEN_ONE,
     TOKEN_TWO,
     ask,
+    ask_ok,
 )
 
 from hosted.core import tenant
@@ -162,7 +163,7 @@ def test_a_restored_tenant_keeps_their_own_project_id(spawner, spawner_root):
     a new fixed bridge address.
     """
     dockerlib.require_xfs()
-    ask(spawner, {"op": "stop", "tenant_id": TENANT_A})
+    ask_ok(spawner, {"op": "stop", "tenant_id": TENANT_A})
     assert "error" not in ask(spawner, {"op": "provision", "tenant_id": TENANT_A,
                                         "project_id": PROJECT_A})
     assert "error" not in ask(spawner, {"op": "task", "tenant_id": TENANT_A,
@@ -253,7 +254,7 @@ def test_a_backup_does_not_resurrect_a_file_the_tenant_deleted(spawner, spawner_
     at the end means only that it never arrived.
     """
     dockerlib.require_xfs()
-    ask(spawner, {"op": "stop", "tenant_id": TENANT_A})
+    ask_ok(spawner, {"op": "stop", "tenant_id": TENANT_A})
     assert "error" not in ask(spawner, {"op": "provision", "tenant_id": TENANT_A,
                                         "project_id": PROJECT_A})
     home = spawner_root / "tenants" / TENANT_A / "home"
@@ -315,8 +316,8 @@ def test_the_platform_key_is_in_no_tenant_container(spawner, spawner_root):
         "absence below is an absence with no source and none of it can fail. "
         "conftest.py's `spawner` fixture is what plants it.")
 
-    ask(spawner, {"op": "start", "tenant_id": TENANT_A, "project_id": PROJECT_A,
-                  "timezone": "UTC", "token": TOKEN_ONE})
+    ask_ok(spawner, {"op": "start", "tenant_id": TENANT_A, "project_id": PROJECT_A,
+                     "timezone": "UTC", "token": TOKEN_ONE})
     name = template.container_name(TENANT_A, template.KIND_TENANT)
     dockerlib.wait_for_listener(name, "127.0.0.1", template.DASHBOARD_PORT)
 
@@ -428,8 +429,8 @@ def test_changing_the_project_id_of_ones_own_file_fails(spawner, tenant_image,
     BOTH succeed. Three outcomes.
     """
     dockerlib.require_xfs()
-    ask(spawner, {"op": "start", "tenant_id": TENANT_A, "project_id": PROJECT_A,
-                  "timezone": "UTC", "token": TOKEN_ONE})
+    ask_ok(spawner, {"op": "start", "tenant_id": TENANT_A, "project_id": PROJECT_A,
+                     "timezone": "UTC", "token": TOKEN_ONE})
     name = template.container_name(TENANT_A, template.KIND_TENANT)
     dockerlib.wait_for_listener(name, "127.0.0.1", template.DASHBOARD_PORT)
     dockerlib.exec_in(name, ["python", "-c", "open('/data/mine','w').write('x')"])

@@ -66,7 +66,6 @@ else:
     # Importing a fixture by name into a module that also names it as a test
     # argument is `ruff` F811, which is what the brief's shape produced.
 
-    import time as _time  # noqa: E402 - inside the daemon-present branch
 
     import dockerlib as _dockerlib  # noqa: E402
     import spawnerlib as _spawnerlib  # noqa: E402
@@ -191,6 +190,26 @@ else:
         if device:
             extra += ["--device", device]
         _dockerlib.remove(_spawnerlib.SPAWNER_CONTAINER)
+        # THE STALE SOCKET, REMOVED ON THE HOST BEFORE ANYTHING STARTS.
+        #
+        # This is the bug that took 15 of the first CI run's 20 failures. The
+        # socket lives on a bind mount under the shared root, so removing the
+        # container does NOT remove the file: the previous module's socket sits
+        # there with nothing behind it. The readiness check below used to be
+        # `socket_path.exists()`, which that file satisfies INSTANTLY -- so the
+        # fixture yielded while the new spawner was still importing aiohttp,
+        # and every test that ran in that window got ECONNREFUSED against a
+        # dead file. In run 1 that was test_spawner's first seven tests (the
+        # spawner bound four seconds in, at 05:41:45, and everything from the
+        # eighth test on passed) and all eight of test_tenant_files, whose
+        # tests fail fast enough that the module ended before its spawner ever
+        # bound.
+        #
+        # Two changes, and both are needed. Unlinking alone still races the
+        # bind; probing alone would work but leaves a file that makes the
+        # failure look like a refusal rather than an absence.
+        socket_path = root / "run" / "spawner" / "spawner.sock"
+        socket_path.unlink(missing_ok=True)
         try:
             _dockerlib.start_detached(
                 services_image, ["python", "-m", "hosted.spawner"],
@@ -199,16 +218,7 @@ else:
                 binds=["/var/run/docker.sock:/var/run/docker.sock",
                        f"{root}:{root}"],
                 extra=extra)
-            socket_path = root / "run" / "spawner" / "spawner.sock"
-            for _ in range(60):
-                if socket_path.exists():
-                    break
-                _time.sleep(0.5)
-            else:
-                raise AssertionError(
-                    "the spawner never bound its socket. It is not running, so "
-                    "nothing below this line is a test of anything.\n"
-                    + _dockerlib.logs(_spawnerlib.SPAWNER_CONTAINER))
+            _spawnerlib.wait_until_the_spawner_answers(socket_path)
             yield socket_path
         finally:
             print(_dockerlib.logs(_spawnerlib.SPAWNER_CONTAINER))
