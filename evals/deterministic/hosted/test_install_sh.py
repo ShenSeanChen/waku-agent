@@ -362,7 +362,6 @@ def test_a_second_domain_is_refused(tmp_path):
         # built, which is precisely what a preflight exists to prevent.
         (".", False),
         ("..", False),
-        ("a..b", False),
         ("a b.c", False),
         ("*.waku.one", False),
         ("http://a.b", False),
@@ -370,12 +369,21 @@ def test_a_second_domain_is_refused(tmp_path):
         # A trailing dot is a valid FQDN and not a valid site address here.
         ("agent.waku.one.", False),
         (".agent.waku.one", False),
-        # A hyphen may not begin or end a label.
-        ("-a.b", False),
-        ("a-.b", False),
-        # An IP address: the last label is all digits.
-        ("1.2.3.4", False),
+        # EVERY CASE BELOW HAS A LAST LABEL OF TWO OR MORE NON-DIGIT
+        # CHARACTERS, deliberately. The first draft of this list used `a..b`,
+        # `-a.b`, `a-.b` and `1.2.3.4`, and every one of them was refused by
+        # the TLD-length rule rather than by the guard it was named for --
+        # removing the empty-label arm, the hyphen arm and the all-digit arm
+        # each left the suite green. Same shape as the resolver defect: a
+        # fixture carried by a different guard than the one it is testing.
+        ("a..io", False),
+        ("-a.io", False),
+        ("a-.io", False),
+        ("1.2.3.44", False),
+        ("a.12", False),
+        # And the short last label in its own right.
         ("a.4", False),
+        ("agent.waku.o", False),
         # Upper case: gateway/config.py lowercases WAKU_APEX_HOST when it
         # reads it, so a mixed-case value would leave install.env saying one
         # thing and the running gateway using another.
@@ -617,6 +625,21 @@ def test_a_refusal_names_the_file_and_the_line_number_and_never_the_secret(
     assert _SECRET not in done.stdout, "the credential reached the terminal"
     assert f"{path} line {line}" in done.stderr
     assert shelllib.calls(tmp_path) == []
+
+
+def test_a_line_whose_name_is_not_a_name_is_refused_as_a_shape_not_a_value(tmp_path):
+    """Which of the two messages an operator gets. `${line%%=*}` on
+    `AWS SECRET=x` is `AWS SECRET`, which is not a variable name -- so the
+    problem is the line's shape and saying "the value of AWS SECRET is not
+    usable" would send the operator to look at the wrong half. The name is
+    only recovered when it passes the same closed set its value goes
+    through."""
+    path = _dns_file(tmp_path, "AWS SECRET=AKIAEXAMPLE\n")
+    done = shelllib.run(INSTALL, _required(tmp_path, dns_env_file=path),
+                        tmp_path=tmp_path, stubs=OUTSIDE)
+    assert done.returncode != 0
+    assert "expected NAME=VALUE" in done.stderr
+    assert "is not usable" not in done.stderr
 
 
 def test_a_refusal_may_name_the_variable_because_a_name_is_not_a_secret(tmp_path):
