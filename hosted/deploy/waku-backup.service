@@ -11,6 +11,15 @@
 # NO Restart= AND NO RemainAfterExit=. A backup that failed tonight is a
 # backup to look at, not one to run again in ten seconds against a staging
 # slot it may itself have wedged; the timer brings the next attempt.
+#
+# TimeoutStartSec BECAUSE systemd's DEFAULT FOR A ONESHOT IS INFINITY. Without
+# it a run that never returns -- an object store that black-holes a connection
+# rather than refusing it is the ordinary way -- holds the staging lock for
+# ever, and the lock is shared with restore.sh, so the next night's backup and
+# every later restore queue behind a unit nothing will ever end. Six hours is
+# chosen to sit above a legitimate whole-fleet backup (one tenant at a time, up
+# to 1 GB each) and far below the 24 hours until the timer fires again, so it
+# can only ever end a run that is stuck.
 
 [Unit]
 Description=waku nightly backup
@@ -19,4 +28,5 @@ Requires=docker.service
 
 [Service]
 Type=oneshot
+TimeoutStartSec=6h
 ExecStart=@WAKU_BACKUP@ --all

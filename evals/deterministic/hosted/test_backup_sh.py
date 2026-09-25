@@ -17,7 +17,9 @@ for a backup it then cannot send anywhere. Several tests below assert that no
 from __future__ import annotations
 
 import os
+import shutil
 import stat
+import time
 
 import pytest
 import shelllib
@@ -106,7 +108,42 @@ _WEDGED_FOR_ONE = f'''    if [ "$id" = "{OTHER}" ]; then
     fi
 ''' + _OK
 
-_STUBS = ["docker", "restic", "sqlite3", "flock", "find", "id"]
+_STUBS = ["docker", "restic", "sqlite3", "flock", "find", "id", "timeout"]
+
+# `find` RECORDS AND THEN DOES THE REAL WORK, by absolute path so it cannot
+# re-enter itself through the stub directory at the front of PATH.
+#
+# It used to be the plain recorder, and that is how the archive sweep came to
+# delete nothing for as long as it did: the only test of that line read the
+# FLAGS off the call log, so `-maxdepth 1` against a layout the spawner had
+# moved to depth 2 was pinned in place rather than caught. With the real find
+# behind it, a test can plant an archive and ask whether it is gone.
+#
+# The one host `find` backup.sh runs is the archive sweep. The `find /staging
+# -mindepth 1 -delete` in waku_reset_staging_slot runs INSIDE the repair
+# container, so it reaches the docker stub and not this one.
+# Resolved here rather than hardcoded: this file runs on a maintainer's macOS
+# laptop and on Ubuntu, and a missing `find` must read as "this machine cannot
+# run these tests" rather than as a sweep that deleted nothing.
+_REAL_FIND = shutil.which("find")
+assert _REAL_FIND, "no find(1) on PATH; the archive sweep cannot be exercised"
+
+_FIND = f"""#!/bin/sh
+printf '%s %s\\n' find "$*" >> "$WAKU_CALLS"
+exec {_REAL_FIND} "$@"
+"""
+
+# `timeout` records and then runs what it was given, dropping the duration.
+# WAKU_TIMEOUT_RC makes it answer as the real one does when the bound is hit:
+# coreutils `timeout` exits 124 and the command never finishes.
+_TIMEOUT = """#!/bin/sh
+printf '%s %s\\n' timeout "$*" >> "$WAKU_CALLS"
+if [ -n "${WAKU_TIMEOUT_RC:-}" ]; then
+  exit "$WAKU_TIMEOUT_RC"
+fi
+shift
+exec "$@"
+"""
 
 
 def _root(tmp_path, *, backup_env=None, install_env_extra="WAKU_SERVICES_IMAGE=waku-services:current\n",
@@ -152,7 +189,9 @@ def _bodies(admin=_OK, rows=_ONE_ROW, integrity="ok"):
             # flock's real job is taking a lock on fd 9; the stub records the
             # call and succeeds, so the ORDER can be asserted without the test
             # blocking on a lock it also holds.
-            "flock": '#!/bin/sh\nprintf "%s %s\\n" flock "$*" >> "$WAKU_CALLS"\nexit 0\n'}
+            "flock": '#!/bin/sh\nprintf "%s %s\\n" flock "$*" >> "$WAKU_CALLS"\nexit 0\n',
+            "find": _FIND,
+            "timeout": _TIMEOUT}
 
 
 def _run(tmp_path, args, env, **kwargs):
@@ -552,19 +591,131 @@ def test_the_control_slot_is_readable_only_by_root(tmp_path):
     assert stat.S_IMODE((root / "staging" / "control").stat().st_mode) == 0o700
 
 
-def test_archives_are_pruned_by_age_and_nothing_is_descended_into(tmp_path):
-    """The archive directory holds only the .tar.zst FILES the spawner writes
-    (spec, "archive on delete", 30 days). -maxdepth 1 -type f is what keeps a
-    prune from walking into anything."""
-    _, env = _root(tmp_path)
-    _run(tmp_path, ["--all"], env)
-    prune = next(line for line in shelllib.calls(tmp_path)
-                 if line.startswith("find") and "archive" in line)
-    assert "-maxdepth 1" in prune
-    assert "-type f" in prune
-    assert "-name *.tar.zst" in prune
-    assert "-mtime +30" in prune
-    assert "-delete" in prune
+# 40 days: comfortably past `-mtime +30` whatever the run's own clock does
+# between planting the file and sweeping it.
+_OLD_SECONDS = 40 * 24 * 60 * 60
+
+
+def _archive(root, tenant_id: str, name: str, *, age_seconds: int):
+    """One archive file where the spawner actually writes it.
+
+    `_archive` in hosted/spawner/docker.py builds
+    `_tenant_directory_under(archive_root, tenant_id) / f"{tenant_id}-{stamp}"`
+    and the container appends `-home.tar.zst` and `-env.tar.zst`, so a real
+    archive is at DEPTH 2 under the archive root. That depth is the whole of
+    this test.
+    """
+    path = root / "archive" / tenant_id / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"\x28\xb5\x2f\xfd")
+    when = time.time() - age_seconds
+    os.utime(path, (when, when))
+    return path
+
+
+def test_an_archive_older_than_thirty_days_is_removed(tmp_path):
+    """Spec, "archive on delete": kept 30 days and then removed by the backup
+    timer.
+
+    ASSERTED AS AN EFFECT, and that is the point of this test rather than an
+    incidental style. Its predecessor read the FLAGS of the `find` line off the
+    call log, so when group C moved the files from the archive root down into
+    `archive/<id>/` -- GC-1, because binding the shared root into a container
+    running tenant-owned code would have handed every tenant every other
+    tenant's archives -- `-maxdepth 1` went on passing while the sweep deleted
+    nothing at all. A deleted tenant's data was retained forever, and
+    hosted/README.md and tenant.sh both told the operator it was not.
+    """
+    root, env = _root(tmp_path)
+    old = _archive(root, TENANT, f"{TENANT}-20260101T000000Z-home.tar.zst",
+                   age_seconds=_OLD_SECONDS)
+    assert old.exists(), "the fixture did not plant anything to delete"
+    done = _run(tmp_path, ["--all"], env)
+    assert done.returncode == 0, done.stderr
+    assert not old.exists(), (
+        f"{old} survived the sweep. It is at the depth hosted/spawner/docker.py "
+        "writes to, so a sweep that cannot reach it deletes nothing, ever.")
+
+
+def test_an_archive_inside_thirty_days_survives(tmp_path):
+    """The other side, and without it the test above passes on a sweep that
+    deletes the archive directory wholesale. A tenant deleted this morning has
+    30 days in which somebody may ask for their data back."""
+    root, env = _root(tmp_path)
+    recent = _archive(root, OTHER, f"{OTHER}-20260925T031700Z-home.tar.zst",
+                      age_seconds=0)
+    done = _run(tmp_path, ["--all"], env)
+    assert done.returncode == 0, done.stderr
+    assert recent.exists(), "the sweep removed an archive inside its 30 days"
+
+
+def test_the_sweep_descends_no_further_than_the_spawner_writes(tmp_path):
+    """-maxdepth 2 is exactly the spawner's layout. A deeper walk would delete
+    out of whatever a future task puts under a tenant's archive directory, on a
+    path built from a tenant id, in a file called backup.sh."""
+    root, env = _root(tmp_path)
+    deeper = root / "archive" / TENANT / "nested" / "old.tar.zst"
+    deeper.parent.mkdir(parents=True)
+    deeper.write_bytes(b"\x28\xb5\x2f\xfd")
+    when = time.time() - _OLD_SECONDS
+    os.utime(deeper, (when, when))
+    done = _run(tmp_path, ["--all"], env)
+    assert done.returncode == 0, done.stderr
+    assert deeper.exists(), "the sweep walked deeper than the spawner writes"
+    # And the tenant's archive directory itself is not a candidate: `-type f`
+    # is what keeps a directory old enough to match from being removed.
+    assert (root / "archive" / TENANT).is_dir()
+
+
+def test_the_sweep_deletes_files_and_never_a_directory(tmp_path):
+    """`-type f`, and it needs a fixture of its own because no other one here
+    can reach it: the spawner's own names are files, and the tenant directories
+    the sweep walks past do not end in `.tar.zst`.
+
+    An operator does touch this tree -- the guide tells them to size it and to
+    copy archives elsewhere -- so a directory left behind by unpacking an
+    archive is an ordinary thing to find here.
+
+    THE DIRECTORY IS EMPTY, AND THAT IS WHAT MAKES THIS ABLE TO FAIL. The first
+    version of this test used a directory with a file in it, reasoning that
+    `find -delete` implies `-depth` and would fail with ENOTEMPTY. Measured on
+    both finds rather than reasoned about: GNU find, which Ubuntu 24.04 runs,
+    prints "Directory not empty" and exits 1 -- but BSD find, which is
+    /usr/bin/find on the macOS laptop THIS FILE RUNS ON, exits 0 and leaves the
+    directory silently. So on this host the non-empty fixture agreed with the
+    mutant on both of its assertions and the guard survived its deletion. An
+    EMPTY directory is removed by both finds, so its survival is the guard and
+    nothing else.
+
+    What the empty case proves is the whole of the guard: this line deletes
+    files. What the non-empty case would additionally cost on the VM, and is
+    not asserted here because this host cannot see it: `find` exits 1 at the
+    LAST line of the run, so `set -e` turns a night whose snapshots all
+    succeeded into a unit that reports failure, every night, for ever.
+    """
+    root, env = _root(tmp_path)
+    unpacked = root / "archive" / TENANT / f"{TENANT}-20260101T000000Z-home.tar.zst"
+    unpacked.mkdir(parents=True)
+    when = time.time() - _OLD_SECONDS
+    os.utime(unpacked, (when, when))
+
+    done = _run(tmp_path, ["--all"], env)
+    assert done.returncode == 0, done.stderr
+    assert "backup finished" in done.stdout
+    assert unpacked.is_dir(), (
+        "the sweep removed a directory. It deletes files; a directory here is "
+        "something an operator made, and rmdir is not this line's business.")
+
+
+def test_the_sweep_leaves_files_that_are_not_archives_alone(tmp_path):
+    """`-name '*.tar.zst'`. The archive root is the platform's own directory,
+    but it is one a future task could put a marker or a log in, and a sweep
+    that took everything old would take those too."""
+    root, env = _root(tmp_path)
+    other = _archive(root, TENANT, "notes.txt", age_seconds=_OLD_SECONDS)
+    done = _run(tmp_path, ["--all"], env)
+    assert done.returncode == 0, done.stderr
+    assert other.exists()
 
 
 def test_the_run_is_refused_when_it_is_not_root(tmp_path):
@@ -778,7 +929,7 @@ def test_a_repository_that_does_not_answer_stops_the_run_before_anything_is_stag
     _, env = _root(tmp_path)
     done = _run(tmp_path, ["--all"], {**env, "WAKU_REPO_EXISTS": "0"})
     assert done.returncode != 0
-    assert "cannot be opened" in done.stderr
+    assert "did not open" in done.stderr
     assert "backup.sh --init-repository" in done.stderr
     calls = shelllib.calls(tmp_path)
     assert _restic_writes(calls) == []
@@ -862,3 +1013,47 @@ def test_the_probe_runs_under_the_lock_and_before_the_first_database_copy(tmp_pa
     probe = calls.index(_PROBE)
     first_copy = next(i for i, line in enumerate(calls) if ".backup" in line)
     assert lock < probe < first_copy
+
+
+# --- the probe is bounded, and so is the unit that runs it --------------------
+
+
+def test_the_probe_is_bounded_rather_than_left_to_hang(tmp_path):
+    """It holds the staging lock while it runs, and an object store that
+    black-holes a connection never answers at all -- which is not the same as
+    refusing. Unbounded, that wedges the nightly unit with the lock in its
+    hand, and the lock is shared with restore.sh, so the next night's backup
+    and every later restore queue behind a run nothing will ever end."""
+    _, env = _root(tmp_path)
+    done = _run(tmp_path, ["--all"], env)
+    assert done.returncode == 0, done.stderr
+    bounded = [line for line in shelllib.calls(tmp_path)
+               if line.startswith("timeout ") and line.endswith("restic cat config")]
+    assert bounded, (
+        "the repository probe ran without a bound:\n"
+        + "\n".join(shelllib.calls(tmp_path)))
+
+
+def test_a_probe_that_hits_its_bound_is_a_refusal_and_not_a_backup(tmp_path):
+    """coreutils `timeout` exits 124 and the command never finished. The run
+    must end there with nothing staged, rather than carry on into a fleet walk
+    whose snapshots have nowhere to go."""
+    _, env = _root(tmp_path)
+    done = _run(tmp_path, ["--all"], {**env, "WAKU_TIMEOUT_RC": "124"})
+    assert done.returncode != 0
+    assert "did not open" in done.stderr
+    calls = shelllib.calls(tmp_path)
+    assert _restic_writes(calls) == []
+    assert not [line for line in calls if ".backup" in line]
+
+
+def test_init_is_bounded_too(tmp_path):
+    """--init-repository probes the same way and is run by a person at a
+    terminal, who can at least see it hang. Bounding it as well is what keeps
+    the two from disagreeing about what "does not answer" means."""
+    _, env = _root(tmp_path)
+    done = _run(tmp_path, ["--init-repository"],
+                {**env, "WAKU_REPO_EXISTS": "0"})
+    assert done.returncode == 0, done.stderr
+    assert [line for line in shelllib.calls(tmp_path)
+            if line.startswith("timeout ") and line.endswith("restic cat config")]

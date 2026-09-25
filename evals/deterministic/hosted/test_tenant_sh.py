@@ -250,6 +250,11 @@ def test_delete_names_the_archive_and_says_it_is_the_only_copy(tmp_path):
     assert f"{path}-home.tar.zst" in done.stdout
     assert f"{path}-env.tar.zst" in done.stdout
     assert "30 days" in done.stdout
+    # THE SENTENCE THIS TEST IS NAMED FOR. Without it the claim was asserted
+    # only by a SIBLING's negative (`"ONLY COPY" not in done.stdout` after a
+    # refusal), so deleting the sentence left every test here green and the
+    # sibling silently unable to fail for the reason it states.
+    assert "THAT IS THE ONLY COPY." in done.stdout
 
 
 def test_delete_says_nothing_about_an_archive_the_gateway_did_not_name(tmp_path):
@@ -277,7 +282,11 @@ def test_inspect_prints_the_tunnel_and_how_to_end_it(tmp_path):
                        '"port": 34567, "address": "127.0.0.1"}')
     assert done.returncode == 0, done.stderr
     assert "ssh -N -L 7777:127.0.0.1:34567" in done.stdout
-    assert f"tenant.sh inspect-stop {EMAIL}" in done.stdout
+    # THE COMMAND AS THE OPERATOR CAN RUN IT. `install.sh` puts nothing on
+    # PATH, so a bare `tenant.sh inspect-stop` is a line that does not work
+    # from the directory an operator is standing in -- and this one is printed
+    # at the moment a tenant has just been put into maintenance.
+    assert f"sudo {shelllib.DEPLOY}/tenant.sh inspect-stop {EMAIL}" in done.stdout
 
 
 @pytest.mark.parametrize("answer", [
@@ -296,7 +305,7 @@ def test_inspect_refuses_a_port_it_cannot_put_in_a_command(tmp_path, answer):
     done = _run(tmp_path, ["inspect", EMAIL], answer=answer)
     assert done.returncode != 0
     assert "did not name a usable port" in done.stderr
-    assert f"tenant.sh inspect-stop {EMAIL}" in done.stderr
+    assert f"sudo {shelllib.DEPLOY}/tenant.sh inspect-stop {EMAIL}" in done.stderr
     assert "ssh -N -L" not in done.stdout
 
 

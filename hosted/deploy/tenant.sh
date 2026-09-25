@@ -178,7 +178,7 @@ if [ "$verb" = inspect ]; then
   ( LC_ALL=C
     case "$port" in ""|0*) exit 1 ;; esac
     [ "$port" -le 65535 ] ) \
-    || waku_die "the gateway did not name a usable port for the inspect dashboard. Its answer is on the line above; the container may not have been published. Stop it with: tenant.sh inspect-stop $who"
+    || waku_die "the gateway did not name a usable port for the inspect dashboard. Its answer is on the line above; the container may not have been published. Stop it with: sudo $here/tenant.sh inspect-stop $who"
   cat <<EOF
 
 The inspect dashboard is on this VM's loopback only. From your laptop:
@@ -189,6 +189,6 @@ then open http://127.0.0.1:7777
 
 The tenant stays in maintenance -- their own container will not start -- until:
 
-  tenant.sh inspect-stop $who
+  sudo $here/tenant.sh inspect-stop $who
 EOF
 fi

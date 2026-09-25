@@ -89,7 +89,7 @@ if [ "$mode" = in ]; then
 
 Restored. Before moving DNS:
 
-  1. tenant.sh status          -- the gateway answers
+  1. sudo $here/tenant.sh status     -- the gateway answers
   2. Sign in as one existing tenant and confirm they land on the same tenant id
      with their own data (spec, acceptance 17).
   3. Then move the apex and the wildcard records to this VM.
@@ -190,7 +190,7 @@ On the NEW VM, in this order:
        --restic-repository         $restic_repository
        --restic-password-file      $restic_password_file
        --data-device               <the NEW VM's disk, not this one's>
-  4. migrate.sh --in
+  4. sudo $here/migrate.sh --in
   5. Point the apex and the wildcard DNS records at the new VM. Only then: the
      certificate is issued by DNS-01, so the new VM can hold it before any
      traffic moves.

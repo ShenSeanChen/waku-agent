@@ -130,6 +130,32 @@ def test_the_backup_units_execstart_is_a_placeholder_and_not_a_path():
     assert "Restart" not in unit["Service"]
 
 
+def test_the_backup_unit_bounds_how_long_a_run_may_hold_the_staging_lock():
+    """systemd's DEFAULT TimeoutStartSec FOR A ONESHOT IS INFINITY, and that is
+    the whole reason this assertion exists rather than being left to the
+    default. backup.sh takes the staging flock and then talks to an object
+    store; a store that black-holes a connection rather than refusing it never
+    answers, so an unbounded run holds that lock for ever. The lock is shared
+    with restore.sh, so the next night's backup and every later restore queue
+    behind a unit nothing will ever end.
+
+    A CLOSED SET WITH DEFAULT-DENY over what systemd reads as "no bound", not
+    an equality against the number in the file: `infinity`, `0` and the empty
+    value all mean never, and a plain integer is seconds. The value's SIZE is a
+    judgement (above a whole-fleet backup, below the 24 hours to the next
+    timer) and is argued in the unit's own comment; what a test can hold is
+    that a bound exists at all.
+    """
+    unit = configparser.ConfigParser(strict=False, allow_no_value=True)
+    unit.optionxform = str
+    unit.read(shelllib.DEPLOY / "waku-backup.service")
+    bound = unit["Service"].get("TimeoutStartSec", "")
+    assert bound, (
+        "waku-backup.service sets no TimeoutStartSec, so systemd will wait for "
+        "ever on a run holding the staging lock")
+    assert bound.strip().lower() not in ("infinity", "0", "0s"), bound
+
+
 def test_a_vm_that_was_off_at_the_backup_hour_backs_up_when_it_returns():
     """A DRIFT CHECK on a declarative file. Without Persistent=true a VM that
     was powered down at 03:17 simply skips that night, and the operator's

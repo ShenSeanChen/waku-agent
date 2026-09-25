@@ -70,12 +70,19 @@ either.
 ```bash
 sudo mkfs.xfs -q /dev/nvme1n1
 sudo mkdir -p /srv/waku
-echo '/dev/nvme1n1 /srv/waku xfs defaults,prjquota 0 2' | sudo tee -a /etc/fstab
+# BY UUID, NOT BY DEVICE NODE. Several providers renumber NVMe devices across a
+# reboot, and /etc/fstab naming a node that moved is a VM that boots with
+# /srv/waku missing and every tenant's data unreachable.
+echo "UUID=$(sudo blkid -s UUID -o value /dev/nvme1n1) /srv/waku xfs defaults,prjquota 0 2" \
+  | sudo tee -a /etc/fstab
 sudo mount /srv/waku
 # Mounted is not enforcing. A filesystem without prjquota accepts every
 # xfs_quota command and enforces none of them.
 sudo xfs_quota -x -c 'state -p' /srv/waku | grep 'Enforcement: ON'
 ```
+
+`--data-device` still takes the device node, `/dev/nvme1n1`: the spawner runs
+`xfs_quota` against the block device, not against a mount point.
 
 ### 3. The checkout
 
@@ -84,7 +91,16 @@ two libraries and nothing else; the services are built from a git checkout.
 
 ```bash
 sudo git clone https://github.com/ShenSeanChen/waku-agent /srv/waku/src
+sudo git -C /srv/waku/src checkout main
 ```
+
+**Pick the ref deliberately.** A deployment sits on whatever commit is checked
+out here, and `upgrade.sh` moves it: with no `--ref` it fetches `origin/main`,
+and `upgrade.sh --ref v0.4.0` pins a tag. Installing from `main` means
+installing whatever landed today; installing from a tag means choosing when to
+move. Either is fine, and the one that is not fine is not knowing which you
+did. `install.sh` records the commit it built from in
+`/srv/waku/config/install.env` as `WAKU_INSTALLED_COMMIT`.
 
 ### 4. DNS, TLS, and the Caddy you may already be running
 
@@ -138,17 +154,39 @@ output for the whole install, and the installer can clean up neither.
 | The DNS provider's API token, as `NAME=VALUE` lines | `--dns-env-file` | Copied into `/srv/waku/config/caddy.env` at mode 0600. Delete the source file afterwards |
 | The restic repository's password | `--restic-password-file` | **Not copied.** `config/backup.env` names the path, and restic opens the file every night |
 
-`--dns-env NAME=VALUE` exists for the **non-secret** variables a module needs,
-such as `AWS_REGION`, and is repeatable. Do not put a token there: it stays in
-root's shell history and in `ps` output for the whole install.
-
-Write the restic password before you install, because `install.sh` reads it as
-part of its argument checks and refuses an unreadable or empty file:
+Write all three before you install. `install.sh` reads each one as part of its
+argument checks and refuses a file that is missing, unreadable, empty, or that
+holds anything but the value: one line, no spaces, no blank line before it, and
+no carriage return.
 
 ```bash
 sudo mkdir -p -m 0700 /srv/waku/config
+
+# The platform's model key: the value on one line and nothing else.
+sudo sh -c 'umask 077; printf %s "sk-ant-..." >/root/platform-key'
+
+# The DNS provider's credentials, as the caddy-dns module reads them from the
+# environment. These are route53's names; deploy/caddy.env.example carries them
+# and the cloudflare shape beside them.
+sudo sh -c 'umask 077; cat >/root/route53-credentials' <<'EOF'
+AWS_ACCESS_KEY_ID=AKIA...
+AWS_SECRET_ACCESS_KEY=...
+EOF
+
+# The restic repository's password. Generated rather than chosen: nothing ever
+# types it.
 sudo sh -c 'umask 077; head -c 32 /dev/urandom | base64 >/srv/waku/config/restic-password'
 ```
+
+**Which variables the DNS file needs depends on your module.** Each caddy-dns
+module reads its own; `route53` takes the two AWS names above, `cloudflare`
+takes `CLOUDFLARE_API_TOKEN`, and
+[deploy/caddy.env.example](deploy/caddy.env.example) shows both shapes. Look up
+your module under [caddy-dns](https://github.com/caddy-dns) for the rest.
+
+`--dns-env NAME=VALUE` exists for the **non-secret** variables a module needs,
+such as `AWS_REGION`, and is repeatable. Do not put a token there: it stays in
+root's shell history and in `ps` output for the whole install.
 
 **Keep a copy of that password somewhere that is not this VM.** It is the only
 one of the three that cannot be recovered from the VM's own config, and it is
@@ -195,8 +233,11 @@ sudo /srv/waku/src/hosted/deploy/install.sh agent.waku.one \
 ```
 
 It refuses, with a readable message, when the VM is not Ubuntu 24.04, when
-`/srv/waku` is not XFS with project quotas enforcing, when the Supabase project
-signs with a shared secret, and when the project has open signup.
+`/srv/waku` is not XFS mounted with `prjquota`, when either of ports 80 and 443
+is held by something that is not this deployment's own Caddy, when the Supabase
+project signs with a shared secret, and when the project has open signup. It
+reads the mount OPTION and not the enforcement state, which is why step 2 runs
+`xfs_quota -x -c 'state -p'` itself.
 
 It is **idempotent and never overwrites a config file**. A rerun says which
 files it kept. To change a value, edit the file under `/srv/waku/config/` and
@@ -254,27 +295,33 @@ This is why the VM must carry no instance role.
 ## Operating it
 
 Every script lives in `/srv/waku/src/hosted/deploy/` and runs as root.
+`install.sh` puts nothing on `PATH`, so either use the full path or put the
+directory on yours for the session:
 
 ```bash
-tenant.sh status                      # who has a container running
-tenant.sh disable mei@example.com     # status, sessions, token, container
-tenant.sh enable  mei@example.com
-tenant.sh delete  mei@example.com     # archives the tree, then removes the row
-tenant.sh inspect mei@example.com     # a stock dashboard on their stopped data
-tenant.sh inspect-stop mei@example.com
+export PATH=/srv/waku/src/hosted/deploy:$PATH   # or type the full path below
+```
 
-upgrade.sh                            # fetch, rebuild, restart the services
-upgrade.sh --now                      # and restart every running tenant too
+```bash
+sudo tenant.sh status                 # who has a container running
+sudo tenant.sh disable mei@example.com # status, sessions, token, container
+sudo tenant.sh enable  mei@example.com
+sudo tenant.sh delete  mei@example.com # archives the tree, removes the row
+sudo tenant.sh inspect mei@example.com # a stock dashboard on their stopped data
+sudo tenant.sh inspect-stop mei@example.com
 
-backup.sh --all                       # what the nightly timer runs
-backup.sh --init-repository           # once, before the first backup
-backup.sh --snapshot-staged <id>      # send a slot restic never received
-backup.sh --reset-staging <id>        # empty a wedged staging slot
-restore.sh --tenant mei@example.com   # one tenant, from the latest snapshot
-restore.sh --all                      # the whole system, onto this VM
+sudo upgrade.sh                       # fetch, rebuild, restart the services
+sudo upgrade.sh --now                 # and restart every running tenant too
 
-migrate.sh --out                      # on the old VM
-migrate.sh --in                       # on the new one
+sudo backup.sh --all                  # what the nightly timer runs
+sudo backup.sh --init-repository      # once, before the first backup
+sudo backup.sh --snapshot-staged <id> # send a slot restic never received
+sudo backup.sh --reset-staging <id>   # empty a wedged staging slot
+sudo restore.sh --tenant mei@example.com # one tenant, from the latest snapshot
+sudo restore.sh --all                 # the whole system, onto this VM
+
+sudo migrate.sh --out                 # on the old VM
+sudo migrate.sh --in                  # on the new one
 ```
 
 `tenant.sh` takes a tenant id or an email address, and nothing else. It runs
@@ -297,11 +344,31 @@ assistant away and left no sign of why.
 
 ### Deleting a tenant
 
-`tenant.sh delete` archives the tenant's two directories under
-`/srv/waku/archive/<id>/` and prints the two file names. **That archive is the
-only copy.** Archives are in no restic snapshot, and the nightly timer deletes
-them after 30 days, so the archive is a grace period rather than a backup. Copy
-the two files somewhere else if the person may ask for their data back.
+`tenant.sh delete` sets the status, ends the sessions, revokes the token, stops
+the container, archives the tenant's two directories under
+`/srv/waku/archive/<id>/`, and removes the row. It prints the two archive file
+names.
+
+**That archive is the only copy anything keeps.** Archives are in no restic
+snapshot, and the nightly timer deletes them after 30 days. A deleted tenant is
+also dropped from every later backup, because `backup.sh` walks the rows whose
+status is `active` or `disabled`. So the archive is a grace period rather than
+a backup: copy the two files somewhere else if the person may ask for their
+data back.
+
+**`delete` frees no disk today**, and an operator deleting a tenant to reclaim
+space needs to know that before they do it. The live tree stays at
+`/srv/waku/tenants/<id>` with its XFS project id, indefinitely; removing it is
+task C of spec 001 and is not written. Until that lands, deleting a tenant
+roughly doubles what they occupy rather than releasing it, because the archive
+sits beside the tree rather than replacing it. Remove the tree by hand once you
+are sure, checking first that nothing of theirs is running:
+
+```bash
+sudo tenant.sh status                                  # their id must not appear
+sudo du -sh /srv/waku/tenants/<id> /srv/waku/archive/<id>
+sudo rm -rf /srv/waku/tenants/<id>                     # the archive stays
+```
 
 `delete` refuses while an inspect container is still running for that tenant,
 because the archive it would take is that tenant's only copy and a database
@@ -321,7 +388,11 @@ cannot be told from an empty tenant by looking.
 
 `backup.sh` and `restore.sh` share one `flock` on the staging directory, so a
 backup and a restore never run at once. List what is in the repository with
-`restic snapshots`, using the environment from `/srv/waku/config/backup.env`.
+restic's own environment, which is exactly what `config/backup.env` holds:
+
+```bash
+sudo sh -c 'set -a; . /srv/waku/config/backup.env; set +a; restic snapshots'
+```
 
 ### Restoring
 
@@ -397,8 +468,19 @@ you still have the old VM.
   run/        the four unix sockets the services talk over
 ```
 
-Read the logs with `docker compose -p waku logs gateway`, and the same for
-`proxy`, `spawner` and `caddy`.
+Read the logs with the same invocation every script here uses, which works from
+any directory:
+
+```bash
+sudo docker compose --env-file /srv/waku/config/install.env \
+  -f /srv/waku/src/hosted/deploy/compose.yaml --project-name waku \
+  logs gateway
+```
+
+The same for `proxy`, `spawner` and `caddy`. `docker compose -p waku logs
+gateway` also works while the project is running, because Compose v2 recovers
+the project from the containers' own labels, but it has nothing to fall back on
+once they are stopped.
 
 The design behind all of this is [../docs/architecture.md](../docs/architecture.md)
 for local waku, and the comments in [deploy/](deploy/) for the deployment.

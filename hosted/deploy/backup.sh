@@ -122,7 +122,7 @@ waku_load_backup_env "$WAKU_ROOT/config/backup.env" RESTIC_REPOSITORY RESTIC_PAS
 # at once is restic's own refusal rather than a race this script has to hold a
 # lock against.
 if [ "$mode" = init ]; then
-  if restic cat config >/dev/null 2>&1; then
+  if timeout 60 restic cat config >/dev/null 2>&1; then
     waku_log "the restic repository at $RESTIC_REPOSITORY already exists; nothing to do"
     exit 0
   fi
@@ -139,12 +139,16 @@ waku_flock_staging
 # missing a file", and the refusal has to land before a slot is emptied. Taking
 # the lock empties nothing, so the two names above -- which are read out of a
 # FILE and cost nothing -- stay above it and this one, which is a network round
-# trip, sits below it. The cost of that choice, said out loud: a repository
-# whose address hangs rather than refuses holds the lock while it hangs. That
-# is not a new class of failure, because `restic backup` holds the same lock
-# across the same network for the whole of every run.
-restic cat config >/dev/null 2>&1 \
-  || waku_die "the restic repository at $RESTIC_REPOSITORY cannot be opened, so this backup has nowhere to go and nothing has been staged. If this deployment has never backed up, create the repository once with: backup.sh --init-repository . If it has, then the repository address, the password file or the object store credentials in $WAKU_ROOT/config/backup.env no longer reach it -- and the snapshots already there are not lost, they are unreachable from this VM."
+# trip, sits below it.
+#
+# BOUNDED, because it holds the staging lock while it runs and an object store
+# that black-holes a connection never answers at all. This is the same class of
+# failure as `restic backup`'s own, one step earlier; nothing bounded either
+# until now, and the unit that runs both carries a TimeoutStartSec for the rest
+# of it. `timeout` is coreutils, which Ubuntu 24.04 ships as an essential
+# package, so this adds no dependency to install.
+timeout 60 restic cat config >/dev/null 2>&1 \
+  || waku_die "the restic repository at $RESTIC_REPOSITORY did not open, within a 60 second bound, so this backup has nowhere to go and nothing has been staged. If this deployment has never backed up, create the repository once with: backup.sh --init-repository . If it has, then the repository address, the password file or the object store credentials in $WAKU_ROOT/config/backup.env no longer reach it -- and the snapshots already there are not lost, they are unreachable from this VM."
 
 failures=""
 
@@ -321,9 +325,22 @@ EOF
 waku_log "pruning: 7 daily, 4 weekly, per host and tag"
 restic forget --group-by host,tags --keep-daily 7 --keep-weekly 4 --prune
 
-# Archives older than 30 days (spec, "archive on delete"). -maxdepth 1 -type f:
-# the archive directory holds only .tar.zst FILES, written by the spawner, so
-# this deletes files and never descends into anything.
+# Archives older than 30 days (spec, "archive on delete").
+#
+# -maxdepth 2, AND THE 2 IS THE WHOLE OF THIS COMMENT'S HISTORY. It was 1, and
+# at depth 1 this line deleted nothing at all: `_archive` writes
+# <archive_root>/<tenant id>/<id>-<stamp>-home.tar.zst, one level down, and
+# `-type f` excludes the tenant directories that are all depth 1 holds. The
+# files moved there in group C (GC-1): binding the SHARED archive root into a
+# container running tenant-owned code would have handed every tenant every
+# other tenant's archives, so each tenant got their own directory -- and
+# nothing came back to this line. The sweep silently retained every deleted
+# tenant forever while hosted/README.md and tenant.sh both told the operator it
+# did not.
+#
+# 2 AND NOT -maxdepth OMITTED: two is exactly the spawner's layout, and a
+# deeper walk would descend into whatever a future task puts under a tenant's
+# archive directory. `-type f` still keeps the directories themselves.
 #
 # ARCHIVES ARE IN NO SNAPSHOT, SAID HERE BECAUSE THIS IS THE LINE THAT DELETES
 # THEM. restic is given $staging/control and one $staging/<tenant> at a time
@@ -332,7 +349,7 @@ restic forget --group-by host,tags --keep-daily 7 --keep-weekly 4 --prune
 # period, not a backup, and a reader who finds a `find -delete` in a file
 # called backup.sh should not have to infer which one it is.
 waku_log "removing archives older than 30 days"
-find "$WAKU_ROOT/archive" -maxdepth 1 -type f -name '*.tar.zst' -mtime +30 -delete
+find "$WAKU_ROOT/archive" -maxdepth 2 -type f -name '*.tar.zst' -mtime +30 -delete
 
 [ -z "$failures" ] || waku_die "these tenants were not backed up:$failures"
 waku_log "backup finished"

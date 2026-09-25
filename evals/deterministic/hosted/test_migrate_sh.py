@@ -224,13 +224,29 @@ def test_in_restores_everything_and_passes_the_snapshot_through(tmp_path):
     assert [line for line in calls if line.startswith("backup.sh")] == []
 
 
+def test_out_names_migrate_sh_by_the_path_it_was_run_from(tmp_path):
+    """Step 4 of the printed instructions is a command on the NEW VM, and
+    `install.sh` creates no symlink into any directory on PATH. A bare
+    `migrate.sh --in` is a line that does not work from wherever the operator
+    is standing."""
+    deploy, env = _deploy(tmp_path)
+    done = shelllib.run(deploy / "migrate.sh", ["--out"], tmp_path=tmp_path,
+                        env=env, stubs=["docker", "id"],
+                        bodies={"docker": _DOCKER, "id": _ROOT})
+    assert done.returncode == 0, done.stderr
+    assert f"sudo {deploy}/migrate.sh --in" in done.stdout
+
+
 def test_in_tells_the_operator_to_move_dns_last(tmp_path):
     """The certificate is issued by DNS-01, so the new VM holds it before any
     traffic moves. An operator who moves the records first takes the platform
     down for as long as the challenge takes."""
+    deploy = tmp_path / "deploy"
     done = _run(tmp_path, ["--in"])
     assert done.returncode == 0, done.stderr
-    assert "tenant.sh status" in done.stdout
+    # The full path, because install.sh puts nothing on PATH and this is a
+    # line the operator runs on a machine they have just built.
+    assert f"sudo {deploy}/tenant.sh status" in done.stdout
     assert "Then move the apex and the wildcard records to this VM." in done.stdout
 
 
