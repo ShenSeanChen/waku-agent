@@ -85,21 +85,11 @@ usage: install.sh <domain> --dns-provider NAME --acme-email ADDRESS
 USAGE
 }
 
-# A flag that takes a value, given without one, used to die on bash's own
-# `$2: unbound variable`. It was a refusal and it ran nothing, but it is the
-# one message in this file that does not read like the others. The flags that
-# take a value are listed once, as a closed set, and checked before the arm
-# that would expand $2.
-needs_value() {
-  local remaining
-  remaining=$2
-  case "$1" in
-    --dns-provider|--dns-module-version|--acme-email|--data-device|--free-model \
-    |--platform-key-file|--dns-env-file|--supabase-url|--supabase-publishable-key \
-    |--supabase-audience|--max-running|--tenant-disk|--dns-allow|--root|--dns-env)
-      [ "$remaining" -ge 2 ] || { usage >&2; waku_die "$1 needs a value"; } ;;
-  esac
-}
+# The flags that take a value, given without one, used to die on bash's own
+# `$2: unbound variable` -- a refusal that ran nothing, but the one message in
+# this file that did not read like the others. waku_needs_value (lib.sh) now
+# owns the count check; the closed set of flag names and the message stay
+# here, because the message and the usage text are this script's own.
 
 # A file that must be a credential file and not a binary one.
 #
@@ -203,7 +193,11 @@ refuse_unprintable() {
 # not. The first non-flag argument is the domain, and a second one is an error
 # for the same reason.
 while [ $# -gt 0 ]; do
-  needs_value "$1" "$#"
+  waku_needs_value "$1" "$#" \
+    --dns-provider --dns-module-version --acme-email --data-device --free-model \
+    --platform-key-file --dns-env-file --supabase-url --supabase-publishable-key \
+    --supabase-audience --max-running --tenant-disk --dns-allow --root --dns-env \
+    || { usage >&2; waku_die "$1 needs a value"; }
   case "$1" in
     --dns-provider)             dns_provider=$2; shift 2 ;;
     --dns-module-version)       dns_module_version=$2; shift 2 ;;

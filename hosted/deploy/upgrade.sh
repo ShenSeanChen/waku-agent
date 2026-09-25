@@ -19,8 +19,22 @@ here=$(cd "$(dirname "$0")" && pwd)
 ref=""
 now=no
 while [ $# -gt 0 ]; do
+  # waku_needs_value (lib.sh) catches --ref given with nothing after it --
+  # before anything here expands $2 and dies on bash's own `$2: unbound
+  # variable` instead.
+  waku_needs_value "$1" "$#" --ref \
+    || waku_die "$1 needs a value (usage: upgrade.sh [--ref <git ref>] [--now])"
   case "$1" in
-    --ref) ref=$2; shift 2 ;;
+    --ref)
+      # AND EMPTY IS REFUSED TOO, separately: waku_needs_value only counts
+      # arguments, so `--ref ""` has two of them and passes that check, then
+      # `${ref:-origin/main}` below treats an EMPTY ref the same as an unset
+      # one -- silently upgrading to origin/main and exiting 0 having ignored
+      # what was typed. `--ref <ref>` is half this script's interface and the
+      # whole of the rollback advice a failed upgrade gives; it does not fail
+      # open.
+      [ -n "$2" ] || waku_die "--ref needs a value (usage: upgrade.sh [--ref <git ref>] [--now])"
+      ref=$2; shift 2 ;;
     --now) now=yes; shift ;;
     -h|--help) echo "usage: upgrade.sh [--ref <git ref>] [--now]"; exit 0 ;;
     *) waku_die "unknown argument: $1 (usage: upgrade.sh [--ref <git ref>] [--now])" ;;
@@ -28,12 +42,29 @@ while [ $# -gt 0 ]; do
 done
 
 waku_require_root
-waku_load_install_env
+waku_load_install_env WAKU_TENANT_IMAGE WAKU_SERVICES_IMAGE WAKU_CADDY_IMAGE \
+                      WAKU_DNS_PROVIDER WAKU_GATEWAY_ADDRESS
+
+# CURL IS CHECKED HERE, before anything is fetched or rebuilt, not left to
+# fail 60 seconds into the readiness loop below with a message that blames the
+# gateway for a missing binary.
+command -v curl >/dev/null 2>&1 \
+  || waku_die "curl is not on PATH. upgrade.sh needs it to confirm the gateway is answering before it returns; install it and rerun."
 
 # A DIRTY CHECKOUT IS A REFUSAL. Upgrading over local edits either throws them
 # away or fails halfway with the tree in a state nobody can name, and this
 # checkout is what every service's image is built from.
-if [ -n "$(git -C "$WAKU_SRC" status --porcelain)" ]; then
+#
+# READS GIT'S STATUS, NOT ONLY ITS OUTPUT: `git status --porcelain` failing --
+# no repository there, dubious ownership -- prints to stderr and nothing to
+# stdout, so a guard that only tested `[ -n "$(...)" ]` would see an empty
+# string and fall through to the checkout. `set -e` happens to catch that one
+# line later, at `before=$(git rev-parse HEAD)`, before anything irreversible
+# runs -- but a guard whose safety depends on the next line is a guard that
+# fails open, not one that refuses by name.
+porcelain=$(git -C "$WAKU_SRC" status --porcelain) \
+  || waku_die "$WAKU_SRC does not look like a usable git checkout: git status failed there. This checkout is what every image is built from."
+if [ -n "$porcelain" ]; then
   waku_die "$WAKU_SRC has uncommitted changes. Commit or discard them; this checkout is what the images are built from."
 fi
 

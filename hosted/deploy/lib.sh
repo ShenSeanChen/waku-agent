@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # The shared shell for every operator script. Sourced, never run.
 #
-# SEVEN FUNCTIONS AND NO MORE. Six of them exist because two scripts need them;
-# a helper with one caller belongs in that caller, where a reader can see what
-# it does without opening a second file.
+# EIGHT FUNCTIONS AND NO MORE. Seven of them exist because two or more scripts
+# need them; a helper with one caller belongs in that caller, where a reader
+# can see what it does without opening a second file.
 #
-# waku_write_config is the seventh and it has one caller. It is here anyway,
+# waku_write_config is the eighth and it has one caller. It is here anyway,
 # and for a reason worth writing down: it lived inside install.sh, where no
 # test in any tier could reach it, and it is the SOLE implementation of the
 # spec's "a rerun never overwrites existing config" as well as the function
@@ -29,9 +29,57 @@ waku_require_root() {
   [ "$(id -u)" = 0 ] || waku_die "run this as root: it creates directories owned by three different users, loads an env_file only root can read, and talks to the Docker socket"
 }
 
+# A flag that takes a value, given without one, used to die on bash's own
+# `$2: unbound variable` -- a refusal that ran nothing, but the one message in
+# whichever script hit it that did not read like the others. Moved here from
+# install.sh because upgrade.sh needed the same check for --ref, and F3 and F4
+# add four more argument parsers between them.
+#
+# $1 is the flag under consideration, $2 is the caller's $# AT THE POINT OF
+# THE CALL (so "at least 2 left" means the flag and its value are both still
+# on the line), and every argument after that is one flag name that takes a
+# value -- the caller's own closed set. NEVER DIES ITSELF: it returns 1 so the
+# caller keeps its own message and its own usage text, and returns 0 both when
+# the flag is not one that takes a value and when enough remains for it.
+waku_needs_value() {
+  local flag remaining name
+  flag=$1
+  remaining=$2
+  shift 2
+  for name in "$@"; do
+    if [ "$flag" = "$name" ]; then
+      [ "$remaining" -ge 2 ]
+      return
+    fi
+  done
+  return 0
+}
+
 # WAKU_INSTALL_ENV is an override for the tests, which have no /srv/waku. The
 # default is the one install.sh writes.
+#
+# THE FOUR NAMES BELOW ARE EVERY CALLER'S; ANYTHING ELSE IS THE CALLER'S TO
+# NAME. install.sh only ever needed WAKU_ROOT, WAKU_SRC, WAKU_COMPOSE and
+# WAKU_DOMAIN, so those four were the whole list -- and a second consumer that
+# reads a fifth name from install.env got no check at all: it died on bash's
+# own `set -u` message, sometimes well past the point of no return, or --
+# through `waku_compose`'s --env-file, where a missing name is a WARNING and a
+# BLANK, not an error -- it did not die at all. Found by upgrade.sh (spec 001
+# task F2) missing WAKU_GATEWAY_ADDRESS.
+#
+# THE FIX IS A CALLER-SUPPLIED LIST, NOT A FIXED SUPERSET. A fixed list of
+# every name every script might ever read would make backup.sh refuse to start
+# over WAKU_CADDY_IMAGE, which it never touches, and it would need editing
+# every time any script grows a dereference. The list-as-argument puts the
+# contract at the call site, on the same line a `git diff` shows, so a script
+# that forgets to declare a name it reads is the thing future review has to
+# catch -- not a thing this function can catch for it.
+#
+# `:?` REFUSES EMPTY AS WELL AS UNSET, which matters here: `--data-device ""`
+# or a truncated install.env produce an empty value, not an absent one, and a
+# `[ -z ]` alternative would let that through.
 waku_load_install_env() {
+  local name
   WAKU_INSTALL_ENV=${WAKU_INSTALL_ENV:-/srv/waku/config/install.env}
   [ -r "$WAKU_INSTALL_ENV" ] || waku_die "$WAKU_INSTALL_ENV is not readable. Run install.sh first, and run this as root."
   # shellcheck disable=SC1090
@@ -40,6 +88,9 @@ waku_load_install_env() {
   : "${WAKU_SRC:?install.env is missing WAKU_SRC}"
   : "${WAKU_COMPOSE:?install.env is missing WAKU_COMPOSE}"
   : "${WAKU_DOMAIN:?install.env is missing WAKU_DOMAIN}"
+  for name in "$@"; do
+    eval ": \"\${$name:?install.env is missing $name. It was added to install.sh after this VM was installed, and install.env is never rewritten on a rerun -- add the line by hand and rerun.}\""
+  done
 }
 
 # --env-file is what makes ${WAKU_ROOT} and the image tags resolve inside
