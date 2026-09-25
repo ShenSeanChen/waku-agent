@@ -179,7 +179,8 @@ def _dechunk(raw: bytes) -> bytes:
 
 
 async def send_raw(port: int, method: str, target: str, host: str, *,
-                   body: bytes | None = None, headers: dict | None = None,
+                   body: bytes | None = None,
+                   headers: dict | list | tuple | None = None,
                    cookie: str | None = None) -> tuple[int, dict, bytes]:
     """One request, written to the socket by hand.
 
@@ -191,7 +192,11 @@ async def send_raw(port: int, method: str, target: str, host: str, *,
     it from here rather than carrying a second copy.
     """
     lines = [f"{method} {target} HTTP/1.1", f"Host: {host}", "Connection: close"]
-    for name, value in (headers or {}).items():
+    # A dict OR a sequence of pairs. The pairs are how a test sends the SAME
+    # header twice -- `Sec-Fetch-Site` in front of `Sec-Fetch-Site` is a real
+    # shape on the wire and a dict cannot express it.
+    pairs = headers.items() if isinstance(headers, dict) else (headers or ())
+    for name, value in pairs:
         lines.append(f"{name}: {value}")
     if cookie:
         lines.append(f"Cookie: {cookie}")
@@ -314,7 +319,8 @@ class Harness:
         self.store.close()
 
     async def send(self, method: str, target: str, *, host: str,
-                   body: bytes | None = None, headers: dict | None = None,
+                   body: bytes | None = None,
+                   headers: dict | list | tuple | None = None,
                    cookie: str | None = None) -> tuple[int, dict, bytes]:
         return await send_raw(self.port, method, target, host, body=body,
                               headers=headers, cookie=cookie)

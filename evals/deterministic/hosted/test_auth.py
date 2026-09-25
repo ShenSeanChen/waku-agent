@@ -40,7 +40,6 @@ from gatewaylib import (
 
 from hosted.gateway import admin
 from hosted.gateway.identity import JwksVerifier, NotSignedIn
-from hosted.gateway.launch import DISABLED_MESSAGE
 from hosted.gateway.spawner_client import SpawnerError
 
 
@@ -260,7 +259,7 @@ def test_a_disabled_tenant_is_refused_at_once_on_both_hosts(harness):
     assert before == 200
     assert after == 401
     assert relogin == 403
-    assert relogin_body["error"] == DISABLED_MESSAGE
+    assert relogin_body["error"] == "This account is disabled."
     # One start: the sign-in's pre-warm. Nothing after the disable.
     assert len(ops(harness.spawner, "start")) == 1
     assert ops(harness.spawner, "stop") == [{"op": "stop", "tenant_id": tenant_id}]

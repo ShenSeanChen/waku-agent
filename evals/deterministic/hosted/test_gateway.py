@@ -21,8 +21,6 @@ from gatewaylib import (
     signed_in_on_the_tenant_host,
 )
 
-from hosted.core import policy
-from hosted.gateway import answers
 from hosted.gateway.config import REQUIRED_ENV_NAMES
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -248,19 +246,49 @@ def test_a_non_canonical_path_is_refused_before_anything_else(harness, target):
     apex, tenant = asyncio.run(run())
     assert apex[0] == 400
     assert tenant[0] == 400
-    assert json.loads(apex[2])["error"] == policy.BAD_PATH
+    # The sentence as a literal. Compared to `policy.BAD_PATH` it held for
+    # every value of that constant, "moved" included, and said nothing
+    # about what the person reading the 400 is shown.
+    assert json.loads(apex[2])["error"] == (
+        "That is not a path this dashboard serves.")
 
 
 @pytest.mark.parametrize("host", ["agent.waku.one", "zzzzzzzzzzzz.agent.waku.one"])
-def test_a_service_worker_request_is_refused_on_both_hosts(harness, host):
+@pytest.mark.parametrize("value", ["script", "Script", "SCRIPT", " script ",
+                                   "worker", ""])
+def test_a_service_worker_request_is_refused_on_both_hosts(harness, host, value):
+    """However the header is spelled, and whatever it says.
+
+    Written as `== "script"`, `Service-Worker: Script` was answered 200 on a
+    tenant host while `script` was refused. Case-folding alone would have
+    left the shape -- a value nobody listed admitted by default -- so what is
+    refused is the header, which is defined for one purpose and which no
+    other client has a reason to send.
+    """
     async def run():
         await harness.start()
         answer = await harness.send("GET", "/", host=host,
-                                    headers={"Service-Worker": "script"})
+                                    headers={"Service-Worker": value})
         await harness.stop()
         return answer
 
     assert asyncio.run(run())[0] == 403
+
+
+@pytest.mark.parametrize("host", ["agent.waku.one", "zzzzzzzzzzzz.agent.waku.one"])
+def test_a_request_without_that_header_is_not_refused(harness, host):
+    """The other half of the closed set: the refusal is the header, so a
+    request that does not carry it must be answered normally. Without this,
+    `return True` passes the table above."""
+    async def run():
+        await harness.start()
+        answer = await harness.send("GET", "/", host=host)
+        await harness.stop()
+        return answer
+
+    # The apex redirects to /login; a tenant host with no session bounces or
+    # 401s. Neither is the 403 above, and neither is a refusal of this header.
+    assert asyncio.run(run())[0] in (302, 401)
 
 
 @pytest.mark.parametrize("host", ["agent.waku.one", "zzzzzzzzzzzz.agent.waku.one"])
@@ -361,7 +389,7 @@ def test_the_body_cap_is_this_gateways_own_and_not_aiohttps_default(harness):
     two, five = asyncio.run(run())
     assert two[0] == 200
     assert five[0] == 413
-    assert json.loads(five[2])["error"] == answers.TOO_LARGE
+    assert json.loads(five[2])["error"] == "That request is too large."
     assert five[1]["x-frame-options"] == "DENY"
 
 
@@ -463,6 +491,47 @@ def test_a_navigation_is_the_only_thing_exempt_from_the_pair(harness):
     assert got[0] == 200
     assert headed[0] == 200
     assert [path for _tenant, path in harness.forwarder.calls] == ["/api/data"] * 2
+
+
+@pytest.mark.parametrize("extra, why", [
+    ([("Sec-Fetch-Site", "cross-site")], "a link from another site"),
+    ([("Sec-Fetch-Site", "none")], "typed, pasted or a restored tab"),
+    ([("Sec-Fetch-Site", "same-site"), ("Sec-Fetch-Site", "cross-site")],
+     "two copies, the good one first"),
+    ([("Sec-Fetch-Site", "cross-site"), ("Sec-Fetch-Site", "same-site")],
+     "two copies, the other order"),
+    ([("Sec-Fetch-Site", "same-site"), ("Sec-Fetch-Dest", "image")],
+     "an <img> on a page that is same-site"),
+    ([("Sec-Fetch-Site", "same-site"), ("Sec-Fetch-Dest", "empty")],
+     "a fetch from a page that is same-site"),
+    ([("Sec-Fetch-Site", "same-site"), ("Sec-Fetch-Dest", "document"),
+      ("Sec-Fetch-Dest", "image")], "two destinations"),
+])
+def test_the_hand_off_is_served_only_to_a_same_site_navigation(harness, extra, why):
+    """`headers.get` answers the FIRST copy of a repeated header, so a pair is
+    refused outright rather than read from either end; `none` is refused
+    because the real hand-off is always the apex page's location.assign; and
+    a destination that is not a document is a subresource, which must not
+    mint a session even from a page that is same-site -- a tenant's container
+    serves whatever it likes on a host that shares the registrable domain."""
+    async def run():
+        await harness.start()
+        tenant_id, _apex, code = await sign_in(harness)
+        host = f"{tenant_id}.agent.waku.one"
+        target = f"/auth/enter?code={code}"
+        refused = await harness.send("GET", target, host=host, headers=extra)
+        # And it did not burn the code: the owner's own navigation still works.
+        owner = await harness.send("GET", target, host=host,
+                                   headers={"Sec-Fetch-Site": "same-site",
+                                            "Sec-Fetch-Dest": "document"})
+        await harness.stop()
+        return refused, owner
+
+    refused, owner = asyncio.run(run())
+    assert refused[0] == 302, why
+    assert refused[1]["location"] == "https://agent.waku.one/login"
+    assert cookie_value(refused[1], "__Host-waku_tenant") == ""
+    assert cookie_value(owner[1], "__Host-waku_tenant") != ""
 
 
 def test_a_cross_site_hand_off_is_refused(harness):

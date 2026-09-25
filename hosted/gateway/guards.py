@@ -18,8 +18,9 @@ MISDIRECTED = 421
 UNSUPPORTED_MEDIA = 415
 
 JSON_CONTENT_TYPE = "application/json"
+# The header, and not a value: see is_service_worker. `script` is the one
+# token a browser sends, and it is documented there rather than compared.
 SERVICE_WORKER_HEADER = "Service-Worker"
-SERVICE_WORKER_VALUE = "script"
 HOST_CHARACTERS = frozenset("abcdefghijklmnopqrstuvwxyz0123456789-.")
 
 # The two methods that may cross the door without the CSRF pair, named.
@@ -37,7 +38,12 @@ CHECKED_EXEMPT_METHODS = frozenset({"GET", "HEAD"})
 # 16.4 -- and a sign-in nobody can complete is worse than the narrow window
 # it leaves. Script cannot forge these: Sec-* is a forbidden header name.
 HANDOFF_FETCH_SITES = frozenset({"", "same-site", "same-origin"})
+# A document navigation, or a browser that sends no Fetch Metadata at all.
+# Anything else -- image, iframe, empty (fetch/XHR), script -- is a
+# subresource load, and a subresource must not mint a session.
+HANDOFF_FETCH_DESTS = frozenset({"", "document"})
 FETCH_SITE_HEADER = "Sec-Fetch-Site"
+FETCH_DEST_HEADER = "Sec-Fetch-Dest"
 
 
 def normalise_host(raw: str | None) -> str:
@@ -93,8 +99,26 @@ def tenant_label(host: str, apex: str) -> str | None:
 def is_service_worker(request: web.Request) -> bool:
     """Spec: "it refuses any request carrying Service-Worker: script". A
     service worker registered on a tenant's own origin would keep answering
-    that origin's requests after the session that installed it ended."""
-    return request.headers.get(SERVICE_WORKER_HEADER, "").strip() == SERVICE_WORKER_VALUE
+    that origin's requests after the session that installed it ended.
+
+    THE HEADER'S PRESENCE IS THE REFUSAL, whatever it says. Written as an
+    exact comparison against the lowercase token, `Service-Worker: Script`
+    was forwarded with a 200 while `script` was refused -- the open-set shape
+    again, one function above a guard that already normalises. Case-folding
+    that comparison would fix the case at hand and leave the shape: the next
+    value nobody listed would be admitted by default. `Service-Worker` is
+    defined for exactly one thing, a worker script fetch, and no other client
+    has a reason to send it, so nothing about its VALUE is interesting here.
+    The one token browsers send is `script`; this refuses that and everything
+    else.
+
+    Browsers send the token lowercase, so the original was never a live
+    bypass. It is written this way because the failure mode is not
+    proportional to the likelihood: a worker installed on a tenant origin
+    intercepts every request on that origin for every later session, and this
+    guard is the only thing refusing it.
+    """
+    return SERVICE_WORKER_HEADER in request.headers
 
 
 def csrf_refusal(request: web.Request, host: str) -> str:
@@ -134,6 +158,35 @@ def handoff_refusal(request: web.Request) -> str:
     container. `Sec-Fetch-Site` is what tells the two apart: the real hand-off
     is `same-site` (the apex and the tenant host share the registrable
     domain), and a link from anywhere else is `cross-site`.
+
+    ONE HEADER, ONCE. `headers.get` answers the FIRST of a repeated header, so
+    a request carrying `Sec-Fetch-Site: same-site` in front of
+    `Sec-Fetch-Site: cross-site` would have been served on the first copy. No
+    browser sends two, which is the reason to refuse the request rather than
+    pick a copy: a duplicate is not a hand-off this gateway issued, whichever
+    value it is read from.
+
+    `none` IS REFUSED, DELIBERATELY. It means a user-initiated navigation --
+    typed, pasted, or a restored tab. The real hand-off is always the apex
+    page's `location.assign`, which is `same-site`, so nothing legitimate
+    arrives as `none`; a person who pastes the URL gets a bounce to /login and
+    signs in again, and a restored tab would have failed anyway on a code that
+    is single-use and sixty seconds old.
+
+    `Sec-Fetch-Dest` IS CHECKED TOO. The hand-off is a document navigation.
+    Without it, a page on any waku host -- a tenant's own container serves
+    whatever it likes -- could put the enter URL in an <img> or a fetch, which
+    is same-site, and mint a session from a subresource load. An absent header
+    is admitted for the same reason as an absent Sec-Fetch-Site.
     """
-    site = request.headers.get(FETCH_SITE_HEADER, "").strip().lower()
-    return "" if site in HANDOFF_FETCH_SITES else "cross-site hand-off"
+    sites = request.headers.getall(FETCH_SITE_HEADER, ())
+    destinations = request.headers.getall(FETCH_DEST_HEADER, ())
+    if len(sites) > 1 or len(destinations) > 1:
+        return "more than one fetch-metadata header"
+    site = (sites[0] if sites else "").strip().lower()
+    destination = (destinations[0] if destinations else "").strip().lower()
+    if site not in HANDOFF_FETCH_SITES:
+        return "cross-site hand-off"
+    if destination not in HANDOFF_FETCH_DESTS:
+        return "not a navigation"
+    return ""
