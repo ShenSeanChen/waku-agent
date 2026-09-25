@@ -32,7 +32,7 @@ import shelllib
 # F2, F3 and F4 each append their own names to this set in the same commit that
 # adds the script. C3's firewall.sh joins it when C3 lands.
 EXPECTED_SCRIPTS = {"checks.sh", "envfiles.sh", "install.sh", "lib.sh",
-                    "networks.sh", "tree.sh"}
+                    "networks.sh", "tree.sh", "upgrade.sh"}
 
 COMPOSE = shelllib.DEPLOY / "compose.yaml"
 SERVICES = ("caddy", "gateway", "proxy", "spawner")
