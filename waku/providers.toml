@@ -87,6 +87,22 @@ small_model = "google/gemma-4-26b-a4b-it:free"
 key_url = "https://openrouter.ai/keys"
 price = [1.0, 3.0]
 
+# Requesty routes one key to many labs' models over an OpenAI-compatible API.
+# The picker lists Requesty's managed models, whose short ids such as
+# "claude-sonnet-4-5" are routed across several providers. The defaults use the
+# "vendor/model" form so that this row claims no model family away from
+# anthropic or openai. The API accepts both id forms.
+
+[requesty]
+kind = "openai"
+key_env = "REQUESTY_API_KEY"
+base_url = "https://router.requesty.ai/v1"
+model = "anthropic/claude-sonnet-4-5"
+small_model = "anthropic/claude-haiku-4-5"
+catalog_url = "https://router.requesty.ai/v1/models/managed"
+key_url = "https://app.requesty.ai/api-keys"
+price = [3.0, 15.0]
+
 # Google's Pro tier is not "gemini-3.5-pro" (that id 404s); the current Pro
 # is gemini-3.1-pro-preview.
 
