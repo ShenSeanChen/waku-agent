@@ -29,13 +29,16 @@ RULEBOOK = [
     *(DOCS / name for name in ("getting-started.md", "tour.md", "evals.md", "commands.md", "roadmap.md")),
     *sorted(CONTEXT.glob("*.md")),
     ROOT / "examples" / "README.md",
+    # The operator guide. It is what waku/providers.toml's waku-platform row
+    # points a hosted user at, and group F filled it with commands, so its
+    # links have to resolve and it has to stay emoji-free like every other
+    # guide.
+    #
+    # test_every_doc_is_indexed reads DOCS only, so this adds no requirement to
+    # index hosted/README.md under docs/.
+    ROOT / "hosted" / "README.md",
     LAB / "README.md",
     *(topic / "README.md" for topic in LAB_TOPICS),
-    # The operator guide. It is prose a person reads on a terminal at 2am, and
-    # waku/providers.toml's `waku-platform` row points its key_url at it, so it
-    # is held to the same two rules as the rest of the rulebook: every relative
-    # link resolves, and no emoji.
-    ROOT / "hosted" / "README.md",
 ]
 
 LINK = re.compile(r"\[[^\]]*\]\(([^)\s]+)\)")

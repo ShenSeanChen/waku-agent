@@ -21,8 +21,8 @@ switch on the Models page.
 ## Licensing
 
 The code here is MIT, like the rest of the repository. The Waku design system,
-the Waku mark and the Waku names are not: they are listed in `LICENSE-BRAND`,
-and a hosted deployment serves the stock dashboard, which carries them. **A
+the Waku mark and the Waku names are not: they are listed in
+[LICENSE-BRAND](../LICENSE-BRAND), and a hosted deployment serves the stock dashboard, which carries them. **A
 third party who wants to offer this as a service under the Waku name needs
 AutoManus's written permission.** Nothing in this directory changes that
 license; it only describes a deployment of the software the license already
@@ -41,102 +41,92 @@ covers.
 | `templates/` | the hosted `SOUL.md` and the gateway's own pages |
 | `deploy/` | `install.sh`, Compose, Caddy, the operator scripts, and the example env files they write |
 
-## Before you install
+## Running it
 
-You need six things. Collect all six before you touch the VM: `install.sh`
-refuses without any of them, and two of the refusals land after the VM has been
-changed.
+Hosted waku runs on **one Ubuntu 24.04 VM**. Everything below is done once, in
+this order. The example domain here is the deployment this was built for,
+`agent.waku.one`; substitute your own.
 
-| You need | Why | How it is given |
-|---|---|---|
-| An Ubuntu 24.04 VM | The Docker packages, the systemd units and the resolver path are that release's | `install.sh` reads `/etc/os-release` and refuses anything else |
-| A second disk for `/srv/waku`, XFS with project quotas | Each tenant gets a disk limit, and XFS project quotas are what enforce it | `--data-device /dev/sdb1` |
-| A domain you control through a DNS API | The certificate is issued by DNS-01, so Caddy answers the challenge by writing a TXT record | the apex is the first argument; the API credentials go in `--dns-env-file` |
-| A Supabase project with asymmetric signing keys and signup turned off | The gateway verifies access tokens with a public key, and this deployment is invite-only | `--supabase-url`, `--supabase-publishable-key`, `--supabase-audience` |
-| A model API key for the platform | The metering proxy calls Anthropic with it. No tenant container ever holds it | `--platform-key-file` |
-| A restic repository and its password | Every tenant's data is backed up into it nightly | `--restic-repository`, `--restic-password-file` |
+### 1. What to create at your provider, by hand
 
-Memory decides how many tenants can run at once. `install.sh` sets the cap to
-(memory minus 2 GB) divided by 150 MB, so a 16 GB VM runs 95 containers at
-once. Pass `--max-running N` to choose your own number. Idle containers stop on
-their own, so the cap limits concurrency and not how many people can sign up.
+Spec 001 does not automate this layer (design section 11), and `install.sh`
+refuses to run until it is right.
 
-### The data disk
+| Create | Notes |
+|---|---|
+| A VM | 4 vCPU, 16 GB RAM to start. Memory is the binding resource: about 100 MB per active tenant, and `install.sh` sizes its running cap from it as (memory minus 2 GB) divided by 150 MB, which is 95 on a 16 GB VM. Pass `--max-running N` to choose your own number. Idle containers stop on their own, so the cap limits how many tenants run at once and not how many can sign up |
+| A second disk | 100 GB. It becomes `/srv/waku` |
+| **No instance role, and no service account** | The tenant firewall rules are the first line, and this is the second: if a rule is ever missing, the metadata service must have no credential to hand out |
+| Two DNS records | `agent.waku.one` and `*.agent.waku.one`, both pointing at the VM. Each tenant gets their own host, so the wildcard is not optional |
+| A DNS API token | Caddy answers the DNS-01 challenge with it. It is the one credential on the VM that can change your DNS; it lives in `config/caddy.env`, root-only |
+| An S3-compatible bucket | For restic. S3, GCS, R2 or B2 |
+| A Supabase project | Magic-link sign-in. It must use **asymmetric signing keys** (ES256 or RS256) and it must have **signup turned off**: this deployment is invite-only, and you invite people from the Supabase dashboard |
 
-`/srv/waku` must be XFS mounted with `prjquota`. Without it every tenant shares
-one unbounded disk, and `install.sh` refuses. On a second disk at `/dev/sdb1`:
+### 2. The data disk, XFS with project quotas
 
-```bash
-mkfs.xfs -q /dev/sdb1
-mkdir -p /srv/waku
-echo '/dev/sdb1 /srv/waku xfs defaults,prjquota 0 2' >>/etc/fstab
-mount /srv/waku
-xfs_quota -x -c 'state -p' /srv/waku    # expect: Enforcement: ON
-```
-
-Then clone this repository onto that disk, so the checkout and the data move
-together:
+Every tenant's 1 GB limit is an XFS project quota, so this is not optional
+either.
 
 ```bash
-git clone https://github.com/ShenSeanChen/waku-agent.git /srv/waku/src
+sudo mkfs.xfs -q /dev/nvme1n1
+sudo mkdir -p /srv/waku
+echo '/dev/nvme1n1 /srv/waku xfs defaults,prjquota 0 2' | sudo tee -a /etc/fstab
+sudo mount /srv/waku
+# Mounted is not enforcing. A filesystem without prjquota accepts every
+# xfs_quota command and enforces none of them.
+sudo xfs_quota -x -c 'state -p' /srv/waku | grep 'Enforcement: ON'
 ```
 
-### DNS and TLS
+### 3. The checkout
 
-Create two records before you install, both pointing at the VM's public
-address:
+**The hosted code is not on PyPI.** `pip install waku-agent[hosted]` installs
+two libraries and nothing else; the services are built from a git checkout.
+
+```bash
+sudo git clone https://github.com/ShenSeanChen/waku-agent /srv/waku/src
+```
+
+### 4. DNS, TLS, and the Caddy you may already be running
+
+The two records from step 1 both point at the VM:
 
 ```
-agent.example.com       A    203.0.113.10
-*.agent.example.com     A    203.0.113.10
+agent.waku.one       A    203.0.113.10
+*.agent.waku.one     A    203.0.113.10
 ```
-
-The wildcard is what gives every tenant their own origin at
-`<id>.agent.example.com`. One certificate covers both names.
 
 **Caddy gets the certificate through DNS-01, not HTTP-01.** A wildcard
-certificate cannot be issued any other way, so Caddy has to write a TXT record
-in your zone, and it needs your DNS provider's API credentials to do it.
-`install.sh` builds Caddy from source with the `caddy-dns` module you name in
-`--dns-provider`: pass `route53`, `cloudflare`, `digitalocean` or whichever
-module matches your provider, exactly as it appears under
-`github.com/caddy-dns/`. A module whose Caddy directive takes an inline
-argument is written whole, for example
-`--dns-provider 'cloudflare {env.CLOUDFLARE_API_TOKEN}'`. Pin it with
+certificate cannot be issued any other way, so Caddy writes a TXT record in
+your zone and needs your DNS provider's API token to do it. `install.sh`
+rebuilds Caddy as a container from source with the
+[caddy-dns](https://github.com/caddy-dns) module you name in
+`--dns-provider`: `route53`, `cloudflare`, `digitalocean` or whichever module
+matches your provider, spelled as it appears under that organisation. A module
+whose Caddy directive takes an inline argument passes the whole directive:
+`--dns-provider 'cloudflare {env.CLOUDFLARE_API_TOKEN}'`, with the token
+itself in the file from step 5. Pin the module with
 `--dns-module-version @v1.5.0` if you want a rebuild next month to produce the
 same Caddy.
 
 **Stop and disable any Caddy you are already running, before you run
-`install.sh`.** This deployment runs Caddy as a container built with your
-`caddy-dns` module, and it binds ports 80 and 443 on the host. A Caddy you
-installed by hand holds those ports, so the two cannot coexist. `install.sh`
-does not stop it for you: stopping a service you built yourself is not an
-installer's business, and it would take your holding page down without asking.
-The moment you run the two commands below is the moment that page stops
-serving.
+`install.sh`.** The container binds ports 80 and 443 on the host, so the two
+cannot coexist. `install.sh` does not stop it for you: stopping a service you
+built yourself is not an installer's business, and it would take your holding
+page down without asking. The moment you run these two commands is the moment
+that page stops serving.
 
 ```bash
-systemctl stop caddy
-systemctl disable caddy
+sudo systemctl stop caddy
+sudo systemctl disable caddy
 ```
 
-`install.sh` refuses before it changes anything if either port is still held by
-something that is not this deployment's own Caddy container, and its refusal
-names the port, the process and the container. That refusal is the first check
+`install.sh` refuses, before it changes anything, if either port is still held
+by something that is not this deployment's own Caddy container, and its
+refusal names the port, the process and the container. That is the first check
 it runs, ahead of the apt install and both image builds, so a contested port
-costs you a message and nothing else.
+costs a message and nothing else.
 
-### The Supabase project
-
-`install.sh` reads two public endpoints of your project and refuses on either:
-
-- The project must publish **asymmetric** signing keys (ES256 or RS256). With
-  HS256 the gateway would have to hold the secret that mints tokens, and it
-  only ever needs the public key that verifies them.
-- The project's public auth settings must show **signup closed**. Hosted waku
-  is invite-only; a free tier with open signup is an abuse target.
-
-### The three credential files
+### 5. The three credential files
 
 `install.sh` takes three secrets as **files**, never as values on the command
 line. A value typed as an argument lands in root's shell history and in `ps`
@@ -145,38 +135,40 @@ output for the whole install, and the installer can clean up neither.
 | File | Flag | What happens to it |
 |---|---|---|
 | The platform's model key | `--platform-key-file` | Copied into `/srv/waku/config/proxy.env` at mode 0600. Delete the source file afterwards |
-| The DNS provider's credentials, as `NAME=VALUE` lines | `--dns-env-file` | Copied into `/srv/waku/config/caddy.env` at mode 0600. Delete the source file afterwards |
+| The DNS provider's API token, as `NAME=VALUE` lines | `--dns-env-file` | Copied into `/srv/waku/config/caddy.env` at mode 0600. Delete the source file afterwards |
 | The restic repository's password | `--restic-password-file` | **Not copied.** `config/backup.env` names the path, and restic opens the file every night |
 
+`--dns-env NAME=VALUE` exists for the **non-secret** variables a module needs,
+such as `AWS_REGION`, and is repeatable. Do not put a token there: it stays in
+root's shell history and in `ps` output for the whole install.
+
 Write the restic password before you install, because `install.sh` reads it as
-part of its argument checks and refuses an unreadable or empty file. It can
-live anywhere root can read; keeping it beside the rest of the config is one
-less path to remember:
+part of its argument checks and refuses an unreadable or empty file:
 
 ```bash
-mkdir -p -m 0700 /srv/waku/config
-( umask 077; head -c 32 /dev/urandom | base64 >/srv/waku/config/restic-password )
+sudo mkdir -p -m 0700 /srv/waku/config
+sudo sh -c 'umask 077; head -c 32 /dev/urandom | base64 >/srv/waku/config/restic-password'
 ```
 
-**Keep a copy of the restic password somewhere that is not this VM.** It is the
-only one of the three that is not recoverable from the VM's own config, and it
-is the one that matters most: a repository whose password is lost is a
-repository nobody can read, including you. Losing it turns every nightly backup
-you have ever taken into bytes nobody can open. Put it in the password manager
-you would use for a root password.
+**Keep a copy of that password somewhere that is not this VM.** It is the only
+one of the three that cannot be recovered from the VM's own config, and it is
+the one that matters most: a repository whose password is lost is a repository
+nobody can read, including you. Losing it turns every nightly backup you have
+ever taken into bytes nobody can open. Put it where you would put a root
+password.
 
-### Choosing the restic repository
+### 6. Choosing the restic repository
 
 `--restic-repository` has no default, and picking it is a real decision rather
 than a formality. The two answers cover different failures.
 
 - **A local path**, for example `/srv/backups/waku`, protects against a bad
-  restore, a tenant deleting their own data, and a failed data volume if the
-  path is on a different disk. It does not protect against losing the instance:
-  the repository dies with the VM.
+  restore and against a tenant destroying their own data. On a separate disk it
+  also survives the data volume failing. It does not protect against losing the
+  instance: the repository dies with the VM.
 - **An object store**, for example `s3:s3.amazonaws.com/waku-backups`, protects
   against losing the instance, the disk and the region. It costs a network
-  round trip per snapshot, and it needs its own credentials.
+  round trip per snapshot and it needs its own credentials.
 
 Pick the object store unless you have a reason not to. `install.sh` has no flag
 for the object store's own credentials: add `AWS_ACCESS_KEY_ID` and
@@ -184,112 +176,128 @@ for the object store's own credentials: add `AWS_ACCESS_KEY_ID` and
 install, following [deploy/backup.env.example](deploy/backup.env.example). A
 rerun never overwrites that file, so what you add survives.
 
-**Create the repository yourself, once, before the first backup runs.** Nothing
-in this directory runs `restic init`:
+### 7. Install
 
 ```bash
-export RESTIC_REPOSITORY=s3:s3.amazonaws.com/waku-backups
-export RESTIC_PASSWORD_FILE=/srv/waku/config/restic-password
-restic init
-```
-
-## Installing
-
-```bash
-/srv/waku/src/hosted/deploy/install.sh agent.example.com \
+sudo /srv/waku/src/hosted/deploy/install.sh agent.waku.one \
   --dns-provider route53 \
-  --acme-email ops@example.com \
-  --data-device /dev/sdb1 \
-  --free-model claude-sonnet-5 \
-  --platform-key-file /root/platform-key \
   --dns-env-file /root/route53-credentials \
-  --supabase-url https://abcdefgh.supabase.co \
-  --supabase-publishable-key sb_publishable_example \
-  --supabase-audience authenticated \
-  --restic-repository s3:s3.amazonaws.com/waku-backups \
+  --dns-env AWS_REGION=us-east-1 \
+  --acme-email ops@example.com \
+  --data-device /dev/nvme1n1 \
+  --free-model claude-haiku-4-5 \
+  --platform-key-file /root/platform-key \
+  --supabase-url https://<project>.supabase.co \
+  --supabase-publishable-key sb_publishable_... \
+  --supabase-audience <the aud claim your project's tokens carry> \
+  --restic-repository s3:s3.amazonaws.com/<bucket> \
   --restic-password-file /srv/waku/config/restic-password
 ```
 
-It runs as root, it is idempotent, and **it never overwrites a config file that
-is already there**. A rerun with a different `--free-model` keeps the old value
-and says which file it kept. To change a setting after the install, edit the
-file under `/srv/waku/config/` and restart that one service.
+It refuses, with a readable message, when the VM is not Ubuntu 24.04, when
+`/srv/waku` is not XFS with project quotas enforcing, when the Supabase project
+signs with a shared secret, and when the project has open signup.
 
-When it finishes, the apex is `https://agent.example.com` and each tenant is
-`https://<id>.agent.example.com`. Caddy asks for the certificate on the first
+It is **idempotent and never overwrites a config file**. A rerun says which
+files it kept. To change a value, edit the file under `/srv/waku/config/` and
+restart that service.
+
+When it finishes, the apex is `https://agent.waku.one` and each tenant is
+`https://<id>.agent.waku.one`. Caddy asks for the certificate on the first
 request to the apex, and that request can take a minute while the DNS-01
 challenge propagates.
 
-Delete `/root/platform-key` and `/root/route53-credentials` once the install
-has finished. Both values are in `/srv/waku/config/` now, at mode 0600, in a
-directory only root can enter.
+Then do three things it deliberately leaves to you:
 
-## What a first deployment does not do yet
+```bash
+# 1. The object store's own credentials, appended by hand (step 6).
+sudo nano /srv/waku/config/backup.env
 
-Three parts of the design are not in this repository yet, and a deployment made
-today runs without them. None of them stops the platform working; each one
-changes what you should promise the people using it.
+# 2. Create the restic repository. NOTHING ELSE DOES: install.sh cannot,
+#    because the credentials above are not there while it runs, and the
+#    nightly run refuses rather than creating what it cannot open.
+sudo /srv/waku/src/hosted/deploy/backup.sh --init-repository
 
-**The free tier does not function, and every tenant must bring their own key.**
-The metering proxy is group D of spec 001 and is not written, so `install.sh`
-starts the stack with `--scale proxy=0` and prints a warning saying so.
-`--free-model` and `--platform-key-file` are still required flags and their
-values are still written into the config, but nothing reads them: a tenant
-whose Models page is set to the hosted free tier gets a refused connection on
-their first turn. Tell your first tenants to add their own Anthropic key on the
-Models page. Do not advertise a free tier until group D lands, because an
-operator who believes they are offering one and is not will hear about it from
-a confused user rather than from a log line.
+# 3. Delete the two credential files you passed in. Both values are now in
+#    /srv/waku/config/, mode 0600, in a directory only root can enter.
+sudo rm /root/platform-key /root/route53-credentials
+```
 
-**There is no spend cap.** The proxy is what meters and caps spending, so with
-the proxy scaled to zero nothing counts tokens. This is the same deferral as
-the one above, seen from the money side.
+### 8. Invite somebody
 
-**There are no egress rules.** `firewall.sh` is group C of spec 001 and is not
-written, so `install.sh` prints a warning and installs no firewall unit. Until
-it lands, a tenant's container can reach the VM's private network and the cloud
-provider's metadata service. Keep the deployment invite-only, and attach no
-instance role or service account to the VM.
+Signup is off, so people arrive by invitation: invite an email address from the
+Supabase dashboard. They open the magic link, land on `agent.waku.one/login`,
+and finish at `https://<their id>.agent.waku.one`.
 
-## Running it day to day
+## What is not enabled yet
 
-Every script below lives in `/srv/waku/src/hosted/deploy/` and runs as root on
-the VM.
+Two pieces of spec 001 are deferred, and this deployment is invite-only because
+of them.
 
-| Command | What it does |
-|---|---|
-| `tenant.sh status` | the tenant ids with a running container |
-| `tenant.sh disable <email or id>` | sets the status, deletes the sessions, revokes the token, stops the container |
-| `tenant.sh enable <email or id>` | reverses the status |
-| `tenant.sh delete <email or id>` | all of that, then archives the tree and removes the row |
-| `tenant.sh inspect <email or id>` | a stock waku dashboard on that tenant's stopped data, on loopback only |
-| `tenant.sh inspect-stop <email or id>` | removes that dashboard and lets the tenant start again |
-| `upgrade.sh [--ref <git ref>] [--now]` | pulls, rebuilds and restarts the services |
-| `backup.sh --all` | every tenant and both platform databases, into restic |
-| `restore.sh --tenant <email or id>` | one tenant, from their own snapshot |
-| `restore.sh --all` | the whole system onto this VM |
-| `migrate.sh --out` / `migrate.sh --in` | move the deployment to another VM |
+**No metering proxy, so no free tier and no spend cap.** Group D is not built,
+so the `proxy` service is declared and started with zero replicas. `--free-model`
+and `--platform-key-file` are still required flags and their values are still
+written into the config, but nothing reads them: a tenant whose Models page is
+set to the hosted free tier gets a refused connection on their first turn.
+**Every tenant must bring their own key**, which is the ordinary provider
+switch on the Models page. Do not advertise a free tier until group D lands,
+because an operator who believes they are offering one and is not will hear
+about it from a confused user rather than from a log line. Nothing counts
+tokens either, so there is no cap on what a tenant's own key can spend.
 
-`tenant.sh` runs `python -m hosted.gateway.admin` inside the gateway's
-container. Everything goes through the running gateway, because the gateway
-holds the session cache, the container addresses and the tokens in memory: a
-second process changing any of that behind its back would leave the gateway
-serving from a cache it believes is still true.
+**No tenant firewall rules.** `deploy/firewall.sh` (task C3) is not in the
+tree, so `install.sh` installs no firewall unit and says so. Tenant containers
+cannot reach each other, because both bridges carry `enable_icc=false` -- but
+they **can** reach the VM's private network and the cloud metadata service.
+This is why the VM must carry no instance role.
 
-### Looking at one tenant's data
+## Operating it
 
-`tenant.sh inspect` starts a stock waku dashboard on that tenant's data and
-publishes it on the VM's loopback only. Reach it over an SSH tunnel, and the
-command prints the exact tunnel to run.
+Every script lives in `/srv/waku/src/hosted/deploy/` and runs as root.
+
+```bash
+tenant.sh status                      # who has a container running
+tenant.sh disable mei@example.com     # status, sessions, token, container
+tenant.sh enable  mei@example.com
+tenant.sh delete  mei@example.com     # archives the tree, then removes the row
+tenant.sh inspect mei@example.com     # a stock dashboard on their stopped data
+tenant.sh inspect-stop mei@example.com
+
+upgrade.sh                            # fetch, rebuild, restart the services
+upgrade.sh --now                      # and restart every running tenant too
+
+backup.sh --all                       # what the nightly timer runs
+backup.sh --init-repository           # once, before the first backup
+backup.sh --snapshot-staged <id>      # send a slot restic never received
+backup.sh --reset-staging <id>        # empty a wedged staging slot
+restore.sh --tenant mei@example.com   # one tenant, from the latest snapshot
+restore.sh --all                      # the whole system, onto this VM
+
+migrate.sh --out                      # on the old VM
+migrate.sh --in                       # on the new one
+```
+
+`tenant.sh` takes a tenant id or an email address, and nothing else. It runs
+`python -m hosted.gateway.admin` inside the gateway's container, because the
+gateway holds the session cache, the container addresses and the tokens in
+memory: a second process changing any of that behind its back would leave the
+gateway serving from a cache it believes is still true.
+
+### Looking at one person's data
+
+**`tenant.sh inspect` never runs on the host.** A tenant can plant symlinks in
+their own directories, so the dashboard runs in a throwaway container as their
+UID, with only their two directories mounted, published on the VM's loopback.
+Reach it over an SSH tunnel; the command prints the exact line.
 
 The tenant stays in maintenance for as long as that dashboard exists. Their own
 container will not start, and they see a maintenance message. **Run
-`tenant.sh inspect-stop <email or id>` when you are done**, or you have taken
-somebody's assistant away and left no sign of why.
+`tenant.sh inspect-stop` when you are done**, or you have taken somebody's
+assistant away and left no sign of why.
 
 ### Deleting a tenant
 
-`tenant.sh delete` archives the tenant's two directories into
+`tenant.sh delete` archives the tenant's two directories under
 `/srv/waku/archive/<id>/` and prints the two file names. **That archive is the
 only copy.** Archives are in no restic snapshot, and the nightly timer deletes
 them after 30 days, so the archive is a grace period rather than a backup. Copy
@@ -307,10 +315,13 @@ A systemd timer runs `backup.sh --all` at 03:17 every night, with up to 15
 minutes of random delay, and catches up when the VM was off at that hour.
 Restic keeps 7 daily and 4 weekly snapshots per tenant and prunes the rest.
 
+Every snapshot carries the backup's own `manifest.json`, written last. A
+restore refuses a snapshot without one, because a backup that did not finish
+cannot be told from an empty tenant by looking.
+
 `backup.sh` and `restore.sh` share one `flock` on the staging directory, so a
-backup and a restore never run at once. Check on the repository with
-`restic snapshots`, using the environment from
-`/srv/waku/config/backup.env`.
+backup and a restore never run at once. List what is in the repository with
+`restic snapshots`, using the environment from `/srv/waku/config/backup.env`.
 
 ### Restoring
 
@@ -325,11 +336,11 @@ empty or unreachable costs a refusal and no downtime.
 
 Two refusals you may meet, and what each one means:
 
-- *"the gateway did not answer"*. `restore.sh --all` asks the running gateway to
-  stop the fleet first. If the gateway is down or crash-looping, which is the
-  disaster this command exists for, pass `--no-stop-fleet`. The fleet is still
-  stopped once the gateway is back on the restored database, before any tenant
-  tree is touched.
+- *"the gateway did not answer"*. `restore.sh --all` asks the running gateway
+  to stop the fleet first. If the gateway is down or crash-looping, which is
+  the disaster this command exists for, pass `--no-stop-fleet`. The fleet is
+  still stopped once the gateway is back on the restored database, before any
+  tenant tree is touched.
 - *"already holds a finished backup that was never sent to restic"*. A backup
   finished and its upload failed, so the staging slot holds the only current
   copy of that tenant. Send it with `backup.sh --snapshot-staged <id>`, or
@@ -353,6 +364,25 @@ the new VM can hold it before any traffic moves.
 Downtime is minutes, because all of the state is one directory tree and one
 object store.
 
+**Rehearse it before you need it.** A migration is also the only end-to-end
+proof that the backups are restorable, and the day you find out otherwise
+should not be the day the VM is gone. With at least two tenants who have signed
+in:
+
+```bash
+# On the OLD VM:
+sudo /srv/waku/src/hosted/deploy/migrate.sh --out 2>&1 | tee /tmp/migrate-out.log
+# Follow its printed steps on the NEW VM, then:
+sudo /srv/waku/src/hosted/deploy/migrate.sh --in 2>&1 | tee /tmp/migrate-in.log
+sudo /srv/waku/src/hosted/deploy/tenant.sh status
+```
+
+Then move the two DNS records and check four things as an existing tenant, in a
+browser: they sign in, they land on the **same** tenant id, their provider is
+still selected, and a memory they wrote before the final backup is still there.
+Any of the four failing means the snapshot is not what you thought it was, and
+you still have the old VM.
+
 ## Where everything lives
 
 ```
@@ -370,6 +400,5 @@ object store.
 Read the logs with `docker compose -p waku logs gateway`, and the same for
 `proxy`, `spawner` and `caddy`.
 
-The design behind all of this, and why each choice was made, is
-[../docs/architecture.md](../docs/architecture.md) for local waku and the
-comments in [deploy/](deploy/) for the deployment.
+The design behind all of this is [../docs/architecture.md](../docs/architecture.md)
+for local waku, and the comments in [deploy/](deploy/) for the deployment.

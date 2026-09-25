@@ -131,9 +131,23 @@ def _root(tmp_path, *, backup_env=None, install_env_extra="WAKU_SERVICES_IMAGE=w
                   "WAKU_STAGING": str(root / "staging")}
 
 
+# The repository answers `cat config` when WAKU_REPO_EXISTS is 1 and refuses
+# when it is 0, and `init` succeeds when WAKU_INIT_RC is 0. Everything else
+# restic is asked to do records and succeeds, as the plain recorder does.
+_RESTIC = """#!/bin/sh
+printf '%s %s\\n' restic "$*" >> "$WAKU_CALLS"
+case "$*" in
+  "cat config") exit "$(( 1 - ${WAKU_REPO_EXISTS:-1} ))" ;;
+  "init") exit "${WAKU_INIT_RC:-0}" ;;
+esac
+exit 0
+"""
+
+
 def _bodies(admin=_OK, rows=_ONE_ROW, integrity="ok"):
     return {"docker": _DOCKER.replace("@ADMIN@", admin).replace("@INTEGRITY@", integrity),
             "sqlite3": _SQLITE.replace("@ROWS@", rows),
+            "restic": _RESTIC,
             "id": "#!/bin/sh\necho 0\n",
             # flock's real job is taking a lock on fd 9; the stub records the
             # call and succeeds, so the ORDER can be asserted without the test
@@ -148,6 +162,20 @@ def _run(tmp_path, args, env, **kwargs):
 
 def _deletes(calls):
     return [line for line in calls if "find /staging -mindepth 1 -delete" in line]
+
+
+# `restic cat config` is the readiness probe backup.sh runs once, under the
+# lock, before anything is staged: it READS and nothing else, and a run that
+# refuses right after it has written nothing anywhere. Tests that mean "no
+# snapshot was taken" say so with this rather than with `startswith("restic")`,
+# which would also match the probe and turn "nothing was written" into
+# "restic was never invoked" -- two different claims.
+_PROBE = "restic cat config"
+
+
+def _restic_writes(calls):
+    return [line for line in calls
+            if line.startswith("restic") and line != _PROBE]
 
 
 # --- the order ---------------------------------------------------------------
@@ -239,7 +267,7 @@ def test_the_control_databases_copy_is_checked_before_it_is_snapshotted(tmp_path
     _, env = _root(tmp_path)
     done = _run(tmp_path, ["--all"], env, integrity=answer)
     assert done.returncode != 0
-    assert not [line for line in shelllib.calls(tmp_path) if line.startswith("restic")]
+    assert not _restic_writes(shelllib.calls(tmp_path))
 
 
 def test_retention_is_seven_daily_and_four_weekly_per_host_and_tag(tmp_path):
@@ -264,9 +292,9 @@ def test_one_tenant_is_one_snapshot_and_no_pruning(tmp_path):
     _, env = _root(tmp_path)
     done = _run(tmp_path, ["--tenant", TENANT], env)
     assert done.returncode == 0, done.stderr
-    restic = [line for line in shelllib.calls(tmp_path) if line.startswith("restic")]
     slot = f"{env['WAKU_STAGING']}/{TENANT}"
-    assert restic == [f"restic backup --tag tenant:{TENANT} --host example.test {slot}"]
+    assert _restic_writes(shelllib.calls(tmp_path)) == [
+        f"restic backup --tag tenant:{TENANT} --host example.test {slot}"]
 
 
 def test_reset_staging_empties_one_slot_and_does_nothing_else(tmp_path):
@@ -734,3 +762,103 @@ def test_snapshot_staged_takes_a_tenant_id_and_nothing_else(tmp_path, value):
     assert done.returncode != 0
     assert "a tenant id is twelve characters" in done.stderr
     assert shelllib.calls(tmp_path) == []
+
+
+# --- the repository has to exist before there is anywhere to back up to -------
+
+
+def test_a_repository_that_does_not_answer_stops_the_run_before_anything_is_staged(
+        tmp_path):
+    """NOTHING ELSE ON THIS VM CREATES THE REPOSITORY. install.sh cannot: the
+    object store's own credentials are appended to config/backup.env by hand
+    after it has run, so at the moment it runs there is nothing to authenticate
+    with. Unchecked, the first thing ever to touch the repository is
+    `restic backup` at 03:17 in a timer unit, and the operator believes they
+    have backups until the day they need one."""
+    _, env = _root(tmp_path)
+    done = _run(tmp_path, ["--all"], {**env, "WAKU_REPO_EXISTS": "0"})
+    assert done.returncode != 0
+    assert "cannot be opened" in done.stderr
+    assert "backup.sh --init-repository" in done.stderr
+    calls = shelllib.calls(tmp_path)
+    assert _restic_writes(calls) == []
+    assert not _deletes(calls)
+    assert not [line for line in calls if ".backup" in line]
+
+
+def test_an_ordinary_run_never_creates_the_repository_itself(tmp_path):
+    """The reason this refuses instead of initialising: RESTIC_REPOSITORY
+    mistyped by one character does not answer either, so a run that created
+    what it could not open would make a second, empty repository at the typo,
+    back up into it every night, report success, and leave every real snapshot
+    somewhere restore.sh will not look. `restic cat config` cannot tell an
+    absent repository from a misaddressed one; an operator can."""
+    _, env = _root(tmp_path)
+    done = _run(tmp_path, ["--all"], {**env, "WAKU_REPO_EXISTS": "0"})
+    assert done.returncode != 0
+    assert "restic init" not in shelllib.calls(tmp_path)
+
+
+def test_init_repository_creates_it_and_says_it_is_empty(tmp_path):
+    """The operator runs this once, after adding the object store credentials
+    to backup.env. Saying the repository is EMPTY is the point of the message:
+    an operator who pointed this at the wrong address has one line telling them
+    their old snapshots are not in what they just made."""
+    _, env = _root(tmp_path)
+    done = _run(tmp_path, ["--init-repository"], {**env, "WAKU_REPO_EXISTS": "0"})
+    assert done.returncode == 0, done.stderr
+    calls = shelllib.calls(tmp_path)
+    assert "restic init" in calls
+    assert "It is EMPTY" in done.stdout
+    # It stages nothing, so it takes no lock and empties no slot.
+    assert not [line for line in calls if line.startswith("flock")]
+    assert not _deletes(calls)
+
+
+def test_init_repository_on_an_existing_repository_creates_nothing(tmp_path):
+    """Idempotent, like install.sh. An operator who runs it twice, or who runs
+    it on a VM restored from a migration, must not be handed a second
+    repository."""
+    _, env = _root(tmp_path)
+    done = _run(tmp_path, ["--init-repository"], {**env, "WAKU_REPO_EXISTS": "1"})
+    assert done.returncode == 0, done.stderr
+    assert "restic init" not in shelllib.calls(tmp_path)
+    assert "already exists" in done.stdout
+
+
+def test_an_init_that_fails_is_a_refusal_and_not_a_backup(tmp_path):
+    """restic refuses to init over a repository whose config it can already
+    see, and it refuses when the credentials do not reach the object store.
+    Either way the operator has no repository, and a run that carried on would
+    stage a tenant for a snapshot with nowhere to go."""
+    _, env = _root(tmp_path)
+    done = _run(tmp_path, ["--init-repository"],
+                {**env, "WAKU_REPO_EXISTS": "0", "WAKU_INIT_RC": "1"})
+    assert done.returncode != 0
+    assert "could not create the restic repository" in done.stderr
+    assert not _deletes(shelllib.calls(tmp_path))
+
+
+def test_init_repository_takes_no_tenant(tmp_path):
+    """--all and --init-repository take none; the other three take exactly one.
+    A tenant id accepted here and ignored is one an operator would believe
+    scoped what they ran."""
+    _, env = _root(tmp_path)
+    done = _run(tmp_path, ["--init-repository", TENANT], env)
+    assert done.returncode != 0
+    assert "unknown argument" in done.stderr
+
+
+def test_the_probe_runs_under_the_lock_and_before_the_first_database_copy(tmp_path):
+    """Its position is the assertion. Above the lock it would be one more name
+    checked before a slot can be emptied, which is where the two restic NAMES
+    are checked; below the first `.backup` it would be a probe that ran after
+    the run had already written into control/backup/."""
+    _, env = _root(tmp_path)
+    done = _run(tmp_path, ["--all"], env)
+    assert done.returncode == 0, done.stderr
+    calls = shelllib.calls(tmp_path)
+    lock = next(i for i, line in enumerate(calls) if line.startswith("flock"))
+    probe = calls.index(_PROBE)
+    first_copy = next(i for i, line in enumerate(calls) if ".backup" in line)
+    assert lock < probe < first_copy

@@ -20,9 +20,12 @@ one=""
 usage() {
   cat <<'USAGE'
 usage: backup.sh [--all] [--tenant <id>] [--snapshot-staged <id>]
-                 [--reset-staging <id>]
+                 [--reset-staging <id>] [--init-repository]
   --all              every tenant and both platform databases (the default,
                      and what the timer runs)
+  --init-repository  create the restic repository named in config/backup.env,
+                     once, before the first backup. Nothing else creates it,
+                     and every other mode refuses until it exists
   --tenant <id>      one tenant. RE-COPIES their CURRENT live tree into the
                      staging slot first, so it overwrites anything already
                      staged
@@ -55,6 +58,7 @@ while [ $# -gt 0 ]; do
     || { usage >&2; waku_die "$1 needs a value"; }
   case "$1" in
     --all) mode=all; shift ;;
+    --init-repository) mode=init; shift ;;
     --tenant) mode=one; one=$2; shift 2 ;;
     --snapshot-staged) mode=staged; one=$2; shift 2 ;;
     --reset-staging) mode=reset; one=$2; shift 2 ;;
@@ -67,7 +71,8 @@ done
 # reason: a script that demands root before telling you an argument is wrong is
 # a worse script, and this is also what makes the refusal reachable from a test
 # on a maintainer's laptop.
-if [ "$mode" != all ]; then
+# --all and --init-repository take no tenant; the other three take exactly one.
+if [ "$mode" != all ] && [ "$mode" != init ]; then
   waku_is_tenant_id "$one" \
     || waku_die "a tenant id is twelve characters of a-z and 2-7; got '$one'. It is joined to the staging root to make a path this script empties, so anything else is refused here."
 fi
@@ -95,7 +100,51 @@ fi
 # staging slot to make room for a backup it then cannot send anywhere.
 waku_load_backup_env "$WAKU_ROOT/config/backup.env" RESTIC_REPOSITORY RESTIC_PASSWORD_FILE
 
+# THE REPOSITORY HAS TO EXIST, AND NOTHING ELSE ON THIS VM CREATES IT.
+# install.sh cannot: it writes config/backup.env from --restic-repository and
+# --restic-password-file, and the OBJECT STORE'S OWN CREDENTIALS are appended
+# to that file by hand afterwards, so at the moment install.sh runs there is
+# nothing to authenticate with. Without a check the first thing ever to touch
+# the repository is `restic backup` at 03:17 in a timer unit, which fails into
+# a journal nobody reads while the operator believes they have backups.
+#
+# CREATED ONLY BY A HUMAN WHO ASKED, and that is the whole shape of this. The
+# obvious alternative -- initialise whenever the repository does not answer --
+# builds a worse failure than the one it fixes: RESTIC_REPOSITORY mistyped by
+# one character does not answer either, so the nightly run would create a
+# second, empty repository at the typo, back up into it every night, report
+# success, and leave every real snapshot somewhere restore.sh will not look.
+# `restic cat config` cannot tell a repository that is absent from one whose
+# address is wrong; an operator can.
+#
+# --init-repository TAKES NO LOCK. It stages nothing and empties nothing, and
+# `restic init` refuses a repository that already has a config, so two of them
+# at once is restic's own refusal rather than a race this script has to hold a
+# lock against.
+if [ "$mode" = init ]; then
+  if restic cat config >/dev/null 2>&1; then
+    waku_log "the restic repository at $RESTIC_REPOSITORY already exists; nothing to do"
+    exit 0
+  fi
+  restic init \
+    || waku_die "could not create the restic repository at $RESTIC_REPOSITORY. restic's own message is above. The three things it is usually about: the repository address in $WAKU_ROOT/config/backup.env, the object store credentials appended to that same file by hand, and network access from this VM."
+  waku_log "created the restic repository at $RESTIC_REPOSITORY. It is EMPTY: any snapshot taken before now is in a different repository."
+  exit 0
+fi
+
 waku_flock_staging
+
+# AFTER THE LOCK AND BEFORE ANYTHING IS STAGED, which is the order F3a's rule
+# asks for: "a database that exists and cannot be copied is a backup silently
+# missing a file", and the refusal has to land before a slot is emptied. Taking
+# the lock empties nothing, so the two names above -- which are read out of a
+# FILE and cost nothing -- stay above it and this one, which is a network round
+# trip, sits below it. The cost of that choice, said out loud: a repository
+# whose address hangs rather than refuses holds the lock while it hangs. That
+# is not a new class of failure, because `restic backup` holds the same lock
+# across the same network for the whole of every run.
+restic cat config >/dev/null 2>&1 \
+  || waku_die "the restic repository at $RESTIC_REPOSITORY cannot be opened, so this backup has nowhere to go and nothing has been staged. If this deployment has never backed up, create the repository once with: backup.sh --init-repository . If it has, then the repository address, the password file or the object store credentials in $WAKU_ROOT/config/backup.env no longer reach it -- and the snapshots already there are not lost, they are unreachable from this VM."
 
 failures=""
 
