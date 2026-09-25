@@ -108,13 +108,27 @@ def test_ubuntus_stub_resolver_alone_is_refused(tmp_path):
 
 
 def test_a_resolv_conf_with_no_nameserver_at_all_is_refused(tmp_path):
-    """The empty-source case `pipefail` cannot catch on its own: awk over a
-    file with no matching line succeeds and prints nothing, so without the
-    trailing `grep .` this function would hand install.sh an empty allow-list
-    and exit 0."""
+    """A file systemd wrote before it had an answer. awk over it prints
+    nothing, and a pipeline over an empty source is the shape `pipefail` cannot
+    help with -- it only fails here because each `grep` in the chain exits 1 on
+    empty input. An installer that took the empty result would write an empty
+    --dns-allow and open DNS to nobody."""
     empty = tmp_path / "resolv.conf"
     empty.write_text("search example.test\n", encoding="utf-8")
     done = shelllib.call_function(CHECKS, f'waku_resolvers "{empty}"')
+    assert done.returncode != 0
+    assert done.stdout.strip() == ""
+
+
+def test_a_nameserver_line_with_no_address_is_refused(tmp_path):
+    """The one case the two loopback filters let through, and the whole reason
+    for the trailing `grep .`: awk prints an empty field, neither `grep -v`
+    matches it, and `paste` turns it into one blank line -- a pipeline that
+    exits 0 having produced an empty allow-list. Measured: without that last
+    `grep .` this fixture exits 0."""
+    malformed = tmp_path / "resolv.conf"
+    malformed.write_text("nameserver\nsearch example.test\n", encoding="utf-8")
+    done = shelllib.call_function(CHECKS, f'waku_resolvers "{malformed}"')
     assert done.returncode != 0
     assert done.stdout.strip() == ""
 
