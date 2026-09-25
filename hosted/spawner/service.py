@@ -9,7 +9,6 @@ Neither is widened here.
 
 from __future__ import annotations
 
-import asyncio
 import os
 from pathlib import Path
 
@@ -84,6 +83,3 @@ async def main() -> None:
         async with server:
             await server.serve_forever()
 
-
-if __name__ == "__main__":       # pragma: no cover - `python -m hosted.spawner`
-    asyncio.run(main())

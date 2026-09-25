@@ -184,40 +184,68 @@ def test_a_tenants_own_start_is_not_refused_by_its_own_provisioning(spawner):
         assert answer["address"] == tenant.address_for_project(PROJECT_A)
 
 
-# Which kind of container each task is supposed to produce, and on which
-# network. Pinned as a table rather than as a parameter of the test, so a task
-# that starts producing a DIFFERENT kind is a failure and not a silent pass.
-_TASK_SHAPE = {
-    "backup":  (template.KIND_TASK, "none", "services"),
-    "restore": (template.KIND_TASK, "none", "services"),
-    "archive": (template.KIND_TASK, "none", "services"),
-    "inspect": (template.KIND_INSPECT, tenant.INSPECT_NETWORK, "tenant"),
+# Which container kinds each task may produce, and what each kind must look
+# like. A TABLE OF KINDS, NOT OF COUNTS, and that is C2-2: the first version
+# asserted exactly one KIND_TASK container per task, which `restore` can never
+# satisfy -- it runs an archive, an empty and the restore itself, plus a
+# provision -- so that parameter was red on the first real daemon run. Counting
+# would also have been flaky whatever the number: capture_task_containers polls
+# `docker ps -a` every 200 ms and _run_to_completion removes each container in
+# a `finally`, so a short-lived one can be created and reaped between polls.
+#
+# What does NOT depend on the poller catching every container: every container
+# it DID catch must be one of the kinds this task is allowed to produce, and
+# must have that kind's network and image. A task that starts producing a
+# different kind, or puts a task container on the tenant bridge, fails here.
+_TASK_KINDS = {
+    "backup":  {template.KIND_TASK},
+    # restore archives, empties, provisions and restores.
+    "restore": {template.KIND_TASK, template.KIND_PROVISION},
+    "archive": {template.KIND_TASK},
+    "inspect": {template.KIND_INSPECT},
+}
+
+# The kind that defines the task -- at least one must be seen, or the operation
+# did not do its own work.
+_TASK_OWNER_KIND = {
+    "backup": template.KIND_TASK,
+    "restore": template.KIND_TASK,
+    "archive": template.KIND_TASK,
+    "inspect": template.KIND_INSPECT,
+}
+
+_KIND_SHAPE = {
+    template.KIND_TASK: ("none", SERVICES_TAG),
+    template.KIND_PROVISION: ("none", SERVICES_TAG),
+    template.KIND_INSPECT: (tenant.INSPECT_NETWORK, TENANT_TAG),
 }
 
 
-@pytest.mark.parametrize("task", sorted(_TASK_SHAPE))
+@pytest.mark.parametrize("task", sorted(_TASK_KINDS))
 def test_every_task_container_is_throwaway_and_holds_only_that_tenants_mounts(
         spawner, spawner_root, task):
     """Reads `docker inspect` on the containers the spawner actually created,
     not the dict the template built.
 
     EVERY container the operation creates is checked, not just the first: a
-    restore runs an archive container and a provision container on its way, and
-    each of them mounts a tenant's data as UID 10001. A test that looked only
-    at the first would have said nothing about the other two.
+    restore runs an archive container, an empty container and a provision
+    container on its way, and each of them mounts a tenant's data as UID
+    10001. A test that looked only at the first would have said nothing about
+    the other three.
     """
     payload = {"op": "task", "tenant_id": TENANT_A, "task": task}
     if task == "restore":
         payload["project_id"] = PROJECT_A
-        # A restore extracts what a backup staged; without one there is nothing
-        # under /staging and the restore container exits non-zero, which is a
-        # setup failure and not the thing under test.
+        # A restore extracts what a backup staged, and refuses outright when
+        # nothing is staged -- so the backup is setup, not part of the test.
         ask(spawner, {"op": "task", "tenant_id": TENANT_A, "task": "backup"})
     seen = capture_task_containers(spawner, payload, TENANT_A)
     allowed = allowed_bind_sources(spawner_root, TENANT_A, task)
     try:
+        kinds_seen = set()
         for container in seen:
             host = container["HostConfig"]
+            labels = container["Config"]["Labels"]
             assert container["Config"]["User"] == \
                 f"{template.TENANT_UID}:{template.TENANT_UID}"
             assert host["CapDrop"] == ["ALL"]
@@ -230,16 +258,19 @@ def test_every_task_container_is_throwaway_and_holds_only_that_tenants_mounts(
                 "with CAP_SYS_ADMIN; a mount it was not supposed to have is a "
                 "host path handed to tenant-owned code.")
 
-        kind, network, image_key = _TASK_SHAPE[task]
-        owner = [c for c in seen
-                 if c["Config"]["Labels"].get(template.LABEL_KIND) == kind]
-        assert len(owner) == 1, (
-            f"{task} produced {len(owner)} containers of kind {kind}: "
-            f"{[c['Config']['Labels'] for c in seen]}")
-        assert owner[0]["HostConfig"]["NetworkMode"] == network
-        expected_image = (SERVICES_TAG if image_key == "services"
-                          else TENANT_TAG)
-        assert owner[0]["Config"]["Image"] == expected_image
+            kind = labels.get(template.LABEL_KIND)
+            assert kind in _TASK_KINDS[task], (
+                f"{task} produced a {kind!r} container; it may only produce "
+                f"{sorted(_TASK_KINDS[task])}.")
+            kinds_seen.add(kind)
+            network, image = _KIND_SHAPE[kind]
+            assert host["NetworkMode"] == network, (
+                f"a {kind} container is on {host['NetworkMode']!r}, not {network!r}")
+            assert container["Config"]["Image"] == image
+
+        assert _TASK_OWNER_KIND[task] in kinds_seen, (
+            f"{task} produced no {_TASK_OWNER_KIND[task]} container at all: "
+            f"saw {sorted(kinds_seen)}. The operation did not do its own work.")
     finally:
         if task == "inspect":
             ask(spawner, {"op": "task", "tenant_id": TENANT_A,

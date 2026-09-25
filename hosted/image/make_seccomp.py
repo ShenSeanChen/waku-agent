@@ -13,6 +13,21 @@ and `ioctl` is in one of those lists with no argument condition. In that shape
 the rules are ALLOWANCES: an added deny rule for ioctl would not work, because
 the unconditional allow wins. So `ioctl` is taken OUT of the unconditional
 allow and put back with a condition.
+
+WHAT THE CONDITION DOES NOT CLOSE, AND CANNOT. `SCMP_CMP_NE` compares the FULL
+64-BIT REGISTER, and the kernel reads `ioctl`'s request as a 32-bit
+`unsigned int`. So a caller who passes `0x1_401c5820` is not equal to
+`0x401c5820`, passes the filter, and has the value truncated back to
+FS_IOC_FSSETXATTR on the way in. seccomp has no masked not-equal, so there is
+no way to express "the low 32 bits are not this" in a profile; the rule below
+is the strongest one the format can carry.
+
+This is a residual, not a hole, and the difference is worth stating. It takes
+DELIBERATELY CONSTRUCTING an aliased request: every ordinary route to this
+ioctl -- `xfs_io`, `chattr`, libc's `ioctl(3)` -- passes the plain value and is
+refused. It is on the security checklist as a known residual, and
+evals/deterministic/hosted/test_container_template.py asserts the rule that IS
+here rather than a stronger one it would be comfortable to claim.
 """
 
 from __future__ import annotations

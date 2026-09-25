@@ -62,6 +62,37 @@ INSPECT_BRIDGE = "waku-inspect"
 INSPECT_SUBNET = ipaddress.ip_network("10.89.0.0/24")
 INSPECT_GATEWAY = ipaddress.ip_address("10.89.0.1")
 
+# The Docker network options each bridge is created with, here rather than in
+# the script that runs `docker network create`, so the deploy script, F1's
+# install and the Docker tests read ONE source. C3's networks.sh renders these;
+# until it lands, evals/hosted_docker/conftest.py's `bridges` fixture does.
+#
+# enable_icc=false IS THE LOAD-BEARING ONE. A user-defined bridge allows
+# container-to-container traffic by default, and a tenant's dashboard has NO
+# AUTHENTICATION of its own -- the gateway in front of it is the whole of it.
+# So with ICC on, tenant A opens TCP to 10.88.0.<B>:7777 and reads tenant B's
+# chat log, memory and SQL console. It does not block a tenant reaching the
+# bridge GATEWAY address, which is the host, so the proxy on 10.88.0.1 is
+# unaffected.
+#
+# THIS IS NOT THE WHOLE OF THE NETWORK ISOLATION, and the rest is C3's: the
+# DOCKER-USER forward rules, the dropped private and link-local ranges, the DNS
+# exception and the host's INPUT rules all live in firewall.sh. enable_icc
+# closes tenant-to-tenant on the bridge and nothing else.
+BRIDGE_OPTIONS: dict[str, dict[str, str]] = {
+    TENANT_NETWORK: {
+        "com.docker.network.bridge.name": TENANT_BRIDGE,
+        "com.docker.network.bridge.enable_icc": "false",
+    },
+    # The inspect bridge gets "the same rules" (spec): an inspect container
+    # runs a stock dashboard on a tenant's data, so it is tenant-controlled
+    # code and two of them must not reach each other either.
+    INSPECT_NETWORK: {
+        "com.docker.network.bridge.name": INSPECT_BRIDGE,
+        "com.docker.network.bridge.enable_icc": "false",
+    },
+}
+
 # XFS reserves project id 0 for "no project", so ids start at 2 and their
 # addresses start one past the bridge gateway. 65279 is 0xFEFF: 10.88.254.255,
 # the last address before DYNAMIC_RANGE. About 65,000 tenants on one VM.

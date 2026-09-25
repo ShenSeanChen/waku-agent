@@ -121,13 +121,33 @@ jobs:
       #
       # -rs prints every skip reason in this step's own log, beside the result
       # it belongs to. The junitxml is what the next step reads.
+      # AS ROOT, and that is not laziness. This tier is the only place the
+      # spawner's real privileges exist:
+      #
+      #   - the XFS mount is /srv/waku, created above with sudo and left
+      #     root:root 0755. The `spawner` fixture mkdirs tenants/, archive/,
+      #     staging/ and run/spawner/ under it.
+      #   - provision() hands each tenant directory to UID 10001 at mode 0700
+      #     (hosted/spawner/docker.py), so every host-side read in
+      #     test_tenant_files.py crosses a directory `runner` cannot traverse
+      #     -- and Path.exists() SWALLOWS that PermissionError and returns
+      #     False, which turns an absence assertion into one that cannot fail.
+      #   - the retained-log cap reads the daemon's own storage directory.
+      #
+      # The alternative -- loosening the tenant tree so an unprivileged test
+      # can read it -- would change the thing under test. So the tests run
+      # with the privileges the spawner has, and `sudo -E env "PATH=$PATH"`
+      # is what carries setup-python's interpreter and the two WAKU_XFS_*
+      # variables across sudo, which resets both by default.
       - name: Third-tier evals (Docker)
         run: |
           set -euo pipefail
-          python -m pytest evals/hosted_docker -q -rs --durations=10 \
-            --junitxml=/tmp/hosted-docker.xml
+          sudo -E env "PATH=$PATH" \
+            python -m pytest evals/hosted_docker -q -rs --durations=10 \
+              --junitxml=/tmp/hosted-docker.xml
           # pytest's own exit code already fails the step on 1-4; the `set -e`
           # above turns exit 5 into a failure too, which is what we want here.
+          sudo chown -R "$(id -u):$(id -g)" /tmp/hosted-docker.xml
 
       # THE TWO WAYS THIS JOB COULD LIE, both of which look like a green tick:
       # it collected nothing, or it collected everything and skipped it all.

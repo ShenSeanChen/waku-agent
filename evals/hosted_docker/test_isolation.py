@@ -25,7 +25,100 @@ from spawnerlib import (
     ask,
 )
 
+from hosted.core import tenant
 from hosted.spawner import template
+
+
+def test_a_tenant_cannot_open_a_socket_to_another_tenants_dashboard(spawner):
+    """The ONE piece of acceptance 1 this branch carries, and the reason it is
+    here rather than waiting for C3.
+
+    A tenant's dashboard has NO AUTHENTICATION of its own -- the gateway in
+    front of it is the whole of it -- and a user-defined Docker bridge allows
+    container-to-container traffic by DEFAULT. So with ICC on, tenant A opens
+    TCP to 10.88.0.<B>:7777 and reads tenant B's chat log, memory and SQL
+    console. `enable_icc=false` in core/tenant.BRIDGE_OPTIONS is what closes
+    it, and this is the test that tries the connection.
+
+    THE CONTROL IS THE HALF THAT MATTERS. `probe_tcp` returning False is also
+    what a broken prober, a dead container and a dashboard that never bound
+    look like. So each container first proves it can reach its OWN dashboard
+    on 127.0.0.1:7777 -- same prober, same port, same code path -- and only
+    then is the cross-tenant refusal an assertion about the bridge.
+
+    WHAT THIS DOES NOT COVER, and nothing on this branch does: the DOCKER-USER
+    forward rules, the dropped link-local, CGNAT and private ranges, the DNS
+    exception, the host's INPUT rules, and the inspect bridge's egress. All of
+    those are C3's firewall.sh and C3 is deferred. A green run here means
+    tenant A cannot reach tenant B ON THE BRIDGE; it does not mean a tenant
+    container is confined to it.
+    """
+    for tenant_id, project_id, token in ((TENANT_A, PROJECT_A, TOKEN_ONE),
+                                         (TENANT_B, PROJECT_B, TOKEN_TWO)):
+        answer = ask(spawner, {"op": "start", "tenant_id": tenant_id,
+                               "project_id": project_id, "timezone": "UTC",
+                               "token": token})
+        assert "error" not in answer, answer
+    name_a = template.container_name(TENANT_A, template.KIND_TENANT)
+    name_b = template.container_name(TENANT_B, template.KIND_TENANT)
+    port = template.DASHBOARD_PORT
+    for name in (name_a, name_b):
+        dockerlib.wait_for_listener(name, "127.0.0.1", port)
+
+    assert dockerlib.probe_tcp(name_a, "127.0.0.1", port) is True, (
+        "tenant A cannot reach its OWN dashboard, so the refusal below is not "
+        "evidence of anything about the bridge")
+    assert dockerlib.probe_tcp(name_b, "127.0.0.1", port) is True, (
+        "tenant B cannot reach its OWN dashboard")
+
+    address_a = tenant.address_for_project(PROJECT_A)
+    address_b = tenant.address_for_project(PROJECT_B)
+    assert dockerlib.probe_tcp(name_a, address_b, port) is False, (
+        f"tenant A opened TCP to {address_b}:{port} -- tenant B's dashboard, "
+        "which has no authentication of its own. enable_icc=false is not on "
+        "the tenant bridge.")
+    assert dockerlib.probe_tcp(name_b, address_a, port) is False, (
+        f"tenant B opened TCP to {address_a}:{port}. ICC blocks a direction at "
+        "a time in nobody's implementation, so this failing alone would be "
+        "stranger than both failing.")
+
+
+def test_a_restored_tenant_keeps_their_own_project_id(spawner, spawner_root):
+    """C2-1, against a real XFS.
+
+    `provision()`'s CREATE path is the only thing that issues `project -s`, so
+    a directory that comes back by any other route -- the daemon creating a
+    missing bind source, say -- keeps XFS project 0: uncounted and unlimited,
+    for the rest of that tenant's life. `env` was fine and `home` was not, and
+    the asymmetry is invisible from anywhere except here.
+
+    BOTH DIRECTORIES ARE CHECKED, and against the tenant's OWN project id
+    rather than against "not zero": a restore that claimed a fresh id would
+    pass a not-zero check while giving the tenant a new accounting bucket and
+    a new fixed bridge address.
+    """
+    dockerlib.require_xfs()
+    ask(spawner, {"op": "stop", "tenant_id": TENANT_A})
+    assert "error" not in ask(spawner, {"op": "provision", "tenant_id": TENANT_A,
+                                        "project_id": PROJECT_A})
+    assert "error" not in ask(spawner, {"op": "task", "tenant_id": TENANT_A,
+                                        "task": "backup"})
+    home = spawner_root / "tenants" / TENANT_A / "home"
+    env = spawner_root / "tenants" / TENANT_A / "env"
+    before = (_project_id_of_path(home), _project_id_of_path(env))
+    assert before == (PROJECT_A, PROJECT_A), (
+        f"the directories carry {before} before the restore, not "
+        f"{PROJECT_A} -- so the assertion after it would prove nothing")
+
+    answer = ask(spawner, {"op": "task", "tenant_id": TENANT_A,
+                           "task": "restore", "project_id": PROJECT_A})
+    assert "error" not in answer, answer
+
+    after = (_project_id_of_path(home), _project_id_of_path(env))
+    assert after == (PROJECT_A, PROJECT_A), (
+        f"after the restore the two directories carry {after}, not "
+        f"({PROJECT_A}, {PROJECT_A}). A directory in project 0 has no disk "
+        "limit at all, and the tenant can fill the shared data disk.")
 
 
 def test_the_platform_key_is_in_no_tenant_container(spawner, spawner_root):
@@ -183,10 +276,15 @@ def _project_id_of_path(path) -> int:
     FS_IOC_FSGETXATTR only, in a root container with xfsprogs: the SET half of
     PROJECT_ID_PROBE would change the very thing this is measuring.
     """
+    # os.open, not open(): this is called on DIRECTORIES as well as files, and
+    # open(dir, 'rb') raises IsADirectoryError. A directory's project id is the
+    # interesting one -- it is what XFS_DIFLAG_PROJINHERIT rides on, so it is
+    # what every file created later inherits.
     program = (
-        "import fcntl, struct, sys\n"
+        "import fcntl, os, struct, sys\n"
         "buf = bytearray(28)\n"
-        "fcntl.ioctl(open(sys.argv[1], 'rb'), 0x801C581F, buf, True)\n"
+        "fd = os.open(sys.argv[1], os.O_RDONLY)\n"
+        "fcntl.ioctl(fd, 0x801C581F, buf, True)\n"
         "print(struct.unpack_from('<5I', buf)[3])\n")
     out = dockerlib.run_once(
         SERVICES_TAG, ["python", "-c", program, str(path)],

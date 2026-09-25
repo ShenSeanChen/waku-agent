@@ -30,6 +30,43 @@ class EngineError(RuntimeError):
     """Docker answered, and the answer was not what was asked for."""
 
 
+# One stream byte, three zero bytes, a big-endian uint32 length.
+_FRAME_HEADER = 8
+
+
+def demultiplex(payload: bytes) -> str:
+    """Docker's framed log stream, as plain text. Idempotent on unframed input.
+
+    A container started WITH a TTY gets an unframed stream, and so does a
+    daemon that decides not to frame; this cannot tell the two apart by asking,
+    so it checks the shape of each frame before trusting it -- a valid header
+    is a stream byte in 0..2, three zero bytes, and a length that does not run
+    off the end. The first byte that fails that test ends the framed reading
+    and the rest is returned as-is, so unframed output is never mangled and a
+    truncated stream is never silently dropped.
+
+    Both streams are interleaved in the order the daemon sent them, because
+    that is the order they happened; nothing here needs to tell stdout from
+    stderr, and a caller that did would want the frames, not this.
+    """
+    if not payload:
+        return ""
+    out: list[bytes] = []
+    at = 0
+    while at + _FRAME_HEADER <= len(payload):
+        stream = payload[at]
+        if stream > 2 or payload[at + 1:at + 4] != b"\x00\x00\x00":
+            break
+        size = int.from_bytes(payload[at + 4:at + _FRAME_HEADER], "big")
+        end = at + _FRAME_HEADER + size
+        if end > len(payload):
+            break
+        out.append(payload[at + _FRAME_HEADER:end])
+        at = end
+    out.append(payload[at:])
+    return b"".join(out).decode("utf-8", "replace")
+
+
 class Engine:
     def __init__(self, socket_path: Path = DOCKER_SOCKET, *, timeout: float = 120.0) -> None:
         self._socket_path = socket_path
@@ -48,18 +85,23 @@ class Engine:
             self._session = None
 
     async def _call(self, method: str, path: str, *, body: dict | None = None,
-                    params: dict | None = None, expect: tuple[int, ...] = (200, 201, 204)):
+                    params: dict | None = None, expect: tuple[int, ...] = (200, 201, 204),
+                    raw: bool = False):
         assert self._session is not None, "use Engine as an async context manager"
         # The host is ignored for a Unix socket and must still be syntactically
         # valid; "docker" is the convention and appears in no request.
         url = f"http://docker/{API_VERSION}{path}"
         async with self._session.request(method, url, json=body, params=params) as response:
-            text = await response.text()
+            payload = await response.read()
             if response.status not in expect:
                 raise EngineError(
-                    f"{method} {path} -> {response.status}: {text[:1000]}")
-            if not text:
+                    f"{method} {path} -> {response.status}: "
+                    f"{payload[:1000].decode('utf-8', 'replace')}")
+            if raw:
+                return payload
+            if not payload:
                 return None
+            text = payload.decode("utf-8", "replace")
             try:
                 return json.loads(text)
             except ValueError:
@@ -95,10 +137,22 @@ class Engine:
         return await self._call("GET", f"/containers/{container}/json", expect=(200,))
 
     async def logs(self, container: str) -> str:
-        answer = await self._call("GET", f"/containers/{container}/logs",
-                                  params={"stdout": "true", "stderr": "true", "tail": "200"},
-                                  expect=(200,))
-        return answer if isinstance(answer, str) else str(answer)
+        """The container's output, DEMULTIPLEXED, as text an operator can read.
+
+        A non-TTY container's log stream is FRAMED: each chunk carries an
+        8-byte header -- one stream byte (0 stdin, 1 stdout, 2 stderr), three
+        zero bytes, then a big-endian uint32 length. Returned verbatim, those
+        headers land in the middle of the RuntimeError _run_to_completion
+        raises, which is the string an operator reads when a backup or a
+        provision fails on the VM. They decode as control characters rather
+        than raising, so the old shape was unreadable rather than broken --
+        which is worse, because nothing said so.
+        """
+        payload = await self._call(
+            "GET", f"/containers/{container}/logs",
+            params={"stdout": "true", "stderr": "true", "tail": "200"},
+            expect=(200,), raw=True)
+        return demultiplex(payload if isinstance(payload, bytes) else b"")
 
     async def containers(self, *, label: str | None = None,
                          all_states: bool = False) -> list[dict]:

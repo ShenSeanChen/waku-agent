@@ -424,3 +424,45 @@ def test_the_committed_seccomp_profile_makes_exactly_the_one_edit():
         f"the condition is {only['args']}, not 'argument 1 is not "
         "FS_IOC_FSSETXATTR'. Without exactly this, a tenant can move their own "
         "file into another XFS project and write past their disk limit.")
+
+
+def test_both_bridges_turn_inter_container_traffic_off():
+    """A tenant's dashboard has NO AUTHENTICATION of its own -- the gateway in
+    front of it is the whole of it -- and a user-defined Docker bridge allows
+    container-to-container traffic by DEFAULT. With ICC on, tenant A opens TCP
+    to 10.88.0.<B>:7777 and reads tenant B's chat log, memory and SQL console.
+
+    Pinned as a value in hosted/core/tenant.py because C3's networks.sh, F1's
+    install.sh and the Docker tests must all read one source; the Docker half
+    is evals/hosted_docker/test_isolation.py::
+    test_a_tenant_cannot_open_a_socket_to_another_tenants_dashboard, which
+    tries the connection.
+
+    WHAT THIS DOES NOT COVER, so nobody reads a green tick as isolation: the
+    DOCKER-USER forward rules, the dropped private and link-local ranges, the
+    DNS exception and the host's INPUT rules are all C3's firewall.sh, and C3
+    is deferred. enable_icc closes tenant-to-tenant on the bridge, and that is
+    all it closes.
+    """
+    for network in (tenant.TENANT_NETWORK, tenant.INSPECT_NETWORK):
+        options = tenant.BRIDGE_OPTIONS[network]
+        assert options["com.docker.network.bridge.enable_icc"] == "false", (
+            f"{network} allows inter-container traffic. Two tenants on it can "
+            "reach each other's unauthenticated dashboards.")
+    assert set(tenant.BRIDGE_OPTIONS) == {tenant.TENANT_NETWORK,
+                                          tenant.INSPECT_NETWORK}, (
+        "a bridge with no options entry is a bridge created with Docker's "
+        "defaults, which means ICC on")
+
+
+def test_each_bridges_interface_name_matches_its_network_name():
+    """firewall.sh writes `iptables -i waku-tenants` against the LINUX
+    interface, and Docker names that interface `br-<id>` unless it is told
+    otherwise. The two are set to the same string so the rule means what it
+    looks like it means."""
+    assert (tenant.BRIDGE_OPTIONS[tenant.TENANT_NETWORK]
+            ["com.docker.network.bridge.name"]) == tenant.TENANT_BRIDGE
+    assert (tenant.BRIDGE_OPTIONS[tenant.INSPECT_NETWORK]
+            ["com.docker.network.bridge.name"]) == tenant.INSPECT_BRIDGE
+    for name in (tenant.TENANT_BRIDGE, tenant.INSPECT_BRIDGE):
+        assert len(name) < 16, f"{name} is past Linux's IFNAMSIZ of 15"

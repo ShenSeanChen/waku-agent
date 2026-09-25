@@ -93,11 +93,17 @@ else:
                  ["--ip-range", str(_tenant.DYNAMIC_RANGE)]),
                 (_tenant.INSPECT_NETWORK, str(_tenant.INSPECT_SUBNET),
                  str(_tenant.INSPECT_GATEWAY), [])):
+            # Every option from core/tenant.BRIDGE_OPTIONS, so the bridge the
+            # tests run on and the bridge networks.sh will create cannot
+            # disagree -- enable_icc=false above all, which is what stops
+            # tenant A opening TCP to tenant B's unauthenticated dashboard.
+            options = []
+            for key, value in _tenant.BRIDGE_OPTIONS[name].items():
+                options += ["--opt", f"{key}={value}"]
             _dockerlib.network_remove(name)
             _dockerlib.network_create(
                 name, "--driver", "bridge", "--subnet", subnet,
-                "--gateway", gateway,
-                "--opt", f"com.docker.network.bridge.name={name}", *extra)
+                "--gateway", gateway, *options, *extra)
         yield
         for name in (_tenant.TENANT_NETWORK, _tenant.INSPECT_NETWORK):
             _dockerlib.network_remove(name)
@@ -131,8 +137,26 @@ else:
         # XFS mount, so on CI the setup created four directories nothing used.
         mount, device = _dockerlib.xfs_root() or (None, None)
         root = mount if mount is not None else tmp_path_factory.mktemp("waku")
-        for name in ("tenants", "archive", "staging", "run/spawner"):
-            (root / name).mkdir(parents=True, exist_ok=True)
+        # xfs_root() proves the mount ENFORCES project quotas. It says nothing
+        # about whether this process can write to it, and on the hosted-docker
+        # runner /srv/waku is root:root 0755 -- so an unprivileged pytest gets
+        # PermissionError here and EVERY test in the tier errors at setup, for
+        # a reason that has nothing to do with the code. Say what it is.
+        try:
+            for name in ("tenants", "archive", "staging", "run/spawner"):
+                (root / name).mkdir(parents=True, exist_ok=True)
+            probe = root / ".waku-write-probe"
+            probe.write_text("x", encoding="utf-8")
+            probe.unlink()
+        except OSError as exc:
+            raise AssertionError(
+                f"cannot write to {root}: {exc}. This tier runs the spawner's "
+                "own operations -- it chowns tenant directories to UID 10001 "
+                "at mode 0700 and reads them back -- so it needs the "
+                "privileges the spawner has. The hosted-docker job runs it "
+                'with `sudo -E env "PATH=$PATH" python -m pytest`; run it the '
+                "same way locally. Loosening the tenant tree instead would "
+                "change the thing under test.") from exc
         env = {
             "WAKU_TENANT_ROOT": f"{root}/tenants",
             "WAKU_ARCHIVE_ROOT": f"{root}/archive",

@@ -28,6 +28,7 @@ the code:
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import os
 import socket
 import time
@@ -35,6 +36,8 @@ from pathlib import Path
 
 from hosted import log
 from hosted.core.tenant import (
+    TENANT_SUBNET,
+    TenantDirs,
     address_for_project,
     is_project_id,
     is_tenant_id,
@@ -92,12 +95,19 @@ tar --create --directory /work . | zstd -q -o "/archive/$1-env.tar.zst"
 
 # Emptying a tenant's tree is a WALK, so it happens HERE -- as UID 10001,
 # inside a throwaway container, with only that tenant's mounts -- and never on
-# the host. `find -delete` removes a planted symlink as a link and does not
-# descend it. The host's own part is one rmdir per directory, which is a single
-# syscall over a directory this process just watched become empty; it fails
-# loudly if anything is left rather than reaching for a recursive remove.
+# the host. `find -delete` implies -depth, traverses FTS_PHYSICAL and unlinks
+# relative to a directory fd it opened itself, so a planted symlink is removed
+# as a link and never descended; -mindepth 1 leaves the mount point alone. The
+# host's own part is one rmdir per directory, a single syscall over a directory
+# that is now empty, which fails loudly rather than reaching for a recursive
+# remove.
+#
+# BOTH MOUNTS IN ONE RUN, and that is not tidiness -- see
+# _empty_and_remove_trees for why two runs cannot work.
 _EMPTY_SCRIPT = """
-find "$1" -mindepth 1 -delete
+for mount in "$@"; do
+  find "$mount" -mindepth 1 -delete
+done
 """
 
 
@@ -293,6 +303,22 @@ class DockerRuntime:
                 _LOG.warning("tenant=%s has no address on %s; not listing it",
                              tenant_id, template.TENANT_NETWORK)
                 continue
+            if not _is_a_tenant_address(address):
+                # The gateway FORWARDS to whatever this returns, so an address
+                # off the tenant subnet is a request the platform would make
+                # somewhere it never meant to.
+                #
+                # THE STRONGEST RULE AVAILABLE HERE, AND ITS LIMIT, STATED.
+                # `list` has the tenant id but not the project id, so it cannot
+                # check the address is THAT tenant's -- only that it is inside
+                # TENANT_SUBNET, outside DYNAMIC_RANGE, and therefore one that
+                # some project id derives. Only something that can already
+                # create containers could put a wrong-but-valid address here,
+                # so this is hardening; the check beside it on the tenant id is
+                # the precedent.
+                _LOG.warning("tenant=%s has address %r, which no project id "
+                             "derives; not listing it", tenant_id, address)
+                continue
             running.append(RunningContainer(tenant_id=tenant_id, address=address,
                                             port=template.DASHBOARD_PORT))
         return running
@@ -347,9 +373,14 @@ class DockerRuntime:
                 "directories empty and has to give them back their own id. A "
                 "new id would give the tenant a new XFS accounting bucket AND "
                 "a new fixed bridge address.")
+        # restore is dispatched BEFORE the table and is not in it. It is the
+        # one task that takes a second argument, and a table entry for it
+        # would be a dead branch that calls _restore one argument short the
+        # day somebody removes the special case below as redundant.
+        if task == "restore":
+            return await self._restore(tenant_id, project_id)
         handler = {
             "backup": self._backup,
-            "restore": self._restore,
             "archive": self._archive,
             "inspect": self._inspect,
             "inspect-stop": self._inspect_stop,
@@ -360,8 +391,6 @@ class DockerRuntime:
             # this class is also callable in-process by the gateway and a
             # KeyError here would read as a Docker fault.
             raise ValueError(f"not a task: {task!r}")
-        if task == "restore":
-            return await self._restore(tenant_id, project_id)
         return await handler(tenant_id)
 
     def _staging(self, tenant_id: str) -> Path:
@@ -369,8 +398,16 @@ class DockerRuntime:
 
     async def _backup(self, tenant_id: str) -> dict:
         staging = self._staging(tenant_id)
+        if staging.is_symlink():
+            # Path.mkdir(exist_ok=True) re-checks with is_dir(), which FOLLOWS
+            # a link, and os.chown follows too. Nothing a tenant can write to
+            # includes staging_root today, so this is not reachable -- but this
+            # process is root, the subject of the whole file is planted links,
+            # and refusing costs one stat.
+            raise RuntimeError(f"{staging} is a symlink; refusing to chown through it")
         staging.mkdir(parents=True, exist_ok=True)
-        os.chown(staging, template.TENANT_UID, template.TENANT_UID)
+        os.chown(staging, template.TENANT_UID, template.TENANT_UID,
+                 follow_symlinks=False)
         body = template.task_container(
             self._config, tenant_id=tenant_id,
             command=["bash", "-euc", _BACKUP_SCRIPT],
@@ -398,15 +435,46 @@ class DockerRuntime:
         scheme rests on -- that a stale address in the gateway's memory "can
         only reach nothing or the same tenant".
 
-        Because provision() creates the directories fresh here, its create path
-        runs and `claim()` sets the project id on two empty directories. That
-        is the only place in the class where `project -s` runs, and it runs on
-        exactly what the spec describes.
+        BOTH DIRECTORIES ARE REMOVED IN ONE CONTAINER RUN, and the reason is
+        C2-1. template.task_container binds BOTH tenant paths unconditionally,
+        and the Docker daemon creates a missing `Binds` source as a root-owned
+        directory -- the documented behaviour of the legacy bind form and the
+        reason `--mount` exists. So removing them one per run cannot work: the
+        second run's create re-makes the first's directory, behind provision's
+        back, and provision then takes its FileExistsError branch and calls
+        set_limit instead of claim. That directory keeps XFS project 0 --
+        uncounted and unlimited -- for the rest of that tenant's life, while
+        the other one is fine and the asymmetry is invisible. A tenant who got
+        a restore could then fill the shared data disk and stop every other
+        tenant on the VM.
+
+        So: one run empties both mounts, the host then removes both, and
+        nothing binds either path again until provision() has re-created them.
+        Its create path runs for BOTH, and `claim()` sets the project id on two
+        empty directories -- the only place in this class where `project -s`
+        runs, on exactly what the spec describes. The check below is what makes
+        a future regression loud instead of silent.
         """
+        staging = self._staging(tenant_id)
+        if not staging.is_dir():
+            # The same daemon behaviour, one bind further along: without this,
+            # the restore container's /staging bind would be CREATED empty and
+            # the restore would quietly replace the tenant's data with nothing.
+            raise RuntimeError(
+                f"nothing staged for {tenant_id} at {staging}. A restore "
+                "extracts what a backup or restic put there; with the "
+                "directory missing the daemon would create it empty and this "
+                "would erase the tenant instead of restoring them.")
         archive = await self._archive(tenant_id, suffix="pre-restore")
         dirs = tenant_dirs(self._config.tenant_root, tenant_id)
+        await self._empty_and_remove_trees(tenant_id, dirs)
         for directory in (dirs.home, dirs.env):
-            await self._remove_tree(tenant_id, directory)
+            if directory.exists():
+                raise RuntimeError(
+                    f"{directory} is still there after being removed, so "
+                    "provision() would take its repeat path and never claim a "
+                    "project id for it. Something re-created it -- almost "
+                    "certainly a container bind. See this method's docstring.")
         await self.provision(tenant_id, project_id)
         body = template.task_container(
             self._config, tenant_id=tenant_id,
@@ -436,28 +504,40 @@ class DockerRuntime:
         _LOG.info("archived tenant=%s to %s-{home,env}.tar.zst", tenant_id, path)
         return {"path": str(path)}
 
-    async def _remove_tree(self, tenant_id: str, directory: Path) -> None:
-        """Empty a tenant's directory from INSIDE a container, then rmdir it.
+    async def _empty_and_remove_trees(self, tenant_id: str, dirs: TenantDirs) -> None:
+        """Empty BOTH of a tenant's directories from INSIDE one container, then
+        rmdir both on the host.
+
+        ONE RUN, AND THE RMDIRS AFTER IT. task_container binds both tenant
+        paths unconditionally and the daemon creates a missing bind source, so
+        a second container run -- or a rmdir between two runs -- re-makes what
+        the first removed, root-owned, behind provision's back. That was C2-1
+        and it cost the restored tenant their disk quota. There is no version
+        of this that removes one directory at a time.
 
         The emptying is a walk over a tree the tenant wrote, so it runs as UID
         10001 in a throwaway container with only that tenant's mounts -- the
         same rule as provisioning, for the same reason. What the host does is
-        one rmdir, a single syscall on a directory that is now empty, which
-        fails loudly rather than falling back to a recursive remove.
+        one rmdir per directory, a single syscall on a directory that is now
+        empty: it refuses a symlink with ENOTDIR and a non-empty directory with
+        ENOTEMPTY, and it fails loudly rather than falling back to a recursive
+        remove. If `find` fails for any reason, `bash -euc` exits non-zero,
+        _run_to_completion raises, and the host never reaches rmdir at all.
 
-        The directory has to GO, not just be emptied: provision's create path
-        is what calls xfsquota.claim, and claim is the only thing that may set
-        a project id -- on a directory nothing has written to yet.
+        The directories have to GO, not just be emptied: provision's create
+        path is what calls xfsquota.claim, and claim is the only thing that may
+        set a project id -- on a directory nothing has written to yet.
         """
-        # A KeyError here rather than a default: "/work" as a fallback would
-        # send an unrecognised directory to the wrong mount silently.
-        mount = {"home": "/data", "env": "/work"}[directory.name]
         body = template.task_container(
             self._config, tenant_id=tenant_id,
-            command=["bash", "-euc", _EMPTY_SCRIPT, "empty-tree", mount])
+            # "/data" and "/work" are the mounts task_container always makes,
+            # named here as literals because they are this container's whole
+            # world; the host paths behind them are dirs.home and dirs.env.
+            command=["bash", "-euc", _EMPTY_SCRIPT, "empty-trees", "/data", "/work"])
         await self._run_to_completion(body, tenant_id, "empty")
-        os.rmdir(directory)
-        _LOG.info("removed tenant=%s directory=%s", tenant_id, directory)
+        for directory in (dirs.home, dirs.env):
+            os.rmdir(directory)
+            _LOG.info("removed tenant=%s directory=%s", tenant_id, directory)
 
     async def _inspect(self, tenant_id: str) -> dict:
         """A stock dashboard on a stopped tenant's data, on loopback only.
@@ -486,6 +566,28 @@ class DockerRuntime:
         await self._engine.remove(name)
         _LOG.info("inspect container down for tenant=%s", tenant_id)
         return {"ok": True}
+
+
+def _is_a_tenant_address(address: str) -> bool:
+    """Is this an address some project id derives?
+
+    address_for_project is `subnet.network_address + project_id`, so this runs
+    it backwards and asks is_project_id about the offset. An ALLOWLIST derived
+    from the one function that mints these, not a list of ranges to exclude:
+    it refuses the bridge gateway (offset 1, where the proxy listens), every
+    address in DYNAMIC_RANGE (offsets past LAST_PROJECT_ID), and anything off
+    the subnet, without naming any of them.
+
+    It cannot say WHOSE address it is, because `list` has no project id to
+    compare against; see its call site for that limit.
+    """
+    try:
+        parsed = ipaddress.ip_address(address)
+    except ValueError:
+        return False
+    if parsed.version != 4 or parsed not in TENANT_SUBNET:
+        return False
+    return is_project_id(int(parsed) - int(TENANT_SUBNET.network_address))
 
 
 def _free_loopback_port() -> int:
