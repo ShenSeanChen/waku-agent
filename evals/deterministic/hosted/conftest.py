@@ -40,3 +40,36 @@ def harness(tmp_path):
     from gatewaylib import FakeSpawner, Harness
 
     return Harness(tmp_path, FakeSpawner())
+
+
+@pytest.fixture
+def wired(tmp_path):
+    """A gateway with the real forwarder in front of a fake container.
+
+    Here and not in gatewaylib.py for the reason `harness` gives above: a
+    fixture is only collected from a test module or a conftest. test_gateway.py
+    and test_admin.py both take it, so this is what lets them share it without
+    importing a fixture out of a test module.
+    """
+    from gatewaylib import FakeContainer, FakeSpawner, Harness
+
+    container = FakeContainer()
+    container.start()
+    harness = Harness(tmp_path, FakeSpawner())
+    harness.use_real_forwarding(container)
+    yield harness
+    container.stop()
+
+
+@pytest.fixture
+def wired_one_slot(tmp_path):
+    """The same, on a VM with room for exactly one container, so the running
+    cap is reachable without writing to Fleet's private state."""
+    from gatewaylib import FakeContainer, FakeSpawner, Harness
+
+    container = FakeContainer()
+    container.start()
+    harness = Harness(tmp_path, FakeSpawner(), max_running=1)
+    harness.use_real_forwarding(container)
+    yield harness
+    container.stop()

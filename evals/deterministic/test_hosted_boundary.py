@@ -125,6 +125,16 @@ ALLOWED_IMPORT_ROOTS_IN_HOSTED = (
     # The two distributions the `hosted` extra declares, by import name.
     # Nothing in group B imports either; groups D and E do.
     | {"aiohttp", "jwt"}
+    # yarl is aiohttp's OWN required dependency ("yarl<2.0,>=1.17.0" in
+    # aiohttp's metadata), so naming it here installs nothing that was not
+    # already being installed and adds no line to pyproject.toml or uv.lock.
+    # E3 needs it because yarl.URL(..., encoded=True) is the only way through
+    # aiohttp's public API to send a request target byte for byte -- and
+    # sending it byte for byte is acceptance 22: /api/models?provider= keeps
+    # its empty value and /api/events?cursor=42 keeps its cursor. Reaching the
+    # same class through aiohttp.client.URL would be the same import wearing a
+    # private name.
+    | {"yarl"}
 )
 
 # Builtins that load code. Not import roots, so the allowlist cannot see them.

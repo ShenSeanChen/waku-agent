@@ -1,7 +1,8 @@
 """The admin path and the running gateway agree -- acceptance 23.
 
 The restart-all half is E3's, because "the gateway forwards to the new
-address" needs a forwarder that reads an address.
+address" needs a forwarder that reads an address, and it is the one test here
+that takes `wired` rather than `harness`.
 
 EVERY TEST HERE THAT MATTERS GOES OVER THE SOCKET. admin.handle is reachable
 in-process, and test_auth.py calls it that way once for brevity, but the ones
@@ -18,7 +19,14 @@ import tempfile
 from pathlib import Path
 
 import pytest
-from gatewaylib import cookie_value, sign, sign_in, signed_in_on_the_tenant_host
+from gatewaylib import (
+    FakeContainer,
+    cookie_value,
+    ops,
+    sign,
+    sign_in,
+    signed_in_on_the_tenant_host,
+)
 
 from hosted import jsonsock
 from hosted.gateway import admin
@@ -222,3 +230,42 @@ def test_disable_burns_the_hand_off_codes_that_were_already_minted(harness):
     assert stale[1]["location"] == "https://agent.waku.one/login"
     assert cookie_value(stale[1], "__Host-waku_tenant") == ""
     assert landed[0] == 401
+
+
+def test_restart_all_leaves_one_container_per_tenant_and_forwards_to_the_new_one(
+        wired, sock_dir):
+    """Acceptance 23's second half. The forwarding assertion is what makes it
+    E3's: "the gateway forwards to the new address" needs a forwarder that
+    reads an address, and E1 had a recording stand-in."""
+    async def run():
+        await wired.start()
+        host, cookie = await signed_in_on_the_tenant_host(wired)
+        tenant_id = host.split(".", 1)[0]
+        before = await wired.send("GET", "/api/data", host=host, cookie=cookie)
+
+        # upgrade.sh --now moves the container to a second port, the way a new
+        # image would move it to a new container.
+        second = FakeContainer()
+        second.start()
+        wired.spawner.port = second.port
+
+        path = sock_dir / "admin.sock"
+        server = await admin.serve_admin(path, wired.gateway)
+        answer = await jsonsock.ask(path, {"op": "restart-all"}, timeout=30.0)
+        server.close()
+        await server.wait_closed()
+
+        after = await wired.send("GET", "/api/data", host=host, cookie=cookie)
+        await wired.stop()
+        second.stop()
+        return tenant_id, before, answer, after, second
+
+    tenant_id, before, answer, after, second = asyncio.run(run())
+    assert before[0] == 200
+    assert answer == {"restarted": [tenant_id]}
+    assert after[0] == 200
+    assert second.targets == ["/api/data"]        # the NEW container answered
+    assert wired.container.targets == ["/api/data"]   # the old one, once, before
+    starts = ops(wired.spawner, "start")
+    assert len(starts) == 2
+    assert starts[0]["token"] != starts[1]["token"]

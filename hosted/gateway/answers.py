@@ -98,3 +98,21 @@ def wants_html(request: web.Request) -> bool:
 def refusal(request: web.Request, status: int, message: str) -> web.Response:
     return (html_error(status, message) if wants_html(request)
             else json_error(status, message))
+
+
+TOOK_TOO_LONG = "That took too long. Try again."
+
+
+# Spec, "Error shape": on a streaming route an error is one terminal `done`
+# event carrying `error`, not a JSON body.
+#
+# THE STATUS CODE IS FOR THE LOG, NOT FOR THE PAGE. waku/ops/static/js/
+# render.js calls fetch and goes straight to res.body.getReader(); there is no
+# res.ok branch anywhere in the stream consumers. So the page reads this body
+# whatever the status, render.js turns {"kind": "done", "error": ...} into
+# "Error: <message>" in the dock, and the status is what curl and the access
+# log see.
+def sse_error(status: int, message: str) -> web.Response:
+    frame = json.dumps({"kind": "done", "error": message})
+    return harden(web.Response(status=status, text=f"data: {frame}\n\n",
+                               content_type="text/event-stream", charset="utf-8"))

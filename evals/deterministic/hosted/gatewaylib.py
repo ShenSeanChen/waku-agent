@@ -9,17 +9,27 @@ test_auth.py, test_gateway.py and test_admin.py, so it lives here and is
 imported as a module.
 
 E2 writes this half. E1 step 11 appends the HTTP harness, the signing key and
-the wire helpers; E3 step 9 appends the fake container. Nothing is defined
-twice and nothing is moved after it is written.
+the wire helpers; E3 step 9 appends the fake container and Harness's real
+forwarder. Nothing is defined twice and nothing is moved after it is written.
+
+THE FIXTURES ARE IN conftest.py, NOT HERE, and `wired` is no exception. A
+fixture is only collected from a test module or a conftest: imported into a
+test module it is also an unused name to ruff, and `pytest_plugins` in a
+non-root conftest is an error on pytest 9. So `harness`, `wired` and
+`wired_one_slot` all sit beside each other in conftest.py, and this module
+owns the classes they build.
 """
 
 from __future__ import annotations
 
 import asyncio
 import json
+import threading
 import time
 from http.cookies import SimpleCookie
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+import aiohttp
 import jwt
 from aiohttp import web
 from cryptography.hazmat.primitives.asymmetric import ec
@@ -28,6 +38,7 @@ from hosted.core import idle, quota
 from hosted.core.tenant import address_for_project
 from hosted.gateway.app import Gateway
 from hosted.gateway.config import GatewayConfig
+from hosted.gateway.forward import ContainerForwarder
 from hosted.gateway.identity import JwksVerifier
 from hosted.gateway.launch import Launcher
 from hosted.gateway.store import ControlDb
@@ -52,6 +63,7 @@ class FakeSpawner:
     `address` and `port` exist so E3 can point a start at a real fake
     container on loopback; left None, a start answers the fixed address the
     tenant's project id derives, which is what the real spawner answers.
+    `list` always answers the derived address -- see `start`.
     """
 
     def __init__(self) -> None:
@@ -91,7 +103,18 @@ class FakeSpawner:
             tenant_id=tenant_id,
             address=self.address or address_for_project(project_id),
             port=self._port())
-        self.running[tenant_id] = container
+        # WHAT `list` WILL REPORT IS THE ADDRESS THE PROJECT ID DERIVES, even
+        # when `address` overrode what this call ANSWERS. That is not a
+        # discrepancy for its own sake: the real spawner puts every container
+        # on 10.88.0.0/16 and reports it there, and Launcher.resync refuses to
+        # adopt any other address -- while a pytest process can open a socket
+        # to loopback and to nothing else. So `address` moves the address E3's
+        # forwarder CONNECTS to, and leaves the address the fleet is told
+        # about where the real one would be. With `address` unset the two are
+        # the same object's worth of values and nothing changes.
+        self.running[tenant_id] = RunningContainer(
+            tenant_id=tenant_id, address=address_for_project(project_id),
+            port=container.port)
         return container
 
     async def stop(self, tenant_id: str) -> None:
@@ -271,6 +294,7 @@ class Harness:
         self.forwarder: object = RecordingForwarder()
         self.session = None
         self.container = None
+        self._real_forwarding = False
         self.config = GatewayConfig(
             apex_host=APEX, bind_host="127.0.0.1", port=0,
             control_db=tmp_path / "control.db",
@@ -292,6 +316,37 @@ class Harness:
                        forward=self.forwarder, turns=self.turns,
                        plans=self.plans, now=self.clock)
 
+    def use_real_forwarding(self, container: FakeContainer) -> None:
+        """Point the harness at a fake container and swap the recording
+        forwarder for the real one.
+
+        MUST be called before start(). A test that calls it after has a
+        running app built from the old Gateway, so every assertion under it
+        would be about the recording forwarder -- and would pass. That is the
+        shape of a test that cannot fail, so it is an assertion, not a note.
+
+        THE SESSION IS BUILT IN start(), NOT HERE. aiohttp.ClientSession needs
+        a running event loop at construction ("RuntimeError: no running event
+        loop" on 3.14), and this is called from a synchronous pytest fixture.
+        So this records the intent and start(), which is async, does the
+        wiring -- which is also why `_wire_real_forwarding` is not a second
+        place that decides anything.
+        """
+        assert self._runner is None, "call use_real_forwarding before start()"
+        self.container = container
+        self.spawner.address = "127.0.0.1"
+        self.spawner.port = container.port
+        self._real_forwarding = True
+
+    def _wire_real_forwarding(self) -> None:
+        """Inside the loop: the session, the forwarder, the Gateway."""
+        self.session = aiohttp.ClientSession(auto_decompress=False)
+        self.forwarder = ContainerForwarder(
+            launcher=self.launcher, turns=self.turns, plans=self.plans,
+            proxy_socket=self.config.proxy_socket, session=self.session,
+            now=self.clock)
+        self.gateway = self._build_gateway()
+
     def use_forwarder(self, forward) -> None:
         """Swap the forwarder, before start().
 
@@ -305,6 +360,8 @@ class Harness:
         self.gateway = self._build_gateway()
 
     async def start(self) -> None:
+        if self._real_forwarding:
+            self._wire_real_forwarding()
         self._runner = web.AppRunner(self.gateway.build())
         await self._runner.setup()
         site = web.TCPSite(self._runner, "127.0.0.1", 0)
@@ -335,10 +392,16 @@ class Harness:
                                headers=head)
 
 
-async def sign_in(harness: Harness) -> tuple[str, str, str]:
+async def sign_in(harness: Harness, **claims) -> tuple[str, str, str]:
     """(tenant id, apex cookie, hand-off code) from a real POST
-    /auth/session. Three test modules call it, so it lives here."""
-    token = sign(harness.private, now=harness.clock.t)
+    /auth/session. Three test modules call it, so it lives here.
+
+    `claims` overrides what the signed token carries, which is how a test
+    signs in a SECOND person: a different `sub` is a different tenant. E3's
+    cap test needs three, and three copies of this function is how they would
+    otherwise arrive.
+    """
+    token = sign(harness.private, now=harness.clock.t, **claims)
     status, headers, body = await harness.json_post(
         "/auth/session", {"access_token": token, "timezone": "Asia/Shanghai"},
         host=APEX)
@@ -349,12 +412,101 @@ async def sign_in(harness: Harness) -> tuple[str, str, str]:
             enter.split("code=", 1)[1])
 
 
-async def signed_in_on_the_tenant_host(harness: Harness) -> tuple[str, str]:
+async def signed_in_on_the_tenant_host(harness: Harness,
+                                       **claims) -> tuple[str, str]:
     """(tenant host, tenant-host cookie header) after a real sign-in and a
     real hand-off. Here rather than in test_gateway.py because test_admin.py
     needs it too, and importing a helper across test modules is how the F811
     that created spawnerlib.py started."""
-    tenant_id, _apex, code = await sign_in(harness)
+    tenant_id, _apex, code = await sign_in(harness, **claims)
     host = f"{tenant_id}.{APEX}"
     _s, headers, _b = await harness.send("GET", f"/auth/enter?code={code}", host=host)
     return host, f"__Host-waku_tenant={cookie_value(headers, '__Host-waku_tenant')}"
+
+
+class FakeContainer:
+    """A stock-shaped dashboard: HTTP/1.0, SSE by connection close, and a
+    Set-Cookie on every answer.
+
+    NOT an aiohttp server. waku/ops/dashboard.py is a BaseHTTPRequestHandler
+    with no protocol_version, so every real container answers HTTP/1.0 and
+    delimits a stream by closing the socket. An aiohttp stand-in would answer
+    HTTP/1.1 with chunked encoding, and the pass-through would be tested
+    against a wire shape no tenant container has.
+
+    It records the exact request target it was given, which is what
+    acceptance 22 is about, and it sets a cookie on every response, which is
+    what acceptance 14 is about.
+    """
+
+    def __init__(self) -> None:
+        self.targets: list[str] = []
+        self.bodies: list[bytes] = []
+        self.headers: list[dict] = []
+        self.delay = 0.0
+        # Seconds between SSE frames, and an Event set after the last one.
+        # Together they are how a test can say "the browser had frame one
+        # before the container had written frame three", which is the whole
+        # of what "unbuffered" means and is not a timing assertion.
+        self.frame_delay = 0.0
+        self.finished = threading.Event()
+        # The Location the container tries to send. Off-origin by default,
+        # because that is the one acceptance 14 is about; the tests that drive
+        # forward._is_same_origin_location set it case by case.
+        self.location = "https://evil.example/"
+        self._server: ThreadingHTTPServer | None = None
+        self.port = 0
+
+    def start(self) -> None:
+        recorder = self
+
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, *args):
+                """Silence BaseHTTPRequestHandler's stderr log line."""
+
+            def _record(self) -> bytes:
+                recorder.targets.append(self.path)
+                recorder.headers.append(dict(self.headers))
+                length = int(self.headers.get("Content-Length", 0))
+                body = self.rfile.read(length) if length else b""
+                recorder.bodies.append(body)
+                return body
+
+            def do_GET(self):
+                self._record()
+                if recorder.delay:
+                    time.sleep(recorder.delay)
+                if self.path.startswith("/api/chat/stream"):
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/event-stream")
+                    self.send_header("Set-Cookie", "evil=1")
+                    self.end_headers()
+                    for index in range(3):
+                        if index and recorder.frame_delay:
+                            time.sleep(recorder.frame_delay)
+                        self.wfile.write(f"data: {{\"n\": {index}}}\n\n".encode())
+                        self.wfile.flush()
+                    recorder.finished.set()
+                    return
+                payload = json.dumps({"path": self.path}).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(payload)))
+                self.send_header("Set-Cookie", "evil=1")
+                self.send_header("Clear-Site-Data", '"cookies"')
+                self.send_header("Location", recorder.location)
+                self.send_header("X-Secret", "leaked")
+                self.end_headers()
+                self.wfile.write(payload)
+
+            do_POST = do_GET
+
+        self._server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.port = self._server.server_address[1]
+        threading.Thread(target=self._server.serve_forever, daemon=True).start()
+
+    def stop(self) -> None:
+        if self._server is not None:
+            self._server.shutdown()
+            self._server.server_close()
+            self._server = None
