@@ -62,12 +62,26 @@ TENANT_DIR_MODE = 0o700
 # confused. test_container_template.py pins both halves.
 NO_QUOTA_DEVICE = "none"
 
+# EVERY SCRIPT HERE THAT HAS A PIPELINE SETS `pipefail`, and `bash -euc` alone
+# does not. MEASURED, not assumed:
+#
+#   bash -euc 'tar --create --file - --directory /gone . | tar --extract ...'
+#
+# exits 0. Not "fails with the sink's error" -- exits ZERO. _run_to_completion
+# only raises on a non-zero exit, so without this line a restore that read
+# nothing would have returned {"ok": True} over a tenant whose old tree had
+# just been archived and removed, and a backup that copied nothing would have
+# reported a path the operator would later restore from.
+# test_spawner_restore.py::test_a_failing_source_fails_the_whole_pipeline drives
+# these three constants through a real bash with `tar` stubbed on PATH.
+#
 # `sqlite3 .backup` is SQLite's ONLINE backup: it is safe against a live
 # database, which a plain copy is not. The *-wal, *-shm and *-journal files are
 # left out on purpose -- they belong to the live database and would corrupt the
 # copy on restore -- and every other file is copied as-is, symlinks kept as
 # symlinks, because restic stores a symlink as a symlink and never follows it.
 _BACKUP_SCRIPT = """
+set -o pipefail
 mkdir -p /staging/home /staging/env
 if [ -f /data/state.db ]; then
   sqlite3 /data/state.db ".backup '/staging/home/state.db'"
@@ -81,6 +95,7 @@ tar --create --file - --directory /work \
 """
 
 _RESTORE_SCRIPT = """
+set -o pipefail
 tar --create --file - --directory /staging/home . | tar --extract --file - --directory /data
 tar --create --file - --directory /staging/env  . | tar --extract --file - --directory /work
 """
@@ -89,6 +104,7 @@ tar --create --file - --directory /staging/env  . | tar --extract --file - --dir
 # kept, not read. The two mounts go into one archive so a restore that needs
 # the pre-restore state gets both halves or neither.
 _ARCHIVE_SCRIPT = """
+set -o pipefail
 tar --create --directory /data . | zstd -q -o "/archive/$1-home.tar.zst"
 tar --create --directory /work . | zstd -q -o "/archive/$1-env.tar.zst"
 """
@@ -456,20 +472,41 @@ class DockerRuntime:
         a future regression loud instead of silent.
         """
         staging = self._staging(tenant_id)
-        if not staging.is_dir():
-            # The same daemon behaviour, one bind further along: without this,
-            # the restore container's /staging bind would be CREATED empty and
-            # the restore would quietly replace the tenant's data with nothing.
+        if staging.is_symlink():
+            # is_dir() FOLLOWS a link; _backup refuses one outright. Two guards
+            # on the same path must not disagree about the same class of input.
             raise RuntimeError(
-                f"nothing staged for {tenant_id} at {staging}. A restore "
-                "extracts what a backup or restic put there; with the "
-                "directory missing the daemon would create it empty and this "
-                "would erase the tenant instead of restoring them.")
+                f"{staging} is a symlink; refusing to restore through it")
+        if not all((staging / part).is_dir() for part in ("home", "env")):
+            # CONTENT, NOT EXISTENCE, and the difference is the whole finding.
+            # The same daemon behaviour as the tenant directories, one bind
+            # further along: with <staging>/<id> absent the daemon CREATES it
+            # empty, so the restore extracts nothing over a tenant whose tree
+            # has just been archived and removed. But a directory that merely
+            # EXISTS -- empty, or half a backup interrupted between its two
+            # tars -- walked straight through the first version of this guard
+            # and the destruction happened anyway.
+            #
+            # `home` and `env` is exactly the pair _BACKUP_SCRIPT writes, so
+            # this asks for a whole backup and nothing less. It runs BEFORE
+            # _archive, because once the old tree is packed away and the two
+            # directories are gone, a restore that cannot finish has already
+            # destroyed what it was restoring.
+            raise RuntimeError(
+                f"nothing whole staged for {tenant_id} at {staging}: a restore "
+                "needs both home/ and env/, which is what a backup writes. "
+                "Refusing before anything is archived or removed -- a restore "
+                "that cannot finish must not erase the tenant first.")
         archive = await self._archive(tenant_id, suffix="pre-restore")
         dirs = tenant_dirs(self._config.tenant_root, tenant_id)
         await self._empty_and_remove_trees(tenant_id, dirs)
         for directory in (dirs.home, dirs.env):
-            if directory.exists():
+            # lexists, not exists: exists() follows a link and answers False
+            # for a dangling one, so a directory replaced by a broken symlink
+            # read as "successfully removed" and provision()'s mkdir then
+            # raised FileExistsError on the link -- reaching the operator as
+            # jsonsock's opaque error rather than as the thing that happened.
+            if os.path.lexists(directory):
                 raise RuntimeError(
                     f"{directory} is still there after being removed, so "
                     "provision() would take its repeat path and never claim a "

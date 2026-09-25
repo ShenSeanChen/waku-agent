@@ -13,6 +13,8 @@ field is supposed to prevent; none reads a dict.
 
 from __future__ import annotations
 
+import contextlib
+
 import dockerlib
 from spawnerlib import (
     PROJECT_A,
@@ -28,6 +30,43 @@ from spawnerlib import (
 from hosted.core import tenant
 from hosted.spawner import template
 
+# A port nothing else on a runner is likely to hold, high enough to need no
+# privilege. The listener below is a stand-in for D1's proxy: the point is only
+# that SOMETHING on the host answers on the bridge gateway.
+GATEWAY_PROBE_PORT = 18788
+
+_HOST_LISTENER = (
+    "import socketserver, sys\n"
+    "class H(socketserver.BaseRequestHandler):\n"
+    "    def handle(self):\n"
+    "        self.request.sendall(b'ok')\n"
+    "socketserver.ThreadingTCPServer.allow_reuse_address = True\n"
+    "socketserver.ThreadingTCPServer(('0.0.0.0', int(sys.argv[1])), H)"
+    ".serve_forever()\n")
+
+HOST_LISTENER_CONTAINER = "waku-gateway-probe"
+
+
+@contextlib.contextmanager
+def _listening_on_the_host(port: int):
+    """Something answering on the host, reachable at the bridge gateway.
+
+    `--network host`, so the socket is the HOST's and the bridge gateway
+    address routes to it -- which is exactly how D1's proxy will be reached.
+    Torn down in a finally, because a stray container on a fixed name breaks
+    every later run with a name conflict rather than with a test failure.
+    """
+    dockerlib.remove(HOST_LISTENER_CONTAINER)
+    try:
+        dockerlib.start_detached(
+            SERVICES_TAG, ["python", "-c", _HOST_LISTENER, str(port)],
+            name=HOST_LISTENER_CONTAINER, user="0:0", network="host",
+            read_only=False)
+        dockerlib.wait_for_listener(HOST_LISTENER_CONTAINER, "127.0.0.1", port)
+        yield
+    finally:
+        dockerlib.remove(HOST_LISTENER_CONTAINER)
+
 
 def test_a_tenant_cannot_open_a_socket_to_another_tenants_dashboard(spawner):
     """The ONE piece of acceptance 1 this branch carries, and the reason it is
@@ -40,11 +79,23 @@ def test_a_tenant_cannot_open_a_socket_to_another_tenants_dashboard(spawner):
     console. `enable_icc=false` in core/tenant.BRIDGE_OPTIONS is what closes
     it, and this is the test that tries the connection.
 
-    THE CONTROL IS THE HALF THAT MATTERS. `probe_tcp` returning False is also
-    what a broken prober, a dead container and a dashboard that never bound
-    look like. So each container first proves it can reach its OWN dashboard
-    on 127.0.0.1:7777 -- same prober, same port, same code path -- and only
-    then is the cross-tenant refusal an assertion about the bridge.
+    THE CONTROL IS THE HALF THAT MATTERS, and it takes TWO probes, not one.
+    `probe_tcp` returning False is also what a broken prober, a dead container,
+    a dashboard that never bound and a container that never joined the network
+    look like.
+
+      - 127.0.0.1:7777 proves the prober works and the dashboard is up. It
+        does NOT prove the container is on the tenant bridge at all: a
+        container with no route off its own loopback passes it and then passes
+        every cross-tenant assertion below for the wrong reason.
+      - TENANT_GATEWAY:<a port the host is listening on> proves the container's
+        OFF-LOOPBACK networking works. ICC is documented not to block the
+        bridge gateway -- deliberately, because that is where the proxy will
+        listen on 10.88.0.1:8788 -- so this is the one route that must still
+        work after enable_icc=false, and the one D1 depends on.
+
+    With both, "A cannot reach B" becomes "A's off-container networking works
+    and still cannot reach B".
 
     WHAT THIS DOES NOT COVER, and nothing on this branch does: the DOCKER-USER
     forward rules, the dropped link-local, CGNAT and private ranges, the DNS
@@ -70,6 +121,17 @@ def test_a_tenant_cannot_open_a_socket_to_another_tenants_dashboard(spawner):
         "evidence of anything about the bridge")
     assert dockerlib.probe_tcp(name_b, "127.0.0.1", port) is True, (
         "tenant B cannot reach its OWN dashboard")
+
+    gateway = str(tenant.TENANT_GATEWAY)
+    with _listening_on_the_host(GATEWAY_PROBE_PORT):
+        for name in (name_a, name_b):
+            assert dockerlib.probe_tcp(name, gateway, GATEWAY_PROBE_PORT) is True, (
+                f"{name} cannot reach the bridge gateway {gateway}:"
+                f"{GATEWAY_PROBE_PORT}, so it has no route off its own "
+                "loopback and every refusal below would pass for a container "
+                "that never joined the network. This is also the route the "
+                "proxy will need on 10.88.0.1:8788 -- if enable_icc=false is "
+                "what broke it, D1 is broken too.")
 
     address_a = tenant.address_for_project(PROJECT_A)
     address_b = tenant.address_for_project(PROJECT_B)
