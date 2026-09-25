@@ -406,6 +406,30 @@ waku_require_root
 
 # --- refusals, before anything is created ---------------------------------
 
+# FIRST OF THIS SECTION, AND DELIBERATELY AHEAD OF THE UBUNTU CHECK BELOW.
+# MEASURED ON THE LIVE VM, where Caddy ran as a systemd unit holding both
+# ports (the holding page): without this, install.sh would run the apt
+# install, build both images, write four env files and create both bridges,
+# and only THEN fail at `compose up` -- leaving a half-installed host with a
+# foreign Caddy still serving. Nothing above this line is irreversible; the
+# apt-get below is the first thing that is, so the check has to run before it
+# -- and it does not need to know this is Ubuntu to know two ports are
+# contested, so it does not wait on the check that does. Ordering it first
+# also keeps it reachable the way every check above waku_require_root is:
+# offline, with `ss` and `docker` stubbed on PATH and `id` stubbed to answer
+# root -- evals/deterministic/hosted/test_install_sh.py does exactly that,
+# without needing a /etc/os-release or a /proc this machine may not have.
+#
+# "free, or held by OUR OWN Caddy container" -- not "free" -- because a rerun
+# is idempotent (spec: "a rerun skips finished steps and never overwrites
+# existing config") and on a rerun this deployment's own Caddy correctly holds
+# both ports. waku_ports_free_or_ours decides that from Docker's compose
+# labels, never from Caddy's process name, which a hand-built binary shares.
+port_conflicts=$(waku_ports_free_or_ours 80 443) \
+  || waku_die ":80 and :443 must be free, or held by this deployment's own Caddy container -- decided from Docker's compose project and service labels, never from a process name: a hand-built caddy binary and this deployment's own container both answer to 'caddy' in ps. Nothing has been installed, built or written yet, so refusing here costs nothing; refusing after the apt install, the two image builds and both bridges would leave a half-installed host behind a listener that is still serving. What holds the port:
+$port_conflicts
+Stop and disable whatever that is -- for example 'systemctl stop --now caddy && systemctl disable caddy' for a hand-run systemd unit, or 'docker stop' and 'docker rm' for a foreign container -- then run this again."
+
 # Ubuntu 24.04. Not a taste: the unit file, the resolv.conf path and the Docker
 # packages below are that release's.
 # shellcheck disable=SC1091

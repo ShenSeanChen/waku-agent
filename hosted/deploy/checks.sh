@@ -3,14 +3,24 @@
 #
 # SOURCED, NEVER RUN. install.sh sources this file and so does
 # evals/deterministic/hosted/test_install_sh.py, which is the whole reason the
-# six functions take a path instead of reading /proc/meminfo themselves: a
-# function that reads a fixed path can only be tested on a machine that has it,
-# and macOS has no /proc at all.
+# first six functions take a path instead of reading /proc/meminfo themselves:
+# a function that reads a fixed path can only be tested on a machine that has
+# it, and macOS has no /proc at all.
 #
 # EVERY ONE OF THEM IS DEFAULT-DENY. A JWKS document with no `keys` array, a
 # settings document with no `disable_signup` field, a /proc/mounts line for a
 # different mount point: all of them exit non-zero. An installer that treats
 # "I could not tell" as "yes" is how a VM ends up serving with open signup.
+#
+# THE SEVENTH, waku_ports_free_or_ours, CANNOT TAKE A PATH, and that is a
+# deliberate break from the other six, not an oversight. What it decides --
+# whether :80 and :443 are free, or held by THIS deployment's own Caddy
+# container rather than something else -- is not in any file: it is live
+# process and container state, read through `ss` and `docker` on PATH. Tests
+# reach it the way test_install_sh.py already reaches docker, curl and
+# apt-get: stub executables placed first on PATH. It is still default-deny --
+# no listener passes, our own container's compose labels pass, and everything
+# else, including "the tool to check is missing", is a refusal.
 #
 # Written to parse under bash 3.2 (the macOS default), like
 # hosted/image/build.sh, so `bash -n` on a maintainer's laptop is a real check.
@@ -221,4 +231,136 @@ waku_is_hostname() {
       *[!0-9]*) exit 0 ;;
       *) exit 1 ;;
     esac )
+}
+
+# :80 and :443, as A CLOSED SET WITH DEFAULT-DENY: no listener -> pass; our own
+# compose project's caddy container -> pass; anything else, including "the
+# tool needed to tell is missing" -> refuse.
+#
+# WHY NOT "THE PORT IS FREE": that breaks idempotence, which is F1's own
+# recorded check -- a rerun changes nothing. On a rerun THIS DEPLOYMENT'S OWN
+# Caddy container correctly holds both ports, so a naive free-port guard would
+# refuse the install it is meant to protect on every run after the first.
+#
+# WHY NOT A PROCESS NAME: a hand-built `caddy` binary and this deployment's
+# container both answer to `caddy` in `ps`, so a name match would pass on a
+# VM that already has one holding the ports -- which is exactly the collision
+# this exists to catch. "Ours" comes from Docker instead: the compose PROJECT
+# and SERVICE labels Compose stamps on every container it starts
+# (com.docker.compose.project, com.docker.compose.service; compose.yaml names
+# this deployment's project "waku" and its Caddy service "caddy"). Caddy runs
+# with `network_mode: host` (compose.yaml), so its process is not hidden
+# behind a container network namespace -- the pid `ss` reports on the host IS
+# the container's own process, with no indirection to undo.
+#
+# THE PORT-LISTING TOOL IS `ss`, iproute2's, the one Ubuntu 24.04 ships by
+# default (iproute2 is Priority: important on every Ubuntu server image) --
+# not `lsof` (its own package, not installed by default) and not `netstat`
+# (net-tools, also not installed by default on 24.04). Either would be a new
+# default dependency for a script AGENTS.md hard rule 3 forbids one in.
+# `ss -H -tlnp`: TCP, listening, numeric, with the process that owns each
+# socket -- `-H` drops the header line, and the state column is still checked
+# below rather than trusted, in case a given `ss` build does not honour it.
+# ABSENT IS A REFUSAL, NOT A PASS. `command -v ss` failing, or `ss` itself
+# failing, exits this function non-zero with a message that says so -- the
+# same "I could not tell" default-deny as every check above it.
+#
+# STDOUT ON A REFUSAL ONLY: one line per foreign listener, naming the port,
+# the pid, the process, and the container when it is one and is not ours --
+# so install.sh's refusal can say what holds the port without a second call
+# into ss or docker, which is the whole reason waku_die's messages in this
+# file never say only "refused": an operator told just "port in use" goes and
+# runs `ss` themselves. Silent on success, like the other six.
+#
+# ONE FUNCTION, NOT A waku_env_pair_ok/waku_env_pair_name PAIR, and that is
+# deliberate: splitting the decision from the message would mean asking `ss`
+# and `docker` twice for the same answer, and a container that stopped or
+# started between the two calls would make the message describe a machine
+# that no longer exists. Reading it once and deciding from that one read
+# cannot disagree with itself.
+#
+# $@ is the list of ports to check, given as plain decimal strings (install.sh
+# passes 80 443); each row `ss` reports for a port not in that list is
+# ignored, so this can be called with one port in a test and both in
+# install.sh without duplicating the logic.
+#
+# ONE PROCESS PER SOCKET IS ASSUMED. SO_REUSEPORT letting two processes share
+# one listening socket is not a shape this deployment's Caddy, or the
+# hand-built one it replaces, produces, so only one pid is read per row.
+waku_ports_free_or_ours() {
+  local ss_output line state localaddr port want p name pid \
+        container project service cname conflicts
+  conflicts=""
+
+  if ! command -v ss >/dev/null 2>&1; then
+    printf 'ss is not on PATH. Nothing here can tell whether :%s already has a listener, and treating "cannot tell" as "free" is exactly the mistake this check exists to refuse.\n' "$*"
+    return 1
+  fi
+  if ! ss_output=$(ss -H -tlnp 2>/dev/null); then
+    printf 'ss -H -tlnp failed to run. Nothing here can tell whether :%s already has a listener, and treating "cannot tell" as "free" is exactly the mistake this check exists to refuse.\n' "$*"
+    return 1
+  fi
+
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    state=$(printf '%s' "$line" | awk '{print $1}')
+    [ "$state" = LISTEN ] || continue
+    localaddr=$(printf '%s' "$line" | awk '{print $4}')
+    port=${localaddr##*:}
+    want=no
+    for p in "$@"; do
+      [ "$port" = "$p" ] && want=yes
+    done
+    [ "$want" = yes ] || continue
+
+    # users:(("caddy",pid=2345,fd=12)) -- the name and pid of the (assumed
+    # one) process behind this socket.
+    name=$(printf '%s' "$line" | sed -n 's/.*"\([^"]*\)",pid=\([0-9]*\).*/\1/p')
+    pid=$(printf '%s' "$line" | sed -n 's/.*"\([^"]*\)",pid=\([0-9]*\).*/\2/p')
+    if [ -z "$pid" ]; then
+      conflicts="${conflicts}:$port has a listener ss did not report a pid for -- ss said: $line
+"
+      continue
+    fi
+
+    # Every running container in one call, matched on its own pid -- not one
+    # `docker inspect` per container, which is what a VM with many tenant
+    # containers running would otherwise pay for on every install rerun.
+    container=""
+    if command -v docker >/dev/null 2>&1; then
+      container=$(docker ps -q 2>/dev/null \
+        | xargs -r docker inspect --format \
+          '{{.State.Pid}}|{{index .Config.Labels "com.docker.compose.project"}}|{{index .Config.Labels "com.docker.compose.service"}}|{{.Name}}' \
+          2>/dev/null \
+        | awk -F'|' -v want="$pid" '$1 == want { print; exit }')
+    fi
+
+    project="" service="" cname=""
+    if [ -n "$container" ]; then
+      project=$(printf '%s' "$container" | awk -F'|' '{print $2}')
+      service=$(printf '%s' "$container" | awk -F'|' '{print $3}')
+      cname=$(printf '%s' "$container" | awk -F'|' '{print $4}')
+      cname=${cname#/}
+    fi
+
+    # THE WHOLE FINDING, IN ONE LINE: matched on the compose project and
+    # service labels, never on $name, which is `caddy` for a hand-built
+    # binary just as often as for this deployment's own container.
+    if [ "$project" = waku ] && [ "$service" = caddy ]; then
+      continue
+    fi
+
+    if [ -n "$cname" ]; then
+      conflicts="${conflicts}:$port is held by pid $pid ($name), container $cname
+"
+    else
+      conflicts="${conflicts}:$port is held by pid $pid ($name)
+"
+    fi
+  done <<PORTLIST
+$ss_output
+PORTLIST
+
+  [ -z "$conflicts" ] || { printf '%s' "$conflicts"; return 1; }
+  return 0
 }

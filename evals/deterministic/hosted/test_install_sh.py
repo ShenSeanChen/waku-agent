@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 
 import pytest
 import shelllib
@@ -364,6 +365,195 @@ def test_an_env_pair_stays_a_closed_set_under_a_utf8_locale(tmp_path):
     done = shelllib.run(script, ["A=café"], tmp_path=tmp_path,
                         env={"LC_ALL": "en_US.UTF-8", "LANG": "en_US.UTF-8"})
     assert done.returncode != 0
+
+
+# --- waku_ports_free_or_ours (F1b) --------------------------------------------
+#
+# MEASURED ON THE LIVE VM: Caddy ran there as a hand-built systemd unit
+# holding :80 and :443 (the holding page). A naive "the port is free" check
+# would refuse this deployment's OWN Caddy on every rerun after the first --
+# idempotence is F1's own recorded check -- so the guard is "free, or held by
+# us", decided from Docker's compose project and service labels and never
+# from a process name: a hand-built `caddy` and this deployment's own
+# container both answer to `caddy` in `ps`. Several fixtures below are built
+# in pairs that share that name on purpose, so a name-based implementation and
+# a label-based one disagree on them -- which is the whole finding.
+#
+# `ss` and `docker` are stubbed on PATH, exactly as test_install_sh.py already
+# stubs docker, curl and apt-get for install.sh itself.
+
+_SS_NONE = '#!/bin/sh\n[ -n "${WAKU_CALLS:-}" ] && printf "%s %s\\n" ss "$*" >> "$WAKU_CALLS"\nexit 0\n'
+
+
+def _ss(*lines):
+    return ('#!/bin/sh\n'
+            '[ -n "${WAKU_CALLS:-}" ] && printf "%s %s\\n" ss "$*" >> "$WAKU_CALLS"\n'
+            'cat <<\'SS\'\n' + "\n".join(lines) + '\nSS\n')
+
+
+# One process, pid 2345, answering to `caddy` -- either this deployment's own
+# container (the _OURS docker stub below) or nothing Docker knows about at
+# all (_DOCKER_NONE), depending on the test.
+_L80_CADDY = 'LISTEN 0   4096   0.0.0.0:80    0.0.0.0:*   users:(("caddy",pid=2345,fd=12))'
+_L443_CADDY = 'LISTEN 0   4096   0.0.0.0:443   0.0.0.0:*   users:(("caddy",pid=2345,fd=14))'
+_L80_CADDY_V6 = 'LISTEN 0   4096   [::]:80   [::]:*   users:(("caddy",pid=2345,fd=13))'
+
+# A DIFFERENT pid, also named `caddy` -- the hand-built binary the live VM
+# measured, or a foreign container. Every "foreign" fixture below uses this
+# pid so a test can never confuse it with the "ours" fixtures above by pid
+# alone, only by what Docker says about it.
+_L80_FOREIGN = 'LISTEN 0   4096   0.0.0.0:80    0.0.0.0:*   users:(("caddy",pid=999,fd=12))'
+_L443_FOREIGN = 'LISTEN 0   4096   0.0.0.0:443   0.0.0.0:*   users:(("caddy",pid=999,fd=14))'
+_L80_FOREIGN_V6_ONLY = 'LISTEN 0   4096   [::]:80   [::]:*   users:(("foo",pid=42,fd=9))'
+
+_DOCKER_NONE = ('#!/bin/sh\n'
+                 '[ -n "${WAKU_CALLS:-}" ] && printf "%s %s\\n" docker "$*" >> "$WAKU_CALLS"\n'
+                 'if [ "$1" = ps ]; then exit 0; fi\n'
+                 'exit 1\n')
+# pid 2345 IS this deployment's own container: project "waku", service
+# "caddy" -- compose.yaml's `name: waku` and its caddy service.
+_DOCKER_OURS = ('#!/bin/sh\n'
+                '[ -n "${WAKU_CALLS:-}" ] && printf "%s %s\\n" docker "$*" >> "$WAKU_CALLS"\n'
+                'if [ "$1" = ps ]; then echo c1; exit 0; fi\n'
+                'if [ "$1" = inspect ]; then echo \'2345|waku|caddy|/waku-caddy-1\'; exit 0; fi\n'
+                'exit 1\n')
+# pid 2345 IS a container, but some OTHER compose project's -- proving the
+# decision is the label PAIR, not just that a label exists.
+_DOCKER_FOREIGN_PROJECT = ('#!/bin/sh\n'
+                           '[ -n "${WAKU_CALLS:-}" ] && printf "%s %s\\n" docker "$*" >> "$WAKU_CALLS"\n'
+                           'if [ "$1" = ps ]; then echo c1; exit 0; fi\n'
+                           'if [ "$1" = inspect ]; then echo \'2345|other-stack|caddy|/other-caddy-1\'; exit 0; fi\n'
+                           'exit 1\n')
+
+
+def _port_env(tmp_path, ss_body, docker_body=_DOCKER_NONE):
+    directory = shelllib.stub_path(tmp_path, ["ss", "docker"],
+                                    bodies={"ss": ss_body, "docker": docker_body})
+    return {"PATH": f"{directory}{os.pathsep}{os.environ['PATH']}"}
+
+
+def test_no_listener_passes(tmp_path):
+    done = shelllib.call_function(CHECKS, "waku_ports_free_or_ours 80 443",
+                                  env=_port_env(tmp_path, _SS_NONE))
+    assert done.returncode == 0, done.stderr
+    assert done.stdout == ""
+
+
+def test_this_deployments_own_caddy_container_passes(tmp_path):
+    """The idempotence case: a rerun's own Caddy correctly holds both ports,
+    and must not be refused."""
+    done = shelllib.call_function(
+        CHECKS, "waku_ports_free_or_ours 80 443",
+        env=_port_env(tmp_path, _ss(_L80_CADDY, _L443_CADDY), _DOCKER_OURS))
+    assert done.returncode == 0, done.stderr
+    assert done.stdout == ""
+
+
+def test_our_own_containers_ipv6_listener_also_passes(tmp_path):
+    done = shelllib.call_function(
+        CHECKS, "waku_ports_free_or_ours 80 443",
+        env=_port_env(tmp_path, _ss(_L80_CADDY_V6), _DOCKER_OURS))
+    assert done.returncode == 0, done.stderr
+    assert done.stdout == ""
+
+
+def test_a_hand_built_caddy_with_the_same_name_is_refused_on_both_ports(tmp_path):
+    """THE WHOLE FINDING. pid 999 answers to `caddy` in `ps`, exactly like
+    this deployment's own container in the pass case above -- both fixtures'
+    listener is named caddy -- and is not a container Docker knows about at
+    all. A name-based check cannot tell this apart from the pass case; this
+    one can, because it never looks at the name to decide. The refusal names
+    the pid and the process on both ports."""
+    done = shelllib.call_function(
+        CHECKS, "waku_ports_free_or_ours 80 443",
+        env=_port_env(tmp_path, _ss(_L80_FOREIGN, _L443_FOREIGN), _DOCKER_NONE))
+    assert done.returncode != 0
+    assert ":80" in done.stdout and ":443" in done.stdout
+    assert "999" in done.stdout
+    assert "caddy" in done.stdout
+
+
+def test_a_foreign_compose_projects_container_is_named_in_the_refusal(tmp_path):
+    """A container that also answers to `caddy` as a service name, but is
+    some OTHER compose project's -- proving the match is on the PAIR of
+    labels, not on the service label alone."""
+    done = shelllib.call_function(
+        CHECKS, "waku_ports_free_or_ours 80 443",
+        env=_port_env(tmp_path, _ss(_L80_CADDY), _DOCKER_FOREIGN_PROJECT))
+    assert done.returncode != 0
+    assert "other-caddy-1" in done.stdout
+
+
+def test_a_conflict_on_80_only_does_not_name_443(tmp_path):
+    done = shelllib.call_function(
+        CHECKS, "waku_ports_free_or_ours 80 443",
+        env=_port_env(tmp_path, _ss(_L80_FOREIGN)))
+    assert done.returncode != 0
+    assert ":80" in done.stdout
+    assert ":443" not in done.stdout
+
+
+def test_a_conflict_on_443_only_does_not_name_80(tmp_path):
+    done = shelllib.call_function(
+        CHECKS, "waku_ports_free_or_ours 80 443",
+        env=_port_env(tmp_path, _ss(_L443_FOREIGN)))
+    assert done.returncode != 0
+    assert ":443" in done.stdout
+    assert ":80" not in done.stdout
+
+
+def test_an_ipv6_only_listener_is_still_seen(tmp_path):
+    """*:80 and [::]:80 are different rows -- `ss` lists both address
+    families in one run, and a check that only read the IPv4 one would miss
+    this."""
+    done = shelllib.call_function(
+        CHECKS, "waku_ports_free_or_ours 80 443",
+        env=_port_env(tmp_path, _ss(_L80_FOREIGN_V6_ONLY)))
+    assert done.returncode != 0
+    assert ":80" in done.stdout
+
+
+def test_ss_missing_is_refused_not_treated_as_free(tmp_path):
+    """Default-deny, the same judgement every other check in this file makes:
+    "I could not tell" must not read as "the port is free". PATH here holds
+    nothing but a symlink to the real `bash` -- not the ambient PATH with `ss`
+    merely left out of a stub directory, which on a machine that has `ss`
+    installed (iproute2 is on most Ubuntu images, which is why this deployment
+    can rely on it at all) would find the REAL one and pass, proving nothing.
+    """
+    directory = shelllib.stub_path(tmp_path, [])
+    real_bash = shutil.which("bash")
+    assert real_bash is not None
+    os.symlink(real_bash, directory / "bash")
+    done = shelllib.call_function(CHECKS, "waku_ports_free_or_ours 80 443",
+                                  env={"PATH": str(directory)})
+    assert done.returncode != 0
+    assert "ss is not on PATH" in done.stdout
+
+
+def test_ss_failing_at_runtime_is_refused_not_treated_as_free(tmp_path):
+    """`command -v ss` can succeed while `ss` itself still fails -- a
+    permission error, a kernel too old for a flag -- and that must refuse
+    too, not fall through to an empty, "nothing is listening" reading."""
+    failing = '#!/bin/sh\nexit 2\n'
+    done = shelllib.call_function(
+        CHECKS, "waku_ports_free_or_ours 80 443",
+        env=_port_env(tmp_path, failing))
+    assert done.returncode != 0
+    assert "ss" in done.stdout
+
+
+def test_a_listener_ss_reports_no_pid_for_is_refused_not_ignored(tmp_path):
+    """No `users:(...)` field at all -- `ss` run without enough privilege to
+    see it, for instance. Silently skipping a row this cannot attribute would
+    let an unidentifiable listener through, which is not what default-deny
+    means."""
+    no_pid = 'LISTEN 0   4096   0.0.0.0:80   0.0.0.0:*'
+    done = shelllib.call_function(
+        CHECKS, "waku_ports_free_or_ours 80 443",
+        env=_port_env(tmp_path, _ss(no_pid)))
+    assert done.returncode != 0
+    assert ":80" in done.stdout
 
 
 # --- install.sh's argument refusals -----------------------------------------
@@ -1141,3 +1331,64 @@ def test_a_restic_flag_that_reaches_backup_env_refuses_whitespace(tmp_path, flag
     assert done.returncode != 0
     assert "printable characters with no space" in done.stderr
     assert shelllib.calls(tmp_path) == []
+
+
+# --- the port preflight, wired into install.sh (F1b) --------------------------
+#
+# MEASURED ON THE LIVE VM: without this, install.sh would run the apt install,
+# build both images, write four env files and create both bridges, and only
+# THEN fail at `compose up` -- a half-installed host with a foreign Caddy
+# still serving. The check sits below waku_require_root (it needs `ss` and
+# `docker` on PATH, not an argument), but install.sh puts it ahead of the one
+# absolute path nothing here can fake -- /etc/os-release -- so it stays
+# reachable offline: `id` is stubbed to answer root, exactly as
+# test_backup_sh.py proves backup.sh's staging lock is taken first.
+
+_PORT_STUBS = OUTSIDE + ["id", "ss"]
+_ROOT_ID = "#!/bin/sh\necho 0\n"
+
+
+def test_a_foreign_listener_refuses_before_anything_irreversible(tmp_path):
+    """The refusal names the ports, the pid and the process. Nothing on the
+    closed set of irreversible steps has run: `ss` is the very first thing
+    install.sh calls after `waku_require_root`, and the run stops there --
+    `apt-get` never appears in the call log at all, so the apt install,
+    either image build, the tree and the two bridges are all still ahead of
+    where this refuses."""
+    done = shelllib.run(
+        INSTALL, _required(tmp_path), tmp_path=tmp_path, stubs=_PORT_STUBS,
+        bodies={"id": _ROOT_ID, "ss": _ss(_L80_FOREIGN, _L443_FOREIGN),
+                "docker": _DOCKER_NONE})
+    assert done.returncode != 0
+    assert ":80 and :443 must be free" in done.stderr
+    assert "999" in done.stderr
+    assert "caddy" in done.stderr
+    calls = shelllib.calls(tmp_path)
+    assert calls[0] == "ss -H -tlnp"
+    assert not any(call.startswith("apt-get") for call in calls)
+
+
+def test_a_conflict_on_one_port_names_only_that_port_through_install_sh(tmp_path):
+    done = shelllib.run(
+        INSTALL, _required(tmp_path), tmp_path=tmp_path, stubs=_PORT_STUBS,
+        bodies={"id": _ROOT_ID, "ss": _ss(_L443_FOREIGN), "docker": _DOCKER_NONE})
+    assert done.returncode != 0
+    assert ":443" in done.stderr
+    assert ":80 is held" not in done.stderr
+
+
+def test_this_deployments_own_caddy_is_not_refused_on_a_rerun(tmp_path):
+    """Idempotence, proved through install.sh and not only against the bare
+    function: a rerun whose Caddy is already up must not be refused here.
+    The assertion is negative and about this one refusal -- what install.sh
+    does next is /etc/os-release, an absolute path this test cannot fake, so
+    the same way test_the_editors_trailing_newline_is_not_part_of_the_key
+    stops at the NEXT refusal above this line, this one stops at the port
+    check and looks no further."""
+    done = shelllib.run(
+        INSTALL, _required(tmp_path), tmp_path=tmp_path, stubs=_PORT_STUBS,
+        bodies={"id": _ROOT_ID, "ss": _ss(_L80_CADDY, _L443_CADDY),
+                "docker": _DOCKER_OURS})
+    assert ":80 and :443 must be free" not in done.stderr
+    calls = shelllib.calls(tmp_path)
+    assert calls[0] == "ss -H -tlnp"
