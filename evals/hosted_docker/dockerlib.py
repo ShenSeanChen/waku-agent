@@ -27,9 +27,12 @@ from __future__ import annotations
 
 import json
 import os
+import platform
 import subprocess
 import time
 from pathlib import Path
+
+import pytest
 
 REPO = Path(__file__).resolve().parents[2]
 
@@ -295,3 +298,110 @@ def assert_alive(container: str) -> None:
     assert proc.returncode == 0 and "ALIVE" in proc.stdout, (
         f"{container} is not running python, so it cannot probe anything and "
         f"nothing that uses it proves anything: {proc.stderr[-500:]}")
+
+
+# --- XFS project quotas -------------------------------------------------
+#
+# There is exactly one XFS filesystem with project quotas anywhere this suite
+# runs, and the hosted-docker job makes it: a loop-mounted 2 GB image, because
+# GitHub's runners have no XFS. It exports the mountpoint and the block device,
+# and everything that needs a project quota reads them from here.
+#
+# The maintainers' machines are macOS on APFS. There is no xfs_quota there and
+# no way to get one -- the quota is a property of the kernel that owns the
+# filesystem. So these skip, and the skip NAMES the platform rather than
+# reading as an unexplained absence.
+
+# The one mount option that means project quotas are ENFORCED. An allowlist of
+# one, not a blocklist: XFS spells the accounting-only mount `pqnoenforce`,
+# which accepts every xfs_quota command, reports the limit back, and enforces
+# nothing. A check that merely excluded `pqnoenforce` would admit the next
+# spelling of the same hole.
+PRJQUOTA_OPTION = "prjquota"
+
+# Named rather than inlined so the offline eval can point it at a fixture.
+# There is no other way to exercise this on a maintainer's machine: macOS has
+# no /proc/mounts at all.
+PROC_MOUNTS = Path("/proc/mounts")
+
+
+def _prjquota_enforced(proc_mounts: str, mount: str) -> bool:
+    """Does /proc/mounts say `mount` is XFS with project quotas enforcing?
+
+    The contract with .github/workflows/hosted-docker.yml: that job mounts with
+    `-o prjquota` and asserts `Enforcement: ON` before exporting the two
+    variables, and this reads back the half of that verdict a non-root process
+    can see. `xfs_quota -x -c 'state -p'` is the other half and needs root, so
+    it stays in the job.
+    """
+    for line in proc_mounts.splitlines():
+        fields = line.split()
+        if len(fields) < 4:
+            continue
+        # /proc/mounts octal-escapes spaces and tabs in the mountpoint.
+        point = fields[1].replace("\\040", " ").replace("\\011", "\t")
+        if point != mount:
+            continue
+        if fields[2] != "xfs":
+            return False
+        return PRJQUOTA_OPTION in fields[3].split(",")
+    return False
+
+
+def xfs_root() -> tuple[Path, str] | None:
+    """(mountpoint, device) of an XFS filesystem with project quotas, or None.
+
+    Four ways to have none, and the caller's skip message says which: not
+    Linux, the variables unset, a mountpoint or device that is not there, or a
+    mount that is not actually enforcing project quotas. The last is CHECKED
+    rather than assumed -- a filesystem mounted WITHOUT prjquota accepts every
+    xfs_quota command and enforces nothing, so a test against it passes while
+    proving the opposite.
+    """
+    if platform.system() != "Linux":
+        return None
+    mount = os.environ.get("WAKU_XFS_MOUNT")
+    device = os.environ.get("WAKU_XFS_DEVICE")
+    if not mount or not device:
+        return None
+    if not Path(mount).is_dir() or not Path(device).exists():
+        return None
+    try:
+        proc_mounts = PROC_MOUNTS.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    if not _prjquota_enforced(proc_mounts, mount):
+        return None
+    return Path(mount), device
+
+
+def require_xfs() -> tuple[Path, str]:
+    """(mountpoint, device), or skip naming which of the four is missing.
+
+    A skip is never a pass. The hosted-docker job is the one place this returns
+    rather than skips, which is why that job also asserts the suite collected
+    something and prints every skip reason: a green run that skipped every
+    quota test is the shape this plan exists to prevent.
+    """
+    root = xfs_root()
+    if root is not None:
+        return root
+    if platform.system() != "Linux":
+        pytest.skip(
+            f"XFS project quotas are Linux-only; this is {platform.system()}. "
+            "The tenant disk limit is verified in the hosted-docker CI job on a "
+            "loop-mounted XFS image, and on the real VM in G1.")
+    mount = os.environ.get("WAKU_XFS_MOUNT")
+    device = os.environ.get("WAKU_XFS_DEVICE")
+    if not mount or not device or not Path(mount).is_dir() or not Path(device).exists():
+        pytest.skip(
+            "no XFS filesystem with project quotas: WAKU_XFS_MOUNT and "
+            "WAKU_XFS_DEVICE are not both set to a real mountpoint and device. "
+            "The hosted-docker job creates one; see .github/workflows/hosted-docker.yml.")
+    pytest.skip(
+        f"{mount} is not an XFS mount with project quotas enforcing: /proc/mounts "
+        f"does not list it as xfs with the `{PRJQUOTA_OPTION}` option. A mount made "
+        "with `-o pqnoenforce` accounts and enforces nothing, so every quota test "
+        "would pass while proving the opposite. The hosted-docker job mounts with "
+        "`-o prjquota` and asserts `Enforcement: ON`; see "
+        ".github/workflows/hosted-docker.yml.")

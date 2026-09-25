@@ -55,7 +55,9 @@ this ladder either.
 
 - `evals/deterministic/` holds 0/1 tests that run offline with no API key.
   `evals/judge/` holds scored LLM-judge evals. The two never mix: one is a unit
-  test, and the other is a scored opinion.
+  test, and the other is a scored opinion. `evals/hosted_docker/` is a third
+  tier: 0/1 and offline like the first, but needing a Docker daemon, so
+  `make gate` does not run it and it has its own CI job.
 - Every behaviour change gets a deterministic eval. A bug fix adds the case
   that would have caught the bug.
 - A new route in `waku/ops/dashboard.py` needs two things beyond its handler:
