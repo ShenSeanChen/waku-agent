@@ -256,6 +256,14 @@ class Launcher:
         self._addresses.pop(tenant_id, None)
         self._fleet.set_status(tenant_id, idle.STOPPED)
 
+    async def spawner_task(self, tenant_id: str, task: str,
+                           project_id: int = 0) -> dict:
+        """The admin path's one door to the spawner's five tasks. It exists so
+        that admin.py does not reach into a private attribute, and it
+        deliberately takes the task name from admin.py's five-entry table
+        rather than from anything on the wire."""
+        return await self._spawner.task(tenant_id, task, project_id)
+
     async def resync(self) -> dict[str, RunningContainer]:
         """Ask the spawner what is actually running and believe that.
 

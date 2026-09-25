@@ -14,6 +14,8 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import pytest
+
 HOSTED = Path(__file__).resolve().parents[3] / "hosted"
 
 if not HOSTED.is_dir():
@@ -22,3 +24,19 @@ else:
     # gatewaylib.py is a sibling module, not a package.
     # evals/hosted_docker/conftest.py does the same for dockerlib.py.
     sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+
+@pytest.fixture
+def harness(tmp_path):
+    """A gateway with the recording forwarder. Each test drives it inside one
+    asyncio.run and calls `await harness.stop()` before returning.
+
+    The fixture lives here rather than in gatewaylib.py because a fixture is
+    only collected from a test module or a conftest: imported into a test
+    module it is also an unused name to ruff, and `pytest_plugins` in a
+    non-root conftest is an error on pytest 9. gatewaylib.py still owns the
+    two classes; this is the one line that makes them a fixture.
+    """
+    from gatewaylib import FakeSpawner, Harness
+
+    return Harness(tmp_path, FakeSpawner())
