@@ -57,13 +57,36 @@ esac
 exit 0
 """
 
+# ONE LINE PER ARGUMENT, because `$*` collapses them. The recorder in
+# shelllib joins argv with spaces, so `--build-arg DNS_PROVIDER=cloudflare` and
+# `--build-arg "DNS_PROVIDER=cloudflare {env.CLOUDFLARE_API_TOKEN}"` are the
+# same text once a space is all that separates the words -- which is exactly
+# the difference the module split makes, and exactly what an assertion on that
+# text cannot see. Measured: the first version of
+# test_xcaddy_is_handed_the_module_and_not_the_whole_directive passed with the
+# split deleted.
+_DOCKER_PER_ARG = """#!/bin/sh
+printf '%s %s\\n' docker "$*" >> "$WAKU_CALLS"
+for argument in "$@"; do printf 'ARG %s\\n' "$argument" >> "$WAKU_CALLS"; done
+exit 0
+"""
+
 _CURL_NEVER_READY = """#!/bin/sh
 printf '%s %s\\n' curl "$*" >> "$WAKU_CALLS"
 exit 1
 """
 
 
-def _install_env(tmp_path):
+def _install_env(tmp_path, *, dns_provider="route53", module_version="@v1.5.0",
+                 omit_module_version=False):
+    """install.env as waku_install_env writes it: every value SINGLE-QUOTED.
+
+    The quoting is not cosmetic here. Unquoted, the documented two-word
+    `--dns-provider` is read by bash as an assignment followed by a command, so
+    this loader dies with `command not found` -- and every fixture in this file
+    used to write the one-word `route53`, which is why no test in any tier ever
+    carried the documented value across the writer-to-reader seam.
+    """
     src = tmp_path / "src"
     (src / "hosted" / "image").mkdir(parents=True)
     build = src / "hosted" / "image" / "build.sh"
@@ -71,15 +94,19 @@ def _install_env(tmp_path):
                      encoding="utf-8")
     build.chmod(0o755)
     env_file = tmp_path / "install.env"
-    env_file.write_text(
-        f"WAKU_ROOT={tmp_path}/waku\nWAKU_SRC={src}\n"
-        f"WAKU_COMPOSE={src}/hosted/deploy/compose.yaml\n"
-        "WAKU_DOMAIN=example.test\nWAKU_DNS_PROVIDER=route53\n"
-        "WAKU_GATEWAY_ADDRESS=127.0.0.1:8787\n"
-        "WAKU_TENANT_IMAGE=waku-tenant:current\n"
-        "WAKU_SERVICES_IMAGE=waku-services:current\n"
-        "WAKU_CADDY_IMAGE=waku-caddy:current\n",
-        encoding="utf-8")
+    lines = [f"WAKU_ROOT='{tmp_path}/waku'",
+             f"WAKU_SRC='{src}'",
+             f"WAKU_COMPOSE='{src}/hosted/deploy/compose.yaml'",
+             "WAKU_DOMAIN='example.test'",
+             f"WAKU_DNS_PROVIDER='{dns_provider}'",
+             "WAKU_ACME_EMAIL='ops@example.test'",
+             "WAKU_GATEWAY_ADDRESS='127.0.0.1:8787'",
+             "WAKU_TENANT_IMAGE='waku-tenant:current'",
+             "WAKU_SERVICES_IMAGE='waku-services:current'",
+             "WAKU_CADDY_IMAGE='waku-caddy:current'"]
+    if not omit_module_version:
+        lines.append(f"WAKU_DNS_MODULE_VERSION='{module_version}'")
+    env_file.write_text("".join(line + "\n" for line in lines), encoding="utf-8")
     return {"WAKU_INSTALL_ENV": str(env_file)}
 
 
@@ -249,3 +276,94 @@ def test_a_config_name_this_script_needs_but_the_loader_never_checked_is_refused
     assert "unbound variable" not in done.stderr
     calls = shelllib.calls(tmp_path)
     assert not [line for line in calls if line.startswith(("docker", "build.sh"))]
+
+
+# --- the caddy rebuild, which had no test at all -------------------------------
+
+
+def test_the_two_word_dns_provider_survives_being_loaded(tmp_path):
+    """THE SEAM, FROM THIS SIDE. Every fixture in this file wrote the one-word
+    `route53`, so the value install.sh declares valid --
+    `cloudflare {env.CLOUDFLARE_API_TOKEN}` -- was never loaded by this script
+    in any test. Unquoted in install.env it makes `waku_load_install_env` exit
+    127 with `{env.CLOUDFLARE_API_TOKEN}: command not found`, which is an
+    upgrade that fails with an unrecognisable message before it does anything.
+    """
+    done = shelllib.run(UPGRADE, [], tmp_path=tmp_path,
+                        env=_install_env(
+                            tmp_path,
+                            dns_provider="cloudflare {env.CLOUDFLARE_API_TOKEN}"),
+                        stubs=["git", "docker", "curl", "id"],
+                        bodies={"git": _GIT_CLEAN, "id": _ID_ROOT})
+    assert done.returncode == 0, done.stderr
+    assert "command not found" not in done.stderr
+
+
+def _args(calls):
+    return [line[len("ARG "):] for line in calls if line.startswith("ARG ")]
+
+
+def test_xcaddy_is_handed_the_module_and_not_the_whole_directive(tmp_path):
+    """install.sh splits this and says why in capitals: "The whole string used
+    to go to both, so the documented Cloudflare recipe could not build at all:
+    xcaddy was handed `github.com/caddy-dns/cloudflare
+    {env.CLOUDFLARE_API_TOKEN}`."
+
+    This script passed the whole string, which is that bug reproduced in the
+    one command an operator runs to cross a version boundary -- and it fails
+    AFTER `git checkout --detach` has moved the checkout and after both other
+    images were rebuilt.
+    """
+    done = shelllib.run(UPGRADE, [], tmp_path=tmp_path,
+                        env=_install_env(
+                            tmp_path,
+                            dns_provider="cloudflare {env.CLOUDFLARE_API_TOKEN}"),
+                        stubs=["git", "docker", "curl", "id"],
+                        bodies={"git": _GIT_CLEAN, "docker": _DOCKER_PER_ARG,
+                                "id": _ID_ROOT})
+    assert done.returncode == 0, done.stderr
+    # ONE ARGUMENT, MATCHED WHOLE. The unsplit form is
+    # `DNS_PROVIDER=cloudflare {env.CLOUDFLARE_API_TOKEN}` as a SINGLE argv
+    # word, which no assertion on the joined command line can tell from two.
+    assert "DNS_PROVIDER=cloudflare" in _args(shelllib.calls(tmp_path))
+
+
+def test_the_operators_module_pin_reaches_the_rebuild(tmp_path):
+    """caddy.Dockerfile's own header: "DNS_PROVIDER_VERSION IS EMPTY BY DEFAULT
+    AND SHOULD NOT STAY THAT WAY on a deployment anybody depends on." This
+    script passed no DNS_PROVIDER_VERSION at all, so every upgrade re-resolved
+    the module's latest release while the operator's `--dns-module-version`
+    pin sat unused -- and install.env did not carry it in any form."""
+    done = shelllib.run(UPGRADE, [], tmp_path=tmp_path,
+                        env=_install_env(tmp_path, module_version="@v1.5.0"),
+                        stubs=["git", "docker", "curl", "id"],
+                        bodies={"git": _GIT_CLEAN, "docker": _DOCKER_PER_ARG,
+                                "id": _ID_ROOT})
+    assert done.returncode == 0, done.stderr
+    assert "DNS_PROVIDER_VERSION=@v1.5.0" in _args(shelllib.calls(tmp_path))
+
+
+def test_an_empty_pin_is_a_note_and_an_absent_one_is_a_warning(tmp_path):
+    """TWO DIFFERENT THINGS AND TWO DIFFERENT MESSAGES. Empty means the
+    operator gave no --dns-module-version and accepted whatever xcaddy resolves,
+    which install.sh logs a NOTE about. ABSENT means install.env was written
+    before the name existed, and install.env is never rewritten -- so a `:?` in
+    the load list would refuse to upgrade a VM that is otherwise fine. A script
+    that read them the same way would tell an operator with a real pin nothing
+    at all on the upgrade that discarded it."""
+    empty = shelllib.run(UPGRADE, [], tmp_path=tmp_path,
+                         env=_install_env(tmp_path, module_version=""),
+                         stubs=["git", "docker", "curl", "id"],
+                         bodies={"git": _GIT_CLEAN, "id": _ID_ROOT})
+    assert empty.returncode == 0, empty.stderr
+    assert "NOTE: no --dns-module-version pin" in empty.stdout
+    assert "WARNING" not in empty.stdout
+
+    older = tmp_path / "older"
+    older.mkdir()
+    absent = shelllib.run(UPGRADE, [], tmp_path=older,
+                          env=_install_env(older, omit_module_version=True),
+                          stubs=["git", "docker", "curl", "id"],
+                          bodies={"git": _GIT_CLEAN, "id": _ID_ROOT})
+    assert absent.returncode == 0, absent.stderr
+    assert "has no WAKU_DNS_MODULE_VERSION line" in absent.stdout

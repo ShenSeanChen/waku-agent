@@ -195,6 +195,17 @@ nobody can read, including you. Losing it turns every nightly backup you have
 ever taken into bytes nobody can open. Put it where you would put a root
 password.
 
+**Keep the other two, and the install command line, in the same place.** If the
+VM is gone you need all four to rebuild: the restic password, the platform model
+key, the DNS token, and the flags you installed with. Step 7 below tells you to
+delete the two credential files from the VM once they have been copied into
+`config/`, which is right -- they are copies of a secret sitting in `/root`. It
+does not mean destroy the only copy you have. Paste the whole `install.sh`
+command line into the same password-manager entry: `--supabase-audience`,
+`--acme-email`, `--free-model`, `--max-running` and `--tenant-disk` are printed
+only by `migrate.sh --out`, which you cannot run on a machine that has died, and
+`--tenant-disk` silently defaults to 1G and re-quotas every restored tenant.
+
 ### 6. Choosing the restic repository
 
 `--restic-repository` has no default, and picking it is a real decision rather
@@ -366,9 +377,17 @@ are sure, checking first that nothing of theirs is running:
 
 ```bash
 sudo tenant.sh status                                  # their id must not appear
+sudo docker ps --filter label=waku.tenant=<id>         # and neither must this
 sudo du -sh /srv/waku/tenants/<id> /srv/waku/archive/<id>
 sudo rm -rf /srv/waku/tenants/<id>                     # the archive stays
 ```
+
+**`tenant.sh status` alone is not enough for this, and the second command is
+why.** `status` answers with the tenants whose own dashboard is running; an
+`inspect` container and a backup or restore task container bind the same two
+directories and `status` cannot name them. That is the whole reason `delete`
+refuses for an inspected tenant, two paragraphs down, and a root `rm -rf` over
+a live bind mount is the same hazard without the refusal.
 
 `delete` refuses while an inspect container is still running for that tenant,
 because the archive it would take is that tenant's only copy and a database
@@ -382,9 +401,12 @@ A systemd timer runs `backup.sh --all` at 03:17 every night, with up to 15
 minutes of random delay, and catches up when the VM was off at that hour.
 Restic keeps 7 daily and 4 weekly snapshots per tenant and prunes the rest.
 
-Every snapshot carries the backup's own `manifest.json`, written last. A
-restore refuses a snapshot without one, because a backup that did not finish
-cannot be told from an empty tenant by looking.
+Every **tenant** snapshot carries the backup's own `manifest.json`, written
+last. A restore refuses a tenant snapshot without one, because a backup that
+did not finish cannot be told from an empty tenant by looking. The `control`
+snapshot carries none and needs none: it holds two SQLite files, and a single
+SQLite file carries its own completeness check, which both `backup.sh` and
+`restore.sh` run as `PRAGMA integrity_check`.
 
 `backup.sh` and `restore.sh` share one `flock` on the staging directory, so a
 backup and a restore never run at once. List what is in the repository with
@@ -435,6 +457,12 @@ the new VM can hold it before any traffic moves.
 Downtime is minutes, because all of the state is one directory tree and one
 object store.
 
+**`archive/` does not travel, and a migration ends the 30-day grace period
+early.** The final backup `--out` takes covers every live tenant; the archives
+of tenants deleted in the last month are in no restic snapshot, so they go away
+with the old VM. `migrate.sh --out` now says so and prints the directory to
+size; copy it across by hand if anything is in it.
+
 **Rehearse it before you need it.** A migration is also the only end-to-end
 proof that the backups are restorable, and the day you find out otherwise
 should not be the day the VM is gone. With at least two tenants who have signed
@@ -453,6 +481,42 @@ browser: they sign in, they land on the **same** tenant id, their provider is
 still selected, and a memory they wrote before the final backup is still there.
 Any of the four failing means the snapshot is not what you thought it was, and
 you still have the old VM.
+
+### If the VM is gone
+
+`migrate.sh --out` is not available: it runs on the machine that died. You can
+still get everything back from the restic repository, and the order is the whole
+of it.
+
+1. **Prove the repository is there before you build anything.** On any machine
+   with `restic`, the repository address and the password:
+
+   ```bash
+   RESTIC_REPOSITORY=s3:s3.amazonaws.com/waku-backups \
+     RESTIC_PASSWORD_FILE=./restic-password restic snapshots
+   ```
+
+   Do this first, not `backup.sh --init-repository`. On the wrong address
+   `snapshots` says so and `--init-repository` would create an empty repository
+   at your typo.
+2. **Build the new VM through steps 1 to 6 above**, unchanged: the disk, the
+   checkout, the DNS records already point wherever they pointed, and the three
+   credential files written again from your password manager.
+3. **Run `install.sh` with the flags you saved**, with `--data-device` changed to
+   the new VM's disk. If you did not save them: `--free-model`,
+   `--max-running`, `--tenant-disk`, `--supabase-audience` and `--acme-email`
+   have to be remembered or guessed, and `--tenant-disk` defaulting to 1G will
+   re-quota every tenant you restore.
+4. **Append the object store credentials** to `/srv/waku/config/backup.env`
+   again. Skip `backup.sh --init-repository`: the repository exists, and step 1
+   proved it.
+5. **`migrate.sh --in`.** It restores both platform databases and then every
+   tenant, one at a time.
+6. **Check one existing tenant** as the rehearsal above describes, then point
+   the DNS records at the new VM.
+
+What you cannot get back this way: the archives of tenants deleted in the last
+30 days, which were only ever on the old VM.
 
 ## Where everything lives
 

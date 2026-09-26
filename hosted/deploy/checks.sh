@@ -364,3 +364,81 @@ PORTLIST
   [ -z "$conflicts" ] || { printf '%s' "$conflicts"; return 1; }
   return 0
 }
+
+# --- appended by the group F final review: the tools this deployment runs -----
+
+# THE COMMAND EACH PACKAGE PROVIDES, PAIRED WITH THE PACKAGE.
+#
+# A space-separated string of `command:package` rather than an array, because
+# these files parse under bash 3.2 (see the header). The word splitting in the
+# loops below is intentional; neither a command nor an Ubuntu package name
+# contains a space.
+#
+# `zstd` IS INSTALLED AND IS NOT REQUIRED, and the difference is the point. The
+# tar-and-zstd pipelines run INSIDE the services image, which installs its own;
+# no script in hosted/deploy/ ever runs zstd on the host. Installing it keeps
+# the package set this deployment has always had; putting it in the required
+# list below would refuse an install over a command nothing runs, which is task
+# F2's finding in a mirror.
+WAKU_PACKAGES="jq:jq curl:curl restic:restic sqlite3:sqlite3 zstd:zstd docker:docker.io"
+
+# Every command any script in hosted/deploy/ actually runs on the host.
+#
+# restic and sqlite3 are the two that matter: restic is first reached at 03:17
+# inside a timer unit, and host sqlite3 is what backup.sh and restore.sh run to
+# copy and integrity-check both platform databases. `timeout` bounds the
+# repository probe; `flock` takes the staging lock; `find` runs the archive
+# sweep; `install`, `sed` and `awk` render the systemd units and read config
+# values back.
+WAKU_REQUIRED_COMMANDS="docker jq curl restic sqlite3 flock find install sed awk timeout"
+
+# The packages whose command is not on PATH, as one line. Empty means nothing
+# to install.
+#
+# ONE PROBE PER PACKAGE, AND ONLY THE MISSING ONES ARE NAMED. The earlier shape
+# probed jq, curl and docker and then installed all seven or none, so a host
+# that already had those three -- the ordinary shape of a machine somebody has
+# been running something on -- never got restic, sqlite3 or zstd and the
+# installer exited 0.
+#
+# INSTALLING ONLY WHAT IS MISSING ALSO STOPS THIS BREAKING A WORKING HOST. A
+# machine running Docker CE has the daemon and the compose plugin from Docker's
+# own packages, and `apt-get install docker.io` on it is a conflict over the
+# daemon this deployment needs. A missing restic must not drag docker.io in
+# behind it.
+#
+# THE COMPOSE PLUGIN IS NOT A BINARY ON PATH, so it is probed by asking docker
+# for it. `command -v docker-compose` would answer for the retired v1 script and
+# miss the plugin every supported install actually has.
+waku_missing_packages() {
+  local pair out
+  out=""
+  for pair in $WAKU_PACKAGES; do
+    command -v "${pair%%:*}" >/dev/null 2>&1 || out="$out ${pair#*:}"
+  done
+  docker compose version >/dev/null 2>&1 || out="$out docker-compose-v2"
+  printf '%s\n' "${out# }"
+}
+
+# The FIRST required command that is not there, printed, with a return of 1.
+# Nothing is missing: prints nothing and returns 0.
+#
+# "apt-get exited 0" IS NOT "THE COMMAND IS THERE". A package that installed
+# without providing the binary, an apt source serving an older one, a plugin
+# directory the daemon does not read: each leaves a host that got past the
+# install block and fails at 03:17 or in the middle of a restore. It returns
+# rather than dying so the caller keeps its own message, like waku_needs_value.
+waku_require_commands() {
+  local name
+  for name in $WAKU_REQUIRED_COMMANDS; do
+    if ! command -v "$name" >/dev/null 2>&1; then
+      printf '%s\n' "$name"
+      return 1
+    fi
+  done
+  if ! docker compose version >/dev/null 2>&1; then
+    printf '%s\n' "docker compose"
+    return 1
+  fi
+  return 0
+}

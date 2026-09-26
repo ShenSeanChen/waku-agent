@@ -192,6 +192,23 @@ add_dns_env() {
   waku_die "$where: expected NAME=VALUE -- a name of letters, digits and underscores starting with a letter or underscore, then '=', then the value. A line with no '=' is accepted by Compose and leaves the variable UNSET, which looks exactly like a credential you set. (The line itself is deliberately not printed here: it is a credential.)"
 }
 
+# A SINGLE QUOTE IN A VALUE THAT REACHES install.env, REFUSED.
+#
+# waku_install_env wraps every value in single quotes because that is the one
+# grammar bash's `.` and Compose's `--env-file` agree on (see the comment above
+# it). A value holding a single quote would close its own quoting and hand the
+# rest of the line to whichever of five root scripts sources the file next, so
+# the quoting and this refusal are one mechanism in two places.
+#
+# NOT FOLDED INTO refuse_unprintable, which permits a quote on purpose: it
+# guards values written into the SERVICE env files, read only by Compose, where
+# a quote is an ordinary character. This is about the one file bash sources.
+refuse_a_single_quote() {
+  case "$1" in
+    *\'*) waku_die "$2 must not contain a single quote: its value is written into $root/config/install.env, which five scripts source as shell. Got '$1'." ;;
+  esac
+}
+
 # A flag's value that is written into an env file, as a closed set.
 #
 # Not a credential, so the value IS printed -- an operator who mistyped a model
@@ -323,6 +340,20 @@ refuse_unprintable "$acme_email" --acme-email
 waku_is_hostname "${acme_email#*@}" \
   || waku_die "--acme-email's domain must be a hostname; got '${acme_email#*@}'."
 
+# EVERY VALUE THAT REACHES install.env, spelled out rather than looped, for the
+# reason the rerun check below gives: the values are paths, a domain and an
+# email, and every separator a loop could use is a character one of them may
+# hold. --dns-provider is checked by the metacharacter case above, which is
+# stricter.
+refuse_a_single_quote "$root" --root
+refuse_a_single_quote "$src" "the checkout path"
+refuse_a_single_quote "$acme_email" --acme-email
+refuse_a_single_quote "$data_device" --data-device
+# config/backup.env is the OTHER file bash sources (waku_load_backup_env does
+# `set -a; . "$file"`), so its two values need the same pair of guards.
+refuse_a_single_quote "$restic_repository" --restic-repository
+refuse_a_single_quote "$restic_password_file" --restic-password-file
+
 refuse_unprintable "$free_model" --free-model
 refuse_unprintable "$supabase_publishable_key" --supabase-publishable-key
 refuse_unprintable "$supabase_audience" --supabase-audience
@@ -358,6 +389,18 @@ esac
 # into config/install.env as one line and substituted into the Caddyfile.
 ( LC_ALL=C; case "$dns_provider" in *[![:print:]]*) exit 1 ;; esac ) \
   || waku_die "--dns-provider must be printable text on one line: a caddy-dns module name, optionally followed by the arguments Caddy's dns directive takes inline."
+# AND NO SHELL METACHARACTER, which [:print:] permits every one of. This value
+# is the only one on the line that is DOCUMENTED to contain a space, so it is
+# the only one that survives being written into install.env unquoted as an
+# assignment followed by a command -- `route53 $(printf ...)` executed by the
+# next root script to source the file. waku_install_env quotes it now; this is
+# the second half, so a future writer that forgets the quotes cannot be handed
+# a substitution to perform. Caddy's own placeholder syntax is braces --
+# `{env.CLOUDFLARE_API_TOKEN}` -- so nothing the documented interface needs is
+# in this set.
+case "$dns_provider" in
+  *[\$\`\\\"\']*) waku_die "--dns-provider must not contain a quote, a dollar sign, a backtick or a backslash. Caddy names its placeholders with braces, as in 'cloudflare {env.CLOUDFLARE_API_TOKEN}'. The value is written into $root/config/install.env, which five scripts source as shell." ;;
+esac
 
 # A Go module version suffix, and empty means "whatever xcaddy resolves today".
 # It is expanded inside the Dockerfile's RUN, so it is a closed set here as
@@ -451,22 +494,51 @@ waku_xfs_prjquota_ok /proc/mounts "$root" \
     mount $root
     xfs_quota -x -c 'state -p' $root   # expect: Enforcement: ON"
 
-command -v jq >/dev/null 2>&1 || apt_needed=yes
-command -v curl >/dev/null 2>&1 || apt_needed=yes
-
 # --- packages ---------------------------------------------------------------
 #
 # docker.io and docker-compose-v2 from Ubuntu 24.04's own archive: one apt
 # source, one upgrade path, and versions the distribution supports. restic,
-# sqlite3 and zstd are for F3's backup and restore; jq and curl are for the two
+# sqlite3 and zstd are for backup and restore; jq and curl are for the two
 # Supabase checks below.
+#
+# ONE PROBE PER PACKAGE, AND ONLY WHAT IS MISSING IS INSTALLED. The earlier
+# shape probed jq, curl and docker and then installed all seven or none: on a
+# host that already had those three -- which is the ordinary shape of a machine
+# somebody has been running something on, and exactly the shape of the VM this
+# is being installed on, which carries Docker CE and a hand-built Caddy --
+# restic, sqlite3 and zstd were never installed and the run exited 0. restic is
+# then first reached at 03:17 inside the timer, and host sqlite3 is what
+# backup.sh and restore.sh run to copy and integrity-check both platform
+# databases. Nothing in this repository probed either.
+#
+# INSTALLING ONLY THE MISSING ONES ALSO STOPS THIS BREAKING A WORKING HOST. A
+# machine running Docker CE has `docker` and the compose plugin already, and
+# `apt-get install docker.io` on it is a package conflict over the daemon this
+# deployment needs -- so a missing restic must not drag docker.io in behind it.
+#
+# THE COMPOSE PLUGIN IS NOT A BINARY ON PATH, so it is probed by asking docker
+# for it rather than with `command -v`. A host with Docker CE has the plugin
+# from Docker's own package and needs nothing from Ubuntu's.
+# waku_missing_packages and waku_require_commands are checks.sh's, so that a
+# deterministic test can call them with a PATH holding some of the tools and
+# none of them. They were a `command -v` chain inside this script, below
+# waku_require_root and the /etc/os-release read, where no test in any tier
+# could reach them.
+missing=$(waku_missing_packages)
+
 export DEBIAN_FRONTEND=noninteractive
-if [ "${apt_needed:-}" = yes ] || ! command -v docker >/dev/null 2>&1; then
-  waku_log "installing packages"
+if [ -n "$missing" ]; then
+  waku_log "installing packages: $missing"
   apt-get update
-  apt-get install --yes --no-install-recommends \
-    docker.io docker-compose-v2 restic sqlite3 zstd jq curl
+  # shellcheck disable=SC2086
+  apt-get install --yes --no-install-recommends $missing
+else
+  waku_log "every package this deployment needs is already installed"
 fi
+
+absent=$(waku_require_commands) \
+  || waku_die "$absent is not on PATH after the package install. Every script in hosted/deploy/ runs it -- restic and sqlite3 at 03:17 and in the middle of a restore, the rest during this install -- so a deployment without it fails where nobody is looking. Install it and run this again."
+
 systemctl enable --now docker >/dev/null
 
 # --- the two Supabase refusals ----------------------------------------------
@@ -620,11 +692,15 @@ fi
 # case to guard. The path is SUBSTITUTED and not hardcoded, for the reason that
 # block learnt the hard way -- a unit naming /srv/waku/src on a VM installed
 # with --root elsewhere is a unit that fails at 03:17 and nowhere else.
-case "$here" in
-  *[\|\&\\]*) waku_die "the checkout path $here contains a character this script cannot substitute into the systemd unit safely. Move the checkout." ;;
+# BOTH SUBSTITUTED PATHS GO THROUGH THE SAME GUARD. `sed` uses `|` as its
+# delimiter here, so a `|` in either path would end the expression and a `&` or
+# a `\` would be a replacement escape. The install-env path is $root's, which
+# --root supplies and which nothing else checks.
+case "$here$install_env" in
+  *[\|\&\\]*) waku_die "the checkout path $here or the config path $install_env contains a character this script cannot substitute into the systemd unit safely. Move the checkout, or pass a --root without it." ;;
 esac
 install -o 0 -g 0 -m 0644 /dev/null /etc/systemd/system/waku-backup.service
-sed "s|@WAKU_BACKUP@|$here/backup.sh|g" "$here/waku-backup.service" \
+waku_render_backup_unit "$here/waku-backup.service" "$here/backup.sh" "$install_env" \
   >/etc/systemd/system/waku-backup.service
 install -o 0 -g 0 -m 0644 "$here/waku-backup.timer" /etc/systemd/system/waku-backup.timer
 systemctl daemon-reload
@@ -633,7 +709,7 @@ waku_log "nightly backup timer enabled: $(systemctl show waku-backup.timer -p Ne
 
 # --- the stack ---------------------------------------------------------------
 
-WAKU_INSTALL_ENV=$root/config/install.env
+WAKU_INSTALL_ENV=$install_env
 waku_load_install_env
 
 # GROUP D IS DEFERRED: `python -m hosted.proxy` does not exist, so the service is
@@ -662,6 +738,15 @@ while [ $i -lt 60 ]; do
   i=$((i + 1))
 done
 [ "$ready" = yes ] || waku_die "the gateway did not answer on http://$gateway_address/login within 60 seconds. Read: docker compose -p waku logs gateway"
+
+# THE OTHER HALF OF THE --root HAZARD, and it is the half no placeholder can
+# close. lib.sh defaults WAKU_INSTALL_ENV to /srv/waku/config/install.env; the
+# backup timer now carries the real path in its unit, but an operator typing
+# tenant.sh or restore.sh at a prompt on a non-default root gets
+# "/srv/waku/config/install.env is not readable. Run install.sh first" from all
+# five scripts. Said once, here, where they are looking.
+[ "$root" = /srv/waku ] \
+  || waku_log "NOTE: this VM's root is $root, not /srv/waku. The backup timer carries that path in its unit, but the operator scripts fall back to /srv/waku and will refuse. Put this in root's profile: export WAKU_INSTALL_ENV=$install_env"
 
 waku_log "installed. apex https://$domain, tenants https://<id>.$domain"
 waku_log "Caddy issues the certificate on the first request to the apex; the first one can take a minute while DNS-01 propagates."

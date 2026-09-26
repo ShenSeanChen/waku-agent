@@ -1,8 +1,10 @@
-"""DockerRuntime: the five operations ports.TenantRuntime names, and no sixth.
+"""DockerRuntime: the operations ports.TenantRuntime names, and no more.
 
 The spawner is root with CAP_SYS_ADMIN and the data disk's block device. EVERY
 NEW OPERATION HERE IS A NEW PRIVILEGED VERB, so this class implements exactly
-the five in the Protocol and exactly the five tasks core/requests.TASKS names.
+the ones in the Protocol and exactly the five tasks core/requests.TASKS names.
+`tenant_ids` made the Protocol six; the conformance test in
+test_spawner_service.py counts them, so the number lives there and not here.
 Widening either set is a spec change.
 
 What each verb can and cannot do, so a reviewer can check the list rather than

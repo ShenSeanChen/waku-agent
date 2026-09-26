@@ -315,6 +315,19 @@ def test_out_names_the_three_config_files_to_copy_and_not_install_env(tmp_path):
     assert "NOT install.env" in done.stdout
 
 
+def test_out_names_the_archive_directory_it_cannot_carry(tmp_path):
+    """archive/ is in NO restic snapshot, so the final backup --out takes does
+    not cover it and migrate.sh --in cannot bring it back. Every tenant deleted
+    in the last 30 days has their only copy there, and it goes away with the old
+    VM -- which turns the 30-day grace period into however long until the
+    migration, silently."""
+    done = _run(tmp_path, ["--out"])
+    assert done.returncode == 0, done.stderr
+    root = tmp_path / "waku"
+    assert f"{root}/archive" in done.stdout
+    assert "Archives are in no restic snapshot" in done.stdout
+
+
 def test_out_says_the_three_credential_flags_are_still_required(tmp_path):
     """proxy.env and caddy.env come across in step 2 and install.sh keeps
     them -- and it still refuses without --platform-key-file, --dns-env-file

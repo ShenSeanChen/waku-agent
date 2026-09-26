@@ -345,3 +345,29 @@ waku_is_snapshot_id() {
     case "$1" in *[!0-9a-f]*) exit 1 ;; esac
     [ "${#1}" -ge 8 ] && [ "${#1}" -le 64 ] )
 }
+
+# --- appended by the group F final review: the backup unit, rendered ----------
+
+# The backup unit with both of its placeholders filled in, on stdout.
+#
+# ONE CALLER, AND HERE ANYWAY, for waku_write_config's reason quoted at the top
+# of this file: it lived inside install.sh's systemd block, below
+# waku_require_root and an /etc/os-release read, where no test in any tier could
+# reach it -- and what it decides is which paths a unit that runs at 03:17 will
+# use. The unit file's own text was checked by a test (the placeholders are
+# there); that the installer substitutes both of them was checked by nothing.
+#
+# TWO PLACEHOLDERS, AND THE SECOND ONE IS THE ONE THAT WAS MISSING.
+# @WAKU_BACKUP@ is the script; @WAKU_INSTALL_ENV@ is the config file every
+# script reads through waku_load_install_env, whose default is
+# /srv/waku/config/install.env. A VM installed with --root elsewhere therefore
+# had a nightly backup that died at 03:17 saying "run install.sh first", in a
+# unit, in a journal nobody reads -- the same hazard the script placeholder
+# closes, through the other door, in the same block.
+#
+# `sed` USES `|` AS ITS DELIMITER, so the caller checks both paths for `|`, `&`
+# and `\` before calling. A refusal there names the path; there is nothing this
+# function could say that the caller cannot say better.
+waku_render_backup_unit() {
+  sed -e "s|@WAKU_BACKUP@|$2|g" -e "s|@WAKU_INSTALL_ENV@|$3|g" "$1"
+}

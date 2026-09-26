@@ -79,9 +79,43 @@ waku_log "rebuilding the tenant and services images"
 "$WAKU_SRC/hosted/image/build.sh" \
   --tenant-tag "$WAKU_TENANT_IMAGE" --services-tag "$WAKU_SERVICES_IMAGE"
 
-waku_log "rebuilding caddy with the $WAKU_DNS_PROVIDER module"
+# THE MODULE IS THE FIRST WORD, and install.sh says why in capitals at the line
+# that splits it: "--dns-provider is TWO THINGS in one string... The whole
+# string used to go to both, so the documented Cloudflare recipe could not
+# build at all: xcaddy was handed
+# `github.com/caddy-dns/cloudflare {env.CLOUDFLARE_API_TOKEN}`."
+#
+# This file passed the whole string, which is that bug reproduced verbatim in
+# the script an operator runs to cross a version boundary -- and it would fail
+# AFTER `git checkout --detach` has moved the checkout and after both other
+# images were rebuilt. One expansion, the same one install.sh uses.
+dns_module=${WAKU_DNS_PROVIDER%% *}
+
+# THE PIN IS READ BACK FROM install.env, and its ABSENCE is distinguished from
+# its being EMPTY.
+#
+# Empty is a legal value: it means the operator gave no --dns-module-version and
+# accepted whatever xcaddy resolves, which install.sh logs a NOTE about. Absent
+# means this VM's install.env was written before the name existed, and
+# install.env is never rewritten -- so a `:?` in the load list would refuse to
+# upgrade a VM that is otherwise fine. Both get a line, because an upgrade that
+# silently re-resolved the module while the operator believed their pin was
+# holding is the failure caddy.Dockerfile's own header is written about:
+# "DNS_PROVIDER_VERSION IS EMPTY BY DEFAULT AND SHOULD NOT STAY THAT WAY on a
+# deployment anybody depends on."
+if [ -z "${WAKU_DNS_MODULE_VERSION+set}" ]; then
+  waku_log "WARNING: $WAKU_INSTALL_ENV has no WAKU_DNS_MODULE_VERSION line, so this upgrade cannot know what --dns-module-version this VM was installed with. install.env is never rewritten; add the line by hand. Caddy is being rebuilt against whatever xcaddy resolves today."
+  dns_module_version=""
+else
+  dns_module_version=$WAKU_DNS_MODULE_VERSION
+fi
+[ -n "$dns_module_version" ] \
+  || waku_log "NOTE: no --dns-module-version pin, so xcaddy resolves the caddy-dns module's latest version at build time and this rebuild can produce a different Caddy from the last one."
+
+waku_log "rebuilding caddy with the $dns_module${dns_module_version} module"
 DOCKER_BUILDKIT=1 docker build \
-  --build-arg "DNS_PROVIDER=$WAKU_DNS_PROVIDER" \
+  --build-arg "DNS_PROVIDER=$dns_module" \
+  --build-arg "DNS_PROVIDER_VERSION=$dns_module_version" \
   --file "$WAKU_SRC/hosted/image/caddy.Dockerfile" \
   --tag "$WAKU_CADDY_IMAGE" \
   "$WAKU_SRC/hosted/image" >/dev/null

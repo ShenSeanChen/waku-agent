@@ -1,5 +1,14 @@
 # The nightly backup, run by waku-backup.timer.
 #
+# @WAKU_INSTALL_ENV@ IS THE SECOND PLACEHOLDER AND EXISTS FOR THE SAME HAZARD
+# THROUGH THE OTHER DOOR. lib.sh defaults WAKU_INSTALL_ENV to
+# /srv/waku/config/install.env, which is wrong on any VM installed with
+# --root elsewhere -- and the ONE place nothing can pass the variable in is a
+# timer unit. Without this line such a VM's nightly backup died at 03:17 with
+# "/srv/waku/config/install.env is not readable. Run install.sh first", inside
+# a unit, in a journal nobody reads. Substituting the script's path and leaving
+# the config path to a default was closing half of one hazard.
+#
 # @WAKU_BACKUP@ IS A PLACEHOLDER AND MUST STAY ONE, for the reason
 # waku-firewall.service carries in capitals: a hardcoded
 # /srv/waku/src/hosted/deploy/backup.sh installs cleanly on a VM whose checkout
@@ -29,4 +38,5 @@ Requires=docker.service
 [Service]
 Type=oneshot
 TimeoutStartSec=6h
+Environment=WAKU_INSTALL_ENV=@WAKU_INSTALL_ENV@
 ExecStart=@WAKU_BACKUP@ --all

@@ -616,6 +616,7 @@ _ENV_GLOBALS = {
     "src": "/srv/waku/src",
     "domain": "agent.example.test",
     "dns_provider": "route53",
+    "dns_module_version": "@v1.5.0",
     "acme_email": "ops@example.test",
     "gateway_address": "127.0.0.1:8787",
     "max_running": "95",
@@ -651,9 +652,14 @@ exit 128
 """
 
 
-def _env_body(tmp_path, function: str, *, git=_GIT_WITH_A_HEAD,
-              extra: dict[str, str] | None = None) -> dict[str, str]:
-    """Run one envfiles.sh function and parse what it printed.
+def _env_text(tmp_path, function: str, *, git=_GIT_WITH_A_HEAD,
+              extra: dict[str, str] | None = None) -> str:
+    """Run one envfiles.sh function and return exactly what it printed.
+
+    THE TEXT AND NOT A PARSE, because the file has two parsers with two
+    grammars -- bash's `.` in waku_load_install_env, and Compose's
+    `--env-file` -- and which of them a value survives is the property. A
+    helper that quietly unquoted would have hidden the whole of F-1.
 
     `extra` overrides a global for one call -- used where the VALUE has to be
     a path that exists on the machine running the test, rather than the
@@ -668,8 +674,32 @@ def _env_body(tmp_path, function: str, *, git=_GIT_WITH_A_HEAD,
     done = shelllib.run(script, [], tmp_path=tmp_path, stubs=["git"],
                         bodies={"git": git})
     assert done.returncode == 0, done.stderr
+    return done.stdout
+
+
+def _unquoted(name: str, raw: str) -> str:
+    """The value inside install.env's single quotes, asserting they are there.
+
+    waku_install_env quotes every value, and that is load-bearing rather than
+    cosmetic: unquoted, the documented `cloudflare {env.CLOUDFLARE_API_TOKEN}`
+    is read by bash as an assignment followed by a COMMAND. So the quoting is
+    pinned here, once, and the tests that care about a value read it through
+    this.
+    """
+    assert raw.startswith("'") and raw.endswith("'") and len(raw) >= 2, (
+        f"{name} is not single-quoted in install.env: {raw!r}. Five root "
+        "scripts source that file.")
+    inner = raw[1:-1]
+    assert "'" not in inner, f"{name} closes its own quoting: {raw!r}"
+    return inner
+
+
+def _env_body(tmp_path, function: str, *, git=_GIT_WITH_A_HEAD,
+              extra: dict[str, str] | None = None) -> dict[str, str]:
+    """The RAW `name=value` pairs one envfiles.sh function printed."""
+    done = _env_text(tmp_path, function, git=git, extra=extra)
     parsed = {}
-    for line in done.stdout.splitlines():
+    for line in done.splitlines():
         if not line or line.startswith("#"):
             continue
         name, separator, value = line.partition("=")
@@ -746,15 +776,21 @@ def test_the_backup_env_install_writes_is_accepted_by_the_loader_that_reads_it(t
                         extra={"restic_password_file": str(password)})
     assert list(written) == ["RESTIC_REPOSITORY", "RESTIC_PASSWORD_FILE"]
 
+    # WRITTEN BACK AS THE FUNCTION PRINTED IT, quoting included: config/backup.env
+    # is the SECOND file bash sources, and waku_load_backup_env does
+    # `set -a; . "$file"`. A test that stripped the quotes here would be reading
+    # a file that is not the one at 03:17.
     env_file = tmp_path / "backup.env"
-    env_file.write_text("".join(f"{name}={value}\n" for name, value in written.items()),
+    env_file.write_text(_env_text(tmp_path, "waku_backup_env",
+                                  extra={"restic_password_file": str(password)}),
                         encoding="utf-8")
     done = shelllib.call_function(
         shelllib.DEPLOY / "lib.sh",
         f'waku_load_backup_env "{env_file}" RESTIC_REPOSITORY RESTIC_PASSWORD_FILE; '
         "sh -c 'printf %s \"$RESTIC_REPOSITORY\"'")
     assert done.returncode == 0, done.stderr
-    assert done.stdout == written["RESTIC_REPOSITORY"]
+    assert done.stdout == _unquoted("RESTIC_REPOSITORY",
+                                    written["RESTIC_REPOSITORY"])
 
 
 def test_the_install_env_carries_exactly_what_every_other_script_reads(tmp_path):
@@ -764,10 +800,10 @@ def test_the_install_env_carries_exactly_what_every_other_script_reads(tmp_path)
     written = _env_body(tmp_path, "waku_install_env")
     assert set(written) == {
         "WAKU_ROOT", "WAKU_SRC", "WAKU_COMPOSE", "WAKU_DOMAIN",
-        "WAKU_DNS_PROVIDER", "WAKU_ACME_EMAIL", "WAKU_GATEWAY_ADDRESS",
-        "WAKU_TENANT_IMAGE", "WAKU_SERVICES_IMAGE", "WAKU_CADDY_IMAGE",
-        "WAKU_DATA_DEVICE", "WAKU_INSTALLED_COMMIT"}
-    assert written["WAKU_INSTALLED_COMMIT"] == (
+        "WAKU_DNS_PROVIDER", "WAKU_DNS_MODULE_VERSION", "WAKU_ACME_EMAIL",
+        "WAKU_GATEWAY_ADDRESS", "WAKU_TENANT_IMAGE", "WAKU_SERVICES_IMAGE",
+        "WAKU_CADDY_IMAGE", "WAKU_DATA_DEVICE", "WAKU_INSTALLED_COMMIT"}
+    assert _unquoted("WAKU_INSTALLED_COMMIT", written["WAKU_INSTALLED_COMMIT"]) == (
         "0123456789abcdef0123456789abcdef01234567")
 
 
@@ -778,7 +814,8 @@ def test_a_checkout_with_no_git_history_records_the_commit_as_unknown(tmp_path):
     passes through as empty, and "" is not distinguishable from "nobody wrote
     this" when somebody is reading the file to find out what is deployed."""
     written = _env_body(tmp_path, "waku_install_env", git=_GIT_WITHOUT_A_HEAD)
-    assert written["WAKU_INSTALLED_COMMIT"] == "unknown"
+    assert _unquoted("WAKU_INSTALLED_COMMIT",
+                     written["WAKU_INSTALLED_COMMIT"]) == "unknown"
 
 
 def test_no_env_file_install_writes_holds_a_value_compose_would_misread(tmp_path):
@@ -786,11 +823,20 @@ def test_no_env_file_install_writes_holds_a_value_compose_would_misread(tmp_path
     value with a newline in it writes a second variable; one with a trailing
     space carries that space into whatever reads it. The fixtures above are
     the shapes install.sh actually produces."""
+    # WAKU_DNS_MODULE_VERSION is the one name whose value may be empty, and the
+    # emptiness is the meaning: the operator gave no --dns-module-version and
+    # accepted whatever xcaddy resolves. It is written as '' rather than left
+    # off the line, so `${WAKU_DNS_MODULE_VERSION+set}` in upgrade.sh separates
+    # "no pin" from "installed before this name existed" -- two things that
+    # need two different messages.
+    may_be_empty = {"WAKU_DNS_MODULE_VERSION"}
     for function in ("waku_install_env", "waku_gateway_env",
                      "waku_spawner_env", "waku_proxy_env"):
-        for name, value in _env_body(tmp_path, function).items():
+        for name, raw in _env_body(tmp_path, function).items():
+            value = (_unquoted(name, raw) if function == "waku_install_env"
+                     else raw)
             assert value == value.strip(), f"{function}: {name} has edge whitespace"
-            assert value, f"{function}: {name} is empty"
+            assert value or name in may_be_empty, f"{function}: {name} is empty"
 
 
 # --- compose.yaml, rendered ---------------------------------------------------
@@ -816,21 +862,28 @@ def rendered(tmp_path):
     for service in SERVICES:
         (root / "config" / f"{service}.env").write_text(
             f"WAKU_ENV_FILE_MARKER={service}\n", encoding="utf-8")
-    src = tmp_path / "src"
-    src.mkdir()
+    # WRITTEN BY waku_install_env ITSELF, AND WITH THE TWO-WORD --dns-provider.
+    #
+    # This fixture used to hand-write an install.env of unquoted one-word
+    # values, and every other reader's fixture did the same -- so the value
+    # test_install_sh.py declares VALID, `cloudflare {env.CLOUDFLARE_API_TOKEN}`,
+    # was never carried across the writer-to-reader seam by any test in any
+    # tier. It does not survive that seam unquoted: bash reads the line as an
+    # assignment followed by a command. Using the real writer here puts the real
+    # Compose parser on the other end of the real file, which is the half of the
+    # seam a stub can never stand in for.
+    src = shelllib.DEPLOY.parents[1]
     env_file = tmp_path / "install.env"
     env_file.write_text(
-        f"WAKU_ROOT={root}\n"
-        f"WAKU_SRC={src}\n"
-        f"WAKU_COMPOSE={COMPOSE}\n"
-        "WAKU_DOMAIN=example.test\n"
-        "WAKU_DNS_PROVIDER=route53\n"
-        "WAKU_ACME_EMAIL=a@b.test\n"
-        "WAKU_GATEWAY_ADDRESS=127.0.0.1:8787\n"
-        "WAKU_TENANT_IMAGE=waku-tenant:rendertest\n"
-        "WAKU_SERVICES_IMAGE=waku-services:rendertest\n"
-        "WAKU_CADDY_IMAGE=waku-caddy:rendertest\n"
-        "WAKU_DATA_DEVICE=/dev/null\n",
+        _env_text(tmp_path, "waku_install_env",
+                  extra={"root": str(root), "src": str(src),
+                         "domain": "example.test",
+                         "acme_email": "a@b.test",
+                         "dns_provider": "cloudflare {env.CLOUDFLARE_API_TOKEN}",
+                         "tenant_image": "waku-tenant:rendertest",
+                         "services_image": "waku-services:rendertest",
+                         "caddy_image": "waku-caddy:rendertest",
+                         "data_device": "/dev/null"}),
         encoding="utf-8")
     done = subprocess.run(
         ["docker", "compose", "--env-file", str(env_file), "-f", str(COMPOSE),
@@ -964,6 +1017,181 @@ def test_caddy_is_told_the_four_values_its_caddyfile_substitutes(rendered):
     config, _root, _src = rendered
     environment = config["services"]["caddy"]["environment"]
     assert environment["WAKU_DOMAIN"] == "example.test"
-    assert environment["WAKU_DNS_PROVIDER"] == "route53"
+    # THE DOCUMENTED TWO-WORD VALUE, THROUGH THE REAL COMPOSE PARSER. The
+    # Caddyfile substitutes this whole string into its `dns` directive, so the
+    # inline argument has to arrive intact and unexpanded -- and it is the one
+    # value in install.env that contains a space, which is what made it the one
+    # value no reader's fixture ever carried.
+    assert environment["WAKU_DNS_PROVIDER"] == "cloudflare {env.CLOUDFLARE_API_TOKEN}"
     assert environment["WAKU_ACME_EMAIL"] == "a@b.test"
     assert environment["WAKU_GATEWAY_ADDRESS"] == "127.0.0.1:8787"
+
+
+# --- the writer-to-reader seam on install.env ---------------------------------
+#
+# THE FILE HAS TWO PARSERS AND ONE OF THEM RUNS COMMANDS. `docker compose
+# --env-file` reads it above, in the `rendered` fixture; `waku_load_install_env`
+# sources it as shell in all five operator scripts. Before this block the
+# writer was tested against neither: every reader's fixture hand-wrote an
+# install.env of one-word values, so the two-word `--dns-provider` that
+# test_install_sh.py declares VALID crossed no seam in any tier and did not
+# survive the one it was never carried across.
+
+
+def _load_install_env(tmp_path, text: str, name: str):
+    """Write `text` as install.env and read one name back through lib.sh."""
+    env_file = tmp_path / "install.env"
+    env_file.write_text(text, encoding="utf-8")
+    return shelllib.call_function(
+        shelllib.DEPLOY / "lib.sh",
+        f'waku_load_install_env; printf "[%s]" "${name}"',
+        env={"WAKU_INSTALL_ENV": str(env_file)})
+
+
+@pytest.mark.parametrize("value", [
+    "route53",
+    "cloudflare {env.CLOUDFLARE_API_TOKEN}",
+    "digitalocean {env.DO_AUTH_TOKEN}",
+])
+def test_every_documented_dns_provider_survives_being_written_and_sourced(
+        tmp_path, value):
+    """The documented interface: a module name, optionally followed by the
+    arguments Caddy's `dns` directive takes inline.
+
+    Unquoted, the second and third of these are read by bash as the assignment
+    `WAKU_DNS_PROVIDER=cloudflare` followed by the COMMAND
+    `{env.CLOUDFLARE_API_TOKEN}` -- so `waku_load_install_env` exited 127 with
+    `command not found` as the entire diagnosis, and install.sh does that at the
+    line that loads the file, which is after the apt install, the tree, both
+    bridges, five config files and three image builds.
+    """
+    text = _env_text(tmp_path, "waku_install_env", extra={"dns_provider": value})
+    done = _load_install_env(tmp_path, text, "WAKU_DNS_PROVIDER")
+    assert done.returncode == 0, done.stderr
+    assert "command not found" not in done.stderr
+    assert done.stdout == f"[{value}]"
+
+
+def test_a_value_holding_a_substitution_is_data_and_not_a_command(tmp_path):
+    """THE TAIL OF THE LINE, RUN AS ROOT. `--dns-provider`'s own checks permit
+    this by design -- the module check reads only the first word and the
+    whole-string check is `[:print:]` -- so before the quoting a value like
+    this was performed by whichever of five root scripts sourced the file next.
+    install.sh now also refuses the metacharacters; this asserts the writer's
+    half, which is what keeps a future flag from reopening the door.
+
+    THE MARKER IS THE ASSERTION AND NOT THE EXIT CODE. A substitution that ran
+    and wrote nothing observable would leave a green test; the file is proof.
+    """
+    marker = tmp_path / "marker"
+    value = f'route53 $(printf INJECTED > {marker})'
+    text = _env_text(tmp_path, "waku_install_env", extra={"dns_provider": value})
+    done = _load_install_env(tmp_path, text, "WAKU_DNS_PROVIDER")
+    assert done.returncode == 0, done.stderr
+    assert not marker.exists(), (
+        "sourcing install.env performed a substitution from one of its values")
+    assert done.stdout == f"[{value}]"
+
+
+def test_a_root_with_a_space_in_it_survives_being_written_and_sourced(tmp_path):
+    """--root takes a path and nothing checks it for a space. Unquoted, a root
+    of `/srv/waku two` makes WAKU_ROOT `/srv/waku` and runs `two`, and every
+    path under it -- control.db, the sockets, the staging directory -- is then
+    somewhere nobody chose."""
+    text = _env_text(tmp_path, "waku_install_env",
+                     extra={"root": "/srv/waku two"})
+    done = _load_install_env(tmp_path, text, "WAKU_ROOT")
+    assert done.returncode == 0, done.stderr
+    assert done.stdout == "[/srv/waku two]"
+
+
+def test_the_module_version_is_absent_from_a_file_written_before_it_existed(
+        tmp_path):
+    """install.env is written once and never rewritten, so a name added to the
+    installer later is not in a file written before it. upgrade.sh separates
+    that from an empty pin with `${WAKU_DNS_MODULE_VERSION+set}`, and this is
+    the shape it has to separate: the older file, with the name simply gone."""
+    text = _env_text(tmp_path, "waku_install_env")
+    older = "".join(line + "\n" for line in text.splitlines()
+                    if not line.startswith("WAKU_DNS_MODULE_VERSION="))
+    assert "WAKU_DNS_MODULE_VERSION" not in older
+    older_file = tmp_path / "older.env"
+    older_file.write_text(older, encoding="utf-8")
+    done = shelllib.call_function(
+        shelllib.DEPLOY / "lib.sh",
+        'waku_load_install_env; printf "[%s]" "${WAKU_DNS_MODULE_VERSION+set}"',
+        env={"WAKU_INSTALL_ENV": str(older_file)})
+    assert done.returncode == 0, done.stderr
+    assert done.stdout == "[]", (
+        "an install.env with no WAKU_DNS_MODULE_VERSION line must leave the "
+        "name UNSET, not empty: upgrade.sh tells the two apart and gives them "
+        "different messages")
+
+    # And the file the installer writes today has it SET, empty or not.
+    current_file = tmp_path / "current.env"
+    current_file.write_text(text, encoding="utf-8")
+    current = shelllib.call_function(
+        shelllib.DEPLOY / "lib.sh",
+        'waku_load_install_env; printf "[%s]" "${WAKU_DNS_MODULE_VERSION+set}"',
+        env={"WAKU_INSTALL_ENV": str(current_file)})
+    assert current.returncode == 0, current.stderr
+    assert current.stdout == "[set]"
+
+
+# --- the backup unit, as the installer renders it ------------------------------
+
+
+def _rendered_unit(*, backup="/srv/waku/src/hosted/deploy/backup.sh",
+                   install_env="/srv/waku/config/install.env"):
+    done = shelllib.call_function(
+        shelllib.DEPLOY / "lib.sh",
+        f'waku_render_backup_unit "{shelllib.DEPLOY}/waku-backup.service" '
+        f'"{backup}" "{install_env}"')
+    assert done.returncode == 0, done.stderr
+    unit = configparser.ConfigParser(strict=False, allow_no_value=True)
+    unit.optionxform = str
+    unit.read_string(done.stdout)
+    return unit
+
+
+def test_the_backup_unit_carries_the_config_file_it_was_installed_with():
+    """The unit file's placeholders were checked; that the installer fills BOTH
+    of them in was checked by nothing, because the substitution lived below
+    waku_require_root.
+
+    lib.sh defaults WAKU_INSTALL_ENV to /srv/waku/config/install.env, so on a
+    VM installed with --root elsewhere the nightly backup died at 03:17 saying
+    "run install.sh first" -- in a unit, in a journal nobody reads. That is the
+    same hazard @WAKU_BACKUP@ closes, through the other door, in the same block
+    of the same script.
+    """
+    unit = _rendered_unit(backup="/opt/waku/src/hosted/deploy/backup.sh",
+                          install_env="/data/waku/config/install.env")
+    assert unit["Service"]["ExecStart"] == "/opt/waku/src/hosted/deploy/backup.sh --all"
+    assert unit["Service"]["Environment"] == (
+        "WAKU_INSTALL_ENV=/data/waku/config/install.env")
+
+
+def test_no_placeholder_survives_the_rendering():
+    """A CLOSED SET IN THE OTHER DIRECTION: a placeholder added to the unit and
+    not to the renderer installs cleanly and then names a path called
+    `@WAKU_SOMETHING@`, which systemd accepts as a literal and which fails at
+    03:17 and nowhere else."""
+    done = shelllib.call_function(
+        shelllib.DEPLOY / "lib.sh",
+        f'waku_render_backup_unit "{shelllib.DEPLOY}/waku-backup.service" '
+        '"/srv/waku/src/hosted/deploy/backup.sh" "/srv/waku/config/install.env"')
+    assert done.returncode == 0, done.stderr
+    body = "\n".join(line for line in done.stdout.splitlines()
+                     if not line.startswith("#"))
+    assert "@" not in body.replace("WAKU_INSTALL_ENV=", ""), (
+        f"an unsubstituted placeholder is left in the rendered unit:\n{body}")
+
+
+def test_the_unit_in_the_tree_still_holds_both_placeholders():
+    """The other half, so the renderer cannot be passing a unit that already
+    names real paths. A hardcoded /srv/waku/src in the template installs
+    cleanly on a VM whose checkout is anywhere else."""
+    text = (shelllib.DEPLOY / "waku-backup.service").read_text(encoding="utf-8")
+    assert "@WAKU_BACKUP@" in text
+    assert "@WAKU_INSTALL_ENV@" in text

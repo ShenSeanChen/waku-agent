@@ -169,6 +169,11 @@ On the NEW VM, in this order:
        $restic_password_file     (the restic password, named by backup.env)
      NOT install.env: it carries this VM's --data-device and its checkout path,
      and install.sh writes the new VM's own.
+  2b. AND $WAKU_ROOT/archive, if anything is in it.
+     Archives are in no restic snapshot, so migrate.sh --in cannot bring them
+     back: every tenant deleted in the last 30 days has their only copy there,
+     and it goes away with this VM. Check before you destroy the old machine:
+       du -sh $WAKU_ROOT/archive
   3. Run install.sh on the new VM. It STILL NEEDS --platform-key-file,
      --dns-env-file and --free-model even though proxy.env and caddy.env came
      across in step 2 and are kept: they are required flags, and a rerun keeps

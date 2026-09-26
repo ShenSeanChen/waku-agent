@@ -107,25 +107,50 @@ EOF
 }
 
 # Reads: root src domain dns_provider acme_email gateway_address tenant_image
-#        services_image caddy_image data_device
+#        services_image caddy_image data_device dns_module_version
 #
 # Read by every other script in hosted/deploy/ through waku_load_install_env,
 # and by `docker compose --env-file`, which is what makes ${WAKU_ROOT} and the
 # image tags resolve inside compose.yaml.
+#
+# EVERY VALUE IS SINGLE-QUOTED, and this is the one function in the repository
+# where that is not a style choice. This file has TWO parsers with two
+# grammars: bash's `.`, in waku_load_install_env, and Compose's `--env-file`.
+# Written unquoted, the documented Cloudflare value --
+# `WAKU_DNS_PROVIDER=cloudflare {env.CLOUDFLARE_API_TOKEN}` -- is read by
+# Compose correctly and by bash as the assignment `WAKU_DNS_PROVIDER=cloudflare`
+# followed by the COMMAND `{env.CLOUDFLARE_API_TOKEN}`. So every script that
+# loads this file died with `{env.CLOUDFLARE_API_TOKEN}: command not found` and
+# an empty WAKU_DNS_PROVIDER, install.sh included -- at the line that loads it,
+# which is after the apt install, the tree, both bridges, five config files and
+# three image builds. A Cloudflare install could not complete.
+#
+# And the tail of such a line RUNS AS ROOT: `--dns-provider 'route53 $(...)'`
+# passes both of the flag's checks (the module check reads only the first word,
+# the whole-string check is [:print:]) and the substitution is performed by
+# whichever of five root scripts sources the file next. F1's round 4 closed that
+# door for a NEWLINE in this same value and left it open for a SPACE, in the one
+# flag whose documented interface requires a space.
+#
+# Single quotes are the form BOTH grammars agree on, measured against Compose
+# v2.34's own `--env-file` parser: it strips them and performs no substitution
+# inside them. install.sh refuses a single quote in every value that reaches
+# this function, so no value can end its own quoting.
 waku_install_env() {
   cat <<EOF
-WAKU_ROOT=$root
-WAKU_SRC=$src
-WAKU_COMPOSE=$src/hosted/deploy/compose.yaml
-WAKU_DOMAIN=$domain
-WAKU_DNS_PROVIDER=$dns_provider
-WAKU_ACME_EMAIL=$acme_email
-WAKU_GATEWAY_ADDRESS=$gateway_address
-WAKU_TENANT_IMAGE=$tenant_image
-WAKU_SERVICES_IMAGE=$services_image
-WAKU_CADDY_IMAGE=$caddy_image
-WAKU_DATA_DEVICE=$data_device
-WAKU_INSTALLED_COMMIT=$(git -C "$src" rev-parse HEAD 2>/dev/null || echo unknown)
+WAKU_ROOT='$root'
+WAKU_SRC='$src'
+WAKU_COMPOSE='$src/hosted/deploy/compose.yaml'
+WAKU_DOMAIN='$domain'
+WAKU_DNS_PROVIDER='$dns_provider'
+WAKU_DNS_MODULE_VERSION='$dns_module_version'
+WAKU_ACME_EMAIL='$acme_email'
+WAKU_GATEWAY_ADDRESS='$gateway_address'
+WAKU_TENANT_IMAGE='$tenant_image'
+WAKU_SERVICES_IMAGE='$services_image'
+WAKU_CADDY_IMAGE='$caddy_image'
+WAKU_DATA_DEVICE='$data_device'
+WAKU_INSTALLED_COMMIT='$(git -C "$src" rev-parse HEAD 2>/dev/null || echo unknown)'
 EOF
 }
 
@@ -141,9 +166,19 @@ EOF
 # them: the operator appends AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY to
 # this file by hand, backup.env.example shows the shape, and waku_write_config
 # never overwrites, so a rerun keeps what they added.
+# SINGLE-QUOTED FOR waku_install_env's REASON, and this is the SECOND of the
+# two files bash sources. waku_load_backup_env does `set -a; . "$file"`, so a
+# value holding `$(...)` is a substitution performed as root at 03:17 -- and
+# --restic-repository's own check is refuse_unprintable, which refuses a space
+# and permits every metacharacter. Found by asking the question the whole-branch
+# review's meta-finding asks: which OTHER consumer reads a file this one writes?
+#
+# install.sh refuses a single quote in both values, so neither can end its own
+# quoting. The object store's credentials are appended to this file BY HAND and
+# are the operator's own to quote; backup.env.example shows the shape.
 waku_backup_env() {
   cat <<EOF
-RESTIC_REPOSITORY=$restic_repository
-RESTIC_PASSWORD_FILE=$restic_password_file
+RESTIC_REPOSITORY='$restic_repository'
+RESTIC_PASSWORD_FILE='$restic_password_file'
 EOF
 }

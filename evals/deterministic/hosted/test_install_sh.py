@@ -26,6 +26,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+from pathlib import Path
 
 import pytest
 import shelllib
@@ -1425,3 +1426,267 @@ def test_this_deployments_own_caddy_is_not_refused_on_a_rerun(tmp_path):
     assert ":80 and :443 must be free" not in done.stderr
     calls = shelllib.calls(tmp_path)
     assert calls[0] == "ss -H -tlnp"
+
+
+@pytest.mark.parametrize("value", [
+    "route53 $(printf INJECTED)",
+    "route53 `printf INJECTED`",
+    "route53 ${HOME}",
+    "route53 'x'",
+    'route53 "x"',
+    "route53 x\\y",
+])
+def test_a_dns_provider_holding_a_shell_metacharacter_is_refused(tmp_path, value):
+    """THE SPACE DOOR, and it is the same door the newline test above closes
+    one character narrower.
+
+    `--dns-provider` is the one flag whose documented interface REQUIRES a
+    space, so the module check reads only the first word and the whole-string
+    check is `[:print:]` -- which permits every shell metacharacter there is.
+    The value is written into `config/install.env`, and five root scripts
+    source that file. envfiles.sh single-quotes it now, which is what makes the
+    substitution data rather than a command; this is the other half, so a
+    writer that ever loses the quotes cannot be handed one to perform.
+
+    Caddy names its placeholders with braces -- `{env.CLOUDFLARE_API_TOKEN}` --
+    so nothing the documented interface needs is in this set.
+    """
+    args = _required(tmp_path) + ["--dns-provider", value]
+    done = shelllib.run(INSTALL, args, tmp_path=tmp_path, stubs=OUTSIDE)
+    assert done.returncode != 0
+    assert "must not contain a quote, a dollar sign" in done.stderr
+    assert shelllib.calls(tmp_path) == []
+
+
+@pytest.mark.parametrize("value", [
+    "route53",
+    "cloudflare {env.CLOUDFLARE_API_TOKEN}",
+    "digitalocean {env.DO_AUTH_TOKEN}",
+])
+def test_the_documented_dns_provider_values_are_accepted(tmp_path, value):
+    """The other side of the set above, and the reason it cannot simply refuse
+    a space: `cloudflare {env.CLOUDFLARE_API_TOKEN}` is the documented recipe
+    in caddy.env.example, in hosted/README.md and in this script's own usage
+    text. A refusal here would make the Cloudflare path uninstallable, which is
+    the opposite of the bug.
+
+    It gets past the flag checks; what happens to it afterwards needs root, so
+    the seam is tested in test_deploy_scripts.py, where the writer and both of
+    the file's real parsers meet.
+    """
+    args = _required(tmp_path) + ["--dns-provider", value]
+    done = shelllib.run(INSTALL, args, tmp_path=tmp_path, stubs=OUTSIDE)
+    assert "--dns-provider" not in done.stderr
+    assert "must not contain" not in done.stderr
+
+
+@pytest.mark.parametrize("flag, value", [
+    ("--root", "/srv/wa'ku"),
+    ("--acme-email", "o'brien@example.test"),
+    ("--data-device", "/dev/sd'a"),
+])
+def test_a_single_quote_in_a_value_that_reaches_install_env_is_refused(
+        tmp_path, flag, value):
+    """waku_install_env wraps every value in single quotes, because that is the
+    one grammar bash's `.` and Compose's `--env-file` agree on. A value holding
+    a single quote would close its own quoting and hand the rest of the line to
+    whichever of five root scripts sources the file next, so the quoting and
+    this refusal are one mechanism in two places.
+
+    `--acme-email` is the one that is a real address rather than a typo: a
+    quote is legal in an email local part. The refusal names the flag and says
+    why, which is the trade this makes.
+    """
+    args = [a for a in _required(tmp_path)]
+    if flag == "--acme-email":
+        args[args.index("--acme-email") + 1] = value
+    else:
+        args += [flag, value]
+    done = shelllib.run(INSTALL, args, tmp_path=tmp_path, stubs=OUTSIDE)
+    assert done.returncode != 0
+    assert "must not contain a single quote" in done.stderr
+    assert shelllib.calls(tmp_path) == []
+
+
+# --- the tools this deployment runs, probed one package at a time --------------
+
+
+_COMPOSE_OK = "#!/bin/sh\nexit 0\n"
+_NO_COMPOSE = '#!/bin/sh\n[ "$1" = compose ] && exit 1\nexit 0\n'
+
+
+def _with_only(tmp_path, present, *, docker_body=_COMPOSE_OK):
+    """A PATH holding exactly `present` and nothing else.
+
+    EXACTLY, not "plus the real PATH": the whole question is which commands are
+    absent, and a real PATH carrying jq or sqlite3 would answer it for the
+    machine running the test rather than for the host being installed.
+    """
+    directory = tmp_path / "only"
+    directory.mkdir(exist_ok=True)
+    # A symlink to the real bash, the same precedent
+    # test_ss_missing_is_refused_not_treated_as_free sets: the shell has to be
+    # reachable, and nothing in either list is named bash.
+    real_bash = shutil.which("bash")
+    assert real_bash is not None
+    if not (directory / "bash").exists():
+        os.symlink(real_bash, directory / "bash")
+    for name in present:
+        stub = directory / name
+        stub.write_text(docker_body if name == "docker" else "#!/bin/sh\nexit 0\n",
+                        encoding="utf-8")
+        stub.chmod(0o755)
+    return {"PATH": str(directory)}
+
+
+_EVERY_COMMAND = ["docker", "jq", "curl", "restic", "sqlite3", "zstd",
+                  "flock", "find", "install", "sed", "awk", "timeout"]
+
+
+def test_a_bare_host_needs_every_package(tmp_path):
+    done = shelllib.call_function(CHECKS, "waku_missing_packages",
+                                  env=_with_only(tmp_path, []))
+    assert done.returncode == 0, done.stderr
+    assert set(done.stdout.split()) == {
+        "jq", "curl", "restic", "sqlite3", "zstd", "docker.io",
+        "docker-compose-v2"}
+
+
+def test_a_host_that_already_has_jq_curl_and_docker_still_needs_the_rest(tmp_path):
+    """THE SHAPE OF THE VM THIS IS BEING INSTALLED ON, and the reason this
+    function exists. The earlier gate probed exactly these three and then
+    installed all seven or none, so on such a host restic, sqlite3 and zstd
+    were never installed and the run exited 0. restic is first reached at 03:17
+    inside the timer."""
+    done = shelllib.call_function(
+        CHECKS, "waku_missing_packages",
+        env=_with_only(tmp_path, ["jq", "curl", "docker"]))
+    assert done.returncode == 0, done.stderr
+    assert set(done.stdout.split()) == {"restic", "sqlite3", "zstd"}
+
+
+def test_a_host_with_everything_needs_nothing(tmp_path):
+    """The other direction, and without it the two above pass on a function
+    that names every package unconditionally."""
+    done = shelllib.call_function(CHECKS, "waku_missing_packages",
+                                  env=_with_only(tmp_path, _EVERY_COMMAND))
+    assert done.returncode == 0, done.stderr
+    assert done.stdout.strip() == ""
+
+
+def test_dockers_compose_plugin_is_probed_through_docker_and_not_on_path(tmp_path):
+    """`docker-compose-v2` provides a docker SUBCOMMAND, not a binary, so
+    `command -v` can never see it. A host with the daemon and without the plugin
+    is a host on which every script here fails at its first `docker compose`."""
+    done = shelllib.call_function(
+        CHECKS, "waku_missing_packages",
+        env=_with_only(tmp_path, _EVERY_COMMAND, docker_body=_NO_COMPOSE))
+    assert done.returncode == 0, done.stderr
+    assert done.stdout.split() == ["docker-compose-v2"]
+
+
+@pytest.mark.parametrize("absent", ["restic", "sqlite3", "timeout", "flock"])
+def test_a_missing_command_after_the_install_is_named_and_refused(tmp_path, absent):
+    """"apt-get exited 0" is not "the command is there". restic and sqlite3 are
+    the two that matter: one is first reached inside a timer unit and the other
+    copies and integrity-checks both platform databases."""
+    present = [name for name in _EVERY_COMMAND if name != absent]
+    done = shelllib.call_function(CHECKS, "waku_require_commands",
+                                  env=_with_only(tmp_path, present))
+    assert done.returncode != 0
+    assert done.stdout.strip() == absent
+
+
+def test_nothing_is_named_when_every_command_is_there(tmp_path):
+    done = shelllib.call_function(CHECKS, "waku_require_commands",
+                                  env=_with_only(tmp_path, _EVERY_COMMAND))
+    assert done.returncode == 0, done.stderr
+    assert done.stdout.strip() == ""
+
+
+def test_the_compose_plugin_is_required_and_not_only_probed(tmp_path):
+    done = shelllib.call_function(
+        CHECKS, "waku_require_commands",
+        env=_with_only(tmp_path, _EVERY_COMMAND, docker_body=_NO_COMPOSE))
+    assert done.returncode != 0
+    assert done.stdout.strip() == "docker compose"
+
+
+def test_zstd_is_installed_and_is_not_required(tmp_path):
+    """The host runs no zstd: the tar-and-zstd pipelines are inside the services
+    image, which installs its own. It stays in the package set this deployment
+    has always had, and requiring it would refuse an install over a command
+    nothing runs -- which is task F2's finding in a mirror.
+
+    Asserted as the DIFFERENCE between the two lists rather than against either
+    one's text, so a future edit that adds zstd to the required set goes red.
+    """
+    installed = shelllib.call_function(CHECKS, 'printf "%s" "$WAKU_PACKAGES"',
+                                       env=_with_only(tmp_path, []))
+    required = shelllib.call_function(
+        CHECKS, 'printf "%s" "$WAKU_REQUIRED_COMMANDS"',
+        env=_with_only(tmp_path, []))
+    assert "zstd:zstd" in installed.stdout.split()
+    assert "zstd" not in required.stdout.split()
+
+
+@pytest.mark.parametrize("flag", ["--restic-repository", "--restic-password-file"])
+def test_a_single_quote_in_a_backup_env_value_is_refused(tmp_path, flag):
+    """config/backup.env IS THE SECOND FILE BASH SOURCES. waku_load_backup_env
+    does `set -a; . "$file"`, so the same quoting and the same refusal apply to
+    its two values -- and `--restic-repository`'s own check is
+    refuse_unprintable, which refuses a space and permits every shell
+    metacharacter, so a value like `s3:$(...)` would be a substitution
+    performed as root at 03:17.
+
+    Not in the review's list: found by asking which OTHER consumer reads a file
+    written here, which is the question the review's own meta-finding names.
+    """
+    args = list(_required(tmp_path))
+    if flag == "--restic-password-file":
+        args[args.index(flag) + 1] = "/srv/waku/config/restic'password"
+    else:
+        args += [flag, "s3:s3.example.test/bu'cket"]
+    done = shelllib.run(INSTALL, args, tmp_path=tmp_path, stubs=OUTSIDE)
+    assert done.returncode != 0
+    assert "must not contain a single quote" in done.stderr
+    assert shelllib.calls(tmp_path) == []
+
+
+def test_a_restic_repository_holding_a_substitution_is_data_and_not_a_command(
+        tmp_path):
+    """The writer's half, on backup.env. `--restic-repository` takes no space,
+    so refuse_unprintable accepts `s3:$(printf ...)` -- and before the quoting
+    the nightly run performed it. The marker is the assertion: a substitution
+    that ran and wrote nothing observable would leave a green test."""
+    marker = tmp_path / "marker"
+    value = f"s3:$(printf INJECTED>{marker})"
+    password = tmp_path / "restic-password"
+    password.write_text("hunter2\n", encoding="utf-8")
+    body = shelllib.run(
+        _script(tmp_path, "waku_backup_env",
+                {"restic_repository": value,
+                 "restic_password_file": str(password)}),
+        [], tmp_path=tmp_path)
+    assert body.returncode == 0, body.stderr
+    env_file = tmp_path / "backup.env"
+    env_file.write_text(body.stdout, encoding="utf-8")
+    done = shelllib.call_function(
+        CHECKS.parent / "lib.sh",
+        f'waku_load_backup_env "{env_file}" RESTIC_REPOSITORY RESTIC_PASSWORD_FILE; '
+        'printf "[%s]" "$RESTIC_REPOSITORY"')
+    assert done.returncode == 0, done.stderr
+    assert not marker.exists(), (
+        "sourcing backup.env performed a substitution from one of its values")
+    assert done.stdout == f"[{value}]"
+
+
+def _script(tmp_path, function: str, values: dict) -> Path:
+    """One envfiles.sh function, run with the globals it reads."""
+    assignments = "\n".join(f"{name}={value!r}" for name, value in values.items())
+    script = tmp_path / f"{function}.sh"
+    script.write_text(
+        f"set -euo pipefail\n{assignments}\n"
+        f'. "{CHECKS.parent / "envfiles.sh"}"\n{function}\n',
+        encoding="utf-8")
+    return script
