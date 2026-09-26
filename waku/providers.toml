@@ -219,6 +219,24 @@ small_model = "deepseek-v4-flash"
 key_url = "https://opencode.ai/zen"
 price = [0.435, 0.87]
 
+# Opper routes one key to many labs' models over an OpenAI-compatible API,
+# hosted in the EU. Its short ids such as "claude-sonnet-4-6" are pools, served
+# by every provider that carries the model. The defaults use the pinned
+# "vendor/model" form so that this row claims no model family away from
+# anthropic or openai. The API accepts both id forms.
+
+[opper]
+kind = "openai"
+key_env = "OPPER_API_KEY"
+base_url = "https://api.opper.ai/v3/compat"
+model = "anthropic/claude-sonnet-4-6"
+small_model = "openai/gpt-5.4-mini"
+catalog_url = "https://api.opper.ai/v3/compat/models"
+flagship = "anthropic/claude-opus-5"
+fast = "openai/gpt-5.4-mini"
+key_url = "https://platform.opper.ai"
+price = [3.0, 15.0]
+
 # The hosted free tier. Hidden on a local machine: with no
 # WAKU_PLATFORM_BASE_URL set it appears in no page, list or error message,
 # and never in .env.example. In a tenant container the four WAKU_PLATFORM_*
