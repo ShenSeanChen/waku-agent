@@ -657,7 +657,10 @@ details.subterm > summary.subterm-h::-webkit-details-marker{ display:none; }
   color:var(--text-faint);cursor:pointer;font-size:var(--text-xs)}
 
 
-.connmodal-message{flex:1;min-width:160px;color:var(--text-faint);font-size:var(--text-xs)}
+/* Its own line above the buttons: a narrow dialog has no room beside them, and
+   an error lists long env names (WHATSAPP_PHONE_NUMBER_ID) that must break. */
+.connmodal-message{flex-basis:100%;color:var(--text-faint);font-size:var(--text-xs);overflow-wrap:anywhere}
+.connmodal-message:empty{display:none}
 .conn-force{margin-left:var(--space-2)}
 
 @media (max-width:720px){
@@ -666,7 +669,6 @@ details.subterm > summary.subterm-h::-webkit-details-marker{ display:none; }
   
   
   
-  .connmodal-message{flex-basis:100%}
 }
 
 /* --- Memory arena: the fixture, readable before any of it has been run --- */
@@ -809,8 +811,11 @@ dialog.dialog{margin:auto;background:var(--surface-raised);color:var(--text-ink)
 dialog.dialog.dialog-wide{width:min(var(--dialog-wide), 92vw)}
 .dialog-in{padding:var(--space-8)}
 dialog.dialog::backdrop{background:var(--scrim);backdrop-filter:blur(var(--scrim-blur))}
-.dialog-foot{display:flex;justify-content:flex-end;gap:var(--space-2);border-top:var(--rule-width) solid var(--rule);
-             margin-top:var(--space-4);padding-top:var(--space-4)}
+/* wrap + center: a footer that cannot wrap overflows off its LEFT edge (flex-end
+   pushes the excess to the start side), and stretch makes buttons as tall as a
+   multi-line message beside them. */
+.dialog-foot{display:flex;flex-wrap:wrap;align-items:center;justify-content:flex-end;gap:var(--space-2);
+             border-top:var(--rule-width) solid var(--rule);margin-top:var(--space-4);padding-top:var(--space-4)}
 /* The retrieval gate (render.js gateSplit): two figures over a thin bar in
    the chart ramp — the same figure style as the stat band. */
 .gate-figs{display:flex;align-items:flex-end;gap:var(--space-8);margin-bottom:var(--space-3)}
