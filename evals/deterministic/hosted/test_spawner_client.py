@@ -339,3 +339,74 @@ def test_each_call_asks_with_its_own_timeout_not_a_shared_one(monkeypatch):
         "list": QUICK_ASK_TIMEOUT,
         "task": TASK_ASK_TIMEOUT,
     }
+
+
+def test_tenant_ids_parses_what_the_spawner_reports(sock_dir):
+    """The consumer half of the `tenants` wire contract. The key and the
+    element shape are agreed between `service.handle` and this client and were
+    asserted by neither, while `list`'s equivalents are pinned both ways --
+    so renaming the key on one side was green here and a SpawnerError on the
+    VM."""
+
+    async def run():
+        sock = sock_dir / "spawner.sock"
+        answer = {"tenant_ids": ["aaaaaaaaaaaa", "bbbbbbbbbbbb"]}
+        server = await jsonsock.serve(sock, _script(answer), mode=0o660)
+        try:
+            client = SpawnerClient(sock)
+            captured.append(await client.tenant_ids())
+        finally:
+            await _closing(server)
+
+    captured: list = []
+    asyncio.run(run())
+    assert captured == [["aaaaaaaaaaaa", "bbbbbbbbbbbb"]]
+
+
+def test_tenant_ids_sends_the_op_the_spawner_allowlists(sock_dir):
+    """`requests.OPERATIONS` admits `tenants` and exactly the key `op`. A
+    client sending a different name, or a second key, is refused by the
+    spawner -- and the refusal would reach an operator mid-restore as
+    stop-all failing for no visible reason."""
+    captured: dict = {}
+
+    async def handler(payload):
+        captured.update(payload)
+        return {"tenant_ids": []}
+
+    async def run():
+        sock = sock_dir / "spawner.sock"
+        server = await jsonsock.serve(sock, handler, mode=0o660)
+        try:
+            await SpawnerClient(sock).tenant_ids()
+        finally:
+            await _closing(server)
+
+    asyncio.run(run())
+    assert captured == {"op": "tenants"}
+
+
+@pytest.mark.parametrize("answer", [
+    # Not a list at all: `for entry in entries` over a number raises a bare
+    # TypeError, outside the (SpawnerError, OSError) every caller catches.
+    {"tenant_ids": 5},
+    # The key the producer does NOT use -- a rename on one side only.
+    {"containers": []},
+    # A list carrying something that is not a tenant id. It would be joined to
+    # a container name and stopped.
+    {"tenant_ids": ["aaaaaaaaaaaa", "../../srv"]},
+    {"tenant_ids": [None]},
+    {"tenant_ids": ["AAAAAAAAAAAA"]},
+])
+def test_tenant_ids_refuses_an_answer_that_is_not_a_list_of_tenant_ids(
+        sock_dir, answer):
+    async def run():
+        sock = sock_dir / "spawner.sock"
+        server = await jsonsock.serve(sock, _script(answer), mode=0o660)
+        try:
+            with pytest.raises(SpawnerError):
+                await SpawnerClient(sock).tenant_ids()
+        finally:
+            await _closing(server)
+
+    asyncio.run(run())

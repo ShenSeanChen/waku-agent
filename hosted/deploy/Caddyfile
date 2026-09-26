@@ -1,0 +1,38 @@
+# One certificate for the apex and the wildcard, by DNS-01.
+#
+# {$VAR} is substituted from Caddy's own environment before the file is parsed,
+# and compose.yaml puts the four values there. That is what lets one Caddyfile
+# serve any operator's domain and any caddy-dns module.
+#
+# A provider whose module takes an inline argument (Cloudflare wants its token)
+# sets WAKU_DNS_PROVIDER to the whole directive, for example
+#   WAKU_DNS_PROVIDER="cloudflare {env.CLOUDFLARE_API_TOKEN}"
+# Route 53 takes none: it reads AWS credentials from config/caddy.env.
+#
+# THE SITE ADDRESS IS A CLOSED SET. Two names and no more: the apex and one
+# label under it. Caddy serves nothing it was not given a matching site block
+# for, so a request arriving with any other Host is refused here rather than
+# forwarded to the gateway to be sorted out. The wildcard matches exactly one
+# label, which is what a tenant id is.
+#
+# reverse_proxy passes the original Host upstream by default, and the gateway
+# routes by Host -- apex or tenant -- so that default is load-bearing. Do not
+# add a header_up that rewrites it.
+#
+# flush_interval -1 disables response buffering. Without it a streamed turn
+# (/api/chat/stream, /api/graph/stream) arrives at the browser in one lump when
+# the turn ends, which looks exactly like a hung dashboard.
+
+{
+	email {$WAKU_ACME_EMAIL}
+}
+
+{$WAKU_DOMAIN}, *.{$WAKU_DOMAIN} {
+	tls {
+		dns {$WAKU_DNS_PROVIDER}
+	}
+
+	reverse_proxy {$WAKU_GATEWAY_ADDRESS} {
+		flush_interval -1
+	}
+}

@@ -56,7 +56,12 @@ jobs:
         run: |
           set -euxo pipefail
           sudo apt-get update
-          sudo apt-get install --yes --no-install-recommends xfsprogs
+          # restic is not for the filesystem: it is what test_backup_restic.py
+          # measures, and the nightly backup is the only place the "a symlink
+          # is stored as a symlink and never followed" clause is load-bearing.
+          # It is installed here rather than in a step of its own so the tier
+          # has one apt call.
+          sudo apt-get install --yes --no-install-recommends xfsprogs restic
           sudo modprobe xfs
           sudo mkdir -p /srv/waku
           sudo truncate -s 2G /var/tmp/waku-xfs.img

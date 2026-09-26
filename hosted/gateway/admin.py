@@ -32,15 +32,18 @@ _LOG = log.get(__name__)
 ADMIN_SOCKET_MODE = 0o600
 
 ADMIN_OPS = frozenset({"status", "disable", "enable", "delete", "restart-all",
-                       "backup", "restore", "inspect", "inspect-stop"})
+                       "stop-all", "resolve", "backup", "restore", "inspect",
+                       "inspect-stop"})
 _NO_TENANT = frozenset({"op"})
 _ONE_TENANT = frozenset({"op", "tenant"})
 ADMIN_KEYS: dict[str, frozenset[str]] = {
     "status": _NO_TENANT,
     "restart-all": _NO_TENANT,
+    "stop-all": _NO_TENANT,
     "disable": _ONE_TENANT,
     "enable": _ONE_TENANT,
     "delete": _ONE_TENANT,
+    "resolve": _ONE_TENANT,
     "backup": _ONE_TENANT,
     "restore": _ONE_TENANT,
     "inspect": _ONE_TENANT,
@@ -77,17 +80,81 @@ async def handle(gateway: Gateway, payload: dict) -> dict:
         return {"running": sorted(gateway.launcher.fleet.running())}
     if op == "restart-all":
         return {"restarted": await gateway.launcher.restart_all()}
+    if op == "stop-all":
+        return {"stopped": await _stop_all(gateway)}
     needle = payload.get("tenant")
     if not isinstance(needle, str) or not needle:
         return {"error": f"{op} needs a tenant id or email"}
     tenant = _find(gateway, needle)
     if tenant is None:
         return {"error": f"no tenant matches {needle!r}"}
+    if op == "resolve":
+        # READ-ONLY, AND IT EXISTS SO restore.sh DOES NOT NEED ITS OWN SQL.
+        # `_find` is `tenant_by_id` or `tenant_by_email`, and the second pins
+        # its answer with `ORDER BY created_at, id LIMIT 1` because an address
+        # is not unique -- a contract the rest of the platform is tested
+        # against. A shell copy of that query is a second copy of a contract,
+        # and it had already drifted: no ORDER BY, no LIMIT, so an operator
+        # whose address is on two rows got two lines back in the middle of a
+        # disaster. One implementation, one answer, no string literal built by
+        # concatenation in the most destructive script in the deployment.
+        return {"ok": True, "tenant": tenant.id}
     try:
         return await _act(gateway, op, tenant)
     except (SpawnerError, NotActive, InMaintenance, StartFailed, OSError) as exc:
         _LOG.warning("admin %s on tenant=%s failed: %s", op, tenant.id, exc)
         return {"error": str(exc)}
+
+
+async def _stop_all(gateway: Gateway) -> list[str]:
+    """Stop every running tenant container, disabling nobody.
+
+    restore.sh --all needs this and no existing verb does it: `restart-all`
+    restarts, `disable` changes a tenant's status, and `status` reads. A
+    container that survives into a restored control.db holds a proxy token
+    that database may not know, and the gateway would adopt it at startup and
+    forward to it. It is worse than a stale token: its bind mount is inside
+    the tree the restore is about to remove, which is the dead-inode failure
+    designs/backup-restore-integrity.md records -- a restore deleted a running
+    container's directories and the next `docker exec` failed with "possible
+    container breakout detected".
+
+    THE LIST IS THE UNION OF WHAT THE SPAWNER HAS AND WHAT THE FLEET
+    BELIEVES, because neither alone is every container.
+
+    IT ASKS `running_tenant_ids`, NOT `resync`, AND THAT IS THE WHOLE
+    CORRECTION. `resync` and the spawner's `list` answer "may the gateway
+    forward to this container?", so they drop one at an address its project id
+    does not derive and one whose tenant control.db does not know. Stopping
+    asks "is this container ours?", which is strictly wider -- and every
+    container in the difference is exactly the one whose bind mount the
+    restore is about to delete. Built on `resync`'s filter, this verb was
+    structurally unable to stop the containers it exists for.
+
+    `resync` stays read-and-believe: it runs at gateway startup and on every
+    refused connection, and making a consistency function destructive is a
+    category change with its own blast radius.
+
+    The fleet is the other half and not a subset of the first: it also reports
+    STARTING, a container the spawner cannot name yet because it is still
+    being created.
+
+    No new Launcher method beyond the one door `running_tenant_ids` opens;
+    `stop` and `fleet.forget` are calls `_act` already makes.
+
+    WHAT THIS CANNOT CLOSE, said out loud: a sign-in that lands after this
+    answered pre-warms a new container. restore.sh stops the gateway on the
+    next line and asks again once it is back, so the window is narrow, but
+    nothing inside the gateway can make it zero.
+    """
+    running = set(gateway.launcher.fleet.running())
+    running.update(await gateway.launcher.running_tenant_ids())
+    stopped = []
+    for tenant_id in sorted(running):
+        await gateway.launcher.stop(tenant_id)
+        gateway.launcher.fleet.forget(tenant_id)
+        stopped.append(tenant_id)
+    return stopped
 
 
 async def _act(gateway: Gateway, op: str, tenant: Tenant) -> dict:

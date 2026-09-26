@@ -2,7 +2,7 @@
 
 The spawner is root with CAP_SYS_ADMIN and the data disk's block device, and
 this is the only thing that speaks to it. hosted/core/requests.py already
-allowlists the five operations, the five tasks and the exact key set of each,
+allowlists the six operations, the five tasks and the exact key set of each,
 so this module's job is narrow: send exactly those keys, give each call a
 timeout that matches the work it asks for, and turn the spawner's two answer
 shapes into a value or an exception.
@@ -26,6 +26,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from hosted import jsonsock
+from hosted.core.tenant import is_tenant_id
 from hosted.ports.runtime import RunningContainer
 
 # Long enough that the gateway's own 15-second start budget is what expires
@@ -94,6 +95,23 @@ class SpawnerClient:
                     "not an object")
         return [self._container(str(entry.get("tenant_id", "")), entry)
                 for entry in entries]
+
+    async def tenant_ids(self) -> list[str]:
+        """Every tenant container the spawner labelled, by id.
+
+        Validated the same way `list`'s answer is, and for the same reason:
+        what comes back is joined to a container name and stopped, so a shape
+        that is not a tenant id is a refusal rather than a thing to act on.
+        """
+        answer = await self._ask({"op": "tenants"}, timeout=QUICK_ASK_TIMEOUT)
+        entries = answer.get("tenant_ids")
+        if not isinstance(entries, list):
+            raise SpawnerError(
+                f"tenants answered {type(entries).__name__}, not a list")
+        for entry in entries:
+            if not isinstance(entry, str) or not is_tenant_id(entry):
+                raise SpawnerError(f"tenants answered {entry!r}, not a tenant id")
+        return list(entries)
 
     async def task(self, tenant_id: str, task: str, project_id: int = 0) -> dict:
         payload = {"op": "task", "tenant_id": tenant_id, "task": task}

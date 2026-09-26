@@ -1,8 +1,10 @@
-"""DockerRuntime: the five operations ports.TenantRuntime names, and no sixth.
+"""DockerRuntime: the operations ports.TenantRuntime names, and no more.
 
 The spawner is root with CAP_SYS_ADMIN and the data disk's block device. EVERY
 NEW OPERATION HERE IS A NEW PRIVILEGED VERB, so this class implements exactly
-the five in the Protocol and exactly the five tasks core/requests.TASKS names.
+the ones in the Protocol and exactly the five tasks core/requests.TASKS names.
+`tenant_ids` made the Protocol six; the conformance test in
+test_spawner_service.py counts them, so the number lives there and not here.
 Widening either set is a spec change.
 
 What each verb can and cannot do, so a reviewer can check the list rather than
@@ -354,6 +356,38 @@ class DockerRuntime:
         await self._engine.remove(name)
         _LOG.info("stopped tenant=%s", tenant_id)
 
+    async def tenant_ids(self) -> list[str]:
+        """Every tenant container this spawner labelled, by id.
+
+        A DIFFERENT QUESTION FROM `list`, AND DELIBERATELY WIDER. `list`
+        answers "may the gateway forward to this container?", so it drops one
+        with no address on the tenant bridge and one at an address its project
+        id does not derive -- both right, because forwarding to either is
+        sending a signed-in person somewhere the platform never meant. This
+        answers "is this container ours?", which is what STOPPING needs, and
+        the containers in the difference are exactly the ones a restore is
+        about to delete the directories out from under. The failure that costs
+        is in designs/backup-restore-integrity.md: a bind mount left on a dead
+        inode, and the next `docker exec` reporting "possible container
+        breakout detected" in the middle of a disaster recovery.
+
+        THE LABEL AND THE ID SHAPE ARE THE WHOLE FILTER. No address check, no
+        control.db join -- the spawner opens no database, and a tenant the
+        restored control.db will not know is precisely a container that must
+        still be stopped. `is_tenant_id` stays because the id is a closed set
+        everywhere else it is used and `stop` joins it to a container name.
+        """
+        ids = []
+        for entry in await self._engine.containers(
+                label=f"{template.LABEL_KIND}={template.KIND_TENANT}"):
+            tenant_id = (entry.get("Labels") or {}).get(template.LABEL_TENANT, "")
+            if not is_tenant_id(tenant_id):
+                _LOG.warning("ignoring container %s with label tenant=%r",
+                             entry.get("Id", "")[:12], tenant_id)
+                continue
+            ids.append(tenant_id)
+        return sorted(set(ids))
+
     async def list(self) -> list[RunningContainer]:
         running = []
         for entry in await self._engine.containers(
@@ -396,7 +430,8 @@ class DockerRuntime:
         """The maintenance mark, enforced by the spawner so it survives a
         gateway restart.
 
-        It blocks on template.BLOCKING_KINDS -- KIND_TASK and KIND_INSPECT,
+        THREE CALLERS: `start`, `_restore`, and `_archive`. It blocks on
+        template.BLOCKING_KINDS -- KIND_TASK and KIND_INSPECT,
         which are the OPERATOR's containers. It does NOT block on
         KIND_PROVISION, the spawner's own bookkeeping, which every start
         creates on its way to starting the container: blocking on that would
@@ -412,9 +447,11 @@ class DockerRuntime:
             kind = (entry.get("Labels") or {}).get(template.LABEL_KIND)
             if kind in template.BLOCKING_KINDS:
                 raise Busy(
-                    f"tenant {tenant_id} has a {kind} container running. "
-                    "Starting their dashboard now would put two processes "
-                    "on one state.db.")
+                    f"tenant {tenant_id} has a {kind} container running, and "
+                    "it binds their home and env directories. Starting their "
+                    "dashboard would put two processes on one state.db; "
+                    "archiving or restoring would move those directories out "
+                    "from under a live mount.")
 
     # --- the five file tasks ---------------------------------------------
     #
@@ -578,14 +615,41 @@ class DockerRuntime:
         runs, on exactly what the spec describes. The check below is what makes
         a future regression loud instead of silent.
 
-        NOTHING HERE STOPS A RUNNING TENANT CONTAINER, and F3 must. A task is
-        not a start, and _refuse_if_busy is one-way -- a task blocks a start, a
-        start does not block a task -- so a single-tenant restore empties /data
-        and /work under a live dashboard holding state.db open. The spec puts
-        "stop every tenant container first" on `restore.sh --all`, which is
-        F3's; a per-tenant restore needs the same, and the sequencing belongs
-        with the caller, which already has `stop` as a verb.
+        NOTHING HERE STOPS A RUNNING TENANT CONTAINER, and F3's caller does:
+        `_act` calls `launcher.stop(tenant.id)` before this task, and
+        `restore.sh --all` stops the whole fleet through `stop-all` first. The
+        sequencing belongs with the caller, which already has `stop` as a verb.
+        What the caller CANNOT reach is a task or inspect container -- `stop`
+        names a KIND_TENANT container and nothing else -- so those are refused
+        here instead; see the first lines of the body.
         """
+        # EVERY CONTAINER HOLDING THIS TENANT'S MOUNTS MUST BE GONE, NOT JUST
+        # THEIR DASHBOARD. `_refuse_if_busy` was called only from `start`, and
+        # the note below said so -- but the containers it blocks on,
+        # KIND_TASK and KIND_INSPECT, bind `home` and `env` exactly as the
+        # tenant container does (template.task_container,
+        # template.inspect_container), and those are the two directories the
+        # lines below remove and re-create.
+        #
+        # An inspect container is the one that bites: it is operator-started,
+        # AutoRemove is deliberately off, and it lives until `inspect-stop`.
+        # An operator who inspects a tenant and then runs `restore.sh --all`
+        # gets the failure designs/backup-restore-integrity.md records -- a
+        # bind mount left on a removed directory, and the next `docker exec`
+        # reporting "possible container breakout detected" in the middle of a
+        # disaster recovery. The gateway's `stop-all` cannot reach them: it
+        # stops by tenant id and `stop` only knows how to name a KIND_TENANT
+        # container.
+        #
+        # A REFUSAL AND NOT A WIDER STOP, deliberately. An inspect container
+        # holds a dashboard someone is looking at, and killing it from under a
+        # restore is a decision an operator should make with `inspect-stop`,
+        # not one this method should make for them. Busy is the maintenance
+        # answer the gateway already knows how to render.
+        #
+        # This runs BEFORE the manifest read and long before `_archive`, so a
+        # refusal here costs nothing: the tenant's tree is untouched.
+        await self._refuse_if_busy(tenant_id)
         staging = self._staging(tenant_id)
         if staging.is_symlink():
             # is_dir() FOLLOWS a link; _backup refuses one outright. Two guards
@@ -744,7 +808,26 @@ class DockerRuntime:
         image, no network, the tenant's two mounts and the ONE extra the task
         needs -- the archive root, which is the platform's own directory and
         not any tenant's.
+
+        IT REFUSES A BUSY TENANT, and that is not the same guard `_restore`
+        already has: `_restore` calls `_refuse_if_busy` and then calls THIS,
+        but `tenant.sh delete` reaches this method through the admin verb
+        `delete`, which runs `archive` on its own and never went past that
+        check. An inspect container is the one that bites -- it is
+        operator-started, AutoRemove is deliberately off, and it lives until
+        `inspect-stop`, so `launcher.stop` and `stop-all` both leave it
+        running with `state.db` open. The archive it would then pack is the
+        ONLY copy a deleted tenant has (backup.sh's own comment: archives are
+        in no restic snapshot), so a torn database here is not recoverable
+        from anywhere. Refusing costs the operator one `tenant.sh
+        inspect-stop`; the admin verb has already set the tenant's status to
+        disabled by this point, which `tenant.sh enable` reverses.
+
+        The double call on the restore path is deliberate and free: the query
+        is one label lookup and nothing between the two creates a blocking
+        container.
         """
+        await self._refuse_if_busy(tenant_id)
         archive = self._tenant_directory_under(self._config.archive_root, tenant_id)
         stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
         name = f"{tenant_id}-{stamp}" + (f"-{suffix}" if suffix else "")

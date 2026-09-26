@@ -40,6 +40,10 @@ class FakeRuntime:
         self.calls.append(("list",))
         return [RunningContainer(tenant_id="k3fq7x2mza4b", address="10.88.0.2", port=7777)]
 
+    async def tenant_ids(self):
+        self.calls.append(("tenants",))
+        return ["k3fq7x2mza4b"]
+
     async def task(self, tenant_id, task, project_id=0):
         self.calls.append(("task", tenant_id, task, project_id))
         if task == "restore":
@@ -64,6 +68,10 @@ def test_each_operation_answers_the_shape_the_specs_table_names():
     assert ask({"op": "stop", "tenant_id": TENANT})[0] == {"ok": True}
     assert ask({"op": "list"})[0] == {
         "containers": [{"tenant_id": TENANT, "address": "10.88.0.2", "port": 7777}]}
+    # The PRODUCER half of the `tenants` wire contract. Its key is agreed with
+    # SpawnerClient.tenant_ids and was asserted by neither side, so renaming it
+    # here was green and a SpawnerError on the VM.
+    assert ask({"op": "tenants"})[0] == {"tenant_ids": [TENANT]}
     assert ask({"op": "task", "tenant_id": TENANT, "task": "backup"})[0] == {
         "path": f"/srv/waku/staging/{TENANT}"}
     assert ask({"op": "task", "tenant_id": TENANT, "task": "restore",
@@ -231,22 +239,26 @@ def test_the_runtime_the_service_talks_to_is_the_one_the_port_describes():
     from hosted.ports.runtime import TenantRuntime
     from hosted.spawner.docker import DockerRuntime
 
-    for name in ("provision", "start", "stop", "list", "task"):
-        expected = _inspect.signature(getattr(TenantRuntime, name))
-        actual = _inspect.signature(getattr(DockerRuntime, name))
+    for name in ("provision", "start", "stop", "list", "tenants", "task"):
+        # The wire op is `tenants`; the method that answers it is
+        # `tenant_ids`, because `tenants` reads as a collection on a class.
+        method = "tenant_ids" if name == "tenants" else name
+        expected = _inspect.signature(getattr(TenantRuntime, method))
+        actual = _inspect.signature(getattr(DockerRuntime, method))
         assert actual == expected, (
-            f"DockerRuntime.{name}{actual} does not match "
-            f"TenantRuntime.{name}{expected}")
-        assert _inspect.signature(getattr(FakeRuntime, name)).parameters.keys() == \
+            f"DockerRuntime.{method}{actual} does not match "
+            f"TenantRuntime.{method}{expected}")
+        assert _inspect.signature(getattr(FakeRuntime, method)).parameters.keys() == \
             expected.parameters.keys(), (
-            f"FakeRuntime.{name} does not take what TenantRuntime.{name} takes, "
+            f"FakeRuntime.{method} does not take what TenantRuntime.{method} takes, "
             "so every test in this file is driving a shape the spawner has not "
             "got.")
 
     extra = {name for name in vars(DockerRuntime)
              if not name.startswith("_") and callable(vars(DockerRuntime)[name])}
-    assert extra == {"provision", "start", "stop", "list", "task"}, (
+    verbs = {"provision", "start", "stop", "list", "tenant_ids", "task"}
+    assert extra == verbs, (
         f"DockerRuntime has public methods the Protocol does not name: "
-        f"{sorted(extra - {'provision', 'start', 'stop', 'list', 'task'})}. "
+        f"{sorted(extra - verbs)}. "
         "The spawner is root with CAP_SYS_ADMIN; every public verb here is a "
-        "privileged verb, and there are exactly five.")
+        "privileged verb, and there are exactly six.")

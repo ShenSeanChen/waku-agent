@@ -1,0 +1,30 @@
+# syntax=docker/dockerfile:1.7
+# Caddy with exactly one caddy-dns module, named at build time.
+#
+# The stock caddy image has no DNS provider compiled in, and DNS-01 is the only
+# challenge that can issue a WILDCARD certificate -- which is what one origin
+# per tenant needs, because a tenant id becomes a DNS label.
+#
+# DNS_PROVIDER_VERSION IS EMPTY BY DEFAULT AND SHOULD NOT STAY THAT WAY on a
+# deployment anybody depends on. With no version, xcaddy resolves the module's
+# latest release on the day it builds, so two builds of the same commit produce
+# two different Caddys -- and install.sh rebuilds this image on every run.
+# install.sh's --dns-module-version passes a Go module suffix, for example
+# "@v1.5.0", and logs a NOTE when it is absent.
+ARG CADDY_VERSION=2.10.0
+
+FROM caddy:${CADDY_VERSION}-builder AS builder
+# Re-declared inside the stage: an ARG before the first FROM is global and is
+# not in scope in a build stage until it is named again.
+ARG DNS_PROVIDER
+ARG DNS_PROVIDER_VERSION=""
+# QUOTED. Both ARGs are substituted by the shell this RUN starts, so an
+# unquoted expansion would let a value with a space or a metacharacter in it
+# become extra words in the command. install.sh keeps both to closed sets --
+# DNS_PROVIDER is the module name alone, lowercase letters, digits and
+# hyphens, and DNS_PROVIDER_VERSION is "@" and a Go version suffix -- and
+# this is the second half of that, at the place the value is used.
+RUN xcaddy build --with "github.com/caddy-dns/${DNS_PROVIDER}${DNS_PROVIDER_VERSION}"
+
+FROM caddy:${CADDY_VERSION}
+COPY --from=builder /usr/bin/caddy /usr/bin/caddy

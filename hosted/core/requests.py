@@ -17,7 +17,7 @@ from dataclasses import dataclass
 
 from hosted.core.tenant import is_known_timezone, is_project_id, is_proxy_token, is_tenant_id
 
-OPERATIONS = frozenset({"provision", "start", "stop", "list", "task"})
+OPERATIONS = frozenset({"provision", "start", "stop", "list", "tenants", "task"})
 TASKS = frozenset({"backup", "restore", "archive", "inspect", "inspect-stop"})
 
 _KEYS: dict[str, frozenset[str]] = {
@@ -25,6 +25,7 @@ _KEYS: dict[str, frozenset[str]] = {
     "start": frozenset({"op", "tenant_id", "project_id", "timezone", "token"}),
     "stop": frozenset({"op", "tenant_id"}),
     "list": frozenset({"op"}),
+    "tenants": frozenset({"op"}),
     # project_id is OPTIONAL here and required only for `restore`, which is a
     # per-TASK requirement and _REQUIRED is per-OPERATION, so service.handle
     # enforces it rather than parse(). restore recreates the tenant's two
@@ -41,6 +42,7 @@ _REQUIRED: dict[str, tuple[str, ...]] = {
     "start": ("tenant_id", "project_id", "timezone", "token"),
     "stop": ("tenant_id",),
     "list": (),
+    "tenants": (),
     "task": ("tenant_id", "task"),
 }
 
