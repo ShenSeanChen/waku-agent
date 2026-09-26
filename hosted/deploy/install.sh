@@ -625,6 +625,14 @@ if [ "$install_env_existed" = yes ]; then
     differs "the checkout" "$src" "${WAKU_SRC:-}"
     differs "<domain>" "$domain" "${WAKU_DOMAIN:-}"
     differs "--dns-provider" "$dns_provider" "${WAKU_DNS_PROVIDER:-}"
+    # --dns-module-version JOINED install.env AND NOT THIS BLOCK, which is the
+    # same divergence one flag over: a rerun at @v1.6.0 over a VM installed at
+    # @v1.5.0 builds the image from argv and KEEPS the install.env recording
+    # 1.5.0, and the next upgrade.sh -- the code that now reads the pin --
+    # silently rebuilds at 1.5.0. `${X-}` and not `${X:-}`: an empty pin is a
+    # real value here, and `:-` would read a VM installed with no pin as
+    # disagreeing with a rerun that also gives none.
+    differs "--dns-module-version" "$dns_module_version" "${WAKU_DNS_MODULE_VERSION-}"
     differs "--acme-email" "$acme_email" "${WAKU_ACME_EMAIL:-}"
     differs "--data-device" "$data_device" "${WAKU_DATA_DEVICE:-}" )
 fi

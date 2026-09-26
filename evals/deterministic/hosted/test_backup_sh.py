@@ -1057,3 +1057,46 @@ def test_init_is_bounded_too(tmp_path):
     assert done.returncode == 0, done.stderr
     assert [line for line in shelllib.calls(tmp_path)
             if line.startswith("timeout ") and line.endswith("restic cat config")]
+
+
+# --- the shape the example teaches, sourced ------------------------------------
+
+
+def test_the_example_teaches_a_shape_that_cannot_run_a_command(tmp_path):
+    """config/backup.env IS SOURCED AS SHELL, BY ROOT, AT 03:17, and two of its
+    four values are appended BY HAND: the guide tells the operator to add
+    AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY themselves, following
+    deploy/backup.env.example. install.sh quotes the two values it writes; the
+    operator can only copy what the example shows them.
+
+    SO THE EXAMPLE IS THE GUARD HERE, and this test is the only thing that can
+    hold it. The fixture keeps the example's own quoting and substitutes a
+    hostile value into it, exactly as an operator with a B2 or MinIO key
+    containing `$` or a backtick would: if the example ever shows a bare
+    `NAME=value`, the operator writes one, and the marker file appears.
+
+    NOT AN ASSERTION THAT A STRING IS IN THE FILE. The file is loaded by the
+    real loader and the evidence is a path on disk that was not created.
+    """
+    marker = tmp_path / "marker"
+    hostile = f"$(printf INJECTED > {marker})`printf also >> {marker}`"
+    password = tmp_path / "restic-password"
+    password.write_text("hunter2\n", encoding="utf-8")
+
+    example = (shelllib.DEPLOY / "backup.env.example").read_text(encoding="utf-8")
+    body = (example
+            .replace("'example'", f"'{hostile}'")
+            .replace("'/srv/waku/config/restic-password'", f"'{password}'"))
+    assert hostile in body, "the substitution found no value to replace"
+    env_file = tmp_path / "backup.env"
+    env_file.write_text(body, encoding="utf-8")
+
+    done = shelllib.call_function(
+        shelllib.DEPLOY / "lib.sh",
+        f'waku_load_backup_env "{env_file}" RESTIC_REPOSITORY RESTIC_PASSWORD_FILE; '
+        'printf "[%s]" "$AWS_SECRET_ACCESS_KEY"')
+    assert done.returncode == 0, done.stderr
+    assert not marker.exists(), (
+        "a key written the way backup.env.example shows it ran a command as "
+        "root when the file was sourced")
+    assert done.stdout == f"[{hostile}]"

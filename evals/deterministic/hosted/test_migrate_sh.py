@@ -324,8 +324,15 @@ def test_out_names_the_archive_directory_it_cannot_carry(tmp_path):
     done = _run(tmp_path, ["--out"])
     assert done.returncode == 0, done.stderr
     root = tmp_path / "waku"
-    assert f"{root}/archive" in done.stdout
-    assert "Archives are in no restic snapshot" in done.stdout
+    # EACH LINE OF THE PARAGRAPH, ANCHORED SEPARATELY. Both of the needles this
+    # test first carried were satisfied by the paragraph's OTHER lines, so the
+    # headline naming the directory and the `du` that sizes it were each
+    # individually deletable with the suite green -- the fixture agreeing with
+    # the mutant, in a commit about that shape.
+    lines = [line.strip() for line in done.stdout.splitlines()]
+    assert f"2b. AND {root}/archive, if anything is in it." in lines
+    assert any(line.startswith("Archives are in no restic snapshot") for line in lines)
+    assert f"du -sh {root}/archive" in lines
 
 
 def test_out_says_the_three_credential_flags_are_still_required(tmp_path):

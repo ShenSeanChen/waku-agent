@@ -225,6 +225,11 @@ for the object store's own credentials: add `AWS_ACCESS_KEY_ID` and
 install, following [deploy/backup.env.example](deploy/backup.env.example). A
 rerun never overwrites that file, so what you add survives.
 
+**Single-quote both keys.** `backup.env` is sourced as shell, by root, inside the
+backup timer at 03:17: a key holding `$` is silently truncated to the part before
+it, and one holding a backtick or `$(...)` is a command substitution performed as
+root. `AWS_SECRET_ACCESS_KEY='...'` is safe whatever the provider minted.
+
 ### 7. Install
 
 ```bash
