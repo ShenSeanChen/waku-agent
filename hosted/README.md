@@ -20,13 +20,19 @@ switch on the Models page.
 
 ## Licensing
 
-The code here is MIT, like the rest of the repository. The Waku design system,
-the Waku mark and the Waku names are not: they are listed in
-[LICENSE-BRAND](../LICENSE-BRAND), and a hosted deployment serves the stock dashboard, which carries them. **A
-third party who wants to offer this as a service under the Waku name needs
-AutoManus's written permission.** Nothing in this directory changes that
-license; it only describes a deployment of the software the license already
-covers.
+**The code here is NOT MIT.** `hosted/` is licensed under the Elastic License
+2.0 — see [LICENSE](LICENSE). The rest of the repository stays MIT, including
+all of `waku/`, which is what PyPI ships.
+
+What that means in practice: **you may run this yourself, including for your
+own company, and you may read and modify it. You may not offer it to third
+parties as a hosted or managed service.** That one sentence is the whole
+difference.
+
+`hosted/` belongs to AutoManus Technologies, Inc., as do the Waku design
+system, the Waku mark and the Waku names — those are covered separately, listed in
+[LICENSE-BRAND](../LICENSE-BRAND), and a deployment serves the stock dashboard,
+which carries them. Neither license grants any right in them.
 
 ## What is here
 

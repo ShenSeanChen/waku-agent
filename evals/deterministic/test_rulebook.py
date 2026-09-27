@@ -262,3 +262,76 @@ def test_no_module_defines_a_top_level_name_twice():
         "module-level name defined more than once — the later definition wins "
         "and the earlier one is dead:\n  " + "\n  ".join(offenders)
     )
+
+
+# --- hosted/ is Elastic License 2.0, and the repository must not say otherwise --
+#
+# Written when hosted/ stopped being MIT. The risk this guards is not that
+# somebody deletes the licence file -- that is loud -- but that a sentence
+# somewhere keeps saying "the code here is MIT, like the rest of the
+# repository", which is what hosted/README.md said for three commits and what
+# a reader believes. A false licence claim is worse than a missing one: it is
+# a grant somebody can rely on.
+
+ELV2_LIMITATION = ("You may not provide the software to third parties as a "
+                   "hosted or managed service")
+
+
+def test_hosted_carries_the_elastic_licence_and_its_limitation():
+    """The file exists and the one clause the choice was made for is in it.
+
+    Pinned on the LIMITATION rather than the title, because a file headed
+    "Elastic License 2.0" with that paragraph edited out would pass a title
+    check and grant everything.
+    """
+    licence = (ROOT / "hosted" / "LICENSE").read_text()
+    assert ELV2_LIMITATION in " ".join(licence.split()), (
+        "hosted/LICENSE must carry the Elastic License 2.0 limitation clause "
+        "verbatim; that clause is the entire reason hosted/ is not MIT.")
+
+
+def test_no_doc_claims_hosted_is_mit():
+    """No prose in the tree tells a reader hosted/ is MIT.
+
+    Four things this got wrong before it worked, and each is the same lesson
+    at a different scale.
+
+    A substring test for "mit" matches "limit", so hosted/gateway/app.py's
+    "ONE body limit" read as a licence claim; hence the word boundary.
+    Scanning code as well as prose was noise, because a reader's belief comes
+    from documents. The version that survived both STILL could not catch the
+    sentence it was written for -- hosted/README.md said "The code here is
+    MIT, like the rest of the repository", which never says "hosted", it says
+    "here"; inside hosted/, "here" IS hosted.
+
+    And then it flagged its own replacement, because the claim and its
+    qualifier had been wrapped onto different lines. Prose means things in
+    PARAGRAPHS, not lines, so a line-oriented rule about prose is measuring
+    the typesetting. That is why this walks blank-line-separated blocks: it
+    also means re-wrapping a paragraph can never change the verdict.
+    """
+    contrast = ("not", "except", "unlike", "no longer", "stopped", "rather than")
+    offenders = []
+    for path in sorted(ROOT.rglob("*.md")):
+        if any(p in {".git", ".venv", "node_modules"} for p in path.parts):
+            continue
+        inside_hosted = "hosted" in path.relative_to(ROOT).parts
+        number, block = 1, []
+        for index, line in enumerate(path.read_text(errors="ignore").splitlines() + [""], 1):
+            if line.strip():
+                if not block:
+                    number = index
+                block.append(line)
+                continue
+            paragraph = " ".join(block)
+            block = []
+            if not paragraph or not re.search(r"\bMIT\b", paragraph):
+                continue
+            if not inside_hosted and "hosted" not in paragraph.lower():
+                continue
+            if any(word in paragraph.lower() for word in contrast):
+                continue
+            offenders.append(f"{path.relative_to(ROOT)}:{number}: {paragraph[:90]}")
+    assert not offenders, (
+        "these paragraphs read as a claim that hosted/ is MIT, and a reader "
+        "would rely on them:\n  " + "\n  ".join(offenders))
