@@ -63,7 +63,7 @@ usage: install.sh <domain> --dns-provider NAME --acme-email ADDRESS
                               argument names it here too, for example
                               'cloudflare {env.CLOUDFLARE_API_TOKEN}'; the
                               first word is the module xcaddy builds
-  --dns-module-version        pin that module, for example @v1.5.0. Default:
+  --dns-module-version        pin that module, for example @v1.6.2. Default:
                               whatever xcaddy resolves on the day it builds
   --dns-env-file PATH         a file of NAME=VALUE lines: the DNS provider's
                               CREDENTIALS. Delete it once this has run
@@ -411,7 +411,7 @@ case "$dns_module_version" in
     case "$dns_module_version" in
       *[!A-Za-z0-9@._/+-]*) waku_die "--dns-module-version may hold letters, digits and . _ - + / only after its '@'; got '$dns_module_version'." ;;
     esac ;;
-  *) waku_die "--dns-module-version must begin with '@' and a letter or digit, for example @v1.5.0; got '$dns_module_version'." ;;
+  *) waku_die "--dns-module-version must begin with '@' and a letter or digit, for example @v1.6.2; got '$dns_module_version'." ;;
 esac
 
 # THE SAME JUDGEMENT AGAIN, for the same reason. --max-running and

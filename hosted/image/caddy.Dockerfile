@@ -10,8 +10,15 @@
 # latest release on the day it builds, so two builds of the same commit produce
 # two different Caddys -- and install.sh rebuilds this image on every run.
 # install.sh's --dns-module-version passes a Go module suffix, for example
-# "@v1.5.0", and logs a NOTE when it is absent.
-ARG CADDY_VERSION=2.10.0
+# "@v1.6.2", and logs a NOTE when it is absent.
+# 2.10.0's builder ships Go 1.24.6, and NOTHING BUILDS AGAINST IT any more.
+# Measured on a real VM, 2026-09-27: caddy-dns/route53@v1.5.x needs libdns
+# v0.2.2, whose Record is a struct, while Caddy 2.10 pulls libdns v1, whose
+# Record is an interface -- 40 compile errors. And every v1.6.x declares
+# `go 1.25.0`, which 1.24.6 refuses outright. The pin was written to make
+# builds reproducible and had quietly become a pin on a version that cannot
+# build. 2.10.2's builder is Go 1.26.0, which both halves accept.
+ARG CADDY_VERSION=2.10.2
 
 FROM caddy:${CADDY_VERSION}-builder AS builder
 # Re-declared inside the stage: an ARG before the first FROM is global and is

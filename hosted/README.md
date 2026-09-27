@@ -127,7 +127,7 @@ matches your provider, spelled as it appears under that organisation. A module
 whose Caddy directive takes an inline argument passes the whole directive:
 `--dns-provider 'cloudflare {env.CLOUDFLARE_API_TOKEN}'`, with the token
 itself in the file from step 5. Pin the module with
-`--dns-module-version @v1.5.0` if you want a rebuild next month to produce the
+`--dns-module-version @v1.6.2` if you want a rebuild next month to produce the
 same Caddy.
 
 **Stop and disable any Caddy you are already running, before you run
