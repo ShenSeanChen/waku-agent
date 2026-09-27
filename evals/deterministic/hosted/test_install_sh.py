@@ -1513,6 +1513,10 @@ def test_a_single_quote_in_a_value_that_reaches_install_env_is_refused(
 
 _COMPOSE_OK = "#!/bin/sh\nexit 0\n"
 _NO_COMPOSE = '#!/bin/sh\n[ "$1" = compose ] && exit 1\nexit 0\n'
+_NO_BUILDX = '#!/bin/sh\n[ "$1" = buildx ] && exit 1\nexit 0\n'
+_NO_COMPOSE_OR_BUILDX = (
+    '#!/bin/sh\ncase "$1" in\n  compose|buildx) exit 1 ;;\nesac\nexit 0\n'
+)
 
 
 def _with_only(tmp_path, present, *, docker_body=_COMPOSE_OK):
@@ -1549,7 +1553,7 @@ def test_a_bare_host_needs_every_package(tmp_path):
     assert done.returncode == 0, done.stderr
     assert set(done.stdout.split()) == {
         "jq", "curl", "restic", "sqlite3", "zstd", "docker.io",
-        "docker-compose-v2"}
+        "docker-compose-v2", "docker-buildx"}
 
 
 def test_a_host_that_already_has_jq_curl_and_docker_still_needs_the_rest(tmp_path):
@@ -1585,6 +1589,33 @@ def test_dockers_compose_plugin_is_probed_through_docker_and_not_on_path(tmp_pat
     assert done.stdout.split() == ["docker-compose-v2"]
 
 
+def test_buildx_is_probed_through_docker_and_not_on_path(tmp_path):
+    """Ubuntu's docker.io ships without buildx -- only Docker CE bundles it,
+    as docker-buildx-plugin -- so this is the probe a VM carrying docker.io
+    from a previous run of THIS installer still needs. `command -v buildx`
+    would never see it either: like compose, it is a docker subcommand, not a
+    binary on PATH. The stub answers `compose` too, so a probe that could not
+    tell buildx from compose would show up here as the wrong package name."""
+    done = shelllib.call_function(
+        CHECKS, "waku_missing_packages",
+        env=_with_only(tmp_path, _EVERY_COMMAND, docker_body=_NO_BUILDX))
+    assert done.returncode == 0, done.stderr
+    assert done.stdout.split() == ["docker-buildx"]
+
+
+def test_when_compose_and_buildx_are_both_missing_both_are_named(tmp_path):
+    """The two plugins are independent probes, not one `docker --help` grep --
+    a host can lack either without the other, and both must be named so
+    apt-get installs both in the one run rather than the operator discovering
+    the second on a later, unrelated failure."""
+    done = shelllib.call_function(
+        CHECKS, "waku_missing_packages",
+        env=_with_only(tmp_path, _EVERY_COMMAND,
+                       docker_body=_NO_COMPOSE_OR_BUILDX))
+    assert done.returncode == 0, done.stderr
+    assert set(done.stdout.split()) == {"docker-compose-v2", "docker-buildx"}
+
+
 @pytest.mark.parametrize("absent", ["restic", "sqlite3", "timeout", "flock"])
 def test_a_missing_command_after_the_install_is_named_and_refused(tmp_path, absent):
     """"apt-get exited 0" is not "the command is there". restic and sqlite3 are
@@ -1608,6 +1639,30 @@ def test_the_compose_plugin_is_required_and_not_only_probed(tmp_path):
     done = shelllib.call_function(
         CHECKS, "waku_require_commands",
         env=_with_only(tmp_path, _EVERY_COMMAND, docker_body=_NO_COMPOSE))
+    assert done.returncode != 0
+    assert done.stdout.strip() == "docker compose"
+
+
+def test_the_buildx_plugin_is_required_and_not_only_probed(tmp_path):
+    """apt-get exiting 0 for docker-buildx is not buildx being there -- the
+    same gap waku_require_commands exists to close for restic and sqlite3.
+    Compose is present in this fixture, so a refusal here can only be
+    buildx's own check, not the compose check firing on the wrong plugin."""
+    done = shelllib.call_function(
+        CHECKS, "waku_require_commands",
+        env=_with_only(tmp_path, _EVERY_COMMAND, docker_body=_NO_BUILDX))
+    assert done.returncode != 0
+    assert done.stdout.strip() == "docker buildx"
+
+
+def test_when_both_plugins_are_missing_compose_is_named_first(tmp_path):
+    """waku_require_commands checks compose before buildx, so with both gone
+    the operator sees one name and fixes one thing at a time -- the same
+    first-missing-wins shape as the WAKU_REQUIRED_COMMANDS loop above it."""
+    done = shelllib.call_function(
+        CHECKS, "waku_require_commands",
+        env=_with_only(tmp_path, _EVERY_COMMAND,
+                       docker_body=_NO_COMPOSE_OR_BUILDX))
     assert done.returncode != 0
     assert done.stdout.strip() == "docker compose"
 

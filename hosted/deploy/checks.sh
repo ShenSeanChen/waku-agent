@@ -410,6 +410,15 @@ WAKU_REQUIRED_COMMANDS="docker jq curl restic sqlite3 flock find install sed awk
 # THE COMPOSE PLUGIN IS NOT A BINARY ON PATH, so it is probed by asking docker
 # for it. `command -v docker-compose` would answer for the retired v1 script and
 # miss the plugin every supported install actually has.
+#
+# BUILDX IS THE SAME SHAPE, ONE COMMAND OVER: `docker buildx version` and not
+# `command -v buildx`, because buildx is a docker SUBCOMMAND, not a binary
+# either. Ubuntu's docker.io ships without it -- only Docker CE bundles it as
+# docker-buildx-plugin -- so a host that got docker.io from this very install
+# still needs the separate docker-buildx package. hosted/image/build.sh sets
+# DOCKER_BUILDKIT=1 because the per-Dockerfile ignore files that keep secrets
+# out of the build context are a BuildKit feature; without buildx, BuildKit is
+# not there to provide it, and the build dies mid-deployment instead of here.
 waku_missing_packages() {
   local pair out
   out=""
@@ -417,6 +426,7 @@ waku_missing_packages() {
     command -v "${pair%%:*}" >/dev/null 2>&1 || out="$out ${pair#*:}"
   done
   docker compose version >/dev/null 2>&1 || out="$out docker-compose-v2"
+  docker buildx version  >/dev/null 2>&1 || out="$out docker-buildx"
   printf '%s\n' "${out# }"
 }
 
@@ -428,6 +438,13 @@ waku_missing_packages() {
 # directory the daemon does not read: each leaves a host that got past the
 # install block and fails at 03:17 or in the middle of a restore. It returns
 # rather than dying so the caller keeps its own message, like waku_needs_value.
+#
+# COMPOSE AND BUILDX ARE CHECKED HERE TOO, AND NOT ONLY IN
+# waku_missing_packages, for the exact reason this function exists: a plugin
+# apt claims to have installed is not a plugin the daemon can see. Neither one
+# is a name that belongs in WAKU_REQUIRED_COMMANDS above -- `command -v` can
+# never find a docker subcommand, present or absent -- so each gets its own
+# block instead of being jammed into that loop.
 waku_require_commands() {
   local name
   for name in $WAKU_REQUIRED_COMMANDS; do
@@ -438,6 +455,10 @@ waku_require_commands() {
   done
   if ! docker compose version >/dev/null 2>&1; then
     printf '%s\n' "docker compose"
+    return 1
+  fi
+  if ! docker buildx version >/dev/null 2>&1; then
+    printf '%s\n' "docker buildx"
     return 1
   fi
   return 0

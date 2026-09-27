@@ -496,10 +496,10 @@ waku_xfs_prjquota_ok /proc/mounts "$root" \
 
 # --- packages ---------------------------------------------------------------
 #
-# docker.io and docker-compose-v2 from Ubuntu 24.04's own archive: one apt
-# source, one upgrade path, and versions the distribution supports. restic,
-# sqlite3 and zstd are for backup and restore; jq and curl are for the two
-# Supabase checks below.
+# docker.io, docker-compose-v2 and docker-buildx from Ubuntu 24.04's own
+# archive: one apt source, one upgrade path, and versions the distribution
+# supports. restic, sqlite3 and zstd are for backup and restore; jq and curl
+# are for the two Supabase checks below.
 #
 # ONE PROBE PER PACKAGE, AND ONLY WHAT IS MISSING IS INSTALLED. The earlier
 # shape probed jq, curl and docker and then installed all seven or none: on a
@@ -516,9 +516,13 @@ waku_xfs_prjquota_ok /proc/mounts "$root" \
 # `apt-get install docker.io` on it is a package conflict over the daemon this
 # deployment needs -- so a missing restic must not drag docker.io in behind it.
 #
-# THE COMPOSE PLUGIN IS NOT A BINARY ON PATH, so it is probed by asking docker
-# for it rather than with `command -v`. A host with Docker CE has the plugin
-# from Docker's own package and needs nothing from Ubuntu's.
+# THE COMPOSE AND BUILDX PLUGINS ARE NOT BINARIES ON PATH, so each is probed by
+# asking docker for it rather than with `command -v`. A host with Docker CE has
+# both plugins from Docker's own packages and needs neither from Ubuntu's.
+# BuildKit -- and so buildx, the only thing that provides it here -- is not an
+# optimisation: hosted/image/build.sh sets DOCKER_BUILDKIT=1 because the
+# per-Dockerfile ignore files that keep this build context free of secrets are
+# a BuildKit feature, unread by the legacy builder.
 # waku_missing_packages and waku_require_commands are checks.sh's, so that a
 # deterministic test can call them with a PATH holding some of the tools and
 # none of them. They were a `command -v` chain inside this script, below
