@@ -164,7 +164,9 @@ def list_models(provider: str | None = None, *, use_cache: bool = True) -> dict:
         mid = m.get("id", "")
         if not mid:
             continue
-        pricing = m.get("pricing") or {}
+        pricing = m.get("pricing")
+        # OpenRouter's pricing is an object; Requesty's is a list of tiers
+        pricing = pricing if isinstance(pricing, dict) else {}
         params = m.get("supported_parameters")
         entry = {
             "id": mid,

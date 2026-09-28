@@ -149,6 +149,35 @@ def test_catalog_url_is_used_with_both_auth_styles(monkeypatch):
     catalog._models_cache.clear()
 
 
+def test_a_catalog_whose_pricing_is_not_an_object_still_lists(monkeypatch):
+    """OpenRouter reports `pricing` as an object. Some catalogs (Requesty's)
+    report it as a list of price tiers, and reading that list as an object
+    crashed the listing with an AttributeError, so the picker got nothing. A
+    pricing shape the listing does not read is skipped, not fatal."""
+    import io
+    import json
+    import urllib.request
+
+    from waku.ops import catalog
+
+    def fake_urlopen(req, timeout=10):
+        return io.BytesIO(json.dumps({"data": [
+            {"id": "claude-sonnet-4-5",
+             "pricing": [{"prompt_tokens_threshold": 0,
+                          "input_price": 3e-06, "output_price": 1.5e-05}]},
+        ]}).encode())
+
+    monkeypatch.setenv("WAKU_PROVIDER", "openrouter")
+    monkeypatch.delenv("WAKU_MODEL", raising=False)
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    catalog._models_cache.clear()
+
+    result = catalog.list_models("openrouter")
+    assert result["listed"] is True
+    assert [m["id"] for m in result["models"]] == ["claude-sonnet-4-5"]
+    catalog._models_cache.clear()
+
+
 def test_price_for_layers_model_over_provider():
     """Receipts correctness: a kimi-k3 run must be priced at K3's $3/$15, not
     the kimi provider's K2.7 rate — and unknown models still fall back to the
