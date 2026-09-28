@@ -10,6 +10,9 @@ fresh Waku starts on the eternal 'default' session. So one visit to the Settings
 tab silently moved you into a different conversation — your chat was still in
 the database, just no longer the thread the dock was showing. It looked like
 data loss and was reported as one.
+
+The fix for that carried the thread id but not its turns, so the dock was right
+and the model still started from nothing. The history tests pin that half.
 """
 
 from __future__ import annotations
@@ -45,6 +48,46 @@ def test_rebuild_keeps_the_conversation(isolated):
         "rebuild dropped the chat thread — the dock would show an empty "
         "conversation and the user's messages would look lost"
     )
+
+
+def _chat(agent, user, reply):
+    """Record one turn the way respond() does, without calling a model."""
+    agent.session.add_exchange(user, reply, source="dashboard")
+
+
+def test_rebuild_keeps_what_the_model_remembers(isolated):
+    """Keeping the thread id is not enough: the model must still SEE the chat.
+
+    Live bug: the user listed their events, turned on Apple Calendar in
+    Settings, then asked to "add my latest cricket match". The rebuild kept the
+    id, so the dock looked unchanged, but history was empty and Waku asked
+    which match. The trace showed it: input tokens fell from 3,155 to 2,072."""
+    first = browser_agent.get_agent()
+    _chat(first, "can u list all my events", "Cricket match: 2026-09-29 5:00-6:00 PM")
+
+    assert browser_agent.rebuild() is None
+    history = browser_agent.current().session.history
+
+    assert [m["content"] for m in history] == [
+        "can u list all my events", "Cricket match: 2026-09-29 5:00-6:00 PM"
+    ], "the rebuilt agent forgot the conversation the dock is still showing"
+
+
+def test_restart_resumes_the_conversation_not_just_its_id(isolated, monkeypatch):
+    """A dashboard restart resumes the last fresh thread. It must load that
+    thread's turns too, or the first message after a restart has no context."""
+    first = browser_agent.get_agent()
+    session = first.session.session_id
+    _chat(first, "my name is Sathursan", "Nice to meet you, Sathursan.")
+
+    monkeypatch.setattr(browser_agent, "_agent", None)          # the process restarts
+    monkeypatch.setattr(browser_agent, "_dashboard_session", None)
+    resumed = browser_agent.get_agent()
+
+    assert resumed.session.session_id == session
+    assert [m["content"] for m in resumed.session.history] == [
+        "my name is Sathursan", "Nice to meet you, Sathursan."
+    ]
 
 
 def test_rebuild_without_a_prior_agent_still_gets_a_dated_session(isolated):
