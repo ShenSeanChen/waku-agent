@@ -102,6 +102,11 @@ def judge_reply(task: str, reply: str, provider: str | None = None,
                     model=settings.model, max_tokens=300,
                     messages=[{"role": "user", "content": prompt}])
             break
+        except SystemExit:
+            # get_client reports missing keys and invalid providers with
+            # SystemExit. Skip grading so the arena can still save the race;
+            # retrying cannot repair the provider configuration.
+            return None
         except Exception:
             if attempt < 3:
                 time.sleep(1.2 * (attempt + 1))   # 1.2s, 2.4s, 3.6s — let a 429 clear
