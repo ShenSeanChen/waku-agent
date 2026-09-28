@@ -45,8 +45,7 @@ dns_env=""
 usage() {
   cat <<'USAGE'
 usage: install.sh <domain> --dns-provider NAME --acme-email ADDRESS
-                  --data-device /dev/sdb1 --free-model MODEL
-                  --platform-key-file PATH --dns-env-file PATH
+                  --data-device /dev/sdb1 --dns-env-file PATH
                   --supabase-url URL --supabase-publishable-key KEY
                   --supabase-audience AUD
                   --restic-repository REPO --restic-password-file PATH
@@ -74,7 +73,12 @@ usage: install.sh <domain> --dns-provider NAME --acme-email ADDRESS
                               clean up: put secrets in --dns-env-file
   --data-device               the data disk's block device. xfs_quota needs it
                               inside the spawner's container
-  --free-model                the one model the free tier allows. Written into
+  --free-model                OPTIONAL, and needs --platform-key-file. Without
+                              both, this install offers no free tier and every
+                              tenant brings their own key -- which is what a
+                              deployment without the metering proxy (group D)
+                              actually does. The one model the free tier
+                              allows. Written into
                               BOTH spawner.env and proxy.env
   --platform-key-file         a file holding the platform's model key, and
                               nothing else. Delete it once this has run
@@ -292,8 +296,7 @@ done
 
 for pair in \
   "domain:$domain" "--dns-provider:$dns_provider" "--acme-email:$acme_email" \
-  "--data-device:$data_device" "--free-model:$free_model" \
-  "--platform-key-file:$platform_key" "--dns-env-file:$dns_env_file" \
+  "--data-device:$data_device" "--dns-env-file:$dns_env_file" \
   "--supabase-url:$supabase_url" \
   "--supabase-publishable-key:$supabase_publishable_key" \
   "--supabase-audience:$supabase_audience" \
@@ -304,6 +307,32 @@ do
   value=${pair#*:}
   [ -n "$value" ] || { usage >&2; waku_die "$name is required"; }
 done
+
+# THE FREE TIER IS OPTIONAL, AND IT IS ALL OR NOTHING.
+#
+# --free-model and --platform-key-file were required until 2026-09-27, so
+# every install wrote a free tier into config/spawner.env whether or not it
+# had one. None of them did: the metering proxy is group D, it is not built,
+# and the proxy service runs at zero replicas. Every tenant container came up
+# pointed at an address nothing listens on, stock waku read the variables and
+# showed "Hosted free tier: enabled, current" on its Models page, and the
+# tenant's first message returned APIConnectionError.
+#
+# So --free-model is now the signal: give it and this install has a free tier,
+# leave it out and tenants bring their own key, which is the ordinary provider
+# switch on the Models page. The pairing is checked because half a free tier
+# is the same lie in a smaller size -- a key with no model reaches a proxy
+# that cannot be told what to run, and a model with no key cannot authenticate
+# to it. hosted/spawner/template.config_from_env refuses the matching half-set
+# in config/spawner.env, so neither end of this can be configured alone.
+if [ -n "$free_model" ] && [ -z "$platform_key" ]; then
+  usage >&2
+  waku_die "--free-model needs --platform-key-file: a free tier with no key cannot call anything"
+fi
+if [ -z "$free_model" ] && [ -n "$platform_key" ]; then
+  usage >&2
+  waku_die "--platform-key-file needs --free-model: a key with no model is a free tier that cannot name what to run"
+fi
 
 # THE DOMAIN'S SHAPE IS AN ARGUMENT CHECK, so it belongs here with the other
 # argument checks and not below with the checks on the machine. A tenant host
@@ -354,7 +383,12 @@ refuse_a_single_quote "$data_device" --data-device
 refuse_a_single_quote "$restic_repository" --restic-repository
 refuse_a_single_quote "$restic_password_file" --restic-password-file
 
-refuse_unprintable "$free_model" --free-model
+# Only when there IS one: refuse_unprintable refuses the empty string, which
+# is now a legitimate value for this flag (see the free-tier pairing above).
+# Without the guard, every install that does not offer a free tier dies here,
+# on a check about whitespace, naming a flag the operator deliberately left
+# out.
+[ -z "$free_model" ] || refuse_unprintable "$free_model" --free-model
 refuse_unprintable "$supabase_publishable_key" --supabase-publishable-key
 refuse_unprintable "$supabase_audience" --supabase-audience
 refuse_unprintable "$data_device" --data-device

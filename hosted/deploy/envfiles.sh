@@ -51,10 +51,17 @@ EOF
 # Reads: root tenant_image services_image free_model tenant_disk_bytes
 #        data_device
 #
-# The 11 names in hosted/spawner/template.ENV_NAMES, plus WAKU_SPAWNER_SOCKET,
+# The 8 names in hosted/spawner/template.ENV_NAMES, plus WAKU_SPAWNER_SOCKET,
 # which is one of the two in OPTIONAL_ENV_NAMES: it has a working default and
 # is written anyway, so the socket the spawner binds and the one the gateway is
 # told about come from one line of one file.
+#
+# THE THREE PLATFORM NAMES ARE WRITTEN ONLY WITH --free-model, and that flag is
+# the whole signal. Until 2026-09-27 they were written unconditionally, which
+# pointed every tenant container at a metering proxy that has never existed
+# (group D is not built and the proxy runs at zero replicas): stock waku saw
+# the variables, showed "Hosted free tier: enabled, current", and answered the
+# first message with APIConnectionError.
 #
 # --free-model writes the model into BOTH model variables: the free tier's
 # allowlist is one model, the retrieval gate uses the small model, and a small
@@ -67,13 +74,20 @@ WAKU_ARCHIVE_ROOT=$root/archive
 WAKU_STAGING_ROOT=$root/staging
 WAKU_TENANT_IMAGE=$tenant_image
 WAKU_SERVICES_IMAGE=$services_image
-WAKU_PLATFORM_BASE_URL=http://10.88.0.1:8788
-WAKU_PLATFORM_MODEL=$free_model
-WAKU_PLATFORM_SMALL_MODEL=$free_model
 WAKU_TENANT_DISK_BYTES=$tenant_disk_bytes
 WAKU_DATA_DEVICE=$data_device
 WAKU_SECCOMP_PROFILE=/app/hosted/image/seccomp.json
 WAKU_SPAWNER_SOCKET=$root/run/spawner/spawner.sock
+EOF
+  # A SECOND heredoc rather than a ${free_model:+...} inside the first: the
+  # substitution has to end with the closing brace on the EOF line, and `}EOF`
+  # is not the delimiter, so the heredoc ran past its own terminator and
+  # printed the word EOF as data. Two blocks and an `if` is the boring
+  # version, and the boring version is the one that works.
+  [ -z "$free_model" ] || cat <<EOF
+WAKU_PLATFORM_BASE_URL=http://10.88.0.1:8788
+WAKU_PLATFORM_MODEL=$free_model
+WAKU_PLATFORM_SMALL_MODEL=$free_model
 EOF
 }
 

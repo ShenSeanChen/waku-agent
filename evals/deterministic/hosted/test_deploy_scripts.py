@@ -722,17 +722,50 @@ def test_the_gateway_env_install_writes_carries_every_name_the_gateway_requires(
 
 
 def test_the_spawner_env_install_writes_carries_every_name_the_spawner_requires(tmp_path):
-    """The 11 required names in the module's order, plus WAKU_SPAWNER_SOCKET,
+    """Every required name in the module's order, plus WAKU_SPAWNER_SOCKET,
     which is one of the two in OPTIONAL_ENV_NAMES -- written anyway so the
     socket the spawner binds and the one the gateway is told about come from
-    one line of one file. Anything else is a finding in either direction."""
-    from hosted.spawner.template import ENV_NAMES, OPTIONAL_ENV_NAMES
+    one line of one file. Anything else is a finding in either direction.
+
+    This runs with `free_model` set, so the three PLATFORM_ENV_NAMES are also
+    written; test_the_spawner_env_omits_the_free_tier_without_free_model is
+    the other half, and the two together are the whole contract.
+    """
+    from hosted.spawner.template import (
+        ENV_NAMES,
+        OPTIONAL_ENV_NAMES,
+        PLATFORM_ENV_NAMES,
+    )
 
     written = _env_body(tmp_path, "waku_spawner_env")
     assert list(written)[:len(ENV_NAMES)] == list(ENV_NAMES)
     extra = set(written) - set(ENV_NAMES)
-    assert extra == {"WAKU_SPAWNER_SOCKET"}
-    assert extra <= set(OPTIONAL_ENV_NAMES)
+    assert extra == {"WAKU_SPAWNER_SOCKET"} | set(PLATFORM_ENV_NAMES)
+    assert extra <= set(OPTIONAL_ENV_NAMES) | set(PLATFORM_ENV_NAMES)
+
+
+def test_the_spawner_env_omits_the_free_tier_without_free_model(tmp_path):
+    """THE OTHER HALF, and the one that matters today.
+
+    `install.sh` wrote these three unconditionally until 2026-09-27, so every
+    tenant container came up pointed at a metering proxy that runs at zero
+    replicas. Stock waku read the variables and showed "Hosted free tier:
+    enabled, current" on the Models page; the first message returned
+    APIConnectionError.
+
+    --free-model is now the whole signal, so this is what an install without
+    one writes -- and the test asserts the names are ABSENT, which is the only
+    shape of assertion that can catch a variable being written empty. An empty
+    WAKU_PLATFORM_BASE_URL= line would pass a test that merely checked the
+    value.
+    """
+    from hosted.spawner.template import ENV_NAMES, PLATFORM_ENV_NAMES
+
+    written = _env_body(tmp_path, "waku_spawner_env", extra={"free_model": ""})
+    assert list(written)[:len(ENV_NAMES)] == list(ENV_NAMES)
+    assert set(written) - set(ENV_NAMES) == {"WAKU_SPAWNER_SOCKET"}
+    for name in PLATFORM_ENV_NAMES:
+        assert name not in written
 
 
 def test_the_free_model_reaches_both_the_spawner_and_the_proxy(tmp_path):

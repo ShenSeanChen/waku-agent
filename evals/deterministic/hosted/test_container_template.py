@@ -204,15 +204,69 @@ def test_a_tenant_container_refuses_a_zone_or_a_token_it_should_not_carry():
                                       timezone="UTC", token=TOKEN)
 
 
-def test_the_eleven_variable_names_are_pinned_for_group_f():
-    """Both directions. A name in the example file that ENV_NAMES does not read
-    is a value the operator set and the spawner ignored, which looks configured
-    and is not."""
+def test_the_variable_names_are_pinned_for_group_f():
+    """Both directions. A name in the example file that the spawner does not
+    read is a value the operator set and the spawner ignored, which looks
+    configured and is not.
+
+    PLATFORM_ENV_NAMES joined this on 2026-09-27, when the free tier became
+    optional. They belong on the LEFT of this comparison, commented out in the
+    example the way OPTIONAL_ENV_NAMES already is, because an operator who
+    finds them uncommented in a file called .example is an operator who
+    switches on a metering proxy this deployment does not run.
+    """
     example = (Path(__file__).resolve().parents[3]
                / "hosted" / "deploy" / "spawner.env.example").read_text(encoding="utf-8")
-    in_file = {line.split("=", 1)[0] for line in example.splitlines()
-               if line.strip() and not line.startswith("#")}
-    assert in_file == set(template.ENV_NAMES)
+    live = {line.split("=", 1)[0] for line in example.splitlines()
+            if line.strip() and not line.startswith("#")}
+    assert live == set(template.ENV_NAMES)
+    # Named in the file, and named as not-on: a reader has to be able to find
+    # out that a free tier is a thing this file configures.
+    mentioned = {line.lstrip("# ").split("=", 1)[0] for line in example.splitlines()
+                 if line.startswith("#") and "=" in line}
+    assert set(template.PLATFORM_ENV_NAMES) <= mentioned, (
+        "spawner.env.example does not mention the free tier's three names, so "
+        "nothing tells an operator the option exists")
+
+
+def test_a_tenant_gets_no_free_tier_variables_when_there_is_no_free_tier():
+    """The whole point. Stock waku decides whether to offer the "Hosted free
+    tier" row by whether these are set, so a deployment with no metering proxy
+    must not set them -- that combination is what put "enabled, current" on a
+    tenant's Models page above an endpoint that refuses every connection."""
+    env = {name: "x" for name in template.ENV_NAMES}
+    env["WAKU_TENANT_DISK_BYTES"] = "1000000"
+    env["WAKU_SECCOMP_PROFILE"] = str(
+        Path(__file__).resolve().parents[3] / "hosted" / "image" / "seccomp.json")
+    config = template.config_from_env(env)
+    assert template.platform_env(config, TOKEN) == []
+    body = template.tenant_container(config, tenant_id="aaaaaaaaaaaa", project_id=5,
+                                     timezone="UTC", token=TOKEN)
+    assert not [line for line in body["Env"] if "WAKU_PLATFORM" in line]
+    # And the token does not leak in on its own. It is a credential for a
+    # service this deployment does not run, in an environment the tenant reads.
+    assert not [line for line in body["Env"] if line.endswith("=" + TOKEN)]
+
+    with_tier = dict(env, WAKU_PLATFORM_BASE_URL="http://10.88.0.1:8788",
+                     WAKU_PLATFORM_MODEL="m", WAKU_PLATFORM_SMALL_MODEL="m")
+    full = template.tenant_container(template.config_from_env(with_tier),
+                                     tenant_id="aaaaaaaaaaaa", project_id=5,
+                                     timezone="UTC", token=TOKEN)
+    assert len([line for line in full["Env"] if "WAKU_PLATFORM" in line]) == 4
+
+
+def test_half_a_free_tier_is_refused():
+    """A base URL with no model is a provider that cannot name a model; a
+    model with no base URL has nowhere to send it. Either half produces the
+    same lie in a smaller size, so config_from_env refuses to start rather
+    than letting a fleet fail one turn at a time."""
+    env = {name: "x" for name in template.ENV_NAMES}
+    env["WAKU_TENANT_DISK_BYTES"] = "1000000"
+    env["WAKU_SECCOMP_PROFILE"] = str(
+        Path(__file__).resolve().parents[3] / "hosted" / "image" / "seccomp.json")
+    for name in template.PLATFORM_ENV_NAMES:
+        with pytest.raises(ValueError, match="all three or none"):
+            template.config_from_env(dict(env, **{name: "set"}))
 
 
 def test_config_from_env_refuses_an_empty_value_and_accepts_the_typed_escape(tmp_path):

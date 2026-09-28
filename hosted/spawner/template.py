@@ -103,12 +103,30 @@ ENV_NAMES = (
     "WAKU_STAGING_ROOT",
     "WAKU_TENANT_IMAGE",
     "WAKU_SERVICES_IMAGE",
-    "WAKU_PLATFORM_BASE_URL",
-    "WAKU_PLATFORM_MODEL",
-    "WAKU_PLATFORM_SMALL_MODEL",
     "WAKU_TENANT_DISK_BYTES",
     "WAKU_DATA_DEVICE",
     "WAKU_SECCOMP_PROFILE",
+)
+
+# THE FREE TIER, WHICH A DEPLOYMENT MAY NOT HAVE.
+#
+# These three used to be in ENV_NAMES, so install.sh had to write a value for
+# them whether or not a metering proxy existed. It always wrote one, group D
+# was never built, the proxy runs at zero replicas -- and every tenant
+# container therefore started pointed at an address nothing listens on. Stock
+# waku read the variables, showed "Hosted free tier: enabled, current" on its
+# Models page, and answered the first message with APIConnectionError. The
+# product asserted a working provider and then refused the connection.
+#
+# So they are optional, and ALL THREE OR NONE. A base URL with no model is a
+# provider that cannot name a model; a model with no base URL is a model with
+# nowhere to send it. Half a free tier is the same lie in a smaller size, and
+# config_from_env refuses it rather than starting a fleet that will fail one
+# turn at a time.
+PLATFORM_ENV_NAMES = (
+    "WAKU_PLATFORM_BASE_URL",
+    "WAKU_PLATFORM_MODEL",
+    "WAKU_PLATFORM_SMALL_MODEL",
 )
 
 # ONE literal for this path. provision_main.py imports it rather than
@@ -138,15 +156,22 @@ def config_from_env(env: Mapping[str, str]) -> SpawnerConfig:
         raise ValueError(
             f"config/spawner.env is missing {missing}. install.sh writes this "
             "file; every name in template.ENV_NAMES must be in it.")
+    platform = [name for name in PLATFORM_ENV_NAMES if env.get(name)]
+    if platform and len(platform) != len(PLATFORM_ENV_NAMES):
+        raise ValueError(
+            f"config/spawner.env sets {platform} but not "
+            f"{[n for n in PLATFORM_ENV_NAMES if n not in platform]}. The free "
+            "tier is all three or none: anything less is a provider a tenant's "
+            "Models page will call enabled and that cannot answer a turn.")
     return SpawnerConfig(
         tenant_root=Path(env["WAKU_TENANT_ROOT"]),
         archive_root=Path(env["WAKU_ARCHIVE_ROOT"]),
         staging_root=Path(env["WAKU_STAGING_ROOT"]),
         tenant_image=env["WAKU_TENANT_IMAGE"],
         services_image=env["WAKU_SERVICES_IMAGE"],
-        platform_base_url=env["WAKU_PLATFORM_BASE_URL"],
-        platform_model=env["WAKU_PLATFORM_MODEL"],
-        platform_small_model=env["WAKU_PLATFORM_SMALL_MODEL"],
+        platform_base_url=env.get("WAKU_PLATFORM_BASE_URL", ""),
+        platform_model=env.get("WAKU_PLATFORM_MODEL", ""),
+        platform_small_model=env.get("WAKU_PLATFORM_SMALL_MODEL", ""),
         tenant_disk_bytes=int(env["WAKU_TENANT_DISK_BYTES"]),
         data_device=env["WAKU_DATA_DEVICE"],
         seccomp_profile=Path(env["WAKU_SECCOMP_PROFILE"]).read_text(encoding="utf-8"),
@@ -191,6 +216,23 @@ def _isolation(config: SpawnerConfig) -> dict:
 # tenant as a start that failed for no stated reason and to the operator as
 # jsonsock's opaque "the handler failed". _run_to_completion's `finally: remove`
 # does the cleanup instead, where nothing is racing it.
+
+
+def platform_env(config: SpawnerConfig, token: str) -> list[str]:
+    """The free tier's environment, or nothing at all.
+
+    One writer for the four, and one condition. `config_from_env` has already
+    refused a partial set, so the base URL alone answers "is there a free
+    tier" for the whole of this module.
+    """
+    if not config.platform_base_url:
+        return []
+    return [
+        f"WAKU_PLATFORM_BASE_URL={config.platform_base_url}",
+        f"WAKU_PLATFORM_TOKEN={token}",
+        f"WAKU_PLATFORM_MODEL={config.platform_model}",
+        f"WAKU_PLATFORM_SMALL_MODEL={config.platform_small_model}",
+    ]
 
 
 def tenant_container(config: SpawnerConfig, *, tenant_id: str, project_id: int,
@@ -238,10 +280,14 @@ def tenant_container(config: SpawnerConfig, *, tenant_id: str, project_id: int,
             f"WAKU_DASHBOARD_PORT={DASHBOARD_PORT}",
             f"TZ={timezone}",
             "HOME=/tmp",
-            f"WAKU_PLATFORM_BASE_URL={config.platform_base_url}",
-            f"WAKU_PLATFORM_TOKEN={token}",
-            f"WAKU_PLATFORM_MODEL={config.platform_model}",
-            f"WAKU_PLATFORM_SMALL_MODEL={config.platform_small_model}",
+            # The free tier's four, present only when there IS one. Stock
+            # waku decides whether to offer the row by whether these are set
+            # (waku/integrations.py, the hidden_unless_env row), so omitting
+            # them is how a deployment without a metering proxy stops
+            # advertising one. The TOKEN goes with them: a credential for a
+            # service this deployment does not run has no reason to be in a
+            # tenant's environment, where the tenant can read it.
+            *platform_env(config, token),
         ],
         "Labels": {LABEL_TENANT: tenant_id, LABEL_KIND: KIND_TENANT},
         "ExposedPorts": {f"{DASHBOARD_PORT}/tcp": {}},

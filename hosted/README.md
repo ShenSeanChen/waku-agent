@@ -156,7 +156,7 @@ output for the whole install, and the installer can clean up neither.
 
 | File | Flag | What happens to it |
 |---|---|---|
-| The platform's model key | `--platform-key-file` | Copied into `/srv/waku/config/proxy.env` at mode 0600. Delete the source file afterwards |
+| The platform's model key | `--platform-key-file` | Only with `--free-model`, and only once the metering proxy exists. Copied into `/srv/waku/config/proxy.env` at mode 0600. Delete the source file afterwards |
 | The DNS provider's API token, as `NAME=VALUE` lines | `--dns-env-file` | Copied into `/srv/waku/config/caddy.env` at mode 0600. Delete the source file afterwards |
 | The restic repository's password | `--restic-password-file` | **Not copied.** `config/backup.env` names the path, and restic opens the file every night |
 
@@ -202,8 +202,9 @@ ever taken into bytes nobody can open. Put it where you would put a root
 password.
 
 **Keep the other two, and the install command line, in the same place.** If the
-VM is gone you need all four to rebuild: the restic password, the platform model
-key, the DNS token, and the flags you installed with. Step 7 below tells you to
+VM is gone you need these to rebuild: the restic password, the DNS token, the
+flags you installed with, and the platform model key if you configured a free
+tier at all (most deployments should not -- see "What is not enabled yet"). Step 7 below tells you to
 delete the two credential files from the VM once they have been copied into
 `config/`, which is right -- they are copies of a secret sitting in `/root`. It
 does not mean destroy the only copy you have. Paste the whole `install.sh`
@@ -245,14 +246,17 @@ sudo /srv/waku/src/hosted/deploy/install.sh agent.waku.one \
   --dns-env AWS_REGION=us-east-1 \
   --acme-email ops@example.com \
   --data-device /dev/nvme1n1 \
-  --free-model claude-haiku-4-5 \
-  --platform-key-file /root/platform-key \
   --supabase-url https://<project>.supabase.co \
   --supabase-publishable-key sb_publishable_... \
   --supabase-audience <the aud claim your project's tokens carry> \
   --restic-repository s3:s3.amazonaws.com/<bucket> \
   --restic-password-file /srv/waku/config/restic-password
 ```
+
+No `--free-model` and no `--platform-key-file`: this install offers no free
+tier, because the metering proxy behind one is not built (see "What is not
+enabled yet"). Tenants bring their own key and the dashboard says so on their
+first visit. Add both flags together the day group D lands.
 
 It refuses, with a readable message, when the VM is not Ubuntu 24.04, when
 `/srv/waku` is not XFS mounted with `prjquota`, when either of ports 80 and 443
@@ -298,15 +302,31 @@ Two pieces of spec 001 are deferred, and this deployment is invite-only because
 of them.
 
 **No metering proxy, so no free tier and no spend cap.** Group D is not built,
-so the `proxy` service is declared and started with zero replicas. `--free-model`
-and `--platform-key-file` are still required flags and their values are still
-written into the config, but nothing reads them: a tenant whose Models page is
-set to the hosted free tier gets a refused connection on their first turn.
-**Every tenant must bring their own key**, which is the ordinary provider
-switch on the Models page. Do not advertise a free tier until group D lands,
+so the `proxy` service is declared and started with zero replicas.
+**`--free-model` and `--platform-key-file` are therefore optional, and you
+should leave them out.** An install without them writes no
+`WAKU_PLATFORM_*` into `config/spawner.env`, the spawner puts none into a
+tenant container, and stock waku offers no free tier at all: every tenant
+brings their own key, which is the ordinary provider switch on the Models
+page, and the dashboard opens on a setup screen until they do.
+
+That is a correction, not a preference. Until 2026-09-27 both flags were
+required and their values were always written, so every tenant container came
+up pointed at an address nothing listens on -- and waku, seeing the variables,
+showed **"Hosted free tier: enabled, current"** on the Models page above an
+endpoint that refuses every connection. The tenant's first message came back
+`APIConnectionError`. Do not advertise a free tier until group D lands,
 because an operator who believes they are offering one and is not will hear
-about it from a confused user rather than from a log line. Nothing counts
-tokens either, so there is no cap on what a tenant's own key can spend.
+about it from a confused user rather than from a log line. This deployment
+did, and the confused user was its owner.
+
+Giving both flags still configures a free tier, for when group D lands. It is
+all or nothing at both ends: `install.sh` refuses one without the other, and
+`template.config_from_env` refuses a partial set in `config/spawner.env`,
+because half a free tier is the same lie in a smaller size.
+
+Nothing counts tokens either, so there is no cap on what a tenant's own key
+can spend.
 
 **No tenant firewall rules.** `deploy/firewall.sh` (task C3) is not in the
 tree, so `install.sh` installs no firewall unit and says so. Tenant containers
