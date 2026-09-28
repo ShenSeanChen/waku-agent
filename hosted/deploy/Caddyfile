@@ -53,6 +53,36 @@
 		propagation_timeout 5m
 	}
 
+	# COMPRESSION, AS A CLOSED SET OF CONTENT TYPES.
+	#
+	# Until 2026-09-27 this deployment compressed nothing at all, so every
+	# stylesheet and every JSON response crossed the wire whole. The sign-in
+	# page alone carries 44 KB of CSS that gzip takes to about 9.
+	#
+	# WHY THE LIST IS WRITTEN OUT AND WHY IT MUST NOT SAY text/*.
+	# Caddy's default match for `encode` includes `text/*`, and a streamed
+	# turn is `text/event-stream`. Compressing a stream is how a dashboard
+	# comes to look hung: the same failure `flush_interval -1` below exists
+	# to prevent, arriving by a different door. Naming the types that ARE
+	# compressed makes every other type -- the two streaming routes today,
+	# and whatever a later route invents -- uncompressed by default, which
+	# is the only direction this rule is safe to be wrong in.
+	#
+	# woff2 is absent on purpose: it is already compressed, and gzipping it
+	# costs CPU to add bytes.
+	#
+	# zstd first, gzip second: Caddy picks the first the client accepts.
+	encode zstd gzip {
+		match {
+			header Content-Type text/html*
+			header Content-Type text/css*
+			header Content-Type text/javascript*
+			header Content-Type text/plain*
+			header Content-Type application/json*
+			header Content-Type image/svg+xml*
+		}
+	}
+
 	reverse_proxy {$WAKU_GATEWAY_ADDRESS} {
 		flush_interval -1
 	}

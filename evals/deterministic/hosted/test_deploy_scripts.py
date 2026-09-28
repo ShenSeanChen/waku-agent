@@ -22,6 +22,7 @@ from __future__ import annotations
 import configparser
 import json
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -1247,3 +1248,92 @@ def test_the_tls_block_waits_for_dns_propagation_and_uses_a_public_resolver():
             f"certificate loses a race with Route 53 propagation, and the "
             f"symptom is ERR_SSL_PROTOCOL_ERROR on every tenant host while "
             f"the apex keeps working.")
+
+
+def _caddy_block(text: str, opener: str) -> str:
+    """The body of the block `opener` opens, by brace matching.
+
+    Not split("}"): a Caddyfile block's own first line can carry a brace --
+    `dns {$WAKU_DNS_PROVIDER}` does -- and splitting on the first close brace
+    ends the block before anything under it. The propagation test above found
+    that out by failing against a correct Caddyfile.
+
+    Comments come out here rather than at each call site. Every block in this
+    file explains itself in prose that NAMES the directives underneath it, so
+    a substring search on the raw text finds `resolvers` in the paragraph
+    about resolvers after the directive itself has been deleted. That is not a
+    hypothetical: the first version of the propagation test stayed green with
+    its guard removed, for exactly this reason.
+    """
+    start = text.index(opener) + len(opener)
+    depth, end = 1, start
+    while depth:
+        if text[end] == "{":
+            depth += 1
+        elif text[end] == "}":
+            depth -= 1
+        end += 1
+    return "\n".join(line for line in text[start:end - 1].splitlines()
+                     if not line.strip().startswith("#"))
+
+
+def test_the_edge_compresses_text_but_never_a_stream():
+    """`encode`, with a closed set of content types that excludes streams.
+
+    Until 2026-09-27 this deployment compressed nothing, which is 44 KB of
+    uncompressed CSS on the sign-in page alone and every JSON response for
+    every tenant.
+
+    THE DANGER IS THE FIX, NOT ITS ABSENCE. Caddy's default match for
+    `encode` includes `text/*`, and a streamed turn is `text/event-stream`.
+    Turning compression on with the default list puts a buffering encoder in
+    front of the two streaming routes, and a stream that arrives in one lump
+    at the end of a turn looks exactly like a hung dashboard -- the same
+    symptom `flush_interval -1` exists to prevent, reached by another door.
+
+    So the list is an ALLOWLIST and this test is about what is NOT in it: a
+    type nobody named is uncompressed, including whatever a later streaming
+    route invents.
+    """
+    caddyfile = (shelllib.DEPLOY / "Caddyfile").read_text()
+    assert "encode " in caddyfile, "the edge compresses nothing"
+    match = _caddy_block(caddyfile, "match {")
+    types = re.findall(r"header\s+Content-Type\s+(\S+)", match)
+    assert types, "encode has an empty match block, which matches nothing"
+    for banned in ("text/*", "text/event-stream*", "text/event-stream"):
+        assert banned not in types, (
+            f"encode matches {banned}. A compressed text/event-stream is a "
+            f"turn that arrives in one lump when it ends, which reads as a "
+            f"hung dashboard.")
+    # A wildcard on any top-level type re-opens the same hole by another
+    # spelling: text/* is the one that exists today, image/* would be next.
+    assert not [t for t in types if t.endswith("/*")], types
+
+
+def test_every_compressible_thing_the_gateway_serves_is_compressed():
+    """The encode list is a SECOND CONSUMER of the gateway's content types.
+
+    `STATIC_FILES` has one obvious reader, the route that serves it. This is
+    the other: a content type added there and not here is served
+    uncompressed, and nothing anywhere says so -- the page works, it is just
+    slower, which is the failure nobody files a bug about.
+
+    Fonts are the deliberate exception. woff2 is already compressed and
+    gzipping it spends CPU to add bytes.
+    """
+    from hosted.gateway.app import STATIC_FILES
+
+    already_compressed = {"font/woff2"}
+    served = {content_type for _name, (_file, content_type) in STATIC_FILES.items()}
+    match = _caddy_block((shelllib.DEPLOY / "Caddyfile").read_text(), "match {")
+    patterns = re.findall(r"header\s+Content-Type\s+(\S+)", match)
+    for content_type in sorted(served - already_compressed):
+        covered = any(content_type.startswith(pattern.rstrip("*"))
+                      for pattern in patterns)
+        assert covered, (
+            f"the gateway serves {content_type} and the edge does not "
+            f"compress it. Add it to `encode`'s match block in the Caddyfile.")
+    # The dashboard's own answers are not in STATIC_FILES and are the bulk of
+    # what a signed-in tenant transfers.
+    assert any(p.startswith("application/json") for p in patterns)
+    assert any(p.startswith("text/html") for p in patterns)
