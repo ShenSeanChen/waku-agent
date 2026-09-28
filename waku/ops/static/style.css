@@ -904,3 +904,22 @@ dialog.dialog :focus-visible{outline:var(--focus-ring-width) solid var(--accent)
     line-height:var(--leading-snug);pointer-events:none}
   .ja-asks{margin-top:var(--spacing);max-width:52ch}
   .ja-conf{margin-left:var(--spacing);opacity:.55}
+
+  /* First run (setup.js): the screen shown until a provider is usable.
+     The rail and the chat dock are hidden rather than disabled -- a nav you
+     can see and cannot use is a worse answer than a nav that is not there
+     yet, and the dock's input is the exact control that used to look ready
+     and return APIConnectionError. */
+  body.first-run #nav,
+  body.first-run #dock,
+  body.first-run #dock-resizer,
+  body.first-run #dock-reopen,
+  /* The header's status line reads "live - updated 0s ago - <path>", which on
+     this screen is a fact about a loop that has not run and cannot. */
+  body.first-run #sub { display: none }
+  body.first-run main { max-width: calc(var(--spacing) * 160); margin: 0 auto }
+  .setup-lede { color: var(--text-muted); margin: 0 0 var(--space-4) }
+  .setup-choices { display: flex; flex-wrap: wrap; gap: var(--space-2);
+                   margin-bottom: var(--space-4) }
+  .setup-note { color: var(--text-faint); font-size: var(--text-sm);
+                margin: var(--space-2) 0 0 }

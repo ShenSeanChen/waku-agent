@@ -23,6 +23,27 @@ function render(){
   if (!D) return;
   const [v, subRaw] = (location.hash||"#overview").slice(1).split("/");
   const sub = subRaw || null;
+  // FIRST RUN. With no usable provider, every other page is a page about a
+  // loop that cannot run a turn -- and the chat box on Overview looks ready
+  // and answers APIConnectionError. The gate sends all of them to setup.
+  //
+  // There is NO exception, not even #models. An earlier version let that one
+  // page through, because it is where a key is entered -- and produced a page
+  // with no way back, reachable only from a screen it then hid. The provider
+  // modal is a global overlay: setup.js opens the very same one, over the
+  // gate, so nothing has to be escaped to configure anything.
+  //
+  // Nothing is stored and nothing is dismissed: the 5s poll refreshes D, and
+  // the moment a provider reads as enabled this branch stops being taken.
+  // There is no "I set a key" state to get wrong.
+  if (needsSetup(D)){
+    document.body.classList.add("first-run");
+    document.getElementById("title").textContent = "Set up Waku";
+    document.getElementById("view").innerHTML = VIEWS.setup(D);
+    activeView = "setup"; activeSub = null;
+    return;
+  }
+  document.body.classList.remove("first-run");
   const view = VIEWS[v] ? v : "overview";
   const subChanged = sub !== activeSub || view !== activeView;
   // Two nav rows can share a view, so a row that names a sub only lights up
