@@ -216,3 +216,81 @@ def test_the_page_loads_no_vendored_library():
         if content_type == "text/javascript":
             size = (HOSTED_STATIC / filename).stat().st_size
             assert size < 32 * 1024, f"{key} is {size} bytes; is a library back?"
+
+
+# --- caching: the 113 KB that used to be re-fetched on every sign-in -------
+
+
+def test_the_public_static_files_may_be_kept_and_revalidated():
+    """`no-store` said never keep this. On the sign-in page that cost 113591
+    bytes EVERY visit, measured against the live deployment: ten requests,
+    zero cache hits, 88 KB of it incompressible woff2.
+
+    The spec's acceptance 14 requires no-store on every CONTAINER response,
+    which is right: a tenant's dashboard data is theirs. These files are the
+    opposite -- public, identical for every visitor, no credential in any of
+    them.
+
+    `no-cache` and NOT a max-age, deliberately: the browser may keep the file
+    but must ask before using it, so a deploy is picked up immediately. A
+    lifetime would serve the previous release's stylesheet to somebody signing
+    in just after a deploy, which on the page that holds a credential is not a
+    trade worth a few hundred milliseconds.
+    """
+    from hosted.gateway.app import STATIC_CACHE_CONTROL
+
+    assert STATIC_CACHE_CONTROL == "no-cache", (
+        "a max-age here serves a stale sign-in page across a deploy")
+    assert "no-store" not in STATIC_CACHE_CONTROL
+
+
+def test_clear_site_data_no_longer_throws_the_cache_away():
+    """Caching is pointless if the page that needs it wipes the cache on load.
+
+    The spec (line 509) writes `"cache", "storage"`. "storage" is the half
+    that protects a person: localStorage, sessionStorage and IndexedDB, so
+    nothing this page or Supabase wrote survives for the next person at this
+    browser. "cache" cleared an HTTP cache holding four public stylesheets,
+    three fonts, the Waku mark and the sign-in script.
+    """
+    from hosted.gateway.app import CLEAR_SITE_DATA
+
+    assert "storage" in CLEAR_SITE_DATA
+    assert "cache" not in CLEAR_SITE_DATA
+    # And still no "cookies", which was never about performance: the session
+    # cookie is cleared by the logout that sends this, not by the browser.
+    assert "cookies" not in CLEAR_SITE_DATA
+
+
+def test_the_tag_changes_exactly_when_the_file_does():
+    """A tag that survives an edit serves the old file forever; a tag that
+    changes without one defeats the caching. It is the bytes, and nothing
+    else -- not a path, not a mtime, not a process start time."""
+    from hosted.gateway.app import _etag
+
+    first = _etag("login.css", b"one")
+    assert _etag("login.css", b"one") == first
+    assert _etag("a-different-name.css", b"one") == first, (
+        "the tag depends on the filename, so renaming a file with identical "
+        "bytes would needlessly invalidate it")
+    assert _etag("login.css", b"two") != first
+    # Strong, not weak: these are byte-identical copies checked by an eval.
+    assert first.startswith('"') and first.endswith('"')
+    assert not first.startswith("W/")
+
+
+def test_hardening_cannot_quietly_put_no_store_back():
+    """ORDER IS THE WHOLE CONTRACT. answers.harden sets Cache-Control:
+    no-store, so a caller that hardened AFTER setting the cache headers would
+    undo them and nothing would look wrong. One function does both, in one
+    order, and this is why it exists."""
+    from aiohttp import web
+
+    from hosted.gateway.app import _cacheable
+
+    response = _cacheable(web.Response(body=b"x"), '"tag"')
+    assert response.headers["Cache-Control"] == "no-cache"
+    assert response.headers["ETag"] == '"tag"'
+    # The rest of harden still applied.
+    assert response.headers["X-Content-Type-Options"] == "nosniff"
+    assert response.headers["X-Frame-Options"] == "DENY"

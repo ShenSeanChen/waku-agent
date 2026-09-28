@@ -346,8 +346,21 @@ def test_clear_site_data_rides_on_login_and_logout_and_on_no_cookie_response(har
         return login, signed_in, entered, out
 
     login, signed_in, entered, out = asyncio.run(run())
-    assert login[1]["clear-site-data"] == '"cache", "storage"'
-    assert out[1]["clear-site-data"] == '"cache", "storage"'
+    # "storage" and NOT "cache", since 2026-09-28. The spec (line 509) writes
+    # both. "storage" is the half that protects a person -- localStorage,
+    # sessionStorage and IndexedDB, so nothing this page or Supabase wrote
+    # survives for the next person at this browser. "cache" cleared the HTTP
+    # cache, which on this origin holds four public stylesheets, three fonts,
+    # the Waku mark and the sign-in script, and cost 113591 bytes on every
+    # single sign-in for it. The reason app.py gives is the one that matters;
+    # this is the wire.
+    assert login[1]["clear-site-data"] == '"storage"'
+    assert out[1]["clear-site-data"] == '"storage"'
+    # AND IT STILL CARRIES NO "cookies", which is the spec's own note and the
+    # part that was never about performance: the session cookie is cleared by
+    # the logout that sends this header, not by the browser acting on it.
+    for response in (login, out):
+        assert "cookies" not in response[1]["clear-site-data"]
     for response in (signed_in, entered):
         assert "clear-site-data" not in response[1]
     assert cookie_value(signed_in[1], "__Host-waku_session") != ""
@@ -630,7 +643,7 @@ def test_a_tenant_host_has_its_own_logout(harness):
 
     out, after = asyncio.run(run())
     assert out[0] == 200
-    assert out[1]["clear-site-data"] == '"cache", "storage"'
+    assert out[1]["clear-site-data"] == '"storage"'
     assert {"secure", "httponly", "samesite=lax", "path=/", "max-age=0"} <= (
         cookie_attributes(out[1], "__Host-waku_tenant"))
     assert after[0] == 401
@@ -2209,3 +2222,60 @@ def test_a_second_request_during_the_evict_stop_window_waits_for_the_container(
     # And the eviction really did happen, so the window really was open: the
     # winner was inside `stop` when the waiter arrived.
     assert [r["op"] for r in during][:2] == ["stop", "start"]
+
+
+def test_a_static_file_revalidates_with_an_etag_and_answers_304(harness):
+    """THE BEHAVIOUR, not the header constants.
+
+    Until 2026-09-28 every asset on the apex carried `Cache-Control: no-store`
+    and `GET /login` sent `Clear-Site-Data: "cache"`, so a browser re-fetched
+    all 113591 bytes of the sign-in page on every visit -- measured against
+    the live deployment: ten requests, zero cache hits, 88 KB of it
+    incompressible woff2.
+
+    A conditional request now costs one round trip and no body.
+    """
+    async def run():
+        await harness.start()
+        first = await harness.send("GET", "/auth/static/design/tokens.css",
+                                   host="agent.waku.one")
+        tag = first[1]["etag"]
+        again = await harness.send("GET", "/auth/static/design/tokens.css",
+                                   host="agent.waku.one",
+                                   headers={"If-None-Match": tag})
+        stale = await harness.send("GET", "/auth/static/design/tokens.css",
+                                   host="agent.waku.one",
+                                   headers={"If-None-Match": '"not-the-tag"'})
+        await harness.stop()
+        return first, again, stale
+
+    first, again, stale = asyncio.run(run())
+    assert first[0] == 200
+    assert first[1]["cache-control"] == "no-cache", (
+        "the asset says no-store again; nothing will ever be cached")
+    assert first[1]["etag"]
+    # The whole point: same tag, no body.
+    assert again[0] == 304
+    assert again[2] == b""
+    assert again[1]["etag"] == first[1]["etag"]
+    # A tag that does not match gets the file, or a deploy would never land.
+    assert stale[0] == 200
+    assert stale[2] == first[2]
+
+
+def test_a_tenants_own_responses_are_still_never_stored(wired):
+    """The line the caching change must NOT cross. The spec's acceptance 14:
+    "every container response carries Cache-Control: no-store". A tenant's
+    dashboard data is theirs and belongs in no cache; only the apex's public
+    files were ever the argument."""
+    async def run():
+        await wired.start()
+        host, cookie = await signed_in_on_the_tenant_host(wired)
+        answer = await wired.send("GET", "/api/data", host=host, cookie=cookie)
+        await wired.stop()
+        return answer
+
+    status, headers, _body = asyncio.run(run())
+    assert status == 200
+    assert headers["cache-control"] == "no-store"
+    assert "etag" not in headers

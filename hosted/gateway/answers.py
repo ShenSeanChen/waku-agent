@@ -47,7 +47,8 @@ SECURITY_HEADERS = {
 
 
 def harden(response: web.StreamResponse) -> web.StreamResponse:
-    """The five headers, applied without clobbering a page's own CSP.
+    """The five headers, applied without clobbering a page's own CSP or a
+    response's own Cache-Control.
 
     /login carries a full policy of its own, which already contains
     frame-ancestors 'none'. Two Content-Security-Policy headers intersect
@@ -56,6 +57,20 @@ def harden(response: web.StreamResponse) -> web.StreamResponse:
     left alone and the default is added only where there is none.
     """
     for name, value in SECURITY_HEADERS.items():
+        # Cache-Control is DEFAULTED, not imposed, for the same reason the
+        # policy below is. The default is no-store and every response that
+        # says nothing gets it, which is what the spec's acceptance 14
+        # requires of a container response. But this function also runs from
+        # `on_response_prepare`, on every response, AFTER the handler -- so
+        # imposing it silently undid the one place that deliberately sets
+        # something else: the apex's public static files, which are allowed
+        # to be kept and revalidated (app.py, _cacheable).
+        #
+        # That is not hypothetical either. The first version of this change
+        # set the header in the handler, passed its own unit test, and still
+        # served `no-store` on the wire, because this loop ran last.
+        if name == "Cache-Control" and name in response.headers:
+            continue
         response.headers[name] = value
     if "Content-Security-Policy" not in response.headers:
         response.headers["Content-Security-Policy"] = FRAME_ANCESTORS

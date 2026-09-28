@@ -27,6 +27,7 @@ worse answer than 400 for the same reason "/api/ch%61t/stream" is.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import html
 import time
 from collections.abc import Awaitable, Callable
@@ -88,7 +89,67 @@ STATIC_FILES: dict[str, tuple[str, str]] = {
 # some binary types at all.
 TEXT_STATIC_TYPES = frozenset({"text/css", "text/javascript", "image/svg+xml"})
 
-CLEAR_SITE_DATA = '"cache", "storage"'
+# "storage" and NOT "cache", since 2026-09-28.
+#
+# The spec (line 509) writes both. "storage" is the half that protects a
+# person: it clears localStorage, sessionStorage and IndexedDB, so nothing
+# Supabase or this page wrote survives for the next person at this browser.
+# "cache" clears the HTTP cache for this origin -- which on the apex holds
+# four stylesheets, three fonts, the Waku mark and a 2.5 KB script, all of
+# them public, identical for every visitor, and none of them a credential.
+#
+# It cost 113591 bytes on EVERY sign-in, measured against the live
+# deployment: ten requests, zero cache hits, 88 KB of it incompressible
+# woff2, on every visit forever. That is the whole of what "cache" bought
+# and the whole of what it cost.
+#
+# Cookies are untouched either way, and deliberately: the spec notes that
+# this header "carries no cookies", because the session cookie is cleared by
+# the logout that sends this, not by the browser.
+# --- the public static files, and the ONE place they are allowed to cache ---
+#
+# WHY THESE AND NOTHING ELSE. answers.harden sends `Cache-Control: no-store`
+# on every response, which is right for what the spec's acceptance 14 names:
+# "every CONTAINER response carries Cache-Control: no-store". A tenant's
+# dashboard data is theirs and must never sit in a shared cache.
+#
+# /auth/static/ is the opposite kind of thing. Every byte is public, identical
+# for every visitor, and carries no credential: four stylesheets, three fonts,
+# the Waku mark and the sign-in script. `no-store` on those bought nothing and
+# cost 113591 bytes per sign-in.
+#
+# REVALIDATION AND NOT A LIFETIME, on purpose. `no-cache` means "you may keep
+# it, ask me before using it". The browser sends the tag it holds and an
+# unchanged file answers 304 with no body -- so a repeat visit costs round
+# trips instead of bytes, and a deploy is picked up IMMEDIATELY. A max-age
+# would be faster and would serve the previous release's stylesheet to
+# somebody signing in after a deploy, which on the page that holds a
+# credential is not a trade worth a few hundred milliseconds.
+STATIC_CACHE_CONTROL = "no-cache"
+
+# The file's bytes, so the tag changes exactly when the file does. Computed
+# per request and not at import: the files are small, and a cache keyed on a
+# process's startup would serve a stale tag for the life of a container that
+# outlived a `docker cp`. Weak would be wrong -- these are byte-identical
+# copies checked by an eval, and a strong tag is what they are.
+def _etag(filename: str, body: bytes) -> str:
+    return '"' + hashlib.sha256(body).hexdigest()[:32] + '"'
+
+
+def _cacheable(response: web.Response, tag: str) -> web.Response:
+    """harden(), then the two headers that let this one file be kept.
+
+    The order matters and is the whole of this function: harden sets
+    Cache-Control: no-store, so a caller that hardened afterwards would put it
+    back and silently undo the caching. One place does both, in one order.
+    """
+    answers.harden(response)
+    response.headers["Cache-Control"] = STATIC_CACHE_CONTROL
+    response.headers["ETag"] = tag
+    return response
+
+
+CLEAR_SITE_DATA = '"storage"'
 SIGN_IN_REFUSED = "That sign-in did not work. Ask for a new link."
 
 # aiohttp's own default is 1 MiB. Set explicitly, and equal to the proxy's
@@ -100,8 +161,14 @@ MAX_BODY_BYTES = 4 * 1024 * 1024
 async def _harden_on_prepare(_request: web.Request,
                              response: web.StreamResponse) -> None:
     """The five security headers on every response this process writes,
-    including the ones aiohttp writes on its own. harden() is idempotent, so
-    a response that already went through it is unchanged."""
+    including the ones aiohttp writes on its own.
+
+    THIS RUNS AFTER THE HANDLER, which is the whole reason harden() defaults
+    Cache-Control rather than imposing it. A response that set its own -- the
+    public static files, which may be kept and revalidated -- keeps it; every
+    other response gets no-store here even if its handler never thought about
+    it. Before that, this line silently undid the caching and the only symptom
+    was a slow sign-in page."""
     answers.harden(response)
 
 
@@ -254,7 +321,7 @@ class Gateway:
         if request.method == "GET" and path == "/login":
             return self._login_page()
         if request.method == "GET" and path.startswith("/auth/static/"):
-            return self._static(path[len("/auth/static/"):])
+            return self._static(request, path[len("/auth/static/"):])
         if request.method == "POST" and path == "/auth/session":
             return await self._sign_in(request)
         if request.method == "POST" and path == "/auth/logout":
@@ -296,7 +363,7 @@ class Gateway:
         response.headers["Clear-Site-Data"] = CLEAR_SITE_DATA
         return answers.harden(response)
 
-    def _static(self, name: str) -> web.Response:
+    def _static(self, request: web.Request, name: str) -> web.Response:
         found = STATIC_FILES.get(name)
         if found is None:
             return answers.json_error(404, answers.NOT_FOUND)
@@ -306,9 +373,15 @@ class Gateway:
         # page's copy is the one a mojibake bug report would be about. A font
         # is not text and does not get one.
         charset = "utf-8" if content_type in TEXT_STATIC_TYPES else None
-        return answers.harden(web.Response(
-            body=(STATIC / filename).read_bytes(), content_type=content_type,
-            charset=charset))
+        body = (STATIC / filename).read_bytes()
+        tag = _etag(filename, body)
+        # A conditional request costs one round trip and no body. The browser
+        # asks with the tag it holds; an unchanged file answers 304 and sends
+        # nothing.
+        if request.headers.get("If-None-Match") == tag:
+            return _cacheable(web.Response(status=304), tag)
+        return _cacheable(web.Response(
+            body=body, content_type=content_type, charset=charset), tag)
 
     async def _sign_in(self, request: web.Request) -> web.Response:
         try:
