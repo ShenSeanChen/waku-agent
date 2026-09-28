@@ -12,6 +12,7 @@ targets are aliases for the same things, plus the eval and tracing tools.
 | `waku voice` | talk to it — the "waku waku" wake word, or push-to-talk (needs the `[voice]` extra) |
 | `waku telegram` | message it from your phone (needs `TELEGRAM_BOT_TOKEN`) |
 | `waku discord` | answer in a Discord server (needs `DISCORD_BOT_TOKEN`) |
+| `waku slack` | answer Slack DMs from the people you list (needs `SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN` and `SLACK_ALLOWED_USER`) |
 | `waku whatsapp` | answer WhatsApp messages (needs `WHATSAPP_TOKEN` and a public URL) |
 | `waku brief` | a morning briefing from calendar + mail + memory, run as a loop |
 | `waku gather` | the same job as a graph: four sources fetched together, then one digest |
@@ -34,7 +35,7 @@ as their `waku connect` commands, and `/help` lists the graph workflows.
 | `make run` | chat with Waku in the terminal |
 | `make dashboard` | the dashboard at localhost:7777 (restart it after pulling backend changes) |
 | `make voice` | push-to-talk, or always-on with `WAKU_WAKE_WORD` |
-| `make telegram` · `make discord` · `make whatsapp` | the messaging gateways |
+| `make telegram` · `make discord` · `make slack` · `make whatsapp` | the messaging gateways |
 | `make brief` · `make gather` | the morning briefing, as a loop or as a graph |
 | `make eval` | deterministic evals (0/1, no judge involved) |
 | `make eval-judge` | LLM-as-judge evals (scored %, needs an API key) |
