@@ -543,7 +543,9 @@ def session_list(conn) -> list[dict]:
             "SELECT DISTINCT source FROM chat_log WHERE session_id=?", (sid,)).fetchall()]
         preview = ""
         if last:
-            preview = ("you: " if last["role"] == "user" else "waku: ") + last["content"][:80]
+            content = last["content"]
+            excerpt = content[:80] + ("..." if len(content) > 80 else "")
+            preview = ("you: " if last["role"] == "user" else "waku: ") + excerpt
         out.append({"id": sid,
                     "title": (first["content"][:60] if first else "(empty)"),
                     "last": preview,
