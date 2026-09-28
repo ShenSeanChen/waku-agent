@@ -1241,6 +1241,7 @@ def main() -> None:
         # One owner for gateway lifecycle: configuration saves can now stop and
         # restart a bot in-process instead of requiring a dashboard restart.
         from waku.gateway.discord import start_in_background as start_discord
+        from waku.gateway.slack import start_in_background as start_slack
         from waku.gateway.supervisor import GatewaySupervisor
         from waku.gateway.telegram import start_in_background as start_telegram
         from waku.gateway.whatsapp import start_in_background as start_whatsapp
@@ -1252,7 +1253,8 @@ def main() -> None:
 
         gateway_items = [item for item in INTEGRATIONS if item.reload.value == "gateway"]
         supervisor = GatewaySupervisor(
-            {"telegram": start_telegram, "discord": start_discord, "whatsapp": start_whatsapp},
+            {"telegram": start_telegram, "discord": start_discord, "slack": start_slack,
+             "whatsapp": start_whatsapp},
             {item.key: tuple(field.name for field in item.env) for item in gateway_items},
         )
         register_gateway_status_provider(supervisor.status)

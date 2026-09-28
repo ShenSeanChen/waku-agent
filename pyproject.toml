@@ -69,6 +69,12 @@ gcal = [
 discord = [
     "discord.py>=2.4",
 ]
+# Optional gateway: DM Waku in Slack. Socket Mode, so no public URL is needed;
+# aiohttp is what slack-bolt's async Socket Mode client runs on.
+slack = [
+    "slack-bolt>=1.18",
+    "aiohttp>=3.9",
+]
 # Optional gateway: WhatsApp via Meta Cloud API (needs a public URL — see docstring)
 whatsapp = [
     "httpx>=0.25",

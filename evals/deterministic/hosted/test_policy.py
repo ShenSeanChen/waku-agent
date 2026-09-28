@@ -214,7 +214,7 @@ def test_the_two_allowed_connections_pass(route, key):
 
 
 @pytest.mark.parametrize("route", ["/api/connections", "/api/connections/test"])
-@pytest.mark.parametrize("key", ["telegram", "discord", "whatsapp", "google_calendar",
+@pytest.mark.parametrize("key", ["telegram", "discord", "slack", "whatsapp", "google_calendar",
                                  "apple_calendar", "apple_tools", "mem0", "zep",
                                  "langmem", "supabase", "otel", "", "something-new"])
 def test_every_other_connection_is_refused(route, key):

@@ -83,7 +83,7 @@ same memory, see [integrations](docs/integrations.md#share-one-memory-with-your-
 
 | Pillar | In one line | Read more |
 |---|---|---|
-| **Harness** | gateways (terminal, dashboard, voice, Telegram, Discord, WhatsApp) and tools around one loop | [architecture](docs/architecture.md) |
+| **Harness** | gateways (terminal, dashboard, voice, Telegram, Discord, Slack, WhatsApp) and tools around one loop | [architecture](docs/architecture.md) |
 | **Loop** | ~95 lines of plain Python: reason, act, repeat, with two ways to stop | [the tour](docs/tour.md#the-loop) |
 | **Memory** | semantic, episodic and procedural (skills); a gate decides *whether* to remember, consolidation decides *what* to keep | [the tour](docs/tour.md#the-retrieval-gate) |
 | **Eval / LLM-Ops** | deterministic tests and LLM-as-judge side by side, a release gate, a trace for every turn | [evals](docs/evals.md) |
