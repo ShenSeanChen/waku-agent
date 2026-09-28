@@ -188,6 +188,9 @@ def _engine_with(status: int, body: bytes = b""):
     engine = Engine()
     session = _FakeSession(status, body)
     engine._session = session
+    # __aenter__ negotiates this from the daemon; these tests are about the
+    # statuses each verb accepts, so it is planted rather than negotiated.
+    engine._api_version = "1.43"
     return engine, session
 
 
