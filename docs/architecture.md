@@ -9,7 +9,7 @@ flowchart TB
     subgraph GW["Gateway Interface — waku/gateway/"]
         CLI["cli.py (default)"]
         VOICE["voice.py (wake word)"]
-        TG["telegram.py · discord.py · whatsapp.py (optional)"]
+        TG["telegram.py · discord.py · slack.py · whatsapp.py (optional)"]
     end
 
     subgraph RUN["Ephemeral Agent Run — everything here is rebuilt per turn"]
@@ -91,8 +91,8 @@ friendly view; the **Data** tab shows the raw `state.db` tables.
 ## Which file is which
 
 - `waku/gateway/` — how text gets in and out: `cli.py`, `voice.py` (wake word),
-  `telegram.py`, `discord.py` and `whatsapp.py`, started by `runner.py` and
-  `supervisor.py`. Gateways only move text.
+  `telegram.py`, `discord.py`, `slack.py` and `whatsapp.py`, started by
+  `runner.py` and `supervisor.py`. Gateways only move text.
 - `waku/runtime/session.py` — working memory for one turn: SOUL.md, memory
   context and chat history.
 - `waku/loop/agent.py` — the loop. `loop/models.py` — pluggable providers over

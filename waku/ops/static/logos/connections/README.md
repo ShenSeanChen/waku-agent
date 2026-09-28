@@ -11,5 +11,9 @@ a third-party CDN at runtime.
 - `tavily.svg` uses the `tavily-color` artwork from
   [Lobe Icons 1.90.0](https://github.com/lobehub/lobe-icons), licensed under MIT.
   Copyright (c) 2023 LobeHub.
+- `slack.svg` uses the `slack-original` artwork from
+  [Devicon 2.17.0](https://github.com/devicons/devicon), licensed under MIT.
+  Copyright (c) 2015 konpa. Simple Icons dropped Slack in version 16. The
+  rounded background is a Waku presentation wrapper.
 
 Brand names and marks remain the property of their respective owners.

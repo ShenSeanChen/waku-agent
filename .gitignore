@@ -1,7 +1,6 @@
 __pycache__/
 *.pyc
 .venv/
-.env
 state.db
 traces/
 *.ics
@@ -52,3 +51,5 @@ lab/**/*.excalidraw
 # `git add -A` stages two files called deploy.pem and deploy.key into a public
 # repository, and nobody reads that diff twice.
 waku/_c1_context_probe/
+config.bat
+node_modules

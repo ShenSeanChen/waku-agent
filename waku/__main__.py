@@ -10,6 +10,8 @@
   waku voice                 talk to it (needs the [voice] extra)
   waku telegram              phone → laptop (needs TELEGRAM_BOT_TOKEN)
   waku discord               Discord → laptop (needs DISCORD_BOT_TOKEN)
+  waku slack                 Slack DMs → laptop (needs SLACK_BOT_TOKEN, SLACK_APP_TOKEN,
+                             SLACK_ALLOWED_USER)
   waku whatsapp              WhatsApp → laptop (needs WHATSAPP_TOKEN, public URL)
   waku brief                 morning briefing (calendar + mail + memory) — as a LOOP
   waku gather                same job as a GRAPH: github, web, calendar and
@@ -66,6 +68,10 @@ def main() -> None:
         from waku.gateway.discord import main as discord_main
 
         discord_main()
+    elif args[0] == "slack":
+        from waku.gateway.slack import main as slack_main
+
+        slack_main()
     elif args[0] == "whatsapp":
         from waku.gateway.whatsapp import main as wa_main
 
