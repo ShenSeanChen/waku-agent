@@ -1195,3 +1195,55 @@ def test_the_unit_in_the_tree_still_holds_both_placeholders():
     text = (shelllib.DEPLOY / "waku-backup.service").read_text(encoding="utf-8")
     assert "@WAKU_BACKUP@" in text
     assert "@WAKU_INSTALL_ENV@" in text
+
+
+def test_the_tls_block_waits_for_dns_propagation_and_uses_a_public_resolver():
+    """The wildcard cannot issue without both, and the symptom hides the cause.
+
+    Measured on the first real VM, 2026-09-28. Caddy asked Let's Encrypt to
+    validate 4.6 seconds after writing the TXT record, while Route 53 takes 30
+    to 60 to publish it, so every attempt died on "No TXT record found at
+    _acme-challenge". The apex still worked, so the deployment came up looking
+    healthy while every tenant host answered ERR_SSL_PROTOCOL_ERROR -- which
+    reads as a broken tenant, not a missing certificate.
+
+    Two separate settings, because they fail for different reasons and a fix
+    that supplies one is still broken.
+
+    `resolvers` is the subtler one. Caddy's own propagation check runs against
+    the container's resolver, and in this deployment that is 127.0.0.53 --
+    systemd-resolved -- which answers instantly from cache and reports the
+    record present before it is. Only a public resolver sees what the CA sees.
+
+    This pins the presence of both, not their values: 1.1.1.1 could reasonably
+    become 9.9.9.9 and 30s could become 45s, and neither is a regression. What
+    would be a regression is either line going away, which is exactly what
+    happened when this Caddyfile was written from the hand-built one that had
+    `resolvers 1.1.1.1` and lost it.
+    """
+    caddyfile = (shelllib.DEPLOY / "Caddyfile").read_text()
+    # Brace matching, not split("}"): the block's first line is
+    # `dns {$WAKU_DNS_PROVIDER}`, so splitting on the first close brace ends
+    # the block before any of the settings below it. The first version of this
+    # test did exactly that and failed against a correct Caddyfile.
+    start = caddyfile.index("tls {") + len("tls {")
+    depth, end = 1, start
+    while depth:
+        if caddyfile[end] == "{":
+            depth += 1
+        elif caddyfile[end] == "}":
+            depth -= 1
+        end += 1
+    tls = caddyfile[start:end - 1]
+    # Comments stripped first. The block explains WHY each setting is here and
+    # names them in prose, so a substring search finds "resolvers" in the
+    # comment after the directive is deleted -- which is how the first version
+    # of this test stayed green while the guard it pins was gone.
+    directives = "\n".join(line for line in tls.splitlines()
+                           if not line.strip().startswith("#"))
+    for setting in ("resolvers", "propagation_delay", "propagation_timeout"):
+        assert setting in directives, (
+            f"the tls block has no {setting}. Without all three the wildcard "
+            f"certificate loses a race with Route 53 propagation, and the "
+            f"symptom is ERR_SSL_PROTOCOL_ERROR on every tenant host while "
+            f"the apex keeps working.")

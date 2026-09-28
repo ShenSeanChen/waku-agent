@@ -30,6 +30,27 @@
 {$WAKU_DOMAIN}, *.{$WAKU_DOMAIN} {
 	tls {
 		dns {$WAKU_DNS_PROVIDER}
+
+		# RESOLVERS AND A PROPAGATION WAIT, BOTH MEASURED RATHER THAN GUESSED.
+		#
+		# Measured on the first real VM, 2026-09-28: Caddy asked Let's Encrypt
+		# to validate 4.6 SECONDS after writing the TXT record, and Route 53
+		# takes 30 to 60 to publish it, so every attempt died on "No TXT record
+		# found at _acme-challenge.<domain>". The apex still issued, so the
+		# deployment came up looking healthy while every tenant host answered
+		# ERR_SSL_PROTOCOL_ERROR -- which reads as a broken tenant rather than
+		# a missing certificate. It is a race that does win sometimes, which is
+		# worse than never working: it can come up and fail on renewal.
+		#
+		# resolvers is the subtler half. Caddy's own propagation check runs
+		# against the container's resolver, here 127.0.0.53 (systemd-resolved),
+		# which answers instantly from cache and reports the record present
+		# before it is. Only a public resolver sees what the CA sees. The
+		# hand-built Caddyfile this replaced had `resolvers 1.1.1.1`, and the
+		# line was lost in the move to a container.
+		resolvers 1.1.1.1 8.8.8.8
+		propagation_delay 30s
+		propagation_timeout 5m
 	}
 
 	reverse_proxy {$WAKU_GATEWAY_ADDRESS} {
