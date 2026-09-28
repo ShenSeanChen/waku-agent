@@ -438,3 +438,42 @@ def test_the_warning_stops_by_itself_when_group_d_lands(tmp_path):
     done = _upgrade(tmp_path)
     assert done.returncode == 0, done.stderr
     assert "WAKU_PLATFORM_" not in done.stdout + done.stderr
+
+
+def test_an_upgrade_never_starts_the_proxy_that_is_not_there(tmp_path):
+    """`up -d` brings every declared service to its declared replica count.
+
+    This script used to run `waku_compose up -d` bare, with a comment claiming
+    that a service scaled to 0 stays at 0 without the flag. It does not:
+    --scale is a flag on one invocation, not state compose keeps, and
+    compose.yaml declares no replicas for proxy, so the default is one.
+
+    Observed on agent.waku.one on 2026-09-28, the first time this script ran
+    against a real deployment: the proxy started and then restart-looped on
+    `No module named hosted.proxy.__main__` forever, because the service
+    carries `restart: unless-stopped`.
+
+    The assertion is on the `up -d` call specifically. A `--scale` appearing
+    anywhere in the call log would also be satisfied by the build step or a
+    later command, which is how this class of test passes while the flag is on
+    the wrong line.
+    """
+    done = _upgrade(tmp_path)
+    assert done.returncode == 0, done.stderr
+    up = [line for line in shelllib.calls(tmp_path) if " up -d" in line]
+    assert up, shelllib.calls(tmp_path)
+    for line in up:
+        assert "--scale proxy=0" in line, line
+
+
+def test_the_scale_flag_goes_away_when_group_d_lands(tmp_path):
+    """Same condition install.sh uses: whether the checkout has a proxy to
+    run. A deployment that really has one must not have it scaled to zero by
+    an upgrade, and neither script should need editing on the day it lands."""
+    _proxy_exists(tmp_path)
+    done = _upgrade(tmp_path)
+    assert done.returncode == 0, done.stderr
+    up = [line for line in shelllib.calls(tmp_path) if " up -d" in line]
+    assert up
+    for line in up:
+        assert "--scale" not in line, line

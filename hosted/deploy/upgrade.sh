@@ -120,11 +120,33 @@ DOCKER_BUILDKIT=1 docker build \
   --tag "$WAKU_CADDY_IMAGE" \
   "$WAKU_SRC/hosted/image" >/dev/null
 
-# The proxy stays at whatever replica count it has: `up -d` with no --scale
-# leaves a service scaled to 0 at 0, so an upgrade does not quietly start a
-# module that is not there.
+# THE PROXY IS SCALED TO ZERO HERE, THE WAY install.sh DOES IT, AND THE
+# COMMENT THIS REPLACES WAS WRONG.
+#
+# It said: "the proxy stays at whatever replica count it has: `up -d` with no
+# --scale leaves a service scaled to 0 at 0, so an upgrade does not quietly
+# start a module that is not there." Compose does not work that way. `--scale`
+# is a flag on one invocation, not state compose keeps: an `up -d` without it
+# brings every declared service to its declared replica count, and compose.yaml
+# declares none for proxy, so the default is one.
+#
+# Observed on agent.waku.one on 2026-09-28, the first time this script ran
+# against a real deployment: `Container waku-proxy-1 Creating ... Started`,
+# and then `No module named hosted.proxy.__main__` on a loop, forever, because
+# the service carries `restart: unless-stopped`. An upgrade quietly started a
+# module that is not there -- the exact thing the comment promised it would
+# not do, asserted rather than tested.
+#
+# The condition is install.sh's, verbatim in meaning: whether the checkout has
+# a proxy to run. When group D lands the file appears and the scale flag stops
+# being added, on both paths, without either of them being edited.
+scale=""
+if [ ! -f "$WAKU_SRC/hosted/proxy/__main__.py" ]; then
+  scale="--scale proxy=0"
+fi
 waku_log "restarting the services"
-waku_compose up -d
+# shellcheck disable=SC2086
+waku_compose up -d $scale
 
 waku_log "waiting for the gateway"
 ready=no
