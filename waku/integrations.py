@@ -128,15 +128,18 @@ class ApplyResult:
     can_force: bool = False
 
 
-def _positive_int(values: dict[str, str]) -> dict[str, str]:
-    value = values.get("DISCORD_MAX_TURNS_PER_HOUR", "")
-    if value:
-        try:
-            if int(value) <= 0:
-                raise ValueError
-        except ValueError:
-            raise ValueError("DISCORD_MAX_TURNS_PER_HOUR must be a positive integer") from None
-    return values
+def _positive_int(name: str) -> Callable[[dict[str, str]], dict[str, str]]:
+    """A normalizer that rejects `name` unless it is empty or a positive integer."""
+    def check(values: dict[str, str]) -> dict[str, str]:
+        value = values.get(name, "")
+        if value:
+            try:
+                if int(value) <= 0:
+                    raise ValueError
+            except ValueError:
+                raise ValueError(f"{name} must be a positive integer") from None
+        return values
+    return check
 
 
 def _notion_normalize(values: dict[str, str]) -> dict[str, str]:
@@ -168,7 +171,19 @@ INTEGRATIONS: tuple[Integration, ...] = (
                  EnvField("DISCORD_MAX_TURNS_PER_HOUR", "Max turns per hour"),
                  EnvField("DISCORD_HOME", "Workspace directory")), "discord", "discord", "",
                 ReloadMode.GATEWAY, lambda env: bool(env.get("DISCORD_BOT_TOKEN")), None,
-                _positive_int),
+                _positive_int("DISCORD_MAX_TURNS_PER_HOUR")),
+    Integration("slack", "Channels", "Slack", "Lets the people you list DM Waku in Slack.",
+                (EnvField("SLACK_BOT_TOKEN", "Bot token", required=True, secret=True,
+                          help="The xoxb- Bot User OAuth Token."),
+                 EnvField("SLACK_APP_TOKEN", "App token", required=True, secret=True,
+                          help="The xapp- app-level token, from Socket Mode."),
+                 EnvField("SLACK_ALLOWED_USER", "Allowed users", required=True,
+                          help="Comma-separated member ids, like U0123ABCD. Only they get an answer."),
+                 EnvField("SLACK_MAX_TURNS_PER_HOUR", "Max turns per hour"),
+                 EnvField("SLACK_HOME", "Workspace directory")), "slack", "slack_bolt",
+                "https://api.slack.com/apps", ReloadMode.GATEWAY,
+                lambda env: bool(env.get("SLACK_BOT_TOKEN")), None,
+                _positive_int("SLACK_MAX_TURNS_PER_HOUR")),
     Integration("whatsapp", "Channels", "WhatsApp", "Lets Waku answer WhatsApp messages via the Meta Cloud API.",
                 (EnvField("WHATSAPP_TOKEN", "Access token", required=True, secret=True),
                  EnvField("WHATSAPP_PHONE_NUMBER_ID", "Phone number ID", required=True),

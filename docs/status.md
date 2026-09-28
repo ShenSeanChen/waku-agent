@@ -14,8 +14,8 @@ known-broken is below, and half of it already has a fix in flight.
 
 The four pillars run: the loop, memory (semantic + episodic + procedural with
 a retrieval gate), tools, and both eval tiers. `waku`, `waku dashboard`,
-`waku voice`, `waku telegram`, `waku discord`, `waku brief` and
-`waku connect google` all start.
+`waku voice`, `waku telegram`, `waku discord`, `waku slack`, `waku brief`
+and `waku connect google` all start.
 
 **950 deterministic evals pass offline**, with no API key; 60 more are live
 evals that skip without one. CI runs the offline tier on every PR along with
