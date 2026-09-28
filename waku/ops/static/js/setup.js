@@ -19,11 +19,34 @@
 // so there stays exactly one path that writes a credential, with one set of
 // validation and one place to audit.
 
-// True when no provider is both configured and enabled -- which is what the
-// loop needs to run a turn at all.
+// True when this install cannot run a turn.
+//
+// TWO WAYS TO BE UNABLE TO, AND THE SECOND ONE COST A REAL USER AN EVENING.
+// The obvious one is having no usable provider at all. The other is having
+// one and not being ON it: the loop uses `settings.provider`, so a setting
+// that names a provider which is missing or keyless fails every turn while
+// the Models page shows a green, configured card for the key you just pasted.
+//
+// That happened on 2026-09-28. A hosted tenant's setting said `waku-platform`
+// -- the free tier, whose row had just been removed from the build -- and
+// their new Anthropic key sat there working and unused.
+//
+// integrations.apply_provider now adopts the first working key, so nobody
+// should reach that state again. This is for everyone already in it: a
+// setting written before the fix is still sitting in their .env.
 function needsSetup(d){
   if (!d || !d.providers || !d.settings) return false;   // not loaded yet
-  return !d.providers.some(p => providerCardStatus(p, d.settings) === "enabled");
+  const usable = d.providers.filter(
+    p => providerCardStatus(p, d.settings) === "enabled");
+  if (!usable.length) return true;
+  return !usable.some(p => p.key === d.settings.provider);
+}
+
+// Which of the two it is. The screen says different things, because "paste a
+// key" is wrong advice for somebody who already has one.
+function setupIsOrphaned(d){
+  return (d.providers || []).some(
+    p => providerCardStatus(p, d.settings || {}) === "enabled");
 }
 
 // The providers offered by name up front. NOT all of them: a first screen
@@ -54,7 +77,13 @@ VIEWS.setup = function(d){
   // A deployment can ship with none of the three -- the suggestion list is a
   // preference, not an assumption. Fall back to whatever it does have rather
   // than rendering a screen with no way forward.
-  const first = suggested.length ? suggested : providers.slice(0, 3);
+  // An orphaned user's shortlist is what they already hold a key for. Our
+  // three suggestions are for somebody with nothing; offering them to a
+  // person who just needs to switch is asking them to buy a second ticket.
+  const ready = providers.filter(
+    p => providerCardStatus(p, d.settings || {}) === "enabled");
+  const first = ready.length ? ready
+    : (suggested.length ? suggested : providers.slice(0, 3));
   const rest = providers.filter(p => !first.includes(p));
   const offered = setupShowAll ? first.concat(rest) : first;
   const more = rest.length
@@ -62,12 +91,18 @@ VIEWS.setup = function(d){
          onclick="toggleSetupAll()">${setupShowAll ? "show fewer"
          : `show all ${providers.length} providers`}</button></p>`
     : "";
+  const orphaned = setupIsOrphaned(d);
+  const named = (d.settings || {}).provider || "";
+  const lede = orphaned
+    ? `Your current provider, <code>${esc(named)}</code>, cannot answer a turn:
+       it is not in this build, or it has no key. You already have a working
+       provider. Pick the one to use.`
+    : "Waku needs a model to think with. Pick a provider and paste an API key.";
   // No card title: the page header's h1 is already "Set up Waku", and a card
   // that repeats its own page's heading is the shape of a screen assembled
   // from parts rather than designed.
   return uiCard(`
-    <p class="setup-lede">Waku needs a model to think with. Pick a provider and
-      paste an API key.</p>
+    <p class="setup-lede">${lede}</p>
     <div class="setup-choices">${offered.map(setupChoice).join("")}</div>
     <p class="setup-note">The key is written to <code>.env</code> on this
       machine and is read only when Waku calls that provider. Nothing here

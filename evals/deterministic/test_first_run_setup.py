@@ -120,3 +120,43 @@ def test_the_gate_hides_the_control_that_used_to_fail():
     block = block[:block.index("{ display: none }")]
     for part in ("#dock", "#dock-resizer", "#dock-reopen", "#nav"):
         assert part in block, f"first-run leaves {part} on screen"
+
+
+def test_the_gate_fires_when_the_current_provider_is_not_among_the_usable_ones():
+    """THE SECOND WAY TO BE UNABLE TO RUN A TURN, and the one that cost a real
+    user an evening on 2026-09-28.
+
+    The loop uses `settings.provider`. Having a usable provider is not the
+    same as being ON one: a setting naming a removed or keyless provider fails
+    every turn while the Models page shows a green card for the key just
+    pasted. The first version of `needsSetup` asked only "is any provider
+    enabled", which is true in that state, so the gate stayed shut.
+    """
+    setup = SETUP.read_text(encoding="utf-8")
+    body = setup[setup.index("function needsSetup"):]
+    body = body[:body.index("\n}")]
+    assert "d.settings.provider" in body, (
+        "needsSetup ignores which provider is CURRENT, so a setting naming a "
+        "provider that cannot serve a turn passes the gate")
+    # And it still answers the first question too.
+    assert "usable.length" in body or "length" in body
+
+
+def test_the_screen_does_not_tell_a_user_with_a_key_to_paste_a_key():
+    """Two situations, two sentences. Somebody whose provider went missing
+    already has a working key; telling them to paste one sends them looking
+    for a second API key they do not need."""
+    setup = SETUP.read_text(encoding="utf-8")
+    assert "setupIsOrphaned" in setup
+    assert "cannot answer a turn" in setup
+    # The orphaned shortlist is what they hold keys for, not our suggestions.
+    view = setup[setup.index("VIEWS.setup"):]
+    assert "ready.length ? ready" in view
+
+
+def test_the_named_provider_is_escaped_before_it_reaches_the_page():
+    """`settings.provider` is a stored string that reaches innerHTML. It comes
+    from our own registry today; it is still a value from a file on disk."""
+    setup = SETUP.read_text(encoding="utf-8")
+    assert "esc(named)" in setup
+    assert "${named}" not in setup
