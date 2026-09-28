@@ -325,6 +325,30 @@ all or nothing at both ends: `install.sh` refuses one without the other, and
 `template.config_from_env` refuses a partial set in `config/spawner.env`,
 because half a free tier is the same lie in a smaller size.
 
+### If you installed before 2026-09-27, you still have the broken one
+
+A new install writes no `WAKU_PLATFORM_*`. An existing one keeps what it was
+given, because **`upgrade.sh` never touches `config/`** -- an upgrade that
+rewrote config would be an install. So pulling this change fixes nothing on a
+deployment that already exists, and its tenants keep meeting
+`APIConnectionError`.
+
+`upgrade.sh` now warns on every run while that is true. To act on it:
+
+```bash
+sudo sed -i '/^WAKU_PLATFORM_/d' /srv/waku/config/spawner.env
+sudo /srv/waku/src/hosted/deploy/upgrade.sh --now
+```
+
+Compose recreates the spawner when its `env_file` changes, and `--now`
+restarts every running tenant onto the new environment, which costs each open
+dashboard an interrupted turn. Without `--now` each tenant picks it up on
+their next start instead.
+
+Check it worked from a tenant's Models page: the "Hosted free tier" card
+should be gone, not merely disabled, and a tenant with no key of their own
+should land on the setup screen.
+
 Nothing counts tokens either, so there is no cap on what a tenant's own key
 can spend.
 

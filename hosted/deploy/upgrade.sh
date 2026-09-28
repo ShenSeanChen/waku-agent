@@ -148,4 +148,27 @@ if [ "$now" = yes ]; then
   waku_admin restart-all
 fi
 
+# A CONFIG FILE THIS SCRIPT IS NOT ALLOWED TO FIX, so it says so instead.
+#
+# Until 2026-09-27 install.sh REQUIRED --free-model and --platform-key-file and
+# always wrote WAKU_PLATFORM_* into config/spawner.env. Every deployment
+# installed before then still has those three lines, and the spawner still
+# hands them to every tenant container -- so stock waku offers a twelfth
+# provider called "Hosted free tier", marks it enabled and current, and the
+# tenant's first message returns APIConnectionError, because nothing listens
+# at that address while group D is unbuilt.
+#
+# A new install stopped doing this. An EXISTING one cannot notice on its own:
+# `upgrade.sh` does not touch config/ (see the top of this file) and must not
+# start, or an upgrade becomes an install. So the operator is told, every
+# upgrade, until they act.
+#
+# The condition is the same one install.sh uses to decide `--scale proxy=0`:
+# whether the checkout has a proxy to run. When group D lands, this warning
+# stops on its own, because the file will be there.
+if [ ! -f "$WAKU_SRC/hosted/proxy/__main__.py" ] \
+   && grep -q "^WAKU_PLATFORM_BASE_URL=." "$WAKU_ROOT/config/spawner.env" 2>/dev/null; then
+  waku_log "WARNING: $WAKU_ROOT/config/spawner.env still sets WAKU_PLATFORM_*, but this checkout has no metering proxy (group D of spec 001). Every tenant container is started pointed at an address nothing listens on: their Models page shows 'Hosted free tier: enabled, current' and their first message fails with a refused connection. THE FIX: delete the three WAKU_PLATFORM_ lines from that file, then run this script again with --now. Compose recreates the spawner when its env_file changes, and --now restarts every tenant onto the new environment. hosted/README.md, 'What is not enabled yet', has the full note."
+fi
+
 waku_log "upgraded $before -> $after"

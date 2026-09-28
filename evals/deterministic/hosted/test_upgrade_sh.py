@@ -367,3 +367,74 @@ def test_an_empty_pin_is_a_note_and_an_absent_one_is_a_warning(tmp_path):
                           bodies={"git": _GIT_CLEAN, "id": _ID_ROOT})
     assert absent.returncode == 0, absent.stderr
     assert "has no WAKU_DNS_MODULE_VERSION line" in absent.stdout
+
+
+def _spawner_env(tmp_path, *, free_tier: bool):
+    """config/spawner.env as an operator's VM actually holds it."""
+    config = tmp_path / "waku" / "config"
+    config.mkdir(parents=True, exist_ok=True)
+    lines = ["WAKU_TENANT_ROOT=/srv/waku/tenants"]
+    if free_tier:
+        lines += ["WAKU_PLATFORM_BASE_URL=http://10.88.0.1:8788",
+                  "WAKU_PLATFORM_MODEL=claude-haiku-4-5",
+                  "WAKU_PLATFORM_SMALL_MODEL=claude-haiku-4-5"]
+    (config / "spawner.env").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _proxy_exists(tmp_path):
+    """Group D, landed: the file install.sh checks to decide --scale proxy=0."""
+    proxy = tmp_path / "src" / "hosted" / "proxy"
+    proxy.mkdir(parents=True, exist_ok=True)
+    (proxy / "__main__.py").write_text("", encoding="utf-8")
+
+
+def _upgrade(tmp_path):
+    return shelllib.run(UPGRADE, [], tmp_path=tmp_path,
+                        env=_install_env(tmp_path),
+                        stubs=["git", "docker", "curl", "id"],
+                        bodies={"git": _GIT_CLEAN, "id": _ID_ROOT})
+
+
+def test_an_old_installs_dead_free_tier_is_named_on_every_upgrade(tmp_path):
+    """A config file this script is NOT ALLOWED to fix, so it says so.
+
+    install.sh required --free-model until 2026-09-27 and always wrote
+    WAKU_PLATFORM_* into config/spawner.env. Every deployment installed before
+    then still has those lines and still hands them to every tenant container,
+    so waku offers a "Hosted free tier", marks it enabled and current, and the
+    tenant's first message returns APIConnectionError -- against a metering
+    proxy that does not exist.
+
+    A new install stopped doing this; an existing one cannot notice on its own,
+    because upgrade.sh does not touch config/ and must not start. So the
+    operator is told, every upgrade, until they act.
+    """
+    _spawner_env(tmp_path, free_tier=True)
+    done = _upgrade(tmp_path)
+    assert done.returncode == 0, done.stderr
+    output = done.stdout + done.stderr
+    assert "WAKU_PLATFORM_" in output and "WARNING" in output, output[-800:]
+    # It has to say what to DO. A warning naming a problem with no next step is
+    # a warning an operator learns to scroll past.
+    assert "--now" in output
+
+
+def test_a_clean_install_is_not_warned(tmp_path):
+    """The whole point of the condition. A warning that fires for everybody is
+    noise, and noise is how the real one gets ignored."""
+    _spawner_env(tmp_path, free_tier=False)
+    done = _upgrade(tmp_path)
+    assert done.returncode == 0, done.stderr
+    assert "WAKU_PLATFORM_" not in done.stdout + done.stderr
+
+
+def test_the_warning_stops_by_itself_when_group_d_lands(tmp_path):
+    """The condition is the same one install.sh uses to decide --scale proxy=0:
+    whether this checkout has a proxy to run. A deployment that really runs a
+    metering proxy SHOULD set these three, so the warning must not outlive the
+    reason for it and have to be remembered about."""
+    _spawner_env(tmp_path, free_tier=True)
+    _proxy_exists(tmp_path)
+    done = _upgrade(tmp_path)
+    assert done.returncode == 0, done.stderr
+    assert "WAKU_PLATFORM_" not in done.stdout + done.stderr
