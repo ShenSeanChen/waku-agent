@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import hashlib
 import json
 import logging
 from dataclasses import replace
@@ -711,44 +710,78 @@ def test_the_login_page_carries_this_deployments_supabase_values(harness):
     assert "frame-ancestors 'none'" in headers["content-security-policy"]
 
 
-def test_auth_static_serves_three_named_files_and_nothing_else(harness):
-    """An allowlist of three names, not a directory walk.
+def test_auth_static_serves_named_files_and_nothing_else(harness):
+    """An allowlist, not a directory walk.
 
     hosted/ is copied whole into the services image, so a walk would serve
-    whatever anybody drops beside login.css. The vendored Supabase client is
-    checked by digest here as well: the gateway hands that file to every
-    visitor, and a swapped copy is the shortest path to every session on the
-    apex.
+    whatever anybody drops beside login.css. The list grew on 2026-09-27 when
+    the page took on the design system, and shrank by one: the 218 KB
+    vendored Supabase client is gone, because the page makes its one call
+    with fetch (hosted/gateway/static/login.js).
+
+    WHAT IS CHECKED HERE and what is not. This test asks whether the names in
+    the allowlist are served, and whether names outside it are refused.
+    Whether the PAGE's own references are all in the allowlist is the
+    opposite question and is asked by
+    evals/deterministic/hosted/test_login_page.py, which derives its list
+    from the page instead of from here.
     """
+    served = ("login.css", "login.js", "waku-mark.svg",
+              "design/tokens.css", "design/fonts.css",
+              "fonts/InstrumentSans-var.woff2")
+    # Two shapes, two answers. A name that simply is not in the allowlist is
+    # a 404. A name carrying `..` never reaches the allowlist at all: the
+    # gateway's path guard refuses it with a 400 before routing, which is why
+    # no request string is ever joined to a path in `_static`.
+    refused = ("supabase.js", "supabase-js-2.117.1.js", "login.css/",
+               "nothing.js", "design/")
+    traversal = ("../login.css", "design/../login.css")
+
     async def run():
         await harness.start()
         seen = {}
-        for name in ("login.css", "login.js", "supabase.js", "supabase-js-2.117.1.js",
-                     "login.css/", "nothing.js"):
+        for name in served + refused + traversal:
             seen[name] = await harness.send("GET", f"/auth/static/{name}",
                                             host="agent.waku.one")
         await harness.stop()
         return seen
 
     seen = asyncio.run(run())
-    assert [seen[name][0] for name in ("login.css", "login.js", "supabase.js")] == [200] * 3
+    assert [seen[name][0] for name in served] == [200] * len(served), {
+        name: seen[name][0] for name in served}
     assert seen["login.css"][1]["content-type"] == "text/css; charset=utf-8"
     assert seen["login.js"][1]["content-type"] == "text/javascript; charset=utf-8"
-    # The version is a name the page never spells, and the raw filename is not
-    # a second way to ask for the same bytes.
-    assert seen["supabase-js-2.117.1.js"][0] == 404
-    assert seen["login.css/"][0] == 404
-    assert seen["nothing.js"][0] == 404
-    vendored = (ROOT / "hosted/gateway/static/supabase-js-2.117.1.js").read_bytes()
-    assert seen["supabase.js"][2] == vendored
-    assert hashlib.sha256(vendored).hexdigest() == (
-        "dff1e545f4f35bd42895cd6f46431e56137dd13031e46a9759c446447c11a567")
+    assert seen["design/tokens.css"][1]["content-type"] == "text/css; charset=utf-8"
+    assert seen["waku-mark.svg"][1]["content-type"] == "image/svg+xml; charset=utf-8"
+    # A font is bytes, and says so: no charset.
+    assert seen["fonts/InstrumentSans-var.woff2"][1]["content-type"] == "font/woff2"
+    # Nothing outside the list, including the two shapes that would be a
+    # traversal if any request string were ever joined to a path.
+    assert [seen[name][0] for name in refused] == [404] * len(refused), {
+        name: seen[name][0] for name in refused}
+    assert [seen[name][0] for name in traversal] == [400] * len(traversal), {
+        name: seen[name][0] for name in traversal}
+    # The bytes are the file's, not a re-encoding of it.
+    assert seen["fonts/InstrumentSans-var.woff2"][2] == (
+        ROOT / "hosted/gateway/static/fonts/InstrumentSans-var.woff2").read_bytes()
 
 
-def test_the_login_page_names_no_waku_static_file():
-    """The gateway's pages "use no Waku brand file" (spec). The import
-    boundary test reads *.py only, so an HTML src or href pointing into
-    waku/ops/static/ is invisible to it."""
+def test_the_login_page_reaches_into_no_other_tree():
+    """The gateway's pages load from `/auth/static/` and from nowhere else.
+
+    THE SPEC SAID MORE THAN THIS AND NO LONGER DOES. Spec 001 line 514 reads
+    "the pages use no Waku brand file", and until 2026-09-27 that was why the
+    sign-in page was unstyled system-ui. It now uses the Waku design system,
+    at the product owner's instruction, from COPIES that ride in this tree
+    (hosted/gateway/static/design/, listed in LICENSE-BRAND). The deviation
+    is written up in the spec's own amendments section.
+
+    What survives unchanged is the reason this test exists: the import
+    boundary test reads *.py only, so an href into waku/ops/static/ would be
+    invisible to it -- and such an href cannot work anyway, because the
+    services image's build context refuses waku/. This is that refusal,
+    checked at the layer that would otherwise find out in production.
+    """
     for name in ("hosted/templates/login.html", "hosted/gateway/static/login.css",
                  "hosted/gateway/static/login.js"):
         text = (ROOT / name).read_text(encoding="utf-8")

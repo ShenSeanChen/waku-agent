@@ -10,8 +10,16 @@ license.
 Brand assets
   waku/ops/static/design/         the Waku design system (tokens, controls, type)
   waku/ops/static/waku-mark.svg   the Waku mark
+  hosted/gateway/static/design/   the same design system, copied for the
+                                  sign-in page, which cannot read waku/
+  hosted/gateway/static/waku-mark.svg   the same mark, copied for the same reason
   docs/brand/                     the Waku mark, light and dark variants
   the names "Waku" and "Waku Memory", and the Waku mark
+
+The hosted/ copies are listed separately on purpose. hosted/ is under the
+Elastic License 2.0 (hosted/LICENSE) rather than MIT, and neither license
+covers these files: they are this list's, in both trees, and a change to
+hosted/'s license does not reach them.
 
 You may run, build and redistribute waku-agent with these files included and
 unmodified, as part of waku-agent or of a fork of it.
@@ -21,5 +29,5 @@ use these files, the names or the mark in another product or service, or in
 a way that suggests AutoManus Technologies, Inc. or Waku endorses it.
 
 Third-party files keep their own licenses. The fonts in
-waku/ops/static/fonts/ are licensed under the SIL Open Font License 1.1; see
-the OFL-*.txt files beside them.
+waku/ops/static/fonts/ and hosted/gateway/static/fonts/ are licensed under
+the SIL Open Font License 1.1; see the OFL-*.txt files beside them.
