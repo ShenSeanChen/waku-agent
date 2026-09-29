@@ -1261,6 +1261,14 @@ def main() -> None:
         print(f"Waku dashboard → http://localhost:{port}  (Ctrl-C to stop)")
         try:
             server.serve_forever()
+        except KeyboardInterrupt:
+            # Ctrl-C exits here: the server was parked in select() waiting for
+            # requests. Every other gateway catches this pair (see cli.py and
+            # voice.py under gateway/) so the user sees a clean goodbye, not a
+            # raw traceback — the dashboard owed them the same. Pure ASCII on
+            # purpose: this line must survive cp1252 consoles, unlike the "→"
+            # in the banner above (issue #140).
+            print("\nDashboard stopped. Bye!")
         finally:
             supervisor.shutdown()
         return
