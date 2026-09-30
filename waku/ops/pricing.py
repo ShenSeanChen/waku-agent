@@ -25,19 +25,16 @@ from __future__ import annotations
 
 import json
 
+from waku.loop.models import REGISTRY
+
 # Rough $/million tokens (in, out) for a dollar ESTIMATE — the number humans
 # actually feel. Keyed by provider; deliberately approximate and labelled "est".
-PRICING = {
-    "anthropic": (3.0, 15.0), "openai": (2.5, 15.0), "gemini": (0.3, 2.5),
-    "deepseek": (0.435, 0.87), "minimax": (0.30, 1.20), "kimi": (0.6, 2.5), "glm": (0.6, 2.2),
-    "xai": (3.0, 15.0),   # Grok — rough est; keyed users get exact from the catalog
-    "opencode_zen": (0.435, 0.87),   # rough est (matching deepseek — same underlying model)
-    "opencode_go": (0.435, 0.87),    # rough est
-    # openrouter fallback for paid models when the live catalog is unreachable
-    # (rough mid-catalog guess). ":free" ids and catalog-priced models never
-    # hit this: see price_for().
-    "openrouter": (1.0, 3.0),
-}
+# Rough $/million tokens (in, out) for a dollar ESTIMATE — the number humans
+# actually feel. Read from waku/providers.toml so a provider is one table
+# there and not a row to remember here; deliberately approximate and labelled
+# "est" in the UI. A live catalog (OpenRouter reports one) overrides it per
+# model, and ":free" ids never reach it at all — see price_for().
+PRICING = {name: tuple(row["price"]) for name, row in REGISTRY.items()}
 
 # model id -> exact ($/M in, $/M out), filled from the live catalog fetch in
 # list_models(). OpenRouter reports per-model pricing, so cost estimates can

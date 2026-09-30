@@ -15,8 +15,8 @@ async function newChat(){
 //   mode 'history' -> action:history, read-only ('__all__' = full timeline)
 // Replaces CHAT + repaints, unless `guard` is set and the length is unchanged
 // (the live-poll case, to avoid a needless redraw). Returns the items or null.
-async function loadThreadInto(id, {mode = "history", setSession = false, guard = false} = {}){
-  const r = await postJSON("/api/session", {action: mode, id});
+async function loadThreadInto(id, {mode = "history", setSession = false, guard = false, background = false} = {}){
+  const r = await postJSON("/api/session", {action: mode, id}, background ? BG : {});
   if (!r.ok) return null;
   const fresh = (r.history || []).map(histItem);
   if (guard && fresh.length === CHAT.length) return fresh;   // unchanged -> skip repaint
@@ -51,41 +51,31 @@ async function viewAllHistory(){
 }
 // Re-pull the opened conversation each refresh so incoming messages from another
 // gateway (your phone) show up live — unless a turn is mid-stream in the dock.
-async function syncLiveView(){
+// `background` comes straight from the refresh() call that reached us: this is
+// only ever a side effect of that poll, never its own user action.
+async function syncLiveView(background = false){
   if (!liveView || CHAT.some(m => m.pending)) return;
-  await loadThreadInto(liveView, {guard: true});   // guard: repaint only if changed
+  await loadThreadInto(liveView, {guard: true, background});   // guard: repaint only if changed
 }
-function closeSessMenu(){ const m=document.getElementById("sessmenu"); if(m) m.remove(); }
+// The history and model menus are both ui.js's one menu (openMenu), which
+// closes itself on an outside click or Escape. Only one is open at a time, so
+// either close function closes whichever it is.
+function closeSessMenu(){ closeMenu(); }
 function toggleSessMenu(ev){
   ev.stopPropagation();
-  if (document.getElementById("sessmenu")){ closeSessMenu(); return; }
+  if (document.getElementById("ui-menu") && _menuTrigger === ev.currentTarget){ closeMenu(); return; }
   const sessions = (D && D.sessions) || [];
-  const menu = document.createElement("div");
-  menu.className = "sessmenu"; menu.id = "sessmenu";
   // "All messages" shows the full cross-thread timeline (like the Loop tab, but
   // as chat) — so your whole history is one scroll, not split across threads.
-  const allItem = `<div class="sessitem allitem ${liveView==='__all__'?'on':''}" onclick="viewAllHistory()">
-      <div><b>All messages</b> — full timeline</div>
-      <div class="sm">every thread together, newest last</div></div>`;
-  menu.innerHTML = allItem + (sessions.length ? sessions.map(s => {
-    const tags = gwTags(s);
-    return `<div class="sessitem ${s.id===SESSION?"on":""}" onclick="openConversation('${esc(s.id)}')">
-      <div>${esc(s.title||s.id)} ${tags}</div>
-      <div class="sm">${sessionMeta(s)}</div>
-    </div>`;
-  }).join("") : `<div class="sessitem">no past conversations yet</div>`);
-  const r = ev.currentTarget.getBoundingClientRect();
-  menu.style.top = (r.bottom+6)+"px";
-  menu.style.left = Math.max(8, r.right-300)+"px";
-  document.body.appendChild(menu);
+  const allItem = uiMenuItem("<b>All messages</b>",
+    {sub: "full timeline", on: liveView === "__all__", onclick: "viewAllHistory()",
+     title: "every thread together, newest last"});
+  const rows = sessions.length
+    ? sessions.map(s => uiMenuItem(`${esc(s.title||s.id)} ${gwTags(s)}`,
+        {sub: sessionMeta(s), on: s.id === SESSION, onclick: `openConversation('${esc(s.id)}')`})).join("")
+    : `<div class="menu-empty">no past conversations yet</div>`;
+  openMenu(ev.currentTarget, allItem + uiMenuSep() + rows, {width: "400px"});
 }
-document.addEventListener("click", e => {
-  const m = document.getElementById("sessmenu");
-  if (m && !m.contains(e.target)) closeSessMenu();
-  const mm = document.getElementById("modelmenu");
-  const chip = document.getElementById("modelchip");
-  if (mm && !mm.contains(e.target) && e.target !== chip && !chip?.contains(e.target)) closeModelMenu();
-});
 
 // --- mini model switcher in the chat dock: a pill showing the current brain,
 // clicking it drops the live catalog to swap without leaving the conversation.
@@ -96,7 +86,7 @@ function syncModelChip(){
   const st = D.settings;
   el.innerHTML = `<span class="mc-dot"></span><span class="mc-name">${esc(st.model || st.provider || "model")}</span><span class="mc-caret">&#9662;</span>`;
 }
-function closeModelMenu(){ const m = document.getElementById("modelmenu"); if (m) m.remove(); }
+function closeModelMenu(){ closeMenu(); }
 
 // --- per-turn stats toggle (gate / seconds / iterations / tools). On by
 // default; the choice persists in localStorage. Hides the .tele blocks via a
@@ -114,26 +104,19 @@ function toggleTele(){
 }
 function toggleModelMenu(ev){
   ev.stopPropagation();
-  if (document.getElementById("modelmenu")){ closeModelMenu(); return; }
+  if (document.getElementById("ui-menu") && _menuTrigger === ev.currentTarget){ closeMenu(); return; }
   const st = (D && D.settings) || {};
   // Disabled providers leave the switcher (the Models grid's disable button);
   // their pins stay on file and reappear when re-enabled.
   const disabled = st.disabled_providers || [];
   const pinned = (st.pinned || []).filter(p => !disabled.includes(p.provider));
   const items = pinned.length ? pinned.map(p =>
-    `<div class="sessitem ${(p.provider===st.provider && p.model===st.model)?"on":""}"
-          onclick="switchTo('${esc(p.provider)}','${esc(p.model)}')">
-       <span class="mm-prov">${esc(p.provider)}</span> <span class="mm-id">${esc(p.model)}</span>${
-       p.default?'<span class="mm-def">default</span>':""}</div>`
-  ).join("") : `<div class="sessitem">No models pinned yet.</div>`;
-  const menu = document.createElement("div");
-  menu.className = "sessmenu modelmenu"; menu.id = "modelmenu";
-  menu.innerHTML = `<div class="mm-h">Your models</div>${items}`
-    + `<div class="mm-f"><a href="#models" onclick="closeModelMenu()">+ add models in Models &rsaquo;</a></div>`;
-  const r = ev.currentTarget.getBoundingClientRect();
-  menu.style.top = (r.bottom + 6) + "px";
-  menu.style.left = Math.max(8, r.right - 250) + "px";
-  document.body.appendChild(menu);
+    uiMenuItem(`<code>${esc(p.model)}</code>${p.default ? " " + uiBadge("default", "value") : ""}`,
+      {sub: esc(p.provider), on: p.provider === st.provider && p.model === st.model,
+       onclick: `switchTo('${esc(p.provider)}','${esc(p.model)}')`})
+  ).join("") : `<div class="menu-empty">No models pinned yet.</div>`;
+  openMenu(ev.currentTarget, uiMenuLabel("Your models") + items + uiMenuSep()
+    + uiMenuItem("Manage models…", {onclick: "location.hash='models';closeMenu()"}));
 }
 // Switch BOTH provider and model in one click (a pinned model can be any
 // provider). Same-provider switch keeps the gate model; cross-provider lets the

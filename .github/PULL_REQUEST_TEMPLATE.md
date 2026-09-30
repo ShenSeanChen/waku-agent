@@ -4,14 +4,12 @@
 
 ---
 
+- [ ] I read `AGENTS.md`, and this change keeps its hard rules.
 - [ ] **Tested it, not just written it.** Say how below — the review will ask.
 - [ ] **A deterministic eval** in `evals/deterministic/` covers the behavior.
       If you fixed a bug, add the case that catches it.
 - [ ] `make gate` and `make lint` pass locally.
-- [ ] Any heavy or optional dependency is **behind an extra**, not in the
-      default install.
-- [ ] No hidden network calls, no reading secrets or `.env`, nothing runs at
-      install time.
+- [ ] Any doc sentence this change makes false is fixed in this PR too.
 
 **How you tested it** — commands, and what you saw:
 

@@ -55,17 +55,19 @@ function modelRow(m, st){
   const price = m.free ? "free" : (m.price_out != null ? `$${m.price_in}/$${m.price_out} per M` : "");
   const tags = [price, m.context ? Math.round(m.context/1000) + "k ctx" : ""]
                .filter(Boolean).join(" · ");
-  return `<div class="tool" style="display:flex;align-items:center;gap:8px;padding:6px 8px">
+  return `<div class="tool" style="display:flex;align-items:center;gap:var(--space-2);padding:calc(var(--spacing) * 1.5) var(--space-2)">
     <a class="pinstar ${isPinned?"on":""}" title="${isPinned?"pinned to Your models — click to remove":"pin to Your models (shows in chat switcher)"}"
        onclick="pinModel('${esc(st.provider)}','${esc(m.id)}','${isPinned?"unpin":"pin"}')">${isPinned?"★":"☆"}</a>
     <code style="flex:1;word-break:break-all">${esc(m.id)}</code>
     <span class="meta" style="margin:0;white-space:nowrap">${esc(tags)}</span>
-    ${m.reasoning ? `<span class="srcpill apple" title="thinks out loud before answering: fine for the loop, a poor fit for the gate's tiny token budget">reasoning</span>` : ""}
-    ${curGate ? `<span class="srcpill">GATE</span>`
-              : `<a class="reveal" data-id="${esc(m.id)}" onclick="switchModel(this.dataset.id,true)" title="use as the gate/summary model">gate</a>`}
-    ${cur ? `<span class="srcpill" style="background:var(--good-soft);color:var(--good)">CURRENT</span>`
+    ${m.reasoning ? uiBadge("reasoning", "neutral", "thinks out loud before answering: fine for the loop, a poor fit for the gate's tiny token budget") : ""}
+    ${curGate ? uiBadge("gate", "ok")
+              : uiButton("gate", {level: "tertiary", size: "sm", onclick: "switchModel(this.dataset.id,true)",
+                                  title: "use as the gate/summary model", attrs: `data-id="${esc(m.id)}"`})}
+    ${cur ? uiBadge("current", "ok")
           : (m.tools === false ? `<span class="meta" style="margin:0" title="the loop needs tool calling">chat-only</span>`
-                               : `<button class="save" data-id="${esc(m.id)}" onclick="switchModel(this.dataset.id)">use</button>`)}
+                               : uiButton("use", {level: "primary", size: "sm", onclick: "switchModel(this.dataset.id)",
+                                                  attrs: `data-id="${esc(m.id)}"`}))}
   </div>`;
 }
 
@@ -103,7 +105,7 @@ function renderCatalog(){
         onchange="catFilter.tools=this.checked;renderCatalogList()"> tool-capable only</label>
     </div>
     <div id="cat-list"></div>
-    <div class="meta" id="free-switch-msg" style="margin-top:6px"></div>`;
+    <div class="meta" id="free-switch-msg" style="margin-top:calc(var(--spacing) * 1.5)"></div>`;
   renderCatalogList();
 }
 
@@ -118,21 +120,21 @@ function renderCatalogList(){
                              && (!catFilter.tools || m.tools));
   let h = "";
   if (!q && !catFilter.free && !catFilter.tools){
-    h += `<div class="meta" style="margin:4px 0">Suggested picks: transparent heuristics from catalog metadata (tools, price, context), not a quality leaderboard</div>`;
-    h += `<div class="meta" style="margin:6px 0 2px"><b>For the loop</b> (needs tool calling; free first, biggest context)</div>`;
+    h += `<div class="meta" style="margin:var(--spacing) 0">Suggested picks: transparent heuristics from catalog metadata (tools, price, context), not a quality leaderboard</div>`;
+    h += `<div class="meta" style="margin:calc(var(--spacing) * 1.5) 0 calc(var(--spacing) * 0.5)"><b>For the loop</b> (needs tool calling; free first, biggest context)</div>`;
     h += loopPicks(all).map(m => modelRow(m, st)).join("");
-    h += `<div class="meta" style="margin:10px 0 2px"><b>For the gate</b> (cheap, terse, non-reasoning)</div>`;
+    h += `<div class="meta" style="margin:var(--space-2) 0 calc(var(--spacing) * 0.5)"><b>For the gate</b> (cheap, terse, non-reasoning)</div>`;
     h += gatePicks(all).map(m => modelRow(m, st)).join("");
-    h += `<div class="meta" style="margin:12px 0 2px"><b>Everything</b> (${all.length} models, by vendor)</div>`;
+    h += `<div class="meta" style="margin:var(--space-3) 0 calc(var(--spacing) * 0.5)"><b>Everything</b> (${all.length} models, by vendor)</div>`;
   } else {
-    h += `<div class="meta" style="margin:4px 0">${shown.length} of ${all.length} models</div>`;
+    h += `<div class="meta" style="margin:var(--spacing) 0">${shown.length} of ${all.length} models</div>`;
   }
   const vendors = {};
   shown.forEach(m => (vendors[m.id.split("/")[0]] ??= []).push(m));
   const expand = q || catFilter.free || catFilter.tools;
   h += Object.keys(vendors).sort().map(v => `
     <details ${expand ? "open" : ""}><summary><code>${esc(v)}</code>
-      <span class="meta" style="margin-left:6px">${vendors[v].length}${vendors[v].some(m=>m.free) ? " · has free" : ""}</span></summary>
+      <span class="meta" style="margin-left:calc(var(--spacing) * 1.5)">${vendors[v].length}${vendors[v].some(m=>m.free) ? " · has free" : ""}</span></summary>
       ${vendors[v].map(m => modelRow(m, st)).join("")}
     </details>`).join("");
   list.innerHTML = h;
@@ -163,38 +165,43 @@ function yourModelsCard(st){
     <div class="pinrow ${(p.provider===st.provider && p.model===st.model)?"on":""}">
       <span class="mm-prov">${esc(p.provider)}</span>
       <code style="flex:1;word-break:break-all">${esc(p.model)}</code>
-      ${p.default ? `<span class="srcpill" title="this provider's default model">default</span>`
-                  : `<a class="reveal" onclick="pinModel('${esc(p.provider)}','${esc(p.model)}','default')" title="make this ${esc(p.provider)}'s default">make default</a>`}
-      <a class="reveal" onclick="pinModel('${esc(p.provider)}','${esc(p.model)}','unpin')" title="remove from your list">remove</a>
+      ${p.default ? uiBadge("default", "value", "this provider's default model")
+                  : uiButton("make default", {level: "tertiary", size: "sm",
+                      onclick: `pinModel('${esc(p.provider)}','${esc(p.model)}','default')`, title: `make this ${p.provider}'s default`})}
+      ${uiButton("remove", {level: "tertiary", size: "sm", danger: true,
+          onclick: `pinModel('${esc(p.provider)}','${esc(p.model)}','unpin')`, title: "remove from your list"})}
     </div>`).join("") || `<div class="meta">No models pinned yet — add one below.</div>`;
   // The add row is self-contained: pick any provider + type/choose a model id,
   // then Add. Works even for providers with no live catalog. The datalist
   // suggests the CURRENT provider's models (the only one we've fetched).
   const provOpts = providers.map(n => `<option value="${esc(n)}" ${n===st.provider?"selected":""}>${esc(n)}</option>`).join("");
   // Populate the model <select> for the initially-selected provider once the
-  // card is in the DOM (a fresh fetch of that provider's catalog).
-  setTimeout(() => loadAddModels(st.provider), 0);
+  // card is in the DOM (a fresh fetch of that provider's catalog). This card
+  // is rebuilt on every settings re-render, including an unattended 5s poll —
+  // deferBg says whether this particular render was one of those, or a person
+  // opening the tab.
+  deferBg(bg => loadAddModels(st.provider, bg));
   return `<h2>Your models <span class="meta" style="font-weight:400">— what the chat switcher shows</span></h2>
-    <div class="card">
+    ${uiCard(`
       ${rows}
       <div class="addmodel">
         <select id="add-prov" onfocus="markEditing()" onchange="loadAddModels(this.value)">${provOpts}</select>
         <select id="add-model"><option value="">loading models…</option></select>
-        <button class="save" onclick="addPinnedModel()">Add</button>
+        ${uiButton("Add", {level: "primary", onclick: "addPinnedModel()"})}
       </div>
-      <div class="meta" style="margin-top:6px" id="add-msg">Pick a provider, choose a model, then Add.</div>
-    </div>`;
+      <div class="meta" style="margin-top:calc(var(--spacing) * 1.5)" id="add-msg">Pick a provider, choose a model, then Add.</div>`)}`;
 }
 
 // Fill the add-row model <select> with a provider's catalog (any provider, not
 // just the active one — the backend takes a ?provider= override).
-async function loadAddModels(provider){
+async function loadAddModels(provider, background = false){
   const sel = document.getElementById("add-model");
   const msg = document.getElementById("add-msg");
   if (!sel) return;
   sel.innerHTML = `<option value="">loading ${esc(provider)} models…</option>`;
   let data;
-  try { data = await (await fetch("/api/models?provider=" + encodeURIComponent(provider))).json(); }
+  try { data = await (await fetch("/api/models?provider=" + encodeURIComponent(provider),
+    background ? {headers: BG} : undefined)).json(); }
   catch(e){ sel.innerHTML = `<option value="">couldn't load — pick another provider</option>`; return; }
   const ms = data.models || [];
   sel.innerHTML = `<option value="">choose a model…</option>` + ms.map(m => {
@@ -238,24 +245,70 @@ function modelsGrid(d){
     : providerCardStatus(p, st) === "configured" ? 2 : 3;
   const providers = (d.providers || []).slice()
     .sort((a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name));
-  return `<div class="provgrid">` + providers.map(p => providerCard(p, st)).join("") +
-    `</div><div id="prov-modal-root"></div>`;
+  return `<div class="provgrid">` + providers.map(p => providerCard(p, st)).join("")
+       + jevCard(d) + `</div>`;
+}
+
+// Jev is not a chat provider -- it cannot hold a conversation -- so it is not in
+// the provider list. It still needs a key, and this is where people look for
+// one. The key goes straight to the user's own .env.
+function jevCard(d){
+  const ready = !!(d.settings && d.settings.typesafe_key_set);
+  const act = (label, onclick) => uiButton(label, {level: "secondary", size: "sm", onclick});
+  return uiCard(`
+    <div class="provstatus"><span class="provdot" style="background:${
+      ready ? "var(--ok)" : "var(--bad)"}"></span>${ready ? "key set" : "no key"}</div>
+    <p class="muted">Answers typed questions in the Judgment race. Get a key at
+      ${uiLink("typesafe.ai", "https://typesafe.ai")}.</p>
+    <div class="provactions">${act(ready ? "replace key" : "add key", "openJevKey()")}</div>`,
+    {title: "TypeSafe (Jev)", cls: "provcard"});
+}
+
+// Same shape as the provider modal: a header row with a close button, a .fld
+// label around the input, and a right-aligned action row.
+function openJevKey(){
+  markEditing();   // keep the 5s refresh loop from wiping this modal
+  const set = !!(D && D.settings && D.settings.typesafe_key_set);
+  openDialog(`
+      <div class="u" style="display:flex;justify-content:space-between;align-items:center">
+        <b>TypeSafe (Jev)</b>${uiButton("\u2715", {level: "tertiary", size: "sm",
+          onclick: "closeDialog()", attrs: 'aria-label="close"'})}</div>
+      <label class="fld"><span>API key <span class="meta">(TYPESAFE_API_KEY)</span>
+        ${set ? uiBadge("set", "ok") : uiBadge("not set", "neutral")}</span>
+        <input type="password" id="jev-key" autocomplete="off"
+               placeholder="${set ? "key on file — blank keeps it" : "paste key"}"></label>
+      <p class="meta">Written to your own <code>.env</code>. It is sent to
+        api.typesafe.ai and nowhere else.</p>
+      <div id="jev-key-msg" class="meta"></div>
+      <div class="dialog-foot">
+        ${uiButton("Save", {level: "primary", onclick: "saveJevKey()", attrs: 'id="jev-save"'})}
+      </div>`, {label: "TypeSafe key"});
+}
+
+async function saveJevKey(){
+  const input = document.getElementById("jev-key"), msg = document.getElementById("jev-key-msg");
+  const out = await postJSON("/api/judgment-arena/key", {key: input.value});
+  if (out && out.error){ msg.textContent = out.error; return; }
+  input.value = "";                    // do not leave it sitting in the DOM
+  closeDialog();
+  jaFixture = undefined;               // the arena re-reads whether Jev is ready
+  refresh();
 }
 
 function providerCard(p, st){
   const status = providerCardStatus(p, st);
   const current = p.key === st.provider;
-  const dot = status === "enabled" ? "var(--good)" : status === "configured" ? "#4c9aff" : "var(--bad)";
-  return `<div class="provcard" data-provider="${esc(p.key)}">
-    ${current ? `<span class="srcpill prov-current" style="background:var(--good-soft);color:var(--good)">current</span>` : ""}
+  const dot = status === "enabled" ? "var(--ok)" : status === "configured" ? "var(--accent)" : "var(--bad)";
+  const act = (label, onclick) => uiButton(label, {level: "secondary", size: "sm", onclick});
+  return uiCard(`
+    ${current ? `<span class="prov-current">${uiBadge("current", "ok")}</span>` : ""}
     <img class="provlogo" src="/static/logos/${esc(p.key)}.svg" alt="" onerror="this.style.display='none'">
-    <div class="provname">${esc(p.name)}</div>
     <div class="provstatus"><span class="provdot" style="background:${dot}"></span>${status}</div>
     <div class="provactions">
-      <button class="save ghost" onclick="openProviderModal('${esc(p.key)}')">edit</button>
-      ${status === "configured" ? `<button class="save ghost" onclick="toggleProvider('${esc(p.key)}',false)">enable</button>` : ""}
-      ${status === "enabled" && !current ? `<button class="save ghost" onclick="toggleProvider('${esc(p.key)}',true)">disable</button>` : ""}
-    </div></div>`;
+      ${act("edit", `openProviderModal('${esc(p.key)}')`)}
+      ${status === "configured" ? act("enable", `toggleProvider('${esc(p.key)}',false)`) : ""}
+      ${status === "enabled" && !current ? act("disable", `toggleProvider('${esc(p.key)}',true)`) : ""}
+    </div>`, {title: esc(p.name), cls: "provcard"});
 }
 
 // enable/disable a provider (the grid button). Server keeps the key; the
@@ -277,14 +330,12 @@ function openProviderModal(provider){
   const f = (p.fields || [])[0] || {};
   const baseField = (p.fields || []).find(field => field.name.endsWith("_BASE_URL"));
   const selectedBaseUrl = current && st.base_url ? st.base_url : (baseField?.value || "");
-  const root = document.getElementById("prov-modal-root");
-  root.innerHTML = `<div class="provmodal-back" onclick="closeProviderModal()">
-    <div class="provmodal${current ? " provmodal-models" : ""}" onclick="event.stopPropagation()">
+  const d = openDialog(`
       <div class="u" style="display:flex;justify-content:space-between;align-items:center">
-        <b>${esc(p.name)}</b><a class="reveal" onclick="closeProviderModal()">✕</a></div>
+        <b>${esc(p.name)}</b>${uiButton("✕", {level: "tertiary", size: "sm", onclick: "closeProviderModal()", attrs: 'aria-label="close"'})}</div>
       <label class="fld"><span>API key <span class="meta">(${esc(f.name || "")})</span>
-        ${f.configured ? `<span class="srcpill" style="background:var(--good-soft);color:var(--good)">set ····${esc(f.last4 || "")}</span>`
-                       : `<span class="srcpill apple">not set</span>`}</span>
+        ${f.configured ? uiBadge("set ····" + esc(f.last4 || ""), "ok")
+                       : uiBadge("not set", "neutral")}</span>
         <input type="password" id="pm-key" placeholder="${f.configured ? "key on file — blank keeps it" : "paste key"}"></label>
       ${baseField ? `<label class="fld"><span>Base URL <span class="meta">(select the API key's region)</span></span>
         <select id="pm-base-url" onfocus="markEditing()">
@@ -296,19 +347,24 @@ function openProviderModal(provider){
       ${current ? `
       ${renderModelPicker("pm-model", "Main model (runs the loop; needs tool calling)", st.model || "")}
       ${renderModelPicker("pm-small-model", "Gate / summary model", st.small_model || "")}` : ""}
-      <div style="display:flex;gap:8px;margin-top:10px">
-        <button class="save" id="pm-save" onclick="saveProviderModal('${esc(provider)}')">Save</button>
-        ${!current ? `<button class="save ghost" id="pm-make-current" onclick="makeCurrentProvider('${esc(provider)}')">Set as current provider</button>` : ""}
-      </div>
       <span class="meta" id="pm-msg"></span>
-    </div></div>`;
+      <div class="dialog-foot">
+        ${!current ? uiButton("Set as current provider", {level: "secondary", onclick: `makeCurrentProvider('${esc(provider)}')`, attrs: 'id="pm-make-current"'}) : ""}
+        ${uiButton("Save", {level: "primary", onclick: `saveProviderModal('${esc(provider)}')`, attrs: 'id="pm-save"'})}
+      </div>`,
+    {wide: true, label: `${p.name} provider`, onClose: () => { editing = false; }});
+  // openDialog focuses the first control, which is now the close button; start on the key instead.
+  document.getElementById("pm-key")?.focus();
+  // Escape inside an open model list closes that list, not the whole dialog.
+  d.addEventListener("keydown", e => {
+    if (e.key === "Escape" && d.querySelector(".model-picker-list.open")) e.preventDefault();
+  });
   if (current) loadModalModels(provider);
 }
 
 function closeProviderModal(){
   editing = false;
-  const root = document.getElementById("prov-modal-root");
-  if (root) root.innerHTML = "";
+  closeDialog();
 }
 
 // Populate both modal pickers from one request: this provider's live catalog,
@@ -348,7 +404,9 @@ function renderModelPicker(id, label, value){
     <div class="model-picker" id="${escAttr(id)}-picker">
       <div class="model-picker-input">
         <input type="text" id="${escAttr(id)}" value="${escAttr(value || "")}" autocomplete="off" onfocus="markEditing()" onclick="event.stopPropagation()">
-        <button type="button" class="model-picker-toggle" onclick="toggleModelPicker('${escAttr(id)}'); event.stopPropagation();" aria-label="toggle models" aria-controls="${escAttr(id)}-list" aria-expanded="false">▾</button>
+        ${uiButton("▾", {level: "secondary", size: "sm", cls: "model-picker-toggle",
+            onclick: `toggleModelPicker('${escAttr(id)}'); event.stopPropagation();`,
+            attrs: `aria-label="toggle models" aria-controls="${escAttr(id)}-list" aria-expanded="false"`})}
       </div>
       <div class="model-picker-list" id="${escAttr(id)}-list" role="listbox">
         <input type="text" class="model-picker-search" id="${escAttr(id)}-search" placeholder="filter models..." autocomplete="off" aria-label="filter models" oninput="filterModelPicker('${escAttr(id)}')" onfocus="markEditing()" onclick="event.stopPropagation()">

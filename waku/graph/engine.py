@@ -34,6 +34,8 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Any
 
+from waku.loop.agent import error_text
+
 # Same observer protocol as the loop: notify(kind, event). Graph runs emit
 # graph_start / node_start / node_end / route / graph_end, and pass through
 # whatever a node emits (an agent_node's llm/tool events) tagged with node=.
@@ -145,7 +147,13 @@ def run_graph(graph: Graph, state: dict, observer: Observer | None = None,
             out = node.fn(snapshot)
             return name, out or {}, None, int((time.perf_counter() - t) * 1000)
         except Exception as exc:  # surface, don't crash — the run drains cleanly
-            return name, None, repr(exc), int((time.perf_counter() - t) * 1000)
+            # error_text, not repr(exc): this string is shown to whoever ran
+            # the workflow. A provider that refused the call already wrote a
+            # sentence for them ("Free tier used up. Add your own key in
+            # Models."); repr() would hand them
+            # `Refused('Free tier used up...')` instead, and with a real SDK
+            # error it drags the raw JSON error body onto the screen too.
+            return name, None, error_text(exc), int((time.perf_counter() - t) * 1000)
 
     for src, dst in graph.edges:  # START fires its edges before the first wave
         if src == START:

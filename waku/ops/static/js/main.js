@@ -23,6 +23,27 @@ function render(){
   if (!D) return;
   const [v, subRaw] = (location.hash||"#overview").slice(1).split("/");
   const sub = subRaw || null;
+  // FIRST RUN. With no usable provider, every other page is a page about a
+  // loop that cannot run a turn -- and the chat box on Overview looks ready
+  // and answers APIConnectionError. The gate sends all of them to setup.
+  //
+  // There is NO exception, not even #models. An earlier version let that one
+  // page through, because it is where a key is entered -- and produced a page
+  // with no way back, reachable only from a screen it then hid. The provider
+  // modal is a global overlay: setup.js opens the very same one, over the
+  // gate, so nothing has to be escaped to configure anything.
+  //
+  // Nothing is stored and nothing is dismissed: the 5s poll refreshes D, and
+  // the moment a provider reads as enabled this branch stops being taken.
+  // There is no "I set a key" state to get wrong.
+  if (needsSetup(D)){
+    document.body.classList.add("first-run");
+    document.getElementById("title").textContent = "Set up Waku";
+    document.getElementById("view").innerHTML = VIEWS.setup(D);
+    activeView = "setup"; activeSub = null;
+    return;
+  }
+  document.body.classList.remove("first-run");
   const view = VIEWS[v] ? v : "overview";
   const subChanged = sub !== activeSub || view !== activeView;
   // Two nav rows can share a view, so a row that names a sub only lights up
@@ -36,8 +57,10 @@ function render(){
   if (view === "overview" || view === "graph"){
     // don't rebuild mid-animation or the glowing SVG gets wiped
     if (activeView !== view || !animating){ document.getElementById("view").innerHTML = VIEWS[view](D); }
-  } else if ((view === "memory" || view === "settings" || view === "database" || view === "compare" || view === "models" || view === "connections") && editing && !subChanged){
+  } else if ((view === "memory" || view === "settings" || view === "database" || view === "compare" || view === "models" || view === "connections" || view === "judgment") && editing && !subChanged){
     // don't wipe an in-progress edit on the 5s refresh — but DO switch sub-tabs
+    // ("judgment" is here for hover: rebuilding the table mid-hover destroys the
+    // element under the pointer, and a native tooltip never gets to appear)
   } else {
     editing = false;
     // Rebuilding #view innerHTML resets the scroll. On a same-view refresh (the
@@ -50,41 +73,105 @@ function render(){
     if (keepScroll) main.scrollTop = y;
   }
   activeView = view; activeSub = sub;
-  document.getElementById("model").textContent = `${D.provider} · ${D.model}`;
-  document.getElementById("n-gw").textContent = (D.chat_log||[]).length;
-  document.getElementById("n-loop").textContent = D.stats.turns;
+  document.getElementById("n-gw").textContent = (D.chat_log||[]).length || "";
+  document.getElementById("n-loop").textContent = D.stats.turns || "";
   document.getElementById("n-graph").textContent =
     (D.graph && (D.graph.stats.quick + D.graph.stats.full)) || "";
-  document.getElementById("n-mem").textContent = D.facts.length + D.episodes.length;
-  document.getElementById("n-tools").textContent = D.calendar.length + D.outbox.length;
+  document.getElementById("n-mem").textContent = (D.facts.length + D.episodes.length) || "";
+  document.getElementById("n-tools").textContent = (D.calendar.length + D.outbox.length) || "";
   document.getElementById("n-db").textContent = (D.db && D.db.all_tables.length) || "";
   document.getElementById("n-ops").textContent = D.stats.tool_errors || (D.eval_report ? "" : "!");
 }
 let lastFetch = Date.now();
 let lastCompareLoad = 0;   // throttle the Compare scoreboard self-heal to ~5s
+// Marks a request as a timer's poll, not a person doing something — the
+// hosted gateway (group E) reads this to decide whether a request counts as
+// activity, so a background tab can't hold a container awake forever.
+const BG = {"X-Waku-Background": "1"};
+// Set for the duration of a timer-driven refresh() (and reset in its
+// `finally`), so a fetch scheduled as a *side effect* of that refresh's
+// render() — e.g. loadAddModels's setTimeout in models.js — can tell it
+// wasn't a person opening a tab, without threading a parameter through
+// render()/VIEWS. Read it synchronously (or capture it into a local at
+// schedule time); it is only meaningful while that refresh's own synchronous
+// call chain is still running.
+let bgRefresh = false;
+// Defer a load out of a render and carry that render's provenance with it.
+// The capture has to happen HERE, synchronously, while the render that
+// scheduled it is still on the stack: by the time the timeout runs, refresh()
+// has hit its `finally` and bgRefresh is false again, so reading it inside
+// the callback would mark every timer-driven load as a person opening a tab.
+// Three views made this same capture by hand; one of them getting it wrong is
+// silent, so there is one copy of it.
+function deferBg(load){
+  const bg = bgRefresh;
+  setTimeout(() => load(bg), 0);
+}
+let paused = false, pausedMsg = "";   // set by a "paused" reply; see handleNotOk
 function tickLive(){
   if (!D) return;
+  if (paused){
+    // Keep showing the sentence a "paused" reply sent, not the live/updated
+    // line — this 1s tick has no fetch of its own, so it can't overwrite it.
+    document.getElementById("sub").innerHTML = `<span class="live paused">${esc(pausedMsg)}</span>`;
+    return;
+  }
   const ago = Math.round((Date.now()-lastFetch)/1000);
   document.getElementById("sub").innerHTML =
     `<span class="live"><span class="dot"></span>live</span> · updated ${ago}s ago · ${esc(D.home)}`;
 }
 let dockRestored = false;
-async function restoreDock(){
+async function restoreDock(background = false){
   // On page load the dock is empty even though the current thread has messages
   // — restore them so a refresh never looks like it lost the chat.
+  // `background` is threaded because refresh() below reaches this on the FIRST
+  // refresh of any kind, timer-driven included (a 5s poll that lands before
+  // the first one finished). Untagged, that request would read as a person
+  // opening the dock and hold a hosted container awake.
   dockRestored = true;
   const sid = D && D.current_session;
   if (!sid || CHAT.length) return;
-  await loadThreadInto(sid, {setSession: true});
+  await loadThreadInto(sid, {setSession: true, background});
 }
-async function refresh(){
+// A reply whose body is {"code": "paused", "error": "…"} — the hosted
+// container went idle and needs a real user action to wake it. Any other
+// non-2xx (a 401 from an expired session included) just keeps the last data:
+// it used to reassign D unconditionally, so one bad response blanked the
+// whole dashboard.
+async function handleNotOk(res){
+  let body = null;
+  try { body = await res.json(); } catch(e){ /* not JSON — nothing to read */ }
+  if (body && body.code === "paused"){
+    paused = true;
+    pausedMsg = body.error || "Paused. Send a message to wake it.";
+    stopTimers();
+  }
+  tickLive();
+}
+// The ONE place `paused` is cleared, so every route out of the paused state
+// is this one. Paused means FROZEN: both polls are stopped and the 1s tick
+// re-asserts the sentence, so Memory, Facts, Sessions, Stats, the model chip
+// and the harness animation all hold pre-pause data until something clears
+// it. Missing one route out is not a cosmetic bug — it shipped once as a
+// banner reading "Paused. Send a message to wake it." while the assistant
+// was visibly answering the message that was supposed to wake it.
+function resumeLive(){
+  if (!paused) return;
+  paused = false; pausedMsg = "";
+  startTimers();
+}
+async function refresh(background = false){
+  bgRefresh = background;
   try {
-    D = await (await fetch("/api/data")).json(); lastFetch = Date.now();
+    const res = await fetch("/api/data", background ? {headers: BG} : undefined);
+    if (!res.ok){ await handleNotOk(res); return; }
+    D = await res.json(); lastFetch = Date.now();
+    resumeLive();   // a real reply: whatever paused us is over
     render(); tickLive();
     syncModelChip();  // keep the dock's model pill in sync with the active brain
     applyTele();      // reflect the stats on/off choice (default on)
-    syncLiveView();   // live-update an opened conversation (e.g. new phone messages)
-    if (!dockRestored) restoreDock();
+    syncLiveView(background);   // live-update an opened conversation (e.g. new phone messages)
+    if (!dockRestored) restoreDock(background);
     // Self-heal the Compare scoreboard: it otherwise only loads on tab-open and
     // after a race, so a slow/interrupted race (or a server blip) can leave it
     // showing a partial set. Re-pull the server totals while viewing the tab —
@@ -93,9 +180,10 @@ async function refresh(){
     if (activeView === "compare" && !compareState.running && !editing
         && Date.now() - lastCompareLoad > 5000){
       lastCompareLoad = Date.now();
-      loadCompareHistory();
+      loadCompareHistory(background);
     }
   } catch(e){ /* server restarting — keep showing last data */ }
+  finally { bgRefresh = false; }
 }
 // --- resizable columns: drag the thin handle between nav|main and main|dock.
 // Width lives in a CSS var + localStorage, so it survives refreshes.
@@ -107,7 +195,8 @@ function wireResizer(id, cssVar, key, fromRight, min, max){
     document.body.classList.add("resizing");
     const move = ev => {
       let w = fromRight ? (window.innerWidth - ev.clientX) : ev.clientX;
-      w = Math.max(min, Math.min(max, w));
+      const hi = typeof max === "function" ? Math.max(min, max()) : max;
+      w = Math.max(min, Math.min(hi, w));
       document.documentElement.style.setProperty(cssVar, w + "px");
       localStorage.setItem(key, w);
     };
@@ -118,17 +207,29 @@ function wireResizer(id, cssVar, key, fromRight, min, max){
   };
 }
 function wireChrome(){
-  // restore saved widths
-  const nw = localStorage.getItem("navW"); if (nw) document.documentElement.style.setProperty("--nav-w", nw+"px");
+  // The dock keeps its drag handle. The rail collapses instead of resizing,
+  // and the collapse is not remembered: a rail that reopens closed hides the
+  // navigation from someone coming back (Memory's rule).
   const dw = localStorage.getItem("dockW"); if (dw) document.documentElement.style.setProperty("--dock-w", dw+"px");
-  wireResizer("nav-resizer", "--nav-w", "navW", false, 150, 380);
-  wireResizer("dock-resizer", "--dock-w", "dockW", true, 260, 680);
-  // hide / show the sidebar
-  const setNav = v => { document.body.classList.toggle("nav-hidden", v); localStorage.setItem("navHidden", v?"1":"0"); };
-  const nt = document.getElementById("nav-toggle"), nr = document.getElementById("nav-reopen");
-  if (nt) nt.onclick = () => setNav(true);
-  if (nr) nr.onclick = () => setNav(false);
-  setNav(localStorage.getItem("navHidden") === "1");
+  const rail = document.getElementById("nav"), btn = document.getElementById("nav-collapse");
+  // The handle stops where main would drop below --main-min: the same limit
+  // the dock's CSS clamp holds, so a drag can never squeeze or cover the page.
+  // A custom property reads back as its expression ("calc(480px + …)"), not
+  // as pixels, so resolve it the way the dock's CSS does: by laying it out.
+  const px = v => { const p = document.createElement("div");
+    p.style.cssText = `position:absolute;visibility:hidden;width:var(${v})`;
+    document.body.appendChild(p); const w = p.getBoundingClientRect().width; p.remove(); return w; };
+  const dockMax = () => Math.min(680, window.innerWidth - rail.getBoundingClientRect().width
+    - document.getElementById("dock-resizer").getBoundingClientRect().width - px("--main-min"));
+  wireResizer("dock-resizer", "--dock-w", "dockW", true, 260, dockMax);
+  if (btn) btn.onclick = () => {
+    const c = rail.classList.toggle("collapsed");
+    btn.setAttribute("aria-expanded", String(!c));
+    btn.setAttribute("aria-label", c ? "Expand the sidebar" : "Collapse the sidebar");
+    btn.innerHTML = c ? "&#8250;" : "&#8249;";
+    // collapsed, the letter alone is on screen, so the name goes in the tooltip
+    rail.querySelectorAll(":scope > a").forEach(a => { a.title = c ? a.getAttribute("aria-label") : ""; });
+  };
 }
 
 // --- voice on the dashboard: record in the browser, transcribe on the server
@@ -177,8 +278,11 @@ async function stopMic(){
   let r; try { r = await (await fetch("/api/voice", {method:"POST", body:wav})).json(); }
   catch(e){ r = {error:String(e)}; }
   input.placeholder = hold;
-  if (r.error){ input.value = ""; micHint("voice: " + r.error); return; }
-  if (r.text){ input.value = r.text; input.focus(); }
+  // Both branches set .value from code, and a textarea never resizes itself -
+  // without autogrow a dictated sentence lands in a one-row box, which is the
+  // sideways-scrolling bug all over again, reached through the mic.
+  if (r.error){ input.value = ""; autogrow(input); micHint("voice: " + r.error); return; }
+  if (r.text){ input.value = r.text; autogrow(input); input.focus(); }
 }
 
 // float32 chunks → 16-bit PCM mono WAV blob
@@ -196,8 +300,35 @@ function encodeWAV(chunks, rate){
 }
 function wireMic(){ const b = document.getElementById("mic"); if (b) b.onclick = toggleMic; }
 
+// --- the two timer-driven polls (5s data, 450ms live-harness animation) —
+// stopped while the tab is hidden so a background tab can't hold a hosted
+// container awake, and restarted when it's shown again. Named intervals
+// (not bare setInterval calls) so stopTimers() has something to clear.
+let refreshTimer = null, pollTimer = null;
+function startTimers(){
+  if (refreshTimer) return;   // idempotent — a rapid hide/show shouldn't double them
+  refreshTimer = setInterval(() => refresh(true), 5000);
+  pollTimer = setInterval(() => pollEvents(true), 450);
+}
+function stopTimers(){
+  clearInterval(refreshTimer); clearInterval(pollTimer);
+  refreshTimer = null; pollTimer = null;
+}
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden){ stopTimers(); }
+  // Showing a tab is not a user action that may wake a stopped container, so
+  // the refresh is timer-driven AND the timers stay stopped while we are
+  // paused — restarting them here would fire background polls at a container
+  // the pause deliberately stopped talking to. A 2xx from that one refresh
+  // resumes them through resumeLive(), which is the only way back.
+  else { if (!paused) startTimers(); refresh(true); }
+});
+
 window.addEventListener("hashchange", render);
 window.__hold = (v)=>{ animating = v; };   // test hook: freeze the diagram
+applyTheme(currentTheme());
+watchSlots();
 wireDock(); wireChrome(); wireMic();
-refresh(); setInterval(refresh, 5000); setInterval(tickLive, 1000);
-pollEvents(); setInterval(pollEvents, 450);   // live harness animation
+refresh(); pollEvents();   // initial load: a real user action, no header
+setInterval(tickLive, 1000);   // status text only, no fetch of its own
+startTimers();

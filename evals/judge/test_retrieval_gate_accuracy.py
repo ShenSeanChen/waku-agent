@@ -17,7 +17,7 @@ thoughtful observer would defend it. Covers the four cases from issue #77:
 The judge does NOT see the expected label — it independently evaluates whether
 the gate's decision was defensible given the message and what's in memory.
 This is a quality-scored eval (DeepEval GEval, 0–1 with threshold), not a 0/1
-assertion — the difference matters, see CLAUDE.md.
+assertion — the difference matters, see docs/context/conventions.md §4.
 
 Two things the issue asks for that a plain accuracy number cannot express:
 

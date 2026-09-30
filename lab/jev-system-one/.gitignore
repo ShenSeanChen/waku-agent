@@ -1,0 +1,4 @@
+# Cached raw answers from a run. Useful locally for re-scoring without paying
+# for the calls again; stale the moment a question changes, so not shipped.
+answers.json
+answers_llm.json

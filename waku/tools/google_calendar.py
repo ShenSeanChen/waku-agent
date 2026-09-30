@@ -48,9 +48,9 @@ _INSTALL_HINT = (
     "Google Calendar support is not installed — run: pip install -e '.[gcal]'"
 )
 _SETUP_HINT = (
-    "Google Calendar is not connected yet. Run `waku connect google` (or click "
-    "Connect in the dashboard's Connections tab) to sign in — it opens your "
-    "browser and takes about ten seconds."
+    "Google Calendar is not connected yet. Type `/connect google` in the "
+    "dashboard chat, or run `waku connect google` in a terminal — either opens "
+    "your browser to sign in."
 )
 
 

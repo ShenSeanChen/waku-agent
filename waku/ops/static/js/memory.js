@@ -8,7 +8,8 @@ function editFact(id){
   const cell = row.querySelector(".fc"); const cur = cell.textContent;
   cell.innerHTML = `<textarea class="editor" id="ef-${id}">${cur.replace(/</g,"&lt;")}</textarea>`;
   const act = row.lastElementChild;
-  act.innerHTML = `<a class="reveal" onclick="saveFact(${id})">save</a> · <a class="reveal" onclick="editing=false;refresh()">cancel</a>`;
+  act.innerHTML = uiButton("save", {level: "primary", size: "sm", onclick: `saveFact(${id})`})
+    + " " + uiButton("cancel", {level: "tertiary", size: "sm", onclick: "editing=false;refresh()"});
   document.getElementById("ef-"+id).focus();
 }
 async function saveFact(id){

@@ -1,0 +1,53 @@
+# ALLOWLIST. Exclude everything, then re-admit exactly the six entries the spec
+# names, plus the two license files pyproject.toml's license-files requires.
+#
+# This is an allowlist because a denylist loses. A denylist would have to name
+# .env -- and then .env.local, .env.production, the *.pem somebody drops in
+# while debugging TLS, the whole ~/.aws a contributor copies into the checkout.
+# An allowlist refuses all of them by default and refuses the next one too.
+#
+# BuildKit is required for this file to be read at all: the legacy builder
+# looks only for .dockerignore at the context root, and this repo has none. So
+# a legacy build would send the entire checkout -- .env included -- to the
+# daemon. hosted/image/build.sh sets DOCKER_BUILDKIT=1 rather than trusting
+# that the CLI still defaults to it.
+*
+.*
+
+!waku/
+!skills/
+!pyproject.toml
+!uv.lock
+!README.md
+!LICENSE
+!LICENSE-BRAND
+
+# Re-excluded INSIDE the admitted trees. Last match wins, so every line in
+# this block must stay BELOW the `!` admissions above; move one line up and it
+# is undone by the admission that follows it, silently.
+#
+# Build noise first. `**/.pytest_cache/` and `**/.ruff_cache/` used to be
+# named here and are gone: `**/.*` below covers both, and two rules for one
+# job is how a reader learns to believe the wrong one is load-bearing.
+**/__pycache__/
+**/*.pyc
+
+# Secrets. `**/.*` replaced a list of four named shapes -- `**/.env`,
+# `**/.env.*` and the two caches -- because that list was a denylist and a
+# review walked through it by planting `.netrc` and `.aws`. Refusing EVERY
+# dotfile inside an admitted tree is the strongest rule available here, and it
+# costs nothing: `git ls-files waku skills` lists no dotfile at all, and
+# `hosted/` has one, a .gitkeep that carries nothing.
+#
+# THIS IS NOT A CLOSED CLASS. A secret that is not dot-prefixed and does not
+# end .pem or .key -- credentials.json, id_rsa, server.p12 -- still rides in
+# with the tree that admits it, and always will: no pattern distinguishes a
+# secret from a config file by name, and there is no allowlist version of this
+# rule, because whole trees are what the lines above admit. Adding one more
+# extension every time somebody thinks of one is the game this project has now
+# lost five times. The limit is stated instead, and
+# evals/hosted_docker/test_image.py plants both classes and pins which get
+# through.
+**/.*
+**/*.pem
+**/*.key

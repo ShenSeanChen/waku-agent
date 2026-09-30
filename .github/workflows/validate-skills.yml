@@ -17,28 +17,38 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      # A lockfile refresh is 3,880 lines nobody reads, so it hides inside any
-      # PR it rides along with — and an unreviewed lockfile is how a dependency
-      # arrives that nobody chose. If the dependencies really changed,
-      # pyproject.toml says so; if they did not, the lock does not belong here.
-      # A deliberate refresh is welcome as its own PR, where it is the diff
-      # rather than the noise around it.
-      - name: uv.lock changes only alongside pyproject.toml
+      # A lockfile refresh is thousands of lines nobody reads, so it hides
+      # inside any PR it rides along with — and an unreviewed lockfile is how a
+      # dependency arrives that nobody chose. If the dependencies really
+      # changed, pyproject.toml says so; if they did not, the lock does not
+      # belong beside other work.
+      #
+      # A refresh on its own IS allowed, because that is the shape where the
+      # lock is the diff rather than the noise around it. This check used to
+      # refuse it — it demanded a pyproject.toml change even from a PR that
+      # touched nothing else, so the one shape the comment invited was the one
+      # shape it rejected. Hiding is what makes a lock change unreviewable, and
+      # a PR carrying only the lock hides nothing.
+      - name: uv.lock rides alone or alongside pyproject.toml
         if: github.event_name == 'pull_request'
         run: |
           base="origin/${{ github.base_ref }}"
           changed=$(git diff --name-only "$base"...HEAD)
-          if grep -qx 'uv.lock' <<<"$changed" && ! grep -qx 'pyproject.toml' <<<"$changed"; then
-            echo "::error::uv.lock changed but pyproject.toml did not."
+          others=$(grep -vx 'uv.lock' <<<"$changed" | grep -c . || true)
+          if grep -qx 'uv.lock' <<<"$changed" \
+             && ! grep -qx 'pyproject.toml' <<<"$changed" \
+             && [ "$others" -gt 0 ]; then
+            echo "::error::uv.lock changed beside $others other file(s), but pyproject.toml did not."
             echo "If you did not mean to change dependencies:  git checkout $base -- uv.lock"
-            echo "If you did, say so in pyproject.toml. A deliberate lock refresh is welcome as its own PR."
+            echo "If you did, say so in pyproject.toml."
+            echo "If this is a deliberate refresh, send it as a PR that changes only uv.lock."
             exit 1
           fi
 
       - name: Install
-        run: pip install -e '.[dev]'
+        run: pip install -e '.[dev,hosted]'
       - name: Lint (ruff)
-        run: python -m ruff check waku evals scripts
+        run: python -m ruff check waku evals scripts hosted
       - name: Validate skills (community PRs land here)
         run: python scripts/validate_skills.py
       # .env.example's Connections block is GENERATED from waku/integrations.py.

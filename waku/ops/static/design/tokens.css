@@ -1,0 +1,555 @@
+/* ─────────────────────────────────────────────────────────────────────────────
+   THE TOKEN LAYER — the one file in the repo allowed to hold a raw value.
+
+   It is read by TWO documents, and that is the whole reason it is a file of
+   its own rather than the top of app/globals.css:
+
+     the product      app/globals.css imports it, and `@theme inline` there
+                      turns these into Tailwind utilities that resolve the
+                      variable at USE time — so one [data-theme] flip restyles
+                      every surface without regenerating a class.
+     the landing page public/waku/*.html link it directly. The landing page is
+                      a prebuilt static bundle framed in an iframe, and an
+                      iframe is its own document: custom properties do not
+                      cross that boundary. It has to load this file itself.
+
+   Before this split the landing page carried its own copy of the palette, and
+   the two agreed — because the palette was MEASURED off the landing page in
+   the first place. They agreed right up until the contrast floor moved
+   --text-muted and --text-faint on 2026-08-25 and only one side followed.
+   Two copies that agree are indistinguishable from one source, until someone
+   edits either.
+
+   `npm run check-shared-tokens` refuses a re-declaration of any name here
+   inside public/waku/sheet.css. That is the fence which keeps the copy from
+   coming back.
+   ───────────────────────────────────────────────────────────────────────────── */
+
+:root,
+[data-theme="light"] {
+  /* ── colour · light ────────────────────────────────────────────────────────
+     Warm bone paper and a warm near-black. Two values are picked; the seven
+     greys between them are DERIVED, at the landing page's own percentages, so
+     moving --surface-bg or --text-ink moves the whole ramp with them.
+     Hand-picking a grey is what would break that.
+
+     They are RESTATED in every theme block, not inherited into it, and that
+     is not repetition to tidy away. A var() inside a custom property is
+     substituted where the property is DECLARED, and the result inherits as a
+     flat colour — so a --surface-raised declared once here computes against
+     this block's ink and ground and then keeps that value inside a dark
+     panel, whatever that panel redefines. The symptom was a selected tab
+     painting dark chrome on the bone ground; the cause was one declaration
+     doing duty for two palettes. Change a percentage in one block and change
+     it in all three.
+
+     [data-theme] is matched on ANY element, not only :root. Custom properties
+     inherit, so a panel carrying the stamp re-roots the palette for its own
+     subtree — which is what lets /visual-design show both grounds on one page instead
+     of asking the reviewer to remember the other one.
+     ──────────────────────────────────────────────────────────────────────── */
+  --surface-bg: #E1E1D9;
+  --text-ink: #161614;
+
+  --surface-paper: color-mix(in srgb, var(--text-ink) 4%, var(--surface-bg));
+  --surface-raised: color-mix(in srgb, var(--text-ink) 8%, var(--surface-bg));
+  /* A pressed control's ground. It gets its own name rather than reusing
+     --surface-raised, which means elevated: a control that reads as raised
+     while it is being pressed is the wrong word in the one place someone
+     will go looking. Deeper than raised, because with no shadow in this
+     system a control cannot go down — only get heavier. */
+  --surface-sunk: color-mix(in srgb, var(--text-ink) 12%, var(--surface-bg));
+  --rule: color-mix(in srgb, var(--text-ink) 19%, transparent);
+  --rule-hard: color-mix(in srgb, var(--text-ink) 42%, transparent);
+
+  /* ── the two text greys, and the floor that set them ─────────────────────
+     These were 54% and 36% until 2026-08-25, and neither could be read. Not a
+     preference — --text-muted carries real paragraphs and measured 3.62:1 on
+     bone, under AA's 4.5 for body text, and --text-faint carries nineteen
+     12px labels at 2.21:1. Twelve-pixel mono is text and is NOT large text:
+     large starts at 24px, and the largest thing wearing --text-faint is 12.
+
+     The floor each derived value answers to is its JOB, not one number:
+
+       text a person reads       4.5:1   AA
+       the edge of a control     3:1     WCAG 1.4.11, at every level
+       a surface, a divider      none    it carries no information
+
+     AAA was asked for and was measured before it was written. At 7:1 muted
+     needs 76% of ink and faint needs the same 76% — they become one colour,
+     and the three steps of text this palette is built on become two. The
+     semantics darken into each other on bone as well, which spends the one
+     thing having three of them is for.
+
+     So the floor is AA and --text-muted lands at 8.56:1 rather than merely
+     clearing it: AAA where AAA is read, and not where the cost is a
+     hierarchy. --text-faint clears AA at 4.59, which is the bar its actual
+     size asks for. */
+  --text-muted: color-mix(in srgb, var(--text-ink) 82%, var(--surface-bg));
+  --text-faint: color-mix(in srgb, var(--text-ink) 62%, var(--surface-bg));
+
+  /* Accent — two tokens, not one value with derived shades. The amber is a
+     surface you put ink on; as a foreground on bone it measures 1.56:1 and
+     cannot carry a link, a label or a focus ring. --accent-fg is the value
+     [data-accent="deep"] already held in the landing page's own stylesheet. */
+  --accent: #E1AE05;      /* fill, focus border               */
+  --accent-fg: #735903;   /* accent as text — 5.06:1 on bone  */
+
+  /* Theme-INVARIANT: the amber surface is the same in both palettes, so what
+     sits on it must be too. #161614 on #E1AE05 is 8.85:1 in either mode.
+
+     The two darker steps are for a filled control's hover and pressed states,
+     8 % and 14 % down, per playbook §5. They are invariant for the same
+     reason the fill is: ink stays on top of all three, and the worst of them
+     still measures 6.58:1. A dark palette would normally lighten rather than
+     darken here — it does not need to, because nothing reads these against
+     the ground; the label reads against them. */
+  /* ── the chart palette ─────────────────────────────────────────────────────
+     Decided 2026-08-26. One hue, five weights: the accent mixed into the
+     ground at 100 / 78 / 58 / 40 / 24 %.
+
+     A chart with five picked colours needs five colours that all mean
+     something, all clear each other, and all still work beside the accent.
+     Nobody was going to keep that true — the first extra series would have got
+     whatever looked free. One ramp has an order built into it, so a reader
+     sees which slice is bigger without checking the key, and adding a sixth
+     series is visibly wrong instead of quietly ugly.
+
+     Derived, not listed, and NOT restated in the dark block: color-mix reads
+     --accent and --surface-bg where the variable is USED, so the same five
+     names come out amber-on-bone in light and amber-on-charcoal in dark. That
+     is the whole point of the ramp being a mix.
+
+     MEASURED, and the number matters: on bone the five weights run 1.56 · 1.43
+     · 1.31 · 1.20 · 1.12 against the ground, and neighbours differ by 1.09.
+     On charcoal they run 7.96 · 5.39 · 3.57 · 2.40 · 1.64, neighbours 1.5.
+
+     So the light ramp is nowhere near 3:1 — not chart-5, not chart-1 either,
+     and no ramp of one hue could be. Five steps that each clear 3:1 from the
+     ground AND from each other need about seven stops of range; one hue on a
+     pale ground has two. This was a choice between a ramp that orders and a
+     palette of five picked colours that identify, and the ramp won for the
+     reasons above.
+
+     Which fixes what a chart is allowed to be here: the ramp ORDERS, it does
+     not IDENTIFY. Filled areas a reader compares by size, every series
+     labelled in place, the value printed beside it. Never a legend the eye has
+     to carry back to the chart, never a line or a dot told apart by colour
+     alone, never colour as the only carrier of meaning. Same rule as §18's six
+     statuses in two colours, and the same reason: colour ranks, words name.
+
+     A chart that genuinely needs five things identified is a chart that needs
+     five labels, not a sixth token. */
+  --chart-1: var(--accent);
+  --chart-2: color-mix(in srgb, var(--accent) 78%, var(--surface-bg));
+  --chart-3: color-mix(in srgb, var(--accent) 58%, var(--surface-bg));
+  --chart-4: color-mix(in srgb, var(--accent) 40%, var(--surface-bg));
+  --chart-5: color-mix(in srgb, var(--accent) 24%, var(--surface-bg));
+
+  --accent-ink: #161614;
+  --accent-hover: #CFA005;    /* ink on it — 7.49:1 */
+  --accent-active: #C19604;   /* ink on it — 6.58:1 */
+
+  /* Semantic. No single value clears AA on both grounds, so each is a pair.
+
+     warn was absent until 2026-08-24 — the objection was that a second yellow
+     beside an amber accent makes the accent mean nothing, and it was right
+     about yellow. What settled it on /visual-design was that the screen needing
+     one had arrived: "this memory is read by three people, changing its scope
+     changes what they see" is neither done nor failed, and collapsing it into
+     bad tells someone their own action broke.
+
+     So it is not a second yellow. It is an ORANGE, hue 32 against the accent's
+     45, picked to sit as far from the accent as it can while still reading as
+     a warning — measured 14.8 ΔE from --accent-fg on bone and 25.5 from the
+     accent on dark, against a just-noticeable difference of about 2.3. The
+     first proposal for this was #B0741A, which measured 2.98:1 on bone and
+     would have shipped a warning nobody with low vision could read; it failed
+     even the large-text bar. What is here clears AA for BODY text on both
+     grounds, which --ok itself does not. */
+  --ok: #2B7754;   /* 4.13:1 on bone */
+  --warn: #8C5617; /* 4.62:1 on bone */
+  --bad: #AA2E11;  /* 5.14:1 on bone */
+
+  /* ── type ──────────────────────────────────────────────────────────────────
+     Faces arrive as next/font variables from app/layout.tsx — never a <link>.
+     The fallbacks are for a failed fetch, not a slow one.
+
+     Named --face-* rather than --font-*, deliberately: `@theme inline` emits a
+     --font-sans of its own onto :root, so a token sharing that name would be
+     declaring --font-sans: var(--font-sans). Today the cascade order happens to
+     save it; the day Tailwind emits in a different order it becomes a cycle and
+     every face silently falls back to Helvetica. Different names, no ordering
+     to get lucky about.
+     ──────────────────────────────────────────────────────────────────────── */
+  --face-sans: var(--font-instrument-sans), "Helvetica Neue", Arial, sans-serif;
+  --face-mono: var(--font-jetbrains-mono), ui-monospace, SFMono-Regular, Menlo, monospace;
+  --face-display: var(--font-playfair-sc), "Iowan Old Style", "Hoefler Text", Georgia, serif;
+
+  /* The one tracking value the system has, and the landing page's signature
+     before it was anyone's: uppercase mono micro-labels at .16em. It is here
+     rather than in globals.css's @theme because BOTH documents set labels
+     from it, and a static page cannot link an @theme block. The product
+     reads it as tracking-[var(--tracking-label)], which needs no registration.
+
+     Display type is not covered by it. A 132px serif headline is tightened,
+     not tracked out, and those negative values belong to the face at that
+     size rather than to a rule anyone would reuse. */
+  --tracking-label: 0.16em;
+
+  /* The type scale, the line-heights and the one letter-spacing moved out of
+     this block on 2026-08-26 — see the plain @theme below. They have to be
+     declared where Tailwind can see them, or clearing its default namespaces
+     takes text-sm and leading-snug away with them. */
+
+  /* ── line and ring ─────────────────────────────────────────────────────────
+     With no shadow in the system, a hairline is how everything is separated —
+     which makes its width a decision rather than a default. One value, so a
+     card, a table row, a dialog edge and an input all draw the same line.
+
+     The focus ring's width and offset sit here for the same reason: they were
+     settled on /visual-design, they apply to every control, and a primitive that
+     wrote its own would be deciding accessibility locally.
+     ──────────────────────────────────────────────────────────────────────── */
+  --rule-width: 1px;
+  --focus-ring-width: 2px;
+  --focus-ring-offset: 2px;
+
+  /* ── radius ────────────────────────────────────────────────────────────────
+     2px. The measurement said 0 — border-radius does not appear once in the
+     landing page's 1,124 lines, and its own comment says why: "the only round
+     thing on the page is still nothing." The design owner reviewed 0 against
+     2, 6 and 12 on /visual-design and took 2, which is the decision that counts: a
+     marketing page and a settings form are not asked to do the same job, and
+     2px is what softens a field or a dialog edge without reading as round.
+
+     Every shadcn radius step derives from this, so the whole set moves
+     together. This is the one value that would have cost sixteen restyles if
+     it had been settled after T3 instead of before it.
+     ──────────────────────────────────────────────────────────────────────── */
+  --radius: 2px;
+
+  /* Two shapes are exempt, and the exemption is a token so that nobody
+     "fixes" them later and nobody writes a raw length to get around it.
+
+     A radio is a circle and a switch is a pill because those shapes CARRY
+     the meaning: round means one choice out of several, square means many
+     independent ones, and a pill reads as a physical thing that slides.
+     Rounding them to 2px would make a radio and a checkbox the same object
+     and cost the user the only cue that says which rules apply. The radius
+     row governs rectangles; these are not rectangles.
+
+     Named --shape-* rather than --radius-*, for the reason the faces are
+     named --face-*: `@theme inline` emits a token of its own under each
+     theme key it declares, so a raw token sharing the name would resolve to
+     itself. */
+  --shape-circle: 50%;     /* radio, avatar */
+  --shape-pill: 999px;     /* switch track and knob */
+
+  /* A chip is the third exemption, added 2026-08-27 at the design owner's
+     call. At 2px a 20px-tall chip reads as a right-angled box — the radius
+     row's own reasoning ("softens an edge without reading as round") is about
+     a field or a dialog, and a chip is neither: it is a value lifted out of a
+     sentence and made pick-up-able, and round ends are what say so.
+
+     Same number as the pill and a separate token on purpose. The pill's
+     comment says it "reads as a physical thing that slides", which is true of
+     a switch and not of a chip. One reason per token, so changing either does
+     not silently change the other.
+
+     To take chips back to a softened rectangle, this is the one line: 6px. */
+  --shape-chip: 999px;     /* badge, in every variant */
+
+  /* ── spacing ───────────────────────────────────────────────────────────────
+     Comfortable: a 4px base unit. ONE base — read the next paragraph before
+     touching anything here.
+
+     --spacing is Tailwind's own base. Every numeric spacing utility it builds
+     is calc(var(--spacing) * N): p-2, gap-4, size-6, h-10. Setting it here is
+     what makes those utilities part of this token layer instead of a second
+     one running beside it.
+
+     They WERE a second one, until 2026-08-24. --space-1…8 were written out by
+     hand as 4px…32px, Tailwind's default --spacing is .25rem, and at a default
+     root font size both painted the same numbers. So the two scales agreed
+     perfectly and were indistinguishable — while "change one token and every
+     surface follows", which AGENTS.md states as the point of the whole
+     layering, was false for all 82 spacing values inside components/ui/.
+
+     It surfaced sideways: /visual-design §16 asked what the table's density
+     should be and the answer was that nobody had ever decided. px-2 came from
+     shadcn, and the layering lint had only ever been taught to look for a raw
+     px length. The lint was working. It was guarding the other scale.
+
+     Now there is one number. --space-N derives from it, Tailwind derives from
+     it, and npm run visual-design-coverage refuses a --space-* written as a
+     literal — because two scales that agree are indistinguishable from one
+     scale right up until someone changes either.
+     ──────────────────────────────────────────────────────────────────────── */
+  --spacing: 4px;
+  /* ── which step means what ─────────────────────────────────────────────
+     Named 2026-08-26. Eight steps existed, all eight were in use, and nothing
+     said which one went with which relationship — so `space-3` or `space-4`
+     was picked by feel every time, and two screens built a week apart used
+     different gaps for the same thing with neither being wrong.
+
+     Five relationships, five steps. The other three were migrated to their
+     nearest named neighbour the same day — 86 places — because a rule with
+     eighty-six exceptions on the day it is written is not a rule. That is what
+     happened to line length before §20, and it is why the lint below exists.
+
+       tight    2   inside one thing: an icon and its label, a value and its unit
+       inside   3   parts of one block: a label above the thing it names
+       between  4   two blocks that belong together: two fields, two rows
+       group    6   two groups on one screen
+       section  8   two sections, and a screen's own outer padding
+
+     1, 5 and 7 are not merely unnamed, they are DELETED. A retired step left
+     declared is a step someone reaches for, and check-tokens-wired caught them
+     the moment nothing read them any more — which is exactly what it is for.
+
+     There are no --gap-* aliases: a second name for `--space-4` would be a
+     second thing to keep in sync, and this table is the naming. */
+  --space-2: calc(var(--spacing) * 2);
+  --space-3: calc(var(--spacing) * 3);
+  --space-4: calc(var(--spacing) * 4);
+  --space-6: calc(var(--spacing) * 6);
+  --space-8: calc(var(--spacing) * 8);
+
+  /* ── the stack ─────────────────────────────────────────────────────────
+     Decided 2026-08-25, §33. Before it, dialog, dropdown, select and tooltip
+     were ALL z-50: four overlays with no order between them, so a tooltip
+     inside a dialog was resolved by React's render order rather than by
+     anyone. It had not bitten only because no screen nested two.
+
+     One step per layer, in the order they sit. The scrim is under the dialog
+     it belongs to. A tooltip is above everything because it is the one thing
+     that can be summoned from inside any of the others. */
+  /* Inside one component's own stacking context — a select's scroll arrow over
+     its list, an avatar's badge over its image. It does not compete with the
+     rungs below it, and it is named so the next one does not pick a number. */
+  --z-inside: 10;
+
+  --z-header: 10;
+  --z-scrim: 30;
+  --z-dialog: 40;
+  --z-menu: 50;
+  --z-toast: 60;
+  --z-tooltip: 70;
+
+  /* ── the scrim ─────────────────────────────────────────────────────────
+     Decided 2026-08-25, §34, option C — a value per ground, and the blur
+     stays because it was chosen rather than inherited.
+
+     It was `bg-black/10`, the last literal colour in the product, and the same
+     10% on both grounds. Measured: 1.25:1 on bone and 1.03:1 on #202020,
+     which is nothing. The blur was doing all the work on the dark ground, in
+     a system that says nothing casts a shadow.
+
+     Black cannot make a scrim on a dark ground at any strength — 60% still
+     only reaches 1.19:1 — so the dark half is stronger than the light one and
+     still leans on the dialog being --surface-paper with a rule around it,
+     which is lighter than the page and already separates. The number is
+     picked per ground for that reason, not to match. */
+  --scrim: rgb(0 0 0 / 0.40);
+  --scrim-blur: 3px;
+
+  /* ── disabled ──────────────────────────────────────────────────────────
+     Decided 2026-08-25, §32, option B: colour, not opacity.
+
+     Twelve places used opacity-50 and one used 45. Opacity fades the border,
+     the label and the background together, so a disabled field's edge fell to
+     about 1.5:1 — under the 3:1 that same edge had just been raised to clear.
+     Naming the colours instead puts every part of a disabled control on a
+     value the contrast floor already knows about, and a disabled control
+     still reads as a control. */
+  --disabled-fg: var(--text-faint);
+  --disabled-edge: var(--rule);
+
+  /* ── icons ─────────────────────────────────────────────────────────────
+     Settled 2026-08-24 on /visual-design §25–26.
+
+     The stroke was never set. Every icon in the product was drawn at lucide's
+     default of 2 while --rule-width is 1 and this system says it has one value
+     for every border — so an icon sat at twice the weight of every line around
+     it, and nobody chose that. 1 was drawn beside it and is too light at the
+     size these are actually used; 1.5 was taken.
+
+     That is the third library default that turned out to be an undecided
+     design value, after the table's px-2 and the nav item's border-l-2. The
+     pattern is worth naming: a lint that looks for raw values cannot see a
+     number that arrived inside a package.
+
+     The size derives from the spacing base like everything else, so 16px is
+     four steps and not a fourth scale. */
+  --icon-size: calc(var(--spacing) * 4);
+  --icon-stroke: 1.5;
+
+  /* ── measure and page width ────────────────────────────────────────────
+     How wide a line of text is allowed to get, and how wide a column of
+     content is. Decided on /visual-design §20–22, 2026-08-24, by putting a
+     real memory at four widths side by side and reading them.
+
+     Before that there were five line widths in the product and none had been
+     chosen: 40, 46, 48, 58 and 62. Two of them, 46 and 48, were the same kind
+     of text — which is what having no rule looks like from the outside.
+
+     --measure-narrow is a separate number rather than a smaller multiple of
+     the same one. Centred text needs a shorter line than left-aligned text,
+     because every line starts in a different place and the eye has to find
+     the start again on each return.
+
+     ch is the advance width of "0" in the current face, so 58ch is not 58
+     characters. The px beside each is what the browser actually painted at
+     the body size, measured on the page rather than worked out here. */
+  --measure: 58ch;         /* body, left-aligned — 579px */
+  --measure-narrow: 40ch;  /* centred, or a short aside — 400px */
+
+  /* One reading column. The memory list is a table and takes the full width
+     on purpose; this is for content read one item at a time. */
+  --page: 880px;
+
+  /* A dialog you WORK in, as opposed to one you answer. Two numbers rather
+     than a width and a ratio: the height is the point. An editor whose box
+     grows with what you type moves the Save button while you are typing, and
+     the panel beside the field changes length every keystroke. Fixed, the
+     dialog is a room rather than a bubble.
+
+     1024 x 640 is 16:10. It is wider than --page because two columns are
+     inside it, and the reading measure applies to each column, not to the
+     box around them. */
+  --dialog-wide: 1024px;
+  --dialog-wide-height: 640px;
+
+  /* DEPARTURE 1 — control padding does not sit on the 4px grid.
+     Primitives read these rather than writing px of their own, which is why
+     values off the grid are allowed to live here and nowhere else.
+
+     14/26 until 2026-08-27, measured off the landing page. The design owner
+     read four options side by side on /visual-design's terms — 14/26, 12/24
+     (--space-3 / --space-6, the only one on the grid), 10/20 and 12/20 — and
+     took 10/20. The grid was available and was not chosen: at 12/24 a row of
+     two buttons still read as the loudest thing on a detail header whose
+     subject is a paragraph, and this product's screens carry several controls
+     at once rather than one call to action.
+
+     10/20 is the floor, not a step on the way to less. `size="sm"` is 8/16;
+     any tighter and the two sizes collapse into one and the scale loses a
+     rung. */
+  --control-pad-y: 10px;
+  --control-pad-x: 20px;
+  --field-pad-x: 16px;
+  --control-gap: 10px;
+
+  /* ── shadow ────────────────────────────────────────────────────────────────
+     None. box-shadow does not appear once either. Separation is done with
+     rules: a card gets a border, a dialog gets a scrim. These exist as tokens
+     so a primitive that ships with elevation has somewhere to point.
+     ──────────────────────────────────────────────────────────────────────── */
+  --shadow-sm: none;
+  --shadow-md: none;
+  --shadow-lg: none;
+
+  /* ── motion ────────────────────────────────────────────────────────────────
+     Tone is minimal, and the landing page has exactly one duration and one
+     curve for everything that moves. Motion is not a system here; it is a
+     single value, and it stays one until something needs otherwise.
+     ──────────────────────────────────────────────────────────────────────── */
+  --motion-fast: 0.18s;
+  --motion-ease: ease;
+
+  /* ── color-scheme, and why it is not "light dark" ──────────────────────
+     This said `light dark` until 2026-08-24, which means "I support both,
+     browser, you pick" — and the browser picks from the OS, not from
+     data-theme. So anything the browser draws itself rather than reading from
+     this file followed the operating system while the page followed the
+     theme, and the two disagreed exactly half the time.
+
+     The scrollbar was where it showed. A person on a light OS looking at the
+     dark theme got a light scrollbar on a dark page, and the reverse on the
+     other side. Reported as "the scrollbar colours are the wrong way round",
+     which is precisely what it was.
+
+     It governs more than the scrollbar: native form controls, the canvas the
+     browser paints behind the page, the autofill wash on an input, and the
+     default caret. All of them were following the OS.
+
+     One value per theme, restated in all three blocks like every other
+     decision here. */
+  color-scheme: light;
+
+  /* The scrollbar thumb. Settled 2026-08-24 on /visual-design §04c, at 25%.
+
+     It was --rule-hard, the 42% every hairline uses, and it was reported as
+     "the colours are the wrong way round". Two things were wrong and only one
+     of them was the colour.
+
+     The real one was color-scheme — see the note above. Until that followed
+     data-theme, the browser drew the scrollbar in the OS's scheme while the
+     page drew itself in the theme's, so half of all readers saw a light
+     scrollbar on the dark ground or the reverse. Literally swapping the two
+     values was measured before it was written: 1.08:1 and 1.05:1, a scrollbar
+     nobody can see, which is the defect §24 had just been decided to remove.
+
+     What was left after that fix is weight, not colour. A dark mark on bone
+     reads heavier than a light mark on #202020 at the same measured contrast,
+     so 42% looked correct on one ground and wrong on the other. Three weights
+     were drawn as real scrollbars and 25% was taken for both.
+
+     It is its own token rather than --rule-hard because the two are now free
+     to move apart: a hairline separates, a scrollbar hints. */
+  --scrollbar-thumb: color-mix(in srgb, var(--text-ink) 25%, transparent);
+}
+
+
+/* ── colour · dark ───────────────────────────────────────────────────────────
+   Decided at the same time as light, so no row is carrying a dark half that is
+   still outstanding. Only the picked values are restated — the six derived
+   greys recompute from these on their own, which is the whole reason they are
+   derived rather than listed.
+
+   The accent needs no split here: #E1AE05 on #202020 is 7.96:1, so one value
+   carries both fill and text.
+   ──────────────────────────────────────────────────────────────────────────── */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --scrollbar-thumb: color-mix(in srgb, var(--text-ink) 25%, transparent);
+    --scrim: rgb(0 0 0 / 0.55);
+    --surface-bg: #202020;
+    --text-ink: #C9CDD1;
+    --accent-fg: #E1AE05;
+    --ok: #4FBF8B;   /* 7.11:1 on #202020 */
+    --warn: #E78B23; /* 6.30:1 on #202020 */
+    --bad: #EC6242;  /* 4.96:1 on #202020 */
+
+    /* Restated, not inherited. See the note above the light block. */
+    --surface-paper: color-mix(in srgb, var(--text-ink) 4%, var(--surface-bg));
+    --surface-raised: color-mix(in srgb, var(--text-ink) 8%, var(--surface-bg));
+    --surface-sunk: color-mix(in srgb, var(--text-ink) 12%, var(--surface-bg));
+    --rule: color-mix(in srgb, var(--text-ink) 19%, transparent);
+    --rule-hard: color-mix(in srgb, var(--text-ink) 42%, transparent);
+    --text-muted: color-mix(in srgb, var(--text-ink) 82%, var(--surface-bg));
+    --text-faint: color-mix(in srgb, var(--text-ink) 62%, var(--surface-bg));
+  }
+}
+[data-theme="dark"] {
+  color-scheme: dark;
+  --scrollbar-thumb: color-mix(in srgb, var(--text-ink) 25%, transparent);
+  --scrim: rgb(0 0 0 / 0.55);
+  --surface-bg: #202020;
+  --text-ink: #C9CDD1;
+  --accent-fg: #E1AE05;
+  --ok: #4FBF8B;
+  --warn: #E78B23;
+  --bad: #EC6242;
+
+  /* Restated, not inherited. See the note above the light block. */
+  --surface-paper: color-mix(in srgb, var(--text-ink) 4%, var(--surface-bg));
+  --surface-raised: color-mix(in srgb, var(--text-ink) 8%, var(--surface-bg));
+  --surface-sunk: color-mix(in srgb, var(--text-ink) 12%, var(--surface-bg));
+  --rule: color-mix(in srgb, var(--text-ink) 19%, transparent);
+  --rule-hard: color-mix(in srgb, var(--text-ink) 42%, transparent);
+  --text-muted: color-mix(in srgb, var(--text-ink) 82%, var(--surface-bg));
+  --text-faint: color-mix(in srgb, var(--text-ink) 62%, var(--surface-bg));
+}

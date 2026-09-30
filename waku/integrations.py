@@ -267,18 +267,33 @@ def _integration_from_provider(name: str, provider: Provider) -> Integration:
                             default=provider.base_url or "",
                             options=tuple(endpoint.base_url for endpoint in provider.endpoints),
                             option_labels=tuple(endpoint.label for endpoint in provider.endpoints)),)
-    return Integration(name, "AI Providers", name.replace("_", " ").title(),
-                       f"Uses {name.replace('_', ' ').title()} models.",
+    # label_text() falls back to the title-cased row name, so this changes
+    # nothing for a row that never sets `label` -- only waku-platform does.
+    label = provider.label_text(name)
+    return Integration(name, "AI Providers", label,
+                       f"Uses {label} models.",
                        fields, None, None, "",
                        ReloadMode.AGENT, lambda env, key=provider.key_env: bool(env.get(key)), _provider_probe)
 
 
 def provider_integrations() -> tuple[Integration, ...]:
-    return tuple(_integration_from_provider(name, provider) for name, provider in PROVIDERS.items())
+    # A hidden_unless_env row (the hosted free tier) must appear in no local
+    # page or list — see Provider.is_visible().
+    return tuple(_integration_from_provider(name, provider) for name, provider in PROVIDERS.items()
+                 if provider.is_visible())
 
 
 def registry() -> tuple[Integration, ...]:
     return provider_integrations() + INTEGRATIONS
+
+
+def _env_example_provider_integrations() -> tuple[Integration, ...]:
+    """Like provider_integrations(), but for the file that gets committed:
+    .env.example must read the same on every machine, so a hidden_unless_env
+    row is skipped unconditionally — even on a host where it happens to be
+    visible right now (a tenant container generating its own copy)."""
+    return tuple(_integration_from_provider(name, provider) for name, provider in PROVIDERS.items()
+                 if not provider.hidden_unless_env)
 
 
 # T2 implementation: the cache path mirrors waku.ops.catalog's .waku storage.
@@ -424,7 +439,7 @@ def render_env_example_block() -> str:
         "WAKU_PROVIDER=anthropic",
     ]
     group = ""
-    for integration in registry():
+    for integration in _env_example_provider_integrations() + INTEGRATIONS:
         if integration.group != group:
             group = integration.group
             lines.extend(("", f"# ── {group} ──"))
@@ -463,6 +478,14 @@ def cli_main() -> int:
         console.print(f"  {view.name:<20} {label}{' · ' + detail if detail else ''}{checked}")
         if status.state is IntegrationState.ERROR and any(field.configured for field in view.fields):
             failed = True
+
+    # Waku Memory is not an .env field like the rows above: it is a server in
+    # mcp.json with a sign-in token beside it, so its line comes from there.
+    from waku.config import load_settings
+    from waku.tools.waku_memory import status as waku_memory_status
+
+    console.print("\n[bold]Shared memory[/bold]")
+    console.print(f"  {'Waku Memory':<20} {waku_memory_status(load_settings().home)}", markup=False)
     return int(failed)
 
 
@@ -724,6 +747,38 @@ def test_integration(key: str) -> IntegrationView:
     return view
 
 
+def _provider_can_serve(name: str) -> bool:
+    """Whether `name` could answer a turn right now: it exists, and it has a
+    key. `bool(env.get(key_env))` is the same test the Models grid colours a
+    card with, so the two cannot disagree about what "configured" means."""
+    selected = PROVIDERS.get(name)
+    if selected is None:
+        # Names a provider this build does not have. A stored setting outlives
+        # the code that gave it meaning: a row removed from a release leaves
+        # every user who had selected it pointing at nothing.
+        return False
+    return bool(os.environ.get(selected.key_env, ""))
+
+
+def _adoptable(selected: Provider, key: str | None) -> bool:
+    """True when saving `selected` should also make it current.
+
+    IT TAKES A KEY IN THIS CALL, not merely a key on file. The rule is "the
+    first key you enter becomes your provider", and an adoption that fired on
+    any save of an already-keyed provider is a wider rule than that sentence:
+    test_saving_noncurrent_provider_does_not_activate_or_rebuild edits a base
+    URL on a provider that happens to hold a key, while the current provider
+    holds none, and that must stay a base-URL edit rather than a switch. The
+    person is editing settings, not choosing a provider.
+
+    Somebody already stranded on an unusable provider, who is not entering a
+    key, is recovered by the dashboard's first-run gate instead
+    (waku/ops/static/js/setup.js, needsSetup), which can ask rather than guess.
+    """
+    return bool(key) and not _provider_can_serve(
+        os.environ.get("WAKU_PROVIDER", ""))
+
+
 def apply_provider(provider: str, *, key: str | None = None, model: str | None = None,
                    small_model: str | None = None, base_url: str | None = None,
                    custom_key: str | None = None, force: bool = False,
@@ -735,6 +790,28 @@ def apply_provider(provider: str, *, key: str | None = None, model: str | None =
 
     previous = os.environ.get("WAKU_PROVIDER", "")
     selected = PROVIDERS[provider]
+    # THE FIRST WORKING KEY BECOMES THE CURRENT PROVIDER, whatever the caller
+    # asked for.
+    #
+    # The Models modal's save button sends activate=False on purpose: once you
+    # have a provider that works, adding a second one should not silently move
+    # your turns onto it. But that default is wrong in the one case where the
+    # user has nothing -- they paste their first key, the save does not
+    # activate, WAKU_PROVIDER still names whatever it named before, and the
+    # next message fails with no visible reason.
+    #
+    # It is not hypothetical. On 2026-09-28 a hosted tenant's WAKU_PROVIDER
+    # said `waku-platform` -- the free tier, whose row had just been removed
+    # from the build -- so the setting named a provider that no longer
+    # existed. They pasted a valid Anthropic key, the dashboard showed it
+    # configured, and every turn went nowhere, quietly.
+    #
+    # So: adopt when the CURRENT provider cannot serve a turn and the one
+    # being saved can. Both halves matter. Without the first, adding a second
+    # provider hijacks a working setup; without the second, a save that
+    # carries no key moves the user from one dead provider to another.
+    if not activate and _adoptable(selected, key):
+        activate = True
     switching = activate and provider != previous
     updates: dict[str, str] = {"WAKU_PROVIDER": provider} if activate else {}
     if model is not None:

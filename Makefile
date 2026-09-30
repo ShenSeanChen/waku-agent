@@ -56,4 +56,4 @@ shootout-coding: ## coding round via pi, scored by tests: make shootout-coding R
 	$(PY) scripts/shootout.py $(RUNS) --coding
 
 lint:
-	$(PY) -m ruff check waku evals scripts
+	$(PY) -m ruff check waku evals scripts hosted

@@ -122,7 +122,7 @@ def test_the_table_flags_how_many_verdicts_rest_on_the_heuristic():
 
 
 def test_the_table_has_no_emojis():
-    """CLAUDE.md: no emojis in any UI surface, and this one ends up on screen."""
+    """AGENTS.md: no emojis in any UI surface, and this one ends up on screen."""
     rows = arena.scoreboard([{"contestant": "waku", "outcome": PASS}])
     assert all(ord(c) < 0x2190 for c in arena.render(rows))
 

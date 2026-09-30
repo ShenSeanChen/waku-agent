@@ -1,6 +1,6 @@
 """DETERMINISTIC EVAL — hero 1: the gate that decides whether to search memory.
 
-CLAUDE.md calls `retrieval_gate.py` hero 1, and until now it had no test. It is
+docs/architecture.md calls `retrieval_gate.py` hero 1, and until now it had no test. It is
 the answer to the most-asked question about this repo ("why not just search
 memory every turn?"), so it is the one piece that most needs to keep working.
 
