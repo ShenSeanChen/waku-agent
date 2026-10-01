@@ -22,8 +22,6 @@ import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
-WAKU_HOME = Path(".waku")
-
 
 def _claims(access_token: str) -> dict:
     """The token's own claims, read without verifying the signature.
@@ -179,7 +177,9 @@ def sign_in(home: Path, name: str) -> tuple[bool, str]:
 
 def cli_main(argv: list[str] | None = None) -> int:
     args = list(sys.argv[2:] if argv is None else argv)
-    home = Path(WAKU_HOME)
+    from waku.config import load_settings
+
+    home = load_settings().home   # the same home as every other command
 
     if not args:
         return _list(home)

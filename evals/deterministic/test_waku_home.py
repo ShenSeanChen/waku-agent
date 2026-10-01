@@ -175,3 +175,20 @@ def test_the_no_key_message_names_the_home_env_it_read(monkeypatch, tmp_path):
     monkeypatch.setattr(config, "HOME_DOTENV_PATH", str(tmp_path / "h" / ".env"))
     msg = models._no_key_message("anthropic", "ANTHROPIC_API_KEY")
     assert f"Add it to {tmp_path / 'h' / '.env'}" in msg
+
+
+# --- Task 3: `waku mcp` reads the same home as the rest of Waku. It used to
+# hard-code ./.waku and ignore WAKU_HOME, so its tokens could land in a second home.
+
+def test_waku_mcp_lists_the_same_home_as_settings(tmp_path, monkeypatch):
+    from waku.tools import mcp_cli
+    monkeypatch.setenv("WAKU_HOME", str(tmp_path / "h"))
+    seen = []
+    monkeypatch.setattr(mcp_cli, "_list", lambda home: seen.append(home) or 0)
+    assert mcp_cli.cli_main([]) == 0
+    assert seen == [config.Settings().home] == [tmp_path / "h"]
+
+
+def test_waku_mcp_has_no_home_of_its_own():
+    from waku.tools import mcp_cli
+    assert not hasattr(mcp_cli, "WAKU_HOME")
