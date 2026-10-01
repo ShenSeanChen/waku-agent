@@ -4,10 +4,12 @@
 loop across tools: search_web (read the web) → reason over the results →
 create_event once per match. Watch the LOOP box cycle on the dashboard.
 
-Zero new dependencies — just stdlib urllib. Two backends:
+Zero new dependencies — just stdlib urllib. Three backends:
   default  DuckDuckGo HTML (no key, no setup — good enough to demo)
   better   Tavily, if TAVILY_API_KEY (or WAKU_SEARCH_API_KEY) is set — an
            agent-friendly search API with cleaner results (free tier)
+  better   You.com, if YDC_API_KEY is set — a search API built for agents,
+           with clean title/description/url fields per result
 
 The tool returns plain text the model reads; it never parses HTML for the model.
 """
@@ -37,6 +39,29 @@ def _tavily(query: str, key: str, max_results: int) -> list[tuple[str, str, str]
             for r in data.get("results", [])]
 
 
+def _youcom(query: str, key: str, max_results: int) -> list[tuple[str, str, str]]:
+    """You.com web search — POST https://ydc-index.io/v1/search with X-API-Key.
+
+    Each hit contributes a title, a description (falling back to the first
+    snippet, truncated the same way Tavily results are), and a URL, so the
+    caller renders every backend through the same three columns.
+    """
+    body = json.dumps({"query": query, "count": max_results}).encode()
+    req = urllib.request.Request(
+        "https://ydc-index.io/v1/search", data=body,
+        headers={"Content-Type": "application/json", "X-API-Key": key})
+    with urllib.request.urlopen(req, timeout=20) as resp:
+        data = json.loads(resp.read())
+    hits = (data.get("results") or {}).get("web") or []
+    out: list[tuple[str, str, str]] = []
+    for hit in hits[:max_results]:
+        snippet = hit.get("description") or ""
+        if not snippet and hit.get("snippets"):
+            snippet = hit["snippets"][0]
+        out.append((hit.get("title", ""), (snippet or "")[:400], hit.get("url", "")))
+    return out
+
+
 def _strip(text: str) -> str:
     return html.unescape(re.sub(r"<[^>]+>", "", text)).strip()
 
@@ -60,21 +85,29 @@ def _duckduckgo(query: str, max_results: int) -> list[tuple[str, str, str]]:
 
 def make_tool() -> Tool:
     def search_web(query: str, max_results: int = 5) -> str:
-        key = os.getenv("TAVILY_API_KEY") or os.getenv("WAKU_SEARCH_API_KEY")
+        youcom_key = os.getenv("YDC_API_KEY")
+        tavily_key = (not youcom_key) and (
+            os.getenv("TAVILY_API_KEY") or os.getenv("WAKU_SEARCH_API_KEY"))
+        keyed = bool(youcom_key or tavily_key)
+        engine = "You.com" if youcom_key else ("Tavily" if tavily_key else "DuckDuckGo")
         try:
-            results = _tavily(query, key, max_results) if key else _duckduckgo(query, max_results)
+            if youcom_key:
+                results = _youcom(query, youcom_key, max_results)
+            elif tavily_key:
+                results = _tavily(query, tavily_key, max_results)
+            else:
+                results = _duckduckgo(query, max_results)
         except Exception as exc:
-            results = None if key else []  # DDG blocked → fall through to the hint below
-            if key:
+            results = None if keyed else []  # DDG blocked → fall through to the hint below
+            if keyed:
                 return f"Web search failed ({exc}). Answer from what you know, or ask the user."
         if not results:
-            if not key:
+            if not keyed:
                 return ("No results — DuckDuckGo's free endpoint often blocks automated "
                         "requests. For reliable search set a free TAVILY_API_KEY in .env "
                         "(https://tavily.com); see .env.example. Meanwhile, tell the user "
                         "you couldn't search and ask them to add the key.")
             return "No results found. Try a more specific query."
-        engine = "Tavily" if key else "DuckDuckGo"
         lines = [f"Web results for '{query}' (via {engine}):"]
         for i, (title, snippet, link) in enumerate(results, 1):
             lines.append(f"{i}. {title}\n   {snippet}\n   {link}")
