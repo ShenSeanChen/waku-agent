@@ -96,8 +96,7 @@ Waku's own memory is local. Each fact is also written to `~/.waku/memory/`,
 one file per fact, the layout the Waku Memory importer already uploads for
 Claude Code; episodes, `MEMORY.md` and `state.db` are never written there.
 [Waku Memory](https://waku.one) is a hosted memory that several agents share
-over MCP: save something in one agent,
-and recall it in another.
+over MCP: save something in one agent, and recall it in another.
 
 ```bash
 pip install -e '.[mcp]'
