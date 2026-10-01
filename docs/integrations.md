@@ -101,7 +101,7 @@ pip install -e '.[mcp]'
 waku connect waku-memory     # or /connect waku-memory in the dashboard chat
 ```
 
-That adds Waku Memory to `.waku/mcp.json`, next to any servers already there,
+That adds Waku Memory to `~/.waku/mcp.json`, next to any servers already there,
 and opens your browser once to sign in. Restart Waku and its tools appear as
 `waku_memory_*`; `waku mcp` shows which account you are signed in as. A config
 still pointing at Waku Memory's old address is moved to the current one.
@@ -138,7 +138,7 @@ them, waits until Waku Memory has a place for skills.
 pip install -e '.[mcp]'
 ```
 
-Create `.waku/mcp.json` and any Model Context Protocol server's tools appear to
+Create `~/.waku/mcp.json` and any Model Context Protocol server's tools appear to
 the agent, namespaced `<server>_<tool>` (and in the dashboard's Tools ▸ MCP tab):
 
 ```json
@@ -186,7 +186,7 @@ Waku opens your browser on first use:
 
 Nothing is issued out of band and nothing is pasted anywhere. Waku registers
 itself with the server, catches the redirect on `127.0.0.1:41765`, and keeps
-the result in `.waku/mcp-auth/<server>.json`, written `0600` — one file per
+the result in `~/.waku/mcp-auth/<server>.json`, written `0600` — one file per
 server, so a corrupt one costs a single connection rather than all of them.
 Delete that file to sign out.
 

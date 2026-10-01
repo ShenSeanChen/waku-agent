@@ -84,7 +84,7 @@ flowchart LR
 Some assistants (e.g. Hermes) keep long-term memory as a single `MEMORY.md`
 markdown file. Waku keeps the *queryable* source in `state.db` (the `facts` and
 `episodes` tables, keyword-searchable via FTS5) **and** regenerates a readable
-`.waku/MEMORY.md` mirror after every turn — so you get both: a real file you
+`~/.waku/MEMORY.md` mirror after every turn — so you get both: a real file you
 can open, backed by a sturdy database. The dashboard's **Memory** tab is the
 friendly view; the **Data** tab shows the raw `state.db` tables.
 
@@ -117,8 +117,9 @@ friendly view; the **Data** tab shows the raw `state.db` tables.
   The two never mix. `evals/hosted_docker/` is a third tier for `hosted/`:
   0/1 and offline, but it needs a Docker daemon and its own CI job.
 - `examples/` — teaching material, not product; one folder per topic.
-- `.waku/` — runtime state: `state.db`, `calendar.ics`, `outbox/`, `traces/`.
-  Gitignored.
+- `~/.waku/` — runtime state: `state.db`, `calendar.ics`, `outbox/`, `traces/`.
+  `WAKU_HOME` moves it; `make` sets it to the repo's own `.waku/`, which is
+  gitignored. `waku/config.py` `resolve_home()` has the rules.
 
 ## Design decisions worth stealing
 
