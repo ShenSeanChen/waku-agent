@@ -88,6 +88,11 @@ markdown file. Waku keeps the *queryable* source in `state.db` (the `facts` and
 can open, backed by a sturdy database. The dashboard's **Memory** tab is the
 friendly view; the **Data** tab shows the raw `state.db` tables.
 
+Each fact is also written to `~/.waku/memory/<id>.md`, one file per fact, in
+the same pass. That is the layout of Claude Code's memory, which the Waku
+Memory importer already uploads one memory per file. Episodes, `MEMORY.md` and
+`state.db` are never written there (spec 003).
+
 ## Which file is which
 
 - `waku/gateway/` — how text gets in and out: `cli.py`, `voice.py` (wake word),
