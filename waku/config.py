@@ -103,6 +103,29 @@ def describe_home(choice: HomeChoice) -> str:
     return f"{choice.path.resolve()} ({why})"
 
 
+def _load_home_env() -> str:
+    """Load <home>/.env, so a global install finds its key from any folder.
+
+    The working directory's .env loads first (_load_env above) and may set
+    WAKU_HOME, so the home is resolved after it. This file loads last and never
+    overrides a value already set: a project's own .env always wins. Waku reads
+    no .env outside these two places.
+
+    Returns the path that was loaded, or "" when there is none or it is the
+    same file the working directory already supplied.
+    """
+    path = resolve_home().path / ".env"
+    if not path.is_file():
+        return ""
+    if DOTENV_PATH and Path(DOTENV_PATH).resolve() == path.resolve():
+        return ""
+    load_dotenv(path, override=False)
+    return str(path)
+
+
+HOME_DOTENV_PATH = _load_home_env()
+
+
 @dataclass
 class Settings:
     # --- LLM: pick a provider, set its key. See waku/loop/models.py PROVIDERS.

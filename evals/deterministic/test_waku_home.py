@@ -12,8 +12,10 @@ person to an empty memory. These cases pin the rule that checks for state.db.
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
+import sys
 from pathlib import Path
 
 from waku import config
@@ -107,3 +109,69 @@ def test_evals_never_resolve_to_a_real_home():
     home = Path(os.environ["WAKU_HOME"]).resolve()
     assert home != (Path.home() / ".waku").resolve()
     assert home != (Path.cwd() / ".waku").resolve()
+
+
+# --- Task 2: a global install finds its key in <home>/.env from any folder.
+# config.py loads .env files at import, so each case runs in a fresh process.
+
+def _import_config_in(cwd: Path, user_home: Path) -> dict:
+    script = (
+        "import json, os\n"
+        "from waku import config\n"
+        "print(json.dumps({'key': os.environ.get('ANTHROPIC_API_KEY', ''),\n"
+        "                  'cwd_env': config.DOTENV_PATH,\n"
+        "                  'home_env': config.HOME_DOTENV_PATH}))\n"
+    )
+    env = {k: v for k, v in os.environ.items() if k not in ("WAKU_HOME", "ANTHROPIC_API_KEY")}
+    env["HOME"] = str(user_home)
+    env["PYTHONPATH"] = str(Path(__file__).resolve().parents[2])
+    out = subprocess.run([sys.executable, "-c", script], cwd=cwd, env=env,
+                         capture_output=True, text=True, check=True)
+    return json.loads(out.stdout.strip().splitlines()[-1])
+
+
+def test_a_key_in_the_home_env_is_found_from_an_unrelated_folder(tmp_path):
+    cwd, user_home = _layout(tmp_path, legacy_db=False, global_dir=True, global_db=True)
+    (user_home / ".waku" / ".env").write_text("ANTHROPIC_API_KEY=from-home\n")
+    seen = _import_config_in(cwd, user_home)
+    assert seen["key"] == "from-home"
+    assert seen["home_env"] == str(user_home / ".waku" / ".env")
+    assert seen["cwd_env"] == ""
+
+
+def test_the_working_directory_env_wins_over_the_home_env(tmp_path):
+    cwd, user_home = _layout(tmp_path, legacy_db=False, global_dir=True, global_db=True)
+    (user_home / ".waku" / ".env").write_text("ANTHROPIC_API_KEY=from-home\n")
+    (cwd / ".env").write_text("ANTHROPIC_API_KEY=from-cwd\n")
+    assert _import_config_in(cwd, user_home)["key"] == "from-cwd"
+
+
+def test_the_working_directory_env_can_choose_the_home(tmp_path):
+    """WAKU_HOME set in the folder's .env decides which home's .env is read."""
+    cwd, user_home = _layout(tmp_path, legacy_db=False, global_dir=False, global_db=False)
+    other = tmp_path / "other-home"
+    other.mkdir()
+    (other / ".env").write_text("ANTHROPIC_API_KEY=from-other\n")
+    (cwd / ".env").write_text(f"WAKU_HOME={other}\n")
+    seen = _import_config_in(cwd, user_home)
+    assert seen["key"] == "from-other"
+    assert seen["home_env"] == str(other / ".env")
+
+
+def test_the_no_key_message_points_at_the_home_env_when_no_env_exists(monkeypatch, tmp_path):
+    from waku.loop import models
+    monkeypatch.setattr(config, "DOTENV_PATH", "")
+    monkeypatch.setattr(config, "HOME_DOTENV_PATH", "")
+    monkeypatch.setenv("WAKU_HOME", str(tmp_path / "h"))
+    msg = models._no_key_message("anthropic", "ANTHROPIC_API_KEY")
+    assert "No .env found" in msg
+    assert str(tmp_path / "h" / ".env") in msg
+    assert "from any folder" in msg
+
+
+def test_the_no_key_message_names_the_home_env_it_read(monkeypatch, tmp_path):
+    from waku.loop import models
+    monkeypatch.setattr(config, "DOTENV_PATH", "")
+    monkeypatch.setattr(config, "HOME_DOTENV_PATH", str(tmp_path / "h" / ".env"))
+    msg = models._no_key_message("anthropic", "ANTHROPIC_API_KEY")
+    assert f"Add it to {tmp_path / 'h' / '.env'}" in msg

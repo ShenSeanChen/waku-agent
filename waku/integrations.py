@@ -475,16 +475,26 @@ def cli_main() -> int:
         if status.state is IntegrationState.ERROR and any(field.configured for field in view.fields):
             failed = True
 
-    # Waku Memory is not an .env field like the rows above: it is a server in
-    # mcp.json with a sign-in token beside it, so its line comes from there.
-    from waku.config import describe_home, home_notice, load_settings, resolve_home
+    from waku.config import (
+        DOTENV_PATH,
+        HOME_DOTENV_PATH,
+        describe_home,
+        home_notice,
+        load_settings,
+        resolve_home,
+    )
     from waku.tools.waku_memory import status as waku_memory_status
 
+    # Where this run keeps its memory, and which .env files supplied the keys.
     console.print("\n[bold]Home[/bold]")
     console.print(f"  {'Memory folder':<20} {describe_home(resolve_home())}", markup=False)
+    env_files = ", ".join(path for path in (DOTENV_PATH, HOME_DOTENV_PATH) if path) or "none found"
+    console.print(f"  {'.env read':<20} {env_files}", markup=False)
     if notice := home_notice():
         console.print(f"  {notice}", markup=False)
 
+    # Waku Memory is not an .env field like the rows above: it is a server in
+    # mcp.json with a sign-in token beside it, so its line comes from there.
     console.print("\n[bold]Shared memory[/bold]")
     console.print(f"  {'Waku Memory':<20} {waku_memory_status(load_settings().home)}", markup=False)
     return int(failed)
