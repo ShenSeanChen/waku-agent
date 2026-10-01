@@ -192,3 +192,32 @@ def test_waku_mcp_lists_the_same_home_as_settings(tmp_path, monkeypatch):
 def test_waku_mcp_has_no_home_of_its_own():
     from waku.tools import mcp_cli
     assert not hasattr(mcp_cli, "WAKU_HOME")
+
+
+# --- Task 4: the maintainers' reset script cannot reach a person's real ~/.waku.
+# demo_seed wipes memory (after a backup). Run without WAKU_HOME from a folder
+# with no ./.waku, it would now resolve to ~/.waku, so it refuses.
+
+def _run_demo_seed(cwd: Path, user_home: Path, waku_home: str | None):
+    env = {k: v for k, v in os.environ.items() if k != "WAKU_HOME"}
+    env["HOME"] = str(user_home)
+    env["PYTHONPATH"] = str(Path(__file__).resolve().parents[2])
+    if waku_home:
+        env["WAKU_HOME"] = waku_home
+    script = Path(__file__).resolve().parents[2] / "scripts" / "demo_seed.py"
+    return subprocess.run([sys.executable, str(script), "--yes"], cwd=cwd, env=env,
+                          capture_output=True, text=True, check=False)
+
+
+def test_demo_seed_refuses_to_reset_the_global_home(tmp_path):
+    cwd, user_home = _layout(tmp_path, legacy_db=False, global_dir=True, global_db=True)
+    result = _run_demo_seed(cwd, user_home, waku_home=None)
+    assert result.returncode == 2
+    assert "WAKU_HOME" in result.stdout
+    assert (user_home / ".waku" / "state.db").read_text() == "global"
+    assert not list(user_home.glob(".waku.bak-*"))
+
+
+def test_makefile_pins_the_maintainers_home_to_the_repo():
+    makefile = (Path(__file__).resolve().parents[2] / "Makefile").read_text()
+    assert "export WAKU_HOME ?= $(CURDIR)/.waku" in makefile

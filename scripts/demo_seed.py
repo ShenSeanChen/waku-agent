@@ -120,4 +120,13 @@ if __name__ == "__main__":
         print("    python scripts/demo_seed.py --yes"
               + (" --reset-spend" if args.reset_spend else ""))
         raise SystemExit(2)
+    from waku.config import resolve_home
+    if resolve_home().rule == "global":
+        # Spec 002: with no WAKU_HOME and no ./.waku here, the home is the
+        # person's real ~/.waku. A maintainer's reset script never reaches it.
+        print(f"REFUSING to run: the resolved home is {resolve_home().path}, your real memory.")
+        print("demo_seed only resets a home you name. Run it through make, which sets")
+        print("WAKU_HOME to this repo's .waku, or set WAKU_HOME yourself:")
+        print("    WAKU_HOME=$PWD/.waku python scripts/demo_seed.py --yes")
+        raise SystemExit(2)
     main(reset_spend=args.reset_spend)
