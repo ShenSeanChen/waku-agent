@@ -1232,6 +1232,9 @@ def main() -> None:
     # iterations, and bind_host() prints the off-loopback security warning. Ten
     # busy ports used to print it ten times, which teaches people to skip it.
     host = bind_host()
+    from waku.config import home_notice
+    if notice := home_notice():
+        print(notice)
     for port in range(base, base + 10):  # walk past a busy port instead of crashing
         try:
             server = ThreadingHTTPServer((host, port), Handler)

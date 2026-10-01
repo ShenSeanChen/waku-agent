@@ -477,8 +477,13 @@ def cli_main() -> int:
 
     # Waku Memory is not an .env field like the rows above: it is a server in
     # mcp.json with a sign-in token beside it, so its line comes from there.
-    from waku.config import load_settings
+    from waku.config import describe_home, home_notice, load_settings, resolve_home
     from waku.tools.waku_memory import status as waku_memory_status
+
+    console.print("\n[bold]Home[/bold]")
+    console.print(f"  {'Memory folder':<20} {describe_home(resolve_home())}", markup=False)
+    if notice := home_notice():
+        console.print(f"  {notice}", markup=False)
 
     console.print("\n[bold]Shared memory[/bold]")
     console.print(f"  {'Waku Memory':<20} {waku_memory_status(load_settings().home)}", markup=False)

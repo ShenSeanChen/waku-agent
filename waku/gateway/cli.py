@@ -61,6 +61,9 @@ def main() -> None:
         "Commands: /memory · /quit",
         border_style="cyan",
     ))
+    from waku.config import home_notice
+    if notice := home_notice():
+        console.print(f"[yellow]{notice}[/yellow]", markup=True)
     while True:
         try:
             user_message = console.input("[bold cyan]you ›[/bold cyan] ").strip()
