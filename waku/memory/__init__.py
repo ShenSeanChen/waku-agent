@@ -42,6 +42,19 @@ def bundled_skill_dirs() -> list[Path]:
     return [p for p in (here.parents[1] / "skills", here.parents[2] / "skills") if p.is_dir()]
 
 
+def _fact_file_text(row: sqlite3.Row) -> str:
+    """One fact as the file the waku-memory importer reads (spec 003).
+
+    Front matter first, then the fact. The text depends only on the row, so an
+    unchanged fact produces an identical file and re-importing it is free.
+    """
+    def one_line(value) -> str:
+        return " ".join(str(value or "").split())
+
+    return (f"---\nsubject: {one_line(row['subject'])}\nsource: {one_line(row['source'])}\n"
+            f"created_at: {one_line(row['created_at'])}\n---\n{row['content'].strip()}\n")
+
+
 class Memory:
     def __init__(self, conn: sqlite3.Connection, settings: Settings, client: anthropic.Anthropic,
                  episode_store=None):
@@ -188,6 +201,30 @@ class Memory:
         lines += ["", f"## Episodes — episodic memory ({len(eps)})", ""]
         lines += [f"- **{e['happened_at']}** — {e['summary']}" for e in eps] or ["_none yet_"]
         (self.settings.home / "MEMORY.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+        self.export_fact_files()
+
+    def export_fact_files(self) -> None:
+        """Write each fact to <home>/memory/<id>.md, one file per fact.
+
+        This is the shape Claude Code's memory already has, so the waku-memory
+        importer can upload Waku's facts one memory each. Episodes stay in
+        state.db. Only files named <id>.md are ever removed, and only when
+        their fact is gone; anything else in the folder is left alone.
+        """
+        folder = self.settings.home / "memory"
+        folder.mkdir(parents=True, exist_ok=True)
+        rows = self.conn.execute(
+            "SELECT id, subject, content, source, created_at FROM facts").fetchall()
+        current = set()
+        for row in rows:
+            path = folder / f"{row['id']}.md"
+            current.add(path.name)
+            text = _fact_file_text(row)
+            if not path.exists() or path.read_text(encoding="utf-8") != text:
+                path.write_text(text, encoding="utf-8")
+        for path in folder.glob("*.md"):
+            if path.stem.isdigit() and path.name not in current:
+                path.unlink()
 
     def maybe_consolidate(self, notify=None) -> None:
         new_facts = consolidation.consolidate_if_due(
