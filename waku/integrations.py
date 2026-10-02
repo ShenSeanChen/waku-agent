@@ -250,6 +250,15 @@ INTEGRATIONS: tuple[Integration, ...] = (
     Integration("tavily", "Search & Observability", "Tavily", "Lets Waku search the web.",
                 (EnvField("TAVILY_API_KEY", "API key", secret=True),), None, None,
                 "https://tavily.com", ReloadMode.LIVE, lambda env: bool(env.get("TAVILY_API_KEY")), None),
+    # Spec 005: Jev decides which memories earn a slot. Both fields, or it
+    # stays off: WAKU_SLOT_GATE=jev is the switch, the key is the credential.
+    Integration("typesafe", "Memory & Storage", "TypeSafe Jev",
+                "Lets Jev decide which memories earn a place in each answer.",
+                (EnvField("TYPESAFE_API_KEY", "API key", secret=True),
+                 EnvField("WAKU_SLOT_GATE", "Set to jev to turn it on")), None, None,
+                "https://typesafe.ai", ReloadMode.LIVE,
+                lambda env: env.get("WAKU_SLOT_GATE") == "jev" and bool(env.get("TYPESAFE_API_KEY")),
+                None),
     Integration("otel", "Search & Observability", "OpenTelemetry", "Exports traces to an OTLP collector.",
                 (EnvField("OTEL_EXPORTER_OTLP_ENDPOINT", "OTLP endpoint"),), "tracing", "opentelemetry",
                 "", ReloadMode.AGENT, lambda env: bool(env.get("OTEL_EXPORTER_OTLP_ENDPOINT")), None),
