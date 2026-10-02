@@ -63,10 +63,10 @@ EOF
 # the variables, showed "Hosted free tier: enabled, current", and answered the
 # first message with APIConnectionError.
 #
-# --free-model writes the model into BOTH model variables: the free tier's
-# allowlist is one model, the retrieval gate uses the small model, and a small
-# model outside the allowlist would be refused on every turn and silently fail
-# open.
+# --free-model names the model for turns and --free-small-model the one for
+# the retrieval gate and consolidation (spec 004 C: Sonnet and Haiku). Both are
+# on the proxy's allowlist, WAKU_FREE_MODELS, so the small model can never fall
+# outside it; --free-small-model defaults to --free-model.
 waku_spawner_env() {
   cat <<EOF
 WAKU_TENANT_ROOT=$root/tenants
@@ -87,16 +87,16 @@ EOF
   [ -z "$free_model" ] || cat <<EOF
 WAKU_PLATFORM_BASE_URL=http://10.88.0.1:8788
 WAKU_PLATFORM_MODEL=$free_model
-WAKU_PLATFORM_SMALL_MODEL=$free_model
+WAKU_PLATFORM_SMALL_MODEL=${free_small_model:-$free_model}
 EOF
 }
 
-# Reads: root platform_key free_model
+# Reads: root platform_key free_model free_small_model
 #
-# GROUP D IS DEFERRED, so there is no module pinning these names yet. They are
-# group F's, listed in hosted/deploy/proxy.env.example with the same warning,
-# and D1 either adopts them or renames them in one commit that changes both
-# files. The free-tier numbers are the spec's, not defaults chosen here.
+# Pinned by hosted/proxy/config.REQUIRED_ENV_NAMES (spec 004 C), in order. The
+# free-tier numbers are spec 001's, except the max_tokens ceiling (8192, not
+# 4096: thinking counts as output) and the global concurrency, which spec 001
+# names without a number.
 #
 # $platform_key is the only secret any of these three functions prints. It
 # arrives from a file named by --platform-key-file, never from argv, and
@@ -110,11 +110,12 @@ WAKU_LEDGER_DB=$root/ledger/ledger.db
 WAKU_GATEWAY_SOCKET=$root/run/gateway/gateway.sock
 WAKU_PROXY_SOCKET=$root/run/proxy/proxy.sock
 WAKU_PLATFORM_KEY=$platform_key
-WAKU_FREE_MODELS=$free_model
+WAKU_FREE_MODELS=$free_model${free_small_model:+,$free_small_model}
 WAKU_FREE_MONTHLY_CAP_USD=1
 WAKU_FREE_CONCURRENT_CALLS=4
 WAKU_FREE_REQUESTS_PER_MINUTE=60
-WAKU_MAX_TOKENS_CEILING=4096
+WAKU_GLOBAL_CONCURRENT_CALLS=16
+WAKU_MAX_TOKENS_CEILING=8192
 WAKU_MAX_BODY_BYTES=4194304
 WAKU_UPSTREAM_BASE_URL=https://api.anthropic.com
 EOF
