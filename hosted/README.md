@@ -311,13 +311,10 @@ sign-in inside the container (spec 004):
    with `"auth_env": "WAKU_MEMORY_API_KEY"`. A tenant's own servers are kept.
 
 The key is the person's own: it reaches only their memory, and they can revoke
-it on waku.one under Settings, API keys. **A revoked key is not replaced on its
-own yet.** Their agent stops reaching Waku Memory until the row is removed, and
-the next sign-in mints a new one:
-
-```bash
-sudo sqlite3 /srv/waku/control/control.db "DELETE FROM memory_key WHERE tenant_id = '<id>'"
-```
+it on waku.one under Settings, API keys. At most once an hour, a sign-in or a
+chat call asks Waku Memory whether the stored key is still live; a revoked one
+is replaced and the container restarted onto the new key. An unreachable Waku
+Memory changes nothing.
 
 ## The chat API other surfaces call
 
