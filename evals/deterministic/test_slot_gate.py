@@ -16,7 +16,7 @@ MESSAGE = "should we cut our price like Acme did?"
 FACTS = ["acme: Acme cut its price to $19.", "us: Our price is $29.",
          "us: Our margin is 40%.", "acme: Acme's CEO spoke at a conference.",
          "review: Shipping was slow (3 stars).", "review: Box arrived dented."]
-SCORES = {0: 3.0, 1: 2.9, 2: 2.2, 3: 0.4, 4: 0.6, 5: 0.1}
+SCORES = {0: 3.0, 1: 2.9, 2: 2.2, 3: 0.34, 4: 0.2, 5: 0.1}
 
 
 def fake_ask(calls):

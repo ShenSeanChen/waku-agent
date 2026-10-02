@@ -86,7 +86,7 @@ in the prompt; consolidation keeps every fact the summariser proposes. With
 `WAKU_SLOT_GATE=jev` and a `TYPESAFE_API_KEY`, Jev decides both
 (`waku/memory/slot_gate.py`, spec 005): one call scores every retrieved fact on
 "how much does leaving this one out change the answer?" and keeps those at
-1.8 or above, the threshold `lab/jev-system-one` measured at 12 of 12; and
+0.5 or above, which scored 12 of 12 on `lab/jev-system-one`'s cases; and
 each proposed fact is scored on whether a later answer would need it before
 it is stored. Any failure keeps today's behaviour, so a slow judge never costs
 a memory. The turn card says how many it kept.

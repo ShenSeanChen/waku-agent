@@ -74,8 +74,11 @@ numbers against theirs, and the jaggedness).
 
 **Done, as the slot gate** (`waku/memory/slot_gate.py`, `waku/memory/jev.py`,
 spec 005): the memory suite's question now decides which retrieved facts enter
-the prompt, at the same 1.8 threshold, and a second question decides which
+the prompt, and a second question decides which
 consolidated facts are stored. Opt-in with `WAKU_SLOT_GATE=jev`; it fails open.
+Asked as one call for every fact, the threshold moves: these 12 cases score
+keep >= 0.75 and drop <= 0.34, so the slot gate keeps at 0.5 (12/12), not 1.8
+(6/12 in that shape).
 
 **Done, as the Judgment Arena** (`waku/ops/judgment_arena.py`,
 `judgment_cases.py`, `static/js/judgment.js`): the third race beside the model
