@@ -67,3 +67,42 @@ def test_a_201_with_a_real_key_is_minted_with_the_persons_token():
 def test_anything_but_a_well_formed_new_key_is_not_minted(status, body):
     result, _ = _mint_against(status, body)
     assert result is None
+
+
+# --- spec 004 A7: is the stored key still live? ------------------------------
+
+def _is_live_against(status: int, body: object, key_id: str = "key-9"):
+    async def keys(request: web.Request) -> web.Response:
+        assert request.headers.get("Authorization") == "Bearer the-persons-jwt"
+        return web.json_response(body, status=status)
+
+    async def run():
+        app = web.Application()
+        app.router.add_get("/keys", keys)
+        runner = web.AppRunner(app)
+        await runner.setup()
+        site = web.TCPSite(runner, "127.0.0.1", 0)
+        await site.start()
+        port = site._server.sockets[0].getsockname()[1]
+        try:
+            async with aiohttp.ClientSession() as session:
+                return await WakuMemoryKeys(session, f"http://127.0.0.1:{port}/mcp").is_live(
+                    "the-persons-jwt", key_id)
+        finally:
+            await runner.cleanup()
+
+    return asyncio.run(run())
+
+
+def test_a_listed_unrevoked_key_is_live():
+    assert _is_live_against(200, {"keys": [{"id": "key-9", "revoked_at": None}]}) is True
+
+
+def test_a_revoked_or_missing_key_is_not_live():
+    assert _is_live_against(200, {"keys": [{"id": "key-9", "revoked_at": "2026-10-01"}]}) is False
+    assert _is_live_against(200, {"keys": [{"id": "other", "revoked_at": None}]}) is False
+
+
+def test_an_unanswerable_check_is_unknown_not_revoked():
+    assert _is_live_against(401, {"detail": "no"}) is None
+    assert _is_live_against(200, {"unexpected": True}) is None

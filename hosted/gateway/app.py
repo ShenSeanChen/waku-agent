@@ -164,6 +164,8 @@ SIGN_IN_REFUSED = "That sign-in did not work. Ask for a new link."
 CHAT_API_PATH = "/v1/chat"
 CHAT_STREAM_PATH = "/api/chat/stream"
 CHAT_API_POST_ONLY = "Send the message as a POST."
+# Spec 004 A7: how often a tenant's Waku Memory key is checked for revocation.
+MEMORY_KEY_CHECK_SECONDS = 3600
 
 # aiohttp's own default is 1 MiB. Set explicitly, and equal to the proxy's
 # body cap in the spec's proxy step 1, so hosted waku has ONE body limit
@@ -205,6 +207,8 @@ class Gateway:
                  now: Callable[[], float] = time.time) -> None:
         self._config = config
         self._memory_keys = memory_keys
+        # tenant id -> when its Waku Memory key was last minted or checked (A7).
+        self._key_checked: dict[str, float] = {}
         self._store = store
         self._launcher = launcher
         self._verifier = verifier
@@ -497,19 +501,55 @@ class Gateway:
         already has it. Never fails the sign-in: a person who cannot reach Waku
         Memory today can still use their agent, and the next sign-in tries again.
         """
-        if self._memory_keys is None or self._store.memory_key(tenant_id):
+        if self._memory_keys is None:
             return
+        if self._store.memory_key(tenant_id):
+            await self._check_memory_key(tenant_id, access_token)
+            return
+        await self._mint_memory_key(tenant_id, access_token)
+
+    async def _check_memory_key(self, tenant_id: str, access_token: str) -> None:
+        """Replace the key if the person revoked it on waku.one (spec 004 A7).
+
+        At most once an hour per tenant: a sign-in and every /v1/chat call pass
+        through here, and Waku Memory need not be asked about each one. Only a
+        definite "revoked" replaces the key; an unreachable Waku Memory is not
+        evidence of anything. The running container still holds the old key,
+        so it is stopped, and the next request starts it on the new one.
+        """
+        now = self._now()
+        if now - self._key_checked.get(tenant_id, now) < MEMORY_KEY_CHECK_SECONDS:
+            return
+        self._key_checked[tenant_id] = now
+        try:
+            live = await self._memory_keys.is_live(
+                access_token, self._store.memory_key_id(tenant_id))
+        except Exception as exc:
+            _LOG.info("tenant=%s: Waku Memory key check failed: %s", tenant_id, exc)
+            return
+        if live is not False:
+            return
+        _LOG.info("tenant=%s: Waku Memory key was revoked; minting a new one", tenant_id)
+        if await self._mint_memory_key(tenant_id, access_token):
+            try:
+                await self._launcher.stop(tenant_id)
+            except Exception as exc:
+                _LOG.info("tenant=%s: stop after key replacement failed: %s", tenant_id, exc)
+
+    async def _mint_memory_key(self, tenant_id: str, access_token: str) -> bool:
+        self._key_checked[tenant_id] = self._now()
         try:
             minted = await self._memory_keys.mint(access_token)
         except Exception as exc:  # network, timeout, a malformed answer
             _LOG.info("tenant=%s: Waku Memory key not minted: %s", tenant_id, exc)
-            return
+            return False
         if minted is None:
             _LOG.info("tenant=%s: Waku Memory issued no key", tenant_id)
-            return
+            return False
         key, key_id = minted
         self._store.set_memory_key(tenant_id, key=key, key_id=key_id)
         _LOG.info("tenant=%s: Waku Memory key %s minted", tenant_id, key_id)
+        return True
 
     def _sign_out(self, request: web.Request) -> web.Response:
         value = request.cookies.get(sessions.APEX_COOKIE, "")

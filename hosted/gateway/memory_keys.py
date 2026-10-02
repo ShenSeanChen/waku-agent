@@ -42,3 +42,21 @@ class WakuMemoryKeys:
         if not is_memory_key(key) or not isinstance(key_id, str):
             return None
         return key, key_id
+
+    async def is_live(self, access_token: str, key_id: str) -> bool | None:
+        try:
+            async with self._session.get(
+                    self._url, headers={"Authorization": f"Bearer {access_token}"},
+                    timeout=aiohttp.ClientTimeout(total=TIMEOUT_SECONDS)) as response:
+                if response.status != 200:
+                    return None
+                body = await response.json()
+        except (aiohttp.ClientError, TimeoutError, ValueError):
+            return None
+        keys = body.get("keys") if isinstance(body, dict) else None
+        if not isinstance(keys, list):
+            return None
+        for key in keys:
+            if isinstance(key, dict) and key.get("id") == key_id:
+                return key.get("revoked_at") is None
+        return False

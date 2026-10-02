@@ -327,6 +327,14 @@ class ControlDb:
                 (tenant_id, key, key_id, self._now()))
             self._conn.commit()
 
+    def memory_key_id(self, tenant_id: str) -> str:
+        """The id Waku Memory gave the tenant's key, or "" when there is none.
+        Spec 004 A7 asks Waku Memory whether that id is still live."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT key_id FROM memory_key WHERE tenant_id = ?", (tenant_id,)).fetchone()
+        return row[0] if row else ""
+
     def memory_key(self, tenant_id: str) -> str:
         """The tenant's Waku Memory key, or "" when none has been minted."""
         with self._lock:

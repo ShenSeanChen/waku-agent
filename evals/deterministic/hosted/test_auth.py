@@ -464,3 +464,62 @@ def test_a_refused_sign_in_mints_nothing(harness):
 
     assert asyncio.run(run()) == 401
     assert fake.tokens == []
+
+
+# --- spec 004 A7: a revoked key is replaced -----------------------------------
+# The person can revoke "Waku Agent (hosted)" on waku.one. The gateway checks,
+# at most once an hour per tenant, whether the stored key is still live, and
+# mints a new one when it is not, restarting the container onto it.
+
+class CheckingMemoryKeys(FakeMemoryKeys):
+    def __init__(self, live: bool | None, answers=None) -> None:
+        super().__init__()
+        self.live = live
+        self.checks: list[str] = []
+        self._answers = list(answers or [MINTED, ("mem_sk_" + "n" * 43, "key-2")])
+
+    async def mint(self, access_token: str):
+        self.tokens.append(access_token)
+        return self._answers.pop(0)
+
+    async def is_live(self, access_token: str, key_id: str):
+        self.checks.append(key_id)
+        return self.live
+
+
+async def _two_sign_ins(harness, advance: float) -> str:
+    await harness.start()
+    token = sign(harness.private, now=harness.clock.t)
+    await harness.json_post("/auth/session", {"access_token": token}, host="agent.waku.one")
+    harness.clock.t += advance
+    token = sign(harness.private, now=harness.clock.t)
+    await harness.json_post("/auth/session", {"access_token": token}, host="agent.waku.one")
+    stored = harness.store.memory_key(harness.store.tenant_by_sub(SUB).id)
+    await harness.stop()
+    return stored
+
+
+def test_a_revoked_key_is_replaced_at_the_next_sign_in(harness):
+    fake = _with_memory_keys(harness, CheckingMemoryKeys(live=False))
+    stored = asyncio.run(_two_sign_ins(harness, advance=3601))
+    assert fake.checks == ["key-1"]
+    assert stored == "mem_sk_" + "n" * 43
+
+
+def test_a_live_key_is_kept(harness):
+    fake = _with_memory_keys(harness, CheckingMemoryKeys(live=True))
+    stored = asyncio.run(_two_sign_ins(harness, advance=3601))
+    assert fake.checks == ["key-1"] and stored == MINTED[0]
+
+
+def test_an_unknown_answer_keeps_the_key(harness):
+    """Waku Memory unreachable is not evidence of a revocation."""
+    fake = _with_memory_keys(harness, CheckingMemoryKeys(live=None))
+    stored = asyncio.run(_two_sign_ins(harness, advance=3601))
+    assert fake.checks == ["key-1"] and stored == MINTED[0]
+
+
+def test_the_key_is_checked_at_most_once_an_hour(harness):
+    fake = _with_memory_keys(harness, CheckingMemoryKeys(live=False))
+    stored = asyncio.run(_two_sign_ins(harness, advance=60))
+    assert fake.checks == [] and stored == MINTED[0]
