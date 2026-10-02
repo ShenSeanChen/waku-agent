@@ -27,6 +27,7 @@ data_device=""
 restic_repository=""
 restic_password_file=""
 free_model=""
+free_small_model=""
 platform_key=""
 platform_key_file=""
 dns_env_file=""
@@ -77,9 +78,12 @@ usage: install.sh <domain> --dns-provider NAME --acme-email ADDRESS
                               both, this install offers no free tier and every
                               tenant brings their own key -- which is what a
                               deployment without the metering proxy (group D)
-                              actually does. The one model the free tier
-                              allows. Written into
+                              actually does. The model for turns, for example
+                              claude-sonnet-5-5. Written into
                               BOTH spawner.env and proxy.env
+  --free-small-model          OPTIONAL, needs --free-model. The model for the
+                              retrieval gate and consolidation, for example
+                              claude-haiku-4-5. Default: --free-model
   --platform-key-file         a file holding the platform's model key, and
                               nothing else. Delete it once this has run
   --max-running               a whole number of at least 1. No upper limit:
@@ -230,6 +234,7 @@ refuse_unprintable() {
 while [ $# -gt 0 ]; do
   waku_needs_value "$1" "$#" \
     --dns-provider --dns-module-version --acme-email --data-device --free-model \
+    --free-small-model \
     --platform-key-file --dns-env-file --supabase-url --supabase-publishable-key \
     --supabase-audience --restic-repository --restic-password-file \
     --max-running --tenant-disk --dns-allow --root --dns-env \
@@ -240,6 +245,7 @@ while [ $# -gt 0 ]; do
     --acme-email)               acme_email=$2; shift 2 ;;
     --data-device)              data_device=$2; shift 2 ;;
     --free-model)               free_model=$2; shift 2 ;;
+    --free-small-model)         free_small_model=$2; shift 2 ;;
     --platform-key-file)
       # RULED BY SEAN, 2026-09-25: the key is READ FROM A FILE, never taken as
       # a value. A value on the command line lands in root's shell history and
@@ -389,6 +395,9 @@ refuse_a_single_quote "$restic_password_file" --restic-password-file
 # on a check about whitespace, naming a flag the operator deliberately left
 # out.
 [ -z "$free_model" ] || refuse_unprintable "$free_model" --free-model
+[ -z "$free_small_model" ] || refuse_unprintable "$free_small_model" --free-small-model
+[ -z "$free_small_model" ] || [ -n "$free_model" ] \
+  || waku_die "--free-small-model needs --free-model: a small model with no model is not a free tier"
 refuse_unprintable "$supabase_publishable_key" --supabase-publishable-key
 refuse_unprintable "$supabase_audience" --supabase-audience
 refuse_unprintable "$data_device" --data-device

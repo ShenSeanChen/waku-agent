@@ -781,15 +781,17 @@ def test_the_free_model_reaches_both_the_spawner_and_the_proxy(tmp_path):
 
 
 def test_the_proxy_env_carries_the_platform_key_and_the_specs_free_tier_numbers(tmp_path):
-    """Group D is deferred, so no module pins these names; they are group F's
-    and proxy.env.example carries the same warning. The numbers are the
-    spec's, as literals."""
+    """The names are pinned by hosted/proxy/config.REQUIRED_ENV_NAMES
+    (test_proxy_config.py). The numbers are spec 001's, as literals, except
+    the max_tokens ceiling: spec 004 C raised it to 8192 because thinking
+    counts as output."""
     written = _env_body(tmp_path, "waku_proxy_env")
     assert written["WAKU_PLATFORM_KEY"] == "sk-ant-envfiles-fixture"
     assert written["WAKU_FREE_MONTHLY_CAP_USD"] == "1"
     assert written["WAKU_FREE_CONCURRENT_CALLS"] == "4"
     assert written["WAKU_FREE_REQUESTS_PER_MINUTE"] == "60"
-    assert written["WAKU_MAX_TOKENS_CEILING"] == "4096"
+    assert written["WAKU_MAX_TOKENS_CEILING"] == "8192"
+    assert written["WAKU_GLOBAL_CONCURRENT_CALLS"] == "16"
     assert written["WAKU_MAX_BODY_BYTES"] == "4194304"
     assert written["WAKU_PROXY_BIND"] == "10.88.0.1"
 
