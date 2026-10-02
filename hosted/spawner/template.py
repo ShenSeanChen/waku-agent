@@ -27,6 +27,7 @@ from hosted.core.tenant import (
     TENANT_NETWORK,
     address_for_project,
     is_known_timezone,
+    is_memory_key,
     is_project_id,
     is_proxy_token,
     is_tenant_id,
@@ -236,7 +237,7 @@ def platform_env(config: SpawnerConfig, token: str) -> list[str]:
 
 
 def tenant_container(config: SpawnerConfig, *, tenant_id: str, project_id: int,
-                     timezone: str, token: str) -> dict:
+                     timezone: str, token: str, memory_key: str = "") -> dict:
     """The create body for one tenant's dashboard.
 
     The four checks at the top are not belt and braces over core/requests.py:
@@ -259,6 +260,8 @@ def tenant_container(config: SpawnerConfig, *, tenant_id: str, project_id: int,
         raise ValueError(f"not a zone Python knows: {timezone!r}")
     if not is_proxy_token(token):
         raise ValueError("not a proxy token")
+    if memory_key and not is_memory_key(memory_key):
+        raise ValueError("not a Waku Memory key")
     dirs = tenant_dirs(config.tenant_root, tenant_id)
     address = address_for_project(project_id)
     host = _isolation(config)
@@ -288,6 +291,10 @@ def tenant_container(config: SpawnerConfig, *, tenant_id: str, project_id: int,
             # service this deployment does not run has no reason to be in a
             # tenant's environment, where the tenant can read it.
             *platform_env(config, token),
+            # The person's own Waku Memory key (spec 004), read by mcp.json's
+            # waku_memory server through auth_env. Theirs, revocable on
+            # waku.one, and present only once the gateway has minted it.
+            *([f"WAKU_MEMORY_API_KEY={memory_key}"] if memory_key else []),
         ],
         "Labels": {LABEL_TENANT: tenant_id, LABEL_KIND: KIND_TENANT},
         "ExposedPorts": {f"{DASHBOARD_PORT}/tcp": {}},

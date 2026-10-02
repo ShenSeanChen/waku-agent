@@ -44,7 +44,8 @@ async def handle(runtime: DockerRuntime, payload: dict) -> dict:
             return {"ok": True}
         if request.op == "start":
             running = await runtime.start(request.tenant_id, request.project_id,
-                                          request.timezone, request.token)
+                                          request.timezone, request.token,
+                                          request.memory_key)
             return {"address": running.address, "port": running.port}
         if request.op == "stop":
             await runtime.stop(request.tenant_id)

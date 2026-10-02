@@ -103,10 +103,12 @@ class FakeSpawner:
             raise self.fail_provision
 
     async def start(self, tenant_id: str, project_id: int, timezone: str,
-                    token: str) -> RunningContainer:
-        self.requests.append({"op": "start", "tenant_id": tenant_id,
-                              "project_id": project_id, "timezone": timezone,
-                              "token": token})
+                    token: str, memory_key: str = "") -> RunningContainer:
+        request = {"op": "start", "tenant_id": tenant_id,
+                   "project_id": project_id, "timezone": timezone, "token": token}
+        if memory_key:
+            request["memory_key"] = memory_key
+        self.requests.append(request)
         await asyncio.sleep(self.start_delay)
         if self.fail_start is not None:
             raise self.fail_start
