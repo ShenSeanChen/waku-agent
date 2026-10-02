@@ -15,6 +15,7 @@ there is no way to tell those two apart from here.
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 
@@ -31,12 +32,60 @@ ENV_MODE = 0o600
 TENANT_ENV_LINES = ("WAKU_PROVIDER=waku-platform",)
 
 
+# The tenant's Waku Memory, reached with their own key (spec 004). The key is
+# never in this file: auth_env names the variable the spawner sets from
+# control.db, so a tenant reading or editing mcp.json sees no credential.
+WAKU_MEMORY_SERVER = {
+    "name": "waku_memory",
+    "url": "https://api.waku.one/mcp",
+    "auth_env": "WAKU_MEMORY_API_KEY",
+}
+
+
+def ensure_waku_memory(home: Path) -> bool:
+    """Add WAKU_MEMORY_SERVER to home/mcp.json when it is missing. True if it wrote.
+
+    The one file provisioning adds to rather than only creates: a tenant's own
+    servers stay exactly as they are, and a waku_memory entry they already
+    have (an earlier browser sign-in, a different URL) is theirs and is left
+    alone. A symlink is never followed, for the same reason as .env's below,
+    and a file that is not the {"servers": [...]} shape is not ours to fix.
+    """
+    path = home / "mcp.json"
+    if path.is_symlink():
+        return False
+    if path.exists():
+        try:
+            config = json.loads(path.read_text(encoding="utf-8"))
+        except (ValueError, OSError):
+            return False
+        servers = config.get("servers") if isinstance(config, dict) else None
+        if not isinstance(servers, list):
+            return False
+        if any(isinstance(s, dict) and s.get("name") == WAKU_MEMORY_SERVER["name"]
+               for s in servers):
+            return False
+        config["servers"] = [*servers, dict(WAKU_MEMORY_SERVER)]
+    else:
+        config = {"servers": [dict(WAKU_MEMORY_SERVER)]}
+    # Written beside the file and renamed over it: rename replaces the name
+    # itself and never writes through a link planted after the check above.
+    staging = home / ".mcp.json.provision"
+    staging.unlink(missing_ok=True)
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+    with os.fdopen(os.open(staging, flags, 0o644), "w", encoding="utf-8") as handle:
+        handle.write(json.dumps(config, indent=2) + "\n")
+    os.replace(staging, path)
+    return True
+
+
 def render_env() -> str:
     return "".join(f"{line}\n" for line in TENANT_ENV_LINES)
 
 
 def provision(dirs: TenantDirs, soul_template: Path) -> list[Path]:
-    """Create the two files that are missing. Returns the paths written.
+    """Create the files that are missing, and add the tenant's Waku Memory
+    server to mcp.json (spec 004). Returns the paths written.
 
     `dirs` is built directly, not through tenant_dirs(): inside the throwaway
     container the only two paths that exist are the mounts, so C2 calls
@@ -99,5 +148,8 @@ def provision(dirs: TenantDirs, soul_template: Path) -> list[Path]:
     elif not soul.exists():
         soul.write_text(soul_template.read_text(encoding="utf-8"), encoding="utf-8")
         written.append(soul)
+
+    if ensure_waku_memory(dirs.home):
+        written.append(dirs.home / "mcp.json")
 
     return written
