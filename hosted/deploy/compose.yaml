@@ -13,10 +13,9 @@
 # the same rule so one env value (WAKU_CONTROL_DB, WAKU_*_SOCKET) reads the same
 # from the host and from inside a container.
 #
-# THE PROXY IS DECLARED AND MAY BE SCALED TO ZERO. Group D is deferred, so
-# `python -m hosted.proxy` does not exist yet; install.sh passes
-# `--scale proxy=0` while hosted/proxy/__main__.py is absent from the checkout,
-# and nothing else changes. The day D lands, the flag stops being passed.
+# THE PROXY RUNS WHEN THE CHECKOUT HAS ONE. install.sh and upgrade.sh pass
+# `--scale proxy=0` only while hosted/proxy/__main__.py is absent; spec 004 C
+# added it, so a current checkout starts the metering proxy.
 name: waku
 
 services:
