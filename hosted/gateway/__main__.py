@@ -51,6 +51,7 @@ from hosted.gateway.config import config_from_env
 from hosted.gateway.forward import ContainerForwarder
 from hosted.gateway.identity import JwksVerifier
 from hosted.gateway.launch import Launcher
+from hosted.gateway.memory_keys import WakuMemoryKeys
 from hosted.gateway.spawner_client import SpawnerClient
 from hosted.gateway.store import ControlDb
 
@@ -86,7 +87,8 @@ async def main() -> None:
             proxy_socket=config.proxy_socket, session=session)
         gateway = Gateway(config=config, store=store, launcher=launcher,
                           verifier=verifier, forward=forwarder, turns=turns,
-                          plans=plans)
+                          plans=plans,
+                          memory_keys=WakuMemoryKeys(session, config.supabase_audience))
         # Adopt what is already running before the first request arrives, so
         # no container is orphaned and every idle timer starts fresh.
         try:

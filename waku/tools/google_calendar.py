@@ -108,8 +108,8 @@ def connect(home: Path) -> str:
             if not bundled.get("client_id") or not bundled.get("client_secret"):
                 return (
                     "Google Calendar's bundled OAuth client is not configured "
-                    "yet. Add .waku/credentials.json to use your own Desktop "
-                    "OAuth client."
+                    f"yet. Add {home / 'credentials.json'} to use your own "
+                    "Desktop OAuth client."
                 )
             flow = InstalledAppFlow.from_client_config(
                 BUNDLED_CLIENT_CONFIG,

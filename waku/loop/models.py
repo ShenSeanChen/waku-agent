@@ -178,15 +178,18 @@ def _no_key_message(name: str, key_env: str) -> str:
     the URL to get a key, the absolute path of the .env actually in play, and
     the fact that Waku speaks to eleven providers, not one.
     """
-    from waku.config import DOTENV_PATH
+    from waku import config
 
-    # Name the variable in BOTH branches. "add the line there" without saying
+    # Name the variable in every branch. "add the line there" without saying
     # which line is the same dead end as pointing at .env.example was.
-    where = (f"Add it to {DOTENV_PATH}:\n"
+    read = config.DOTENV_PATH or config.HOME_DOTENV_PATH
+    home_env = config.resolve_home().path / ".env"
+    where = (f"Add it to {read}:\n"
              f"    {key_env}=your-key-here"
-             if DOTENV_PATH else
-             f"No .env found from {os.getcwd()} upward — create one here:\n"
-             f"    echo '{key_env}=your-key-here' >> .env")
+             if read else
+             f"No .env found from {os.getcwd()} upward or in {home_env.parent}.\n"
+             f"    Create {home_env} so Waku finds the key from any folder:\n"
+             f"    mkdir -p {home_env.parent} && echo '{key_env}=your-key-here' >> {home_env}")
     url = KEY_URLS.get(name)
     return (
         f"No API key for provider '{name}'.\n\n"

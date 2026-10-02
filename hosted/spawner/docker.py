@@ -305,7 +305,7 @@ class DockerRuntime:
     # --- the tenant's own container --------------------------------------
 
     async def start(self, tenant_id: str, project_id: int, timezone: str,
-                    token: str) -> RunningContainer:
+                    token: str, memory_key: str = "") -> RunningContainer:
         if not is_tenant_id(tenant_id):
             # start() validates its OWN id before it does anything, including
             # before the label query below. The socket path has already run
@@ -316,20 +316,21 @@ class DockerRuntime:
         # Try again.") can run concurrently with the start it is retrying, and
         # the two race over the same container name and the same directories.
         async with self._lock_for(tenant_id):
-            return await self._start_locked(tenant_id, project_id, timezone, token)
+            return await self._start_locked(tenant_id, project_id, timezone, token,
+                                            memory_key)
 
     def _lock_for(self, tenant_id: str) -> asyncio.Lock:
         return self._locks.setdefault(tenant_id, asyncio.Lock())
 
     async def _start_locked(self, tenant_id: str, project_id: int, timezone: str,
-                            token: str) -> RunningContainer:
+                            token: str, memory_key: str = "") -> RunningContainer:
         await self._refuse_if_busy(tenant_id)
         await self.stop(tenant_id)          # exactly one container per tenant
         await self.provision(tenant_id, project_id)
 
         body = template.tenant_container(
             self._config, tenant_id=tenant_id, project_id=project_id,
-            timezone=timezone, token=token)
+            timezone=timezone, token=token, memory_key=memory_key)
         name = template.container_name(tenant_id, template.KIND_TENANT)
         # A previous container with this name may be mid-removal by the
         # AutoRemove reaper. Removing by name first clears it when it is still

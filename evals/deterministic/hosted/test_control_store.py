@@ -401,3 +401,36 @@ def test_reopening_the_file_keeps_everything(store, tmp_path):
         assert again.tenant_by_id(t.id).email == "mei@example.com"
     finally:
         again.close()
+
+
+# --- spec 004 A1: each tenant's Waku Memory key -----------------------------
+# Minted once at sign-in with the person's own token, carried into every
+# container start. The store is the only place it lives on the VM.
+
+KEY = "mem_sk_" + "a" * 43
+
+
+def test_a_tenant_has_no_memory_key_until_one_is_set(store):
+    tenant = store.create_tenant(sub="sub-mk-1", email="mia@example.com", timezone="UTC")
+    assert store.memory_key(tenant.id) == ""
+    store.set_memory_key(tenant.id, key=KEY, key_id="k-1")
+    assert store.memory_key(tenant.id) == KEY
+
+
+def test_setting_a_memory_key_again_replaces_it(store):
+    tenant = store.create_tenant(sub="sub-mk-2", email="mia@example.com", timezone="UTC")
+    store.set_memory_key(tenant.id, key=KEY, key_id="k-1")
+    store.set_memory_key(tenant.id, key="mem_sk_" + "b" * 43, key_id="k-2")
+    assert store.memory_key(tenant.id) == "mem_sk_" + "b" * 43
+
+
+def test_deleting_a_tenant_deletes_its_memory_key(store):
+    tenant = store.create_tenant(sub="sub-mk-3", email="mia@example.com", timezone="UTC")
+    store.set_memory_key(tenant.id, key=KEY, key_id="k-1")
+    store.delete_tenant(tenant.id)
+    assert store.memory_key(tenant.id) == ""
+
+
+def test_setting_a_memory_key_requires_a_tenant_id(store):
+    with pytest.raises(ValueError):
+        store.set_memory_key("not a tenant id", key=KEY, key_id="k-1")

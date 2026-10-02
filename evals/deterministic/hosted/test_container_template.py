@@ -620,3 +620,25 @@ def test_each_bridges_interface_name_matches_its_network_name():
             ["com.docker.network.bridge.name"]) == tenant.INSPECT_BRIDGE
     for name in (tenant.TENANT_BRIDGE, tenant.INSPECT_BRIDGE):
         assert len(name) < 16, f"{name} is past Linux's IFNAMSIZ of 15"
+
+
+# --- spec 004 A3: the Waku Memory key reaches the container --------------------
+
+MEMORY_KEY = "mem_sk_" + "m" * 43
+
+
+def test_a_waku_memory_key_becomes_one_more_variable():
+    body = template.tenant_container(CONFIG, tenant_id=TENANT, project_id=2,
+                                     timezone="UTC", token=TOKEN, memory_key=MEMORY_KEY)
+    assert f"WAKU_MEMORY_API_KEY={MEMORY_KEY}" in body["Env"]
+    assert len(body["Env"]) == len(_tenant_body()["Env"]) + 1
+
+
+def test_no_waku_memory_key_means_no_variable():
+    assert not any(e.startswith("WAKU_MEMORY_API_KEY=") for e in _tenant_body()["Env"])
+
+
+def test_the_template_refuses_a_malformed_waku_memory_key():
+    with pytest.raises(ValueError):
+        template.tenant_container(CONFIG, tenant_id=TENANT, project_id=2,
+                                  timezone="UTC", token=TOKEN, memory_key="mem_sk_x\nEVIL=1")

@@ -380,7 +380,7 @@ def test_google_calendar_reports_when_bundled_client_is_not_configured(
     result = google_calendar.connect(tmp_path)
 
     assert "bundled OAuth client is not configured" in result
-    assert ".waku/credentials.json" in result
+    assert str(tmp_path / "credentials.json") in result, "name the real home, not ./.waku"
     assert "client_config" not in captured
     assert "ran_local_server_port" not in captured
     assert not (tmp_path / "google-token.json").exists()

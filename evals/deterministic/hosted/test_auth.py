@@ -372,3 +372,95 @@ def test_deleting_a_tenant_forgets_the_launcher_state_too(harness):
     assert answer["ok"] is True
     assert answer["tenant"] == tenant_id
     assert after is False
+
+
+# --- spec 004 A2: the Waku Memory key is minted at the first sign-in ---------
+
+SUB = "sub-mei"  # what gatewaylib.sign puts in every token
+
+MINTED = ("mem_sk_" + "z" * 43, "key-1")
+
+
+class FakeMemoryKeys:
+    def __init__(self, answer=MINTED, raises: Exception | None = None) -> None:
+        self.tokens: list[str] = []
+        self._answer = answer
+        self._raises = raises
+
+    async def mint(self, access_token: str):
+        self.tokens.append(access_token)
+        if self._raises is not None:
+            raise self._raises
+        return self._answer
+
+
+def _with_memory_keys(harness, fake):
+    harness.memory_keys = fake
+    harness.gateway = harness._build_gateway()
+    return fake
+
+
+def test_the_first_sign_in_mints_one_key_with_the_persons_own_token(harness):
+    fake = _with_memory_keys(harness, FakeMemoryKeys())
+
+    async def run():
+        await harness.start()
+        token = sign(harness.private, now=harness.clock.t)
+        first = await harness.json_post("/auth/session", {"access_token": token},
+                                        host="agent.waku.one")
+        second = await harness.json_post("/auth/session", {"access_token": token},
+                                         host="agent.waku.one")
+        stored = harness.store.memory_key(harness.store.tenant_by_sub(SUB).id)
+        await harness.stop()
+        return token, first[0], second[0], stored
+
+    token, first, second, stored = asyncio.run(run())
+    assert (first, second) == (200, 200)
+    assert fake.tokens == [token], "minted once, with the token that signed in"
+    assert stored == MINTED[0]
+
+
+def test_the_container_started_at_sign_in_already_has_the_key(harness):
+    _with_memory_keys(harness, FakeMemoryKeys())
+
+    async def run():
+        await harness.start()
+        token = sign(harness.private, now=harness.clock.t)
+        await harness.json_post("/auth/session", {"access_token": token},
+                                host="agent.waku.one")
+        await harness.launcher.wait_for_start(harness.store.tenant_by_sub(SUB).id)
+        await harness.stop()
+
+    asyncio.run(run())
+    assert ops(harness.spawner, "start")[-1]["memory_key"] == MINTED[0]
+
+
+@pytest.mark.parametrize("fake", [FakeMemoryKeys(answer=None),
+                                  FakeMemoryKeys(raises=OSError("api.waku.one unreachable"))])
+def test_a_mint_that_fails_never_fails_the_sign_in(harness, fake):
+    _with_memory_keys(harness, fake)
+
+    async def run():
+        await harness.start()
+        token = sign(harness.private, now=harness.clock.t)
+        answer = await harness.json_post("/auth/session", {"access_token": token},
+                                         host="agent.waku.one")
+        stored = harness.store.memory_key(harness.store.tenant_by_sub(SUB).id)
+        await harness.stop()
+        return answer[0], stored
+
+    assert asyncio.run(run()) == (200, "")
+
+
+def test_a_refused_sign_in_mints_nothing(harness):
+    fake = _with_memory_keys(harness, FakeMemoryKeys())
+
+    async def run():
+        await harness.start()
+        answer = await harness.json_post("/auth/session", {"access_token": "not-a-jwt"},
+                                         host="agent.waku.one")
+        await harness.stop()
+        return answer[0]
+
+    assert asyncio.run(run()) == 401
+    assert fake.tokens == []

@@ -295,3 +295,15 @@ def test_the_prompt_carries_the_log_and_demands_json_only():
     assert "worth remembering in a month" in filled, (
         "the durability instruction is what keeps chit-chat out of long-term memory"
     )
+
+
+def test_the_keep_gate_decides_which_proposed_facts_are_stored(memory, monkeypatch):
+    """Spec 005 B1: consolidation stores only what slot_gate.keep returns, and
+    reports that count. The gate's own behaviour is test_slot_gate.py's."""
+    from waku.memory import slot_gate
+    monkeypatch.setattr(slot_gate, "keep",
+                        lambda proposed: [f for f in proposed if f["subject"] == "Alex"])
+    add_exchanges(memory.conn, 3)
+    assert run(memory, [response([text_block(DISTILLED)])]) == 1
+    stored = [r[0] for r in memory.conn.execute("SELECT subject FROM facts").fetchall()]
+    assert stored == ["alex"]   # the store lowercases subjects

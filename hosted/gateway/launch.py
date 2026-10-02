@@ -227,7 +227,8 @@ class Launcher:
         try:
             running = await asyncio.wait_for(
                 self._spawner.start(tenant.id, tenant.project_id,
-                                    tenant.timezone, token),
+                                    tenant.timezone, token,
+                                    self._store.memory_key(tenant.id)),
                 idle.START_TIMEOUT_SECONDS)
         except SpawnerBusy as exc:
             self._forget_running(tenant.id)

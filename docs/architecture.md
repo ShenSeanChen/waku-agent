@@ -79,14 +79,31 @@ flowchart LR
 > ([@ShenSeanChen](https://github.com/ShenSeanChen)). Code is MIT; **this diagram is licensed CC BY-NC-SA 4.0** —
 > reuse it with credit to the channel, not for commercial resale._
 
+### Which memories earn a slot
+
+Retrieval finds the top facts for a message and, by default, puts all of them
+in the prompt; consolidation keeps every fact the summariser proposes. With
+`WAKU_SLOT_GATE=jev` and a `TYPESAFE_API_KEY`, Jev decides both
+(`waku/memory/slot_gate.py`, spec 005): one call scores every retrieved fact on
+"how much does leaving this one out change the answer?" and keeps those at
+1.8 or above, the threshold `lab/jev-system-one` measured at 12 of 12; and
+each proposed fact is scored on whether a later answer would need it before
+it is stored. Any failure keeps today's behaviour, so a slow judge never costs
+a memory. The turn card says how many it kept.
+
 ### MEMORY.md vs state.db
 
 Some assistants (e.g. Hermes) keep long-term memory as a single `MEMORY.md`
 markdown file. Waku keeps the *queryable* source in `state.db` (the `facts` and
 `episodes` tables, keyword-searchable via FTS5) **and** regenerates a readable
-`.waku/MEMORY.md` mirror after every turn — so you get both: a real file you
+`~/.waku/MEMORY.md` mirror after every turn — so you get both: a real file you
 can open, backed by a sturdy database. The dashboard's **Memory** tab is the
 friendly view; the **Data** tab shows the raw `state.db` tables.
+
+Each fact is also written to `~/.waku/memory/<id>.md`, one file per fact, in
+the same pass. That is the layout of Claude Code's memory, which the Waku
+Memory importer already uploads one memory per file. Episodes, `MEMORY.md` and
+`state.db` are never written there (spec 003).
 
 ## Which file is which
 
@@ -117,8 +134,9 @@ friendly view; the **Data** tab shows the raw `state.db` tables.
   The two never mix. `evals/hosted_docker/` is a third tier for `hosted/`:
   0/1 and offline, but it needs a Docker daemon and its own CI job.
 - `examples/` — teaching material, not product; one folder per topic.
-- `.waku/` — runtime state: `state.db`, `calendar.ics`, `outbox/`, `traces/`.
-  Gitignored.
+- `~/.waku/` — runtime state: `state.db`, `calendar.ics`, `outbox/`, `traces/`.
+  `WAKU_HOME` moves it; `make` sets it to the repo's own `.waku/`, which is
+  gitignored. `waku/config.py` `resolve_home()` has the rules.
 
 ## Design decisions worth stealing
 
@@ -148,5 +166,7 @@ same loop invoked as one step — no peer-to-peer agent messaging, execution
 follows the edges deterministically.) It's the readable blueprint — OpenClaw
 and Hermes are the products; this is the afternoon read that explains them.
 `hosted/` runs this same loop as a service instead; it is a deployment of
-waku, not a second architecture (conventions.md §3). Spec 001 designs it, and
-none of it exists in this repo yet.
+waku, not a second architecture (conventions.md §3). Spec 001 designed it and
+it runs at agent.waku.one, one container per person. Each container reaches
+that person's Waku Memory on its own: the gateway mints their Waku Memory key
+at their first sign-in, and every start passes it in (spec 004).

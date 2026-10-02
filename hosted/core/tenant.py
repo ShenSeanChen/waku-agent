@@ -23,6 +23,10 @@ TENANT_ID_RE = re.compile(r"^[a-z2-7]{12}$")
 
 # secrets.token_urlsafe(32) is 43 characters of the URL-safe base64 alphabet.
 TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{43}$")
+# A Waku Memory API key (spec 004): waku-memory-backend mints `mem_sk_` +
+# secrets.token_urlsafe(32). It lands in a container's environment, so the
+# pattern is anchored and admits no space, newline or `=`.
+MEMORY_KEY_RE = re.compile(r"^mem_sk_[A-Za-z0-9_-]{43}$")
 
 STATUSES = frozenset({"active", "disabled", "deleted"})
 
@@ -135,6 +139,10 @@ def tenant_dirs(root: Path, tenant_id: str) -> TenantDirs:
         raise ValueError(f"not a tenant id: {tenant_id!r}")
     base = root / tenant_id
     return TenantDirs(home=base / "home", env=base / "env")
+
+
+def is_memory_key(value: object) -> bool:
+    return isinstance(value, str) and MEMORY_KEY_RE.match(value) is not None
 
 
 def is_project_id(value: object) -> bool:

@@ -92,16 +92,18 @@ notifications are suppressed (`sendUpdates=none`).
 
 ## Share one memory with your other agents (Waku Memory)
 
-Waku's own memory is local. [Waku Memory](https://waku.one) is a separate,
-hosted memory that several agents share over MCP: save something in one agent,
-and recall it in another.
+Waku's own memory is local. Each fact is also written to `~/.waku/memory/`,
+one file per fact, the layout the Waku Memory importer already uploads for
+Claude Code; episodes, `MEMORY.md` and `state.db` are never written there.
+[Waku Memory](https://waku.one) is a hosted memory that several agents share
+over MCP: save something in one agent, and recall it in another.
 
 ```bash
 pip install -e '.[mcp]'
 waku connect waku-memory     # or /connect waku-memory in the dashboard chat
 ```
 
-That adds Waku Memory to `.waku/mcp.json`, next to any servers already there,
+That adds Waku Memory to `~/.waku/mcp.json`, next to any servers already there,
 and opens your browser once to sign in. Restart Waku and its tools appear as
 `waku_memory_*`; `waku mcp` shows which account you are signed in as. A config
 still pointing at Waku Memory's old address is moved to the current one.
@@ -132,13 +134,26 @@ skill calls `create_event`) arrive as instructions without those tools behind
 them. Saving skills into Waku Memory, so a cloud agent like Grok Bot can recall
 them, waits until Waku Memory has a place for skills.
 
+## Let Jev decide which memories earn a slot
+
+```bash
+TYPESAFE_API_KEY=...      # typesafe.ai
+WAKU_SLOT_GATE=jev
+```
+
+With both set, Jev scores every retrieved memory against your message and only
+the ones that change the answer go into the prompt; it also scores facts before
+consolidation stores them. One call per turn, about a quarter of a second. Leave
+either unset, or let TypeSafe be unreachable, and Waku behaves as before. The
+TypeSafe card on Connections sets both.
+
 ## Connect MCP servers
 
 ```bash
 pip install -e '.[mcp]'
 ```
 
-Create `.waku/mcp.json` and any Model Context Protocol server's tools appear to
+Create `~/.waku/mcp.json` and any Model Context Protocol server's tools appear to
 the agent, namespaced `<server>_<tool>` (and in the dashboard's Tools ▸ MCP tab):
 
 ```json
@@ -186,7 +201,7 @@ Waku opens your browser on first use:
 
 Nothing is issued out of band and nothing is pasted anywhere. Waku registers
 itself with the server, catches the redirect on `127.0.0.1:41765`, and keeps
-the result in `.waku/mcp-auth/<server>.json`, written `0600` — one file per
+the result in `~/.waku/mcp-auth/<server>.json`, written `0600` — one file per
 server, so a corrupt one costs a single connection rather than all of them.
 Delete that file to sign out.
 
