@@ -2,7 +2,9 @@
 
 The proxy is the one service tenant code can reach directly, so it gets no
 access to control.db. It sends a SHA-256 hash and gets back a tenant id and a
-status. It cannot enumerate tenants, read a session, or issue anything.
+status, and the tenant's Waku Memory key so it can charge that person's
+credits (spec 004 D). It cannot enumerate tenants, read a session, or issue
+anything.
 """
 
 from __future__ import annotations
@@ -37,7 +39,10 @@ async def serve_token_lookup(path: Path, store: ControlStore) -> asyncio.Server:
         if found is None:
             return {"tenant": None}
         tenant_id, status = found
-        return {"tenant": tenant_id, "status": status}
+        # The person's Waku Memory key (spec 004 D): the proxy charges each
+        # call to their credits with it, so a charge can only land on them.
+        return {"tenant": tenant_id, "status": status,
+                "memory_key": store.memory_key(tenant_id)}
 
     # The directory, the way admin.serve_admin does it. F1's Compose mounts
     # run/gateway/ so the deployment never needs this -- but without it the

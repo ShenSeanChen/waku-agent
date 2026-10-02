@@ -30,6 +30,8 @@ REQUIRED_ENV_NAMES = (
     "WAKU_MAX_TOKENS_CEILING",
     "WAKU_MAX_BODY_BYTES",
     "WAKU_UPSTREAM_BASE_URL",
+    # Spec 004 D: where each settled call is charged in credits.
+    "WAKU_MEMORY_API_URL",
 )
 
 
@@ -49,6 +51,7 @@ class ProxyConfig:
     max_tokens_ceiling: int
     max_body_bytes: int
     upstream_base_url: str
+    memory_api_url: str = "https://api.waku.one"
 
 
 def config_from_env(env: Mapping[str, str]) -> ProxyConfig:
@@ -77,4 +80,5 @@ def config_from_env(env: Mapping[str, str]) -> ProxyConfig:
         max_tokens_ceiling=int(env["WAKU_MAX_TOKENS_CEILING"]),
         max_body_bytes=int(env["WAKU_MAX_BODY_BYTES"]),
         upstream_base_url=env["WAKU_UPSTREAM_BASE_URL"].rstrip("/"),
+        memory_api_url=env["WAKU_MEMORY_API_URL"].rstrip("/"),
     )

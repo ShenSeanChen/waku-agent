@@ -356,6 +356,12 @@ which holds the platform key and nothing else does:
   body field outside the allowlist. Thinking blocks Sonnet returns are accepted
   back, because Waku sends them on the next call.
 
+- **One wallet.** Each settled call is also charged to the person's waku.one
+  credits, at 25,000 credits a dollar, with their own Waku Memory key (spec
+  004 D; `POST /agent-usage`). A Free person with no credits left is refused
+  before their call reaches Anthropic. When Waku Memory cannot be reached, the
+  $1 cap is the only limit.
+
 `config/proxy.env` holds all of it. `ledger.db` holds each person's spend.
 
 ### Turning it on for a deployment installed without it
