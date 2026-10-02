@@ -134,6 +134,19 @@ skill calls `create_event`) arrive as instructions without those tools behind
 them. Saving skills into Waku Memory, so a cloud agent like Grok Bot can recall
 them, waits until Waku Memory has a place for skills.
 
+## Let Jev decide which memories earn a slot
+
+```bash
+TYPESAFE_API_KEY=...      # typesafe.ai
+WAKU_SLOT_GATE=jev
+```
+
+With both set, Jev scores every retrieved memory against your message and only
+the ones that change the answer go into the prompt; it also scores facts before
+consolidation stores them. One call per turn, about a quarter of a second. Leave
+either unset, or let TypeSafe be unreachable, and Waku behaves as before. The
+TypeSafe card on Connections sets both.
+
 ## Connect MCP servers
 
 ```bash

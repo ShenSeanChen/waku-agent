@@ -17,7 +17,7 @@ from pathlib import Path
 import anthropic
 
 from waku.config import Settings
-from waku.memory import consolidation, retrieval_gate
+from waku.memory import consolidation, retrieval_gate, slot_gate
 from waku.memory.episodic.store import SqliteEpisodeStore
 from waku.memory.procedural.loader import SkillLoader
 from waku.memory.semantic.store import SqliteFactStore
@@ -109,8 +109,14 @@ class Memory:
             notify("gate", {"decision": "retrieve" if retrieve else "skip", "reason": reason})
         if not retrieve:
             return ""
-        found = self.facts.search(query, self.settings.retrieval_top_k)
-        found += self.episodes.search(query, top_k=3)
+        facts = self.facts.search(query, self.settings.retrieval_top_k)
+        # Spec 005: Jev keeps only the facts that change the answer. Off by
+        # default, and it fails open, so without WAKU_SLOT_GATE=jev this is
+        # every fact, as before.
+        facts, verdicts = slot_gate.select(message, facts)
+        if notify and verdicts:
+            notify("slot", {"verdicts": verdicts})
+        found = facts + self.episodes.search(query, top_k=3)
         return "\n".join(found)
 
     # ---- procedural
