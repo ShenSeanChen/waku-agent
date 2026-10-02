@@ -55,7 +55,7 @@ uv run waku dashboard                   # …or the browser cockpit → localhos
 
 **Now try it.** *"Remember that Alex prefers morning meetings."* Quit. Restart.
 *"Book a catch-up with Alex on Friday."* → it remembers, and books 9am. Your memory is one
-file: `.waku/state.db`.
+file: `~/.waku/state.db`, the same from every folder.
 
 **Use the model you already pay for.** Anthropic (default), OpenAI, Gemini, DeepSeek, MiniMax,
 Kimi, GLM, OpenRouter (one key, hundreds of hosted models), OpenCode Zen, or OpenCode Go —

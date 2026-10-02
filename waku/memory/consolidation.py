@@ -16,6 +16,7 @@ from datetime import date
 
 import anthropic
 
+from waku.memory import slot_gate
 from waku.memory.episodic.store import SqliteEpisodeStore
 from waku.memory.semantic.store import SqliteFactStore
 
@@ -68,9 +69,13 @@ def consolidate_if_due(
     except Exception:
         return 0  # never lose the log — it stays unconsolidated for next time
 
-    for fact in distilled.get("facts", []):
-        if fact.get("subject") and fact.get("content"):
-            facts.add(fact["subject"], fact["content"], source="consolidation")
+    proposed = [f for f in distilled.get("facts", [])
+                if isinstance(f, dict) and f.get("subject") and f.get("content")]
+    # Spec 005: Jev drops what no later answer would need. Off by default, and
+    # it fails open, so without WAKU_SLOT_GATE=jev every proposed fact is kept.
+    kept = slot_gate.keep(proposed)
+    for fact in kept:
+        facts.add(fact["subject"], fact["content"], source="consolidation")
     if distilled.get("episode"):
         episodes.add(distilled["episode"], happened_at=date.today().isoformat())
 
@@ -79,4 +84,4 @@ def consolidate_if_due(
         [r["id"] for r in rows],
     )
     conn.commit()
-    return len(distilled.get("facts", []))
+    return len(kept)

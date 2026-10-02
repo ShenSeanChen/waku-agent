@@ -25,7 +25,8 @@ SPEC_OPERATIONS = {"provision", "start", "stop", "list", "tenants", "task"}
 SPEC_TASKS = {"backup", "restore", "archive", "inspect", "inspect-stop"}
 SPEC_KEYS = {
     "provision": {"op", "tenant_id", "project_id"},
-    "start": {"op", "tenant_id", "project_id", "timezone", "token"},
+    # memory_key is spec 004 A3: optional, so it is in _KEYS and not _REQUIRED.
+    "start": {"op", "tenant_id", "project_id", "timezone", "token", "memory_key"},
     "stop": {"op", "tenant_id"},
     "list": {"op"},
     # Added in group F (F3b). `list` answers "may the gateway forward to this
@@ -90,6 +91,7 @@ _VALUES = {
     "timezone": "UTC",
     "token": GOOD_TOKEN,
     "task": "backup",
+    "memory_key": "mem_sk_" + "M" * 43,
 }
 
 
@@ -226,3 +228,25 @@ def test_a_timezone_is_refused_here_rather_than_normalised():
     with pytest.raises(requests.Invalid):
         requests.parse({"op": "start", "tenant_id": GOOD_ID, "project_id": 7,
                         "timezone": "Mars/Olympus", "token": GOOD_TOKEN})
+
+
+# --- spec 004 A3: the Waku Memory key on `start` ----------------------------
+
+def test_start_carries_a_waku_memory_key_when_given():
+    request = requests.parse(payload_for("start"))
+    assert request.memory_key == "mem_sk_" + "M" * 43
+
+
+def test_start_without_a_waku_memory_key_is_still_a_start():
+    payload = payload_for("start")
+    del payload["memory_key"]
+    assert requests.parse(payload).memory_key == ""
+
+
+@pytest.mark.parametrize("bad", ["", "mem_sk_short", "sk_" + "M" * 43, "mem_sk_" + "M" * 42,
+                                 "mem_sk_" + "M" * 43 + "\nX=1", "mem_sk_" + "M" * 42 + " ", 7])
+def test_start_refuses_anything_that_is_not_a_waku_memory_key(bad):
+    """The value lands in a container's environment. A newline or a space is
+    how one variable becomes two."""
+    with pytest.raises(requests.Invalid):
+        requests.parse(payload_for("start", memory_key=bad))

@@ -15,14 +15,22 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from hosted.core.tenant import is_known_timezone, is_project_id, is_proxy_token, is_tenant_id
+from hosted.core.tenant import (
+    is_known_timezone,
+    is_memory_key,
+    is_project_id,
+    is_proxy_token,
+    is_tenant_id,
+)
 
 OPERATIONS = frozenset({"provision", "start", "stop", "list", "tenants", "task"})
 TASKS = frozenset({"backup", "restore", "archive", "inspect", "inspect-stop"})
 
 _KEYS: dict[str, frozenset[str]] = {
     "provision": frozenset({"op", "tenant_id", "project_id"}),
-    "start": frozenset({"op", "tenant_id", "project_id", "timezone", "token"}),
+    # memory_key is optional (spec 004): a tenant whose Waku Memory key has not
+    # been minted yet still starts, without one.
+    "start": frozenset({"op", "tenant_id", "project_id", "timezone", "token", "memory_key"}),
     "stop": frozenset({"op", "tenant_id"}),
     "list": frozenset({"op"}),
     "tenants": frozenset({"op"}),
@@ -59,6 +67,7 @@ class SpawnerRequest:
     timezone: str = "UTC"
     token: str = ""
     task: str = ""
+    memory_key: str = ""
 
 
 def parse(payload: object) -> SpawnerRequest:
@@ -94,9 +103,14 @@ def parse(payload: object) -> SpawnerRequest:
     if "token" in payload and not is_proxy_token(token):
         raise Invalid("token is not a proxy token")
 
+    memory_key = payload.get("memory_key", "")
+    if "memory_key" in payload and not is_memory_key(memory_key):
+        raise Invalid("memory_key is not a Waku Memory key")
+
     task = payload.get("task", "")
     if "task" in payload and task not in TASKS:
         raise Invalid(f"task must be one of {sorted(TASKS)}, not {task!r}")
 
     return SpawnerRequest(op=op, tenant_id=tenant_id, project_id=project_id,
-                          timezone=timezone, token=token, task=task)
+                          timezone=timezone, token=token, task=task,
+                          memory_key=memory_key)

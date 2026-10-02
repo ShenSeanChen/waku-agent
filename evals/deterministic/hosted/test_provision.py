@@ -52,9 +52,10 @@ def _mode(path):
     return stat.S_IMODE(path.lstat().st_mode)
 
 
-def test_the_two_files_are_written_on_a_first_provision(dirs, template):
+def test_the_three_files_are_written_on_a_first_provision(dirs, template):
     written = provision(dirs, template)
-    assert written == [dirs.env / ".env", dirs.home / "SOUL.md"]
+    # mcp.json is spec 004: the tenant's Waku Memory server.
+    assert written == [dirs.env / ".env", dirs.home / "SOUL.md", dirs.home / "mcp.json"]
     assert (dirs.env / ".env").read_text(encoding="utf-8") == render_env()
     assert (dirs.home / "SOUL.md").read_text(encoding="utf-8") == SOUL_TEMPLATE_TEXT
 
@@ -124,6 +125,7 @@ def test_a_deleted_file_comes_back(dirs, template):
 def test_a_deleted_directory_comes_back(dirs, template):
     provision(dirs, template)
     (dirs.home / "SOUL.md").unlink()
+    (dirs.home / "mcp.json").unlink()
     dirs.home.rmdir()
     provision(dirs, template)
     assert (dirs.home / "SOUL.md").is_file()
@@ -142,7 +144,7 @@ def test_an_env_symlink_is_left_alone_rather_than_followed(dirs, template, tmp_p
     os.chmod(outside, 0o644)
     (dirs.env / ".env").symlink_to(outside)
 
-    assert provision(dirs, template) == [dirs.home / "SOUL.md"]
+    assert provision(dirs, template) == [dirs.home / "SOUL.md", dirs.home / "mcp.json"]
     assert _mode(outside) == 0o644, "the mode repair followed a symlink"
     assert outside.read_text(encoding="utf-8") == "not mine\n"
 
@@ -184,3 +186,63 @@ def test_a_soul_symlink_to_an_existing_file_is_left_alone(dirs, template, tmp_pa
     (dirs.home / "SOUL.md").symlink_to(target)
     provision(dirs, template)
     assert target.read_text(encoding="utf-8") == "UNTOUCHED\n"
+
+
+# --- spec 004 A4: every tenant's mcp.json names their Waku Memory -------------
+# The container reaches Waku Memory through a waku_memory server whose
+# credential is the person's own key, passed in as WAKU_MEMORY_API_KEY.
+
+import json  # noqa: E402
+
+from hosted.core.provision import WAKU_MEMORY_SERVER  # noqa: E402
+
+
+def _servers(dirs):
+    return json.loads((dirs.home / "mcp.json").read_text())["servers"]
+
+
+def test_a_new_tenant_gets_an_mcp_json_with_waku_memory(dirs, template):
+    written = provision(dirs, template)
+    assert dirs.home / "mcp.json" in written
+    assert _servers(dirs) == [WAKU_MEMORY_SERVER]
+    assert WAKU_MEMORY_SERVER == {"name": "waku_memory", "url": "https://api.waku.one/mcp",
+                                  "auth_env": "WAKU_MEMORY_API_KEY"}
+
+
+def test_a_tenants_own_servers_are_kept_and_waku_memory_is_added(dirs, template):
+    dirs.home.mkdir(parents=True)
+    treg = {"name": "treg", "url": "https://treg.to/mcp/", "oauth": True}
+    (dirs.home / "mcp.json").write_text(json.dumps({"servers": [treg]}))
+    provision(dirs, template)
+    assert _servers(dirs) == [treg, WAKU_MEMORY_SERVER]
+
+
+def test_a_waku_memory_entry_the_tenant_already_has_is_left_alone(dirs, template):
+    dirs.home.mkdir(parents=True)
+    theirs = {"name": "waku_memory", "url": "https://api.waku.one/mcp", "oauth": True}
+    (dirs.home / "mcp.json").write_text(json.dumps({"servers": [theirs]}))
+    written = provision(dirs, template)
+    assert dirs.home / "mcp.json" not in written
+    assert _servers(dirs) == [theirs]
+
+
+def test_an_mcp_json_that_is_not_json_is_left_alone(dirs, template):
+    dirs.home.mkdir(parents=True)
+    (dirs.home / "mcp.json").write_text("{not json")
+    provision(dirs, template)
+    assert (dirs.home / "mcp.json").read_text() == "{not json"
+
+
+def test_a_symlinked_mcp_json_is_never_followed(dirs, template, tmp_path):
+    dirs.home.mkdir(parents=True)
+    target = tmp_path / "elsewhere.json"
+    target.write_text(json.dumps({"servers": []}))
+    (dirs.home / "mcp.json").symlink_to(target)
+    provision(dirs, template)
+    assert json.loads(target.read_text()) == {"servers": []}
+
+
+def test_provisioning_twice_adds_waku_memory_once(dirs, template):
+    provision(dirs, template)
+    provision(dirs, template)
+    assert _servers(dirs) == [WAKU_MEMORY_SERVER]

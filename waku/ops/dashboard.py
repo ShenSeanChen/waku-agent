@@ -99,7 +99,7 @@ def chat_stream(message: str, emit) -> None:
     events: list[dict] = []
 
     def observer(kind, ev):
-        if kind in ("gate", "consolidation", "route", "triage"):
+        if kind in ("gate", "consolidation", "route", "triage", "slot"):
             events.append({"kind": kind, **ev})
         emit(kind, ev)
 
@@ -114,6 +114,7 @@ def chat_stream(message: str, emit) -> None:
     cons = next((e for e in events if e["kind"] == "consolidation"), None)
     route = next((e for e in events if e["kind"] == "route"), None)
     triage = next((e for e in events if e["kind"] == "triage"), None)
+    slot = next((e for e in events if e["kind"] == "slot"), None)
     quick = bool(route) and route.get("target") == "quick_reply"
     emit("done", {
         "reply": result.reply,
@@ -125,6 +126,9 @@ def chat_stream(message: str, emit) -> None:
                    "status": _tool_status(c["output"]),
                    "summary": (c["output"] or "").split(". ")[0][:120]} for c in result.tool_calls],
         "consolidation": {"new_facts": cons["new_facts"]} if cons else None,
+        # Spec 005: how many retrieved memories Jev let into the prompt.
+        "slot": ({"kept": sum(1 for v in slot["verdicts"] if v["kept"]),
+                  "total": len(slot["verdicts"])} if slot else None),
         "iterations": result.iterations,
         "latency_ms": latency_ms,
         # which brain answered — shown per card; a quick graph turn was the small model
@@ -1232,6 +1236,9 @@ def main() -> None:
     # iterations, and bind_host() prints the off-loopback security warning. Ten
     # busy ports used to print it ten times, which teaches people to skip it.
     host = bind_host()
+    from waku.config import home_notice
+    if notice := home_notice():
+        print(notice)
     for port in range(base, base + 10):  # walk past a busy port instead of crashing
         try:
             server = ThreadingHTTPServer((host, port), Handler)

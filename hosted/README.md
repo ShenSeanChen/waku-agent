@@ -296,6 +296,29 @@ Signup is off, so people arrive by invitation: invite an email address from the
 Supabase dashboard. They open the magic link, land on `agent.waku.one/login`,
 and finish at `https://<their id>.agent.waku.one`.
 
+## Each person's Waku Memory
+
+Every tenant's agent reaches that person's own Waku Memory without a browser
+sign-in inside the container (spec 004):
+
+1. At the person's first sign-in, the gateway calls Waku Memory's `POST /keys`
+   with the person's own Supabase token and the label `Waku Agent (hosted)`.
+   The API base is `WAKU_SUPABASE_AUDIENCE` without `/mcp`. A failure is logged
+   and the sign-in goes ahead; the next sign-in tries again.
+2. The key is stored in `control.db`, table `memory_key`, and every container
+   start passes it in as `WAKU_MEMORY_API_KEY`.
+3. Provisioning adds a `waku_memory` server to the tenant's `/data/mcp.json`
+   with `"auth_env": "WAKU_MEMORY_API_KEY"`. A tenant's own servers are kept.
+
+The key is the person's own: it reaches only their memory, and they can revoke
+it on waku.one under Settings, API keys. **A revoked key is not replaced on its
+own yet.** Their agent stops reaching Waku Memory until the row is removed, and
+the next sign-in mints a new one:
+
+```bash
+sudo sqlite3 /srv/waku/control/control.db "DELETE FROM memory_key WHERE tenant_id = '<id>'"
+```
+
 ## What is not enabled yet
 
 Two pieces of spec 001 are deferred, and this deployment is invite-only because

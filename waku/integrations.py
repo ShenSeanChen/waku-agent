@@ -250,6 +250,15 @@ INTEGRATIONS: tuple[Integration, ...] = (
     Integration("tavily", "Search & Observability", "Tavily", "Lets Waku search the web.",
                 (EnvField("TAVILY_API_KEY", "API key", secret=True),), None, None,
                 "https://tavily.com", ReloadMode.LIVE, lambda env: bool(env.get("TAVILY_API_KEY")), None),
+    # Spec 005: Jev decides which memories earn a slot. Both fields, or it
+    # stays off: WAKU_SLOT_GATE=jev is the switch, the key is the credential.
+    Integration("typesafe", "Memory & Storage", "TypeSafe Jev",
+                "Lets Jev decide which memories earn a place in each answer.",
+                (EnvField("TYPESAFE_API_KEY", "API key", secret=True),
+                 EnvField("WAKU_SLOT_GATE", "Set to jev to turn it on")), None, None,
+                "https://typesafe.ai", ReloadMode.LIVE,
+                lambda env: env.get("WAKU_SLOT_GATE") == "jev" and bool(env.get("TYPESAFE_API_KEY")),
+                None),
     Integration("otel", "Search & Observability", "OpenTelemetry", "Exports traces to an OTLP collector.",
                 (EnvField("OTEL_EXPORTER_OTLP_ENDPOINT", "OTLP endpoint"),), "tracing", "opentelemetry",
                 "", ReloadMode.AGENT, lambda env: bool(env.get("OTEL_EXPORTER_OTLP_ENDPOINT")), None),
@@ -475,11 +484,26 @@ def cli_main() -> int:
         if status.state is IntegrationState.ERROR and any(field.configured for field in view.fields):
             failed = True
 
-    # Waku Memory is not an .env field like the rows above: it is a server in
-    # mcp.json with a sign-in token beside it, so its line comes from there.
-    from waku.config import load_settings
+    from waku.config import (
+        DOTENV_PATH,
+        HOME_DOTENV_PATH,
+        describe_home,
+        home_notice,
+        load_settings,
+        resolve_home,
+    )
     from waku.tools.waku_memory import status as waku_memory_status
 
+    # Where this run keeps its memory, and which .env files supplied the keys.
+    console.print("\n[bold]Home[/bold]")
+    console.print(f"  {'Memory folder':<20} {describe_home(resolve_home())}", markup=False)
+    env_files = ", ".join(path for path in (DOTENV_PATH, HOME_DOTENV_PATH) if path) or "none found"
+    console.print(f"  {'.env read':<20} {env_files}", markup=False)
+    if notice := home_notice():
+        console.print(f"  {notice}", markup=False)
+
+    # Waku Memory is not an .env field like the rows above: it is a server in
+    # mcp.json with a sign-in token beside it, so its line comes from there.
     console.print("\n[bold]Shared memory[/bold]")
     console.print(f"  {'Waku Memory':<20} {waku_memory_status(load_settings().home)}", markup=False)
     return int(failed)

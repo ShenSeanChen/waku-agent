@@ -72,6 +72,11 @@ numbers against theirs, and the jaggedness).
 
 ## Graduation
 
+**Done, as the slot gate** (`waku/memory/slot_gate.py`, `waku/memory/jev.py`,
+spec 005): the memory suite's question now decides which retrieved facts enter
+the prompt, at the same 1.8 threshold, and a second question decides which
+consolidated facts are stored. Opt-in with `WAKU_SLOT_GATE=jev`; it fails open.
+
 **Done, as the Judgment Arena** (`waku/ops/judgment_arena.py`,
 `judgment_cases.py`, `static/js/judgment.js`): the third race beside the model
 and memory arenas. It holds the harness, the questions and the cases constant

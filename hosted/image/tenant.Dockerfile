@@ -43,10 +43,12 @@ COPY skills ./skills
 # --frozen installs exactly uv.lock and resolves nothing, so an image build can
 # never become a dependency change nobody reviewed. --extra notion is the one
 # allowed Connection that needs an extra; Tavily needs none (spec, "Images").
+# --extra mcp is spec 004: every tenant reaches their own Waku Memory, and
+# treg next, over MCP, and waku loads no MCP server without it.
 # UV_LINK_MODE=copy: the cache and the venv are on different layers, and uv's
 # default hardlink mode warns on every build.
 ENV UV_LINK_MODE=copy
-RUN uv sync --frozen --extra notion
+RUN uv sync --frozen --extra notion --extra mcp
 
 # PYTHONDONTWRITEBYTECODE, because the root filesystem is read-only at runtime:
 # without it every import tries to write a .pyc under /app and the failures are

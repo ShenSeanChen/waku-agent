@@ -690,3 +690,32 @@ def test_resync_stops_a_container_whose_tenant_row_is_gone(made):
     assert [r["tenant_id"] for r in during if r["op"] == "stop"] == [tenant_id]
     assert tenant_id not in spawner.running     # and it really is gone now
     assert fleet.running() == []
+
+
+# --- spec 004 A3: a start carries the tenant's Waku Memory key ---------------
+
+def test_a_start_carries_the_tenants_waku_memory_key(made):
+    _path, store, spawner, _clock, _fleet, launcher = made
+    key = "mem_sk_" + "w" * 43
+
+    async def run():
+        record, _ = await launcher.ensure_tenant(sub="sub-mk", email="mia@example.com",
+                                                 timezone="UTC")
+        store.set_memory_key(record.id, key=key, key_id="k-1")
+        await launcher.start(record)
+        return record
+
+    asyncio.run(run())
+    assert ops(spawner, "start")[-1]["memory_key"] == key
+
+
+def test_a_start_without_a_key_sends_none(made):
+    _path, _store, spawner, _clock, _fleet, launcher = made
+
+    async def run():
+        record, _ = await launcher.ensure_tenant(sub="sub-nokey", email="mia@example.com",
+                                                 timezone="UTC")
+        await launcher.start(record)
+
+    asyncio.run(run())
+    assert "memory_key" not in ops(spawner, "start")[-1]

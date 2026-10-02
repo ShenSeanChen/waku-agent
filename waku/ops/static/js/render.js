@@ -25,7 +25,7 @@ const toolRow = x => `<div class="tool ${x.status||"ok"}">
 // before this was saved, or another gateway) fall back to a plain card.
 function histItem(m){
   if (m.role === "user") return {role:"user", text:m.content};
-  if (m.meta) return {role:"waku", reply:m.content, gate:m.meta.gate,
+  if (m.meta) return {role:"waku", reply:m.content, gate:m.meta.gate, slot:m.meta.slot,
                       graph:m.meta.graph,
                       tools:m.meta.tools, iterations:m.meta.iterations,
                       latency_ms:m.meta.latency_ms, model:m.meta.model};
@@ -109,6 +109,7 @@ const chatTurnCard = t => uiCard(`
   ${msgCopy(t.reply)}
   ${(t.gate||t.graph)?`${stagesRow(t, false)}
     <div class="meta tele" style="margin:0 0 calc(var(--spacing) * 1.5)">${esc((t.gate&&t.gate.reason)||(t.graph&&t.graph.reason)||"")}</div>`:""}
+  ${t.slot?`<div class="meta tele" style="margin:0 0 calc(var(--spacing) * 1.5)">Jev kept ${esc(String(t.slot.kept))} of ${esc(String(t.slot.total))} memories</div>`:""}
   ${nodesRow(t)}
   ${(t.tools||[]).length?`<div class="tele">${(t.tools||[]).map(toolRow).join("")}</div>`:""}
   <div class="r" style="margin-top:var(--space-2)">${renderMarkdown(t.reply)}</div>
