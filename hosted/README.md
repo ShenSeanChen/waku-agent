@@ -156,7 +156,7 @@ output for the whole install, and the installer can clean up neither.
 
 | File | Flag | What happens to it |
 |---|---|---|
-| The platform's model key | `--platform-key-file` | Only with `--free-model`, and only once the metering proxy exists. Copied into `/srv/waku/config/proxy.env` at mode 0600. Delete the source file afterwards |
+| The platform's model key | `--platform-key-file` | Only with `--free-model`. Copied into `/srv/waku/config/proxy.env` at mode 0600. Delete the source file afterwards |
 | The DNS provider's API token, as `NAME=VALUE` lines | `--dns-env-file` | Copied into `/srv/waku/config/caddy.env` at mode 0600. Delete the source file afterwards |
 | The restic repository's password | `--restic-password-file` | **Not copied.** `config/backup.env` names the path, and restic opens the file every night |
 
@@ -254,9 +254,9 @@ sudo /srv/waku/src/hosted/deploy/install.sh agent.waku.one \
 ```
 
 No `--free-model` and no `--platform-key-file`: this install offers no free
-tier, because the metering proxy behind one is not built (see "What is not
-enabled yet"). Tenants bring their own key and the dashboard says so on their
-first visit. Add both flags together the day group D lands.
+tier, and tenants bring their own key. To offer one, add
+`--free-model claude-sonnet-5-5 --free-small-model claude-haiku-4-5
+--platform-key-file <file>`; "The free tier" below says what that runs.
 
 It refuses, with a readable message, when the VM is not Ubuntu 24.04, when
 `/srv/waku` is not XFS mounted with `prjquota`, when either of ports 80 and 443
@@ -339,61 +339,53 @@ with `"kind": "done"`. The turn counts against the same hourly quota as a turn
 typed into the dashboard. The container never sees the token. The route ignores
 cookies, so it does not check `Origin`; it still requires a JSON body.
 
-## What is not enabled yet
+## The free tier
 
-Two pieces of spec 001 are deferred, and this deployment is invite-only because
-of them.
+With `--free-model` and `--platform-key-file`, every tenant can use Waku
+without a key of their own (spec 004 C, which builds spec 001's group D). Their
+`waku-platform` provider points at the metering proxy on `10.88.0.1:8788`,
+which holds the platform key and nothing else does:
 
-**No metering proxy, so no free tier and no spend cap.** Group D is not built,
-so the `proxy` service is declared and started with zero replicas.
-**`--free-model` and `--platform-key-file` are therefore optional, and you
-should leave them out.** An install without them writes no
-`WAKU_PLATFORM_*` into `config/spawner.env`, the spawner puts none into a
-tenant container, and stock waku offers no free tier at all: every tenant
-brings their own key, which is the ordinary provider switch on the Models
-page, and the dashboard opens on a setup screen until they do.
+- **Models.** Sonnet 5.5 for turns, Haiku 4.5 for the retrieval gate and
+  consolidation (`--free-model`, `--free-small-model`). Both are on the
+  allowlist; any other model is refused.
+- **The cap.** $1 a month per person, at list prices
+  (`hosted/proxy/prices.py`). Each call reserves its worst case first, from
+  Anthropic's `count_tokens`, and is settled from the usage Anthropic reports.
+  A person at their dollar never reaches Anthropic.
+- **The limits.** 4 calls at once and 60 a minute per person, 16 at once
+  across the VM, `max_tokens` at most 8192.
+- **What it refuses.** Images, documents, server tools, `cache_control` and any
+  body field outside the allowlist. Thinking blocks Sonnet returns are accepted
+  back, because Waku sends them on the next call.
 
-That is a correction, not a preference. Until 2026-09-27 both flags were
-required and their values were always written, so every tenant container came
-up pointed at an address nothing listens on -- and waku, seeing the variables,
-showed **"Hosted free tier: enabled, current"** on the Models page above an
-endpoint that refuses every connection. The tenant's first message came back
-`APIConnectionError`. Do not advertise a free tier until group D lands,
-because an operator who believes they are offering one and is not will hear
-about it from a confused user rather than from a log line. This deployment
-did, and the confused user was its owner.
+`config/proxy.env` holds all of it. `ledger.db` holds each person's spend.
 
-Giving both flags still configures a free tier, for when group D lands. It is
-all or nothing at both ends: `install.sh` refuses one without the other, and
-`template.config_from_env` refuses a partial set in `config/spawner.env`,
-because half a free tier is the same lie in a smaller size.
+### Turning it on for a deployment installed without it
 
-### If you installed before 2026-09-27, you still have the broken one
-
-A new install writes no `WAKU_PLATFORM_*`. An existing one keeps what it was
-given, because **`upgrade.sh` never touches `config/`** -- an upgrade that
-rewrote config would be an install. So pulling this change fixes nothing on a
-deployment that already exists, and its tenants keep meeting
-`APIConnectionError`.
-
-`upgrade.sh` now warns on every run while that is true. To act on it:
+`upgrade.sh` never writes `config/`, so a deployment installed with no free
+tier gets one by hand. With the platform key in a root-only file:
 
 ```bash
-sudo sed -i '/^WAKU_PLATFORM_/d' /srv/waku/config/spawner.env
+sudo install -m 0600 /dev/null /srv/waku/config/proxy.env
+sudo bash -c '. /srv/waku/src/hosted/deploy/envfiles.sh; root=/srv/waku; \
+  platform_key=$(cat /root/platform-key); free_model=claude-sonnet-5-5; \
+  free_small_model=claude-haiku-4-5; waku_proxy_env > /srv/waku/config/proxy.env'
+sudo bash -c 'printf "%s\n" WAKU_PLATFORM_BASE_URL=http://10.88.0.1:8788 \
+  WAKU_PLATFORM_MODEL=claude-sonnet-5-5 WAKU_PLATFORM_SMALL_MODEL=claude-haiku-4-5 \
+  >> /srv/waku/config/spawner.env'
 sudo /srv/waku/src/hosted/deploy/upgrade.sh --now
+sudo shred -u /root/platform-key
 ```
 
-Compose recreates the spawner when its `env_file` changes, and `--now`
-restarts every running tenant onto the new environment, which costs each open
-dashboard an interrupted turn. Without `--now` each tenant picks it up on
-their next start instead.
+`upgrade.sh` starts the proxy because `hosted/proxy/__main__.py` is now in the
+checkout, and `--now` restarts every tenant onto the free tier. Check it from a
+tenant's Models page: "Hosted free tier" is enabled and current, and a message
+gets an answer.
 
-Check it worked from a tenant's Models page: the "Hosted free tier" card
-should be gone, not merely disabled, and a tenant with no key of their own
-should land on the setup screen.
+A tenant's own key, once added, is not counted: it is theirs.
 
-Nothing counts tokens either, so there is no cap on what a tenant's own key
-can spend.
+## What is not enabled yet
 
 **No tenant firewall rules.** `deploy/firewall.sh` (task C3) is not in the
 tree, so `install.sh` installs no firewall unit and says so. Tenant containers
