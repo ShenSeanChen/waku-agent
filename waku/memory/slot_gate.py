@@ -3,10 +3,10 @@
 Two decisions, both opt-in and both failing open:
 
   select  which retrieved facts enter the prompt. One Jev call scores every
-          fact against the person's message, with the question
-          lab/jev-system-one measured at 12 of 12: "how much does leaving this
-          one out change the answer?". Facts at or above WAKU_SLOT_GATE_KEEP
-          (1.8, the lab's threshold) are kept.
+          fact against the person's message, with lab/jev-system-one's
+          question: "how much does leaving this one out change the answer?".
+          Facts at or above WAKU_SLOT_GATE_KEEP (0.5, measured 12 of 12 on the
+          lab's cases in this shape) are kept.
   keep    which facts consolidation proposes are stored. "Would a future
           answer need this?"; at or above WAKU_KEEP_GATE_MIN are kept.
 
@@ -33,7 +33,11 @@ KEEP_LEVELS = [
     "Often. A fact, preference or decision a later answer would use.",
     "Always. Getting this wrong later would be a real mistake.",
 ]
-DEFAULT_SLOT_KEEP = 1.8     # the lab's measured threshold, 12/12
+# Measured 2026-10-02 on this module's one-call shape: the lab's 12 memory
+# cases score keep >= 0.75 and drop <= 0.34, so 0.5 is 12/12 with margin on
+# both sides (a pricing example, 5/5, too). The lab's 1.8 was set for its
+# one-fact-per-call shape and scores 6/12 here.
+DEFAULT_SLOT_KEEP = 0.5
 DEFAULT_KEEP_MIN = 1.0      # drops only what Jev rates "never"; tuned in spec 005 B2
 
 
