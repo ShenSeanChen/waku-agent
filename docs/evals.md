@@ -42,7 +42,7 @@ it in. Run `make gate` → green → the eval history records the run.
 
 ## Spend is permanent
 
-Every LLM call's tokens are appended to `.waku/usage.jsonl`, an append-only
+Every LLM call's tokens are appended to `~/.waku/usage.jsonl`, an append-only
 ledger that a demo reset never wipes. The **Ops** tab shows the all-time cost,
 tokens, and a per-day / per-provider breakdown (dollar cost is estimated from
 tokens, which are the ground truth). So the number on screen is your real
@@ -50,7 +50,7 @@ running total, not a per-session guess.
 
 ## Tracing is always on
 
-Every turn appends readable lines to `.waku/traces/<date>.jsonl` with zero
+Every turn appends readable lines to `~/.waku/traces/<date>.jsonl` with zero
 setup — a trace is just "what happened, in order." For span-waterfall views:
 
 ```bash

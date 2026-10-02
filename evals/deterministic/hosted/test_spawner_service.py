@@ -29,8 +29,9 @@ class FakeRuntime:
     async def provision(self, tenant_id, project_id):
         self.calls.append(("provision", tenant_id, project_id))
 
-    async def start(self, tenant_id, project_id, timezone, token):
-        self.calls.append(("start", tenant_id, project_id, timezone, token))
+    async def start(self, tenant_id, project_id, timezone, token, memory_key=""):
+        self.calls.append(("start", tenant_id, project_id, timezone, token)
+                          + ((memory_key,) if memory_key else ()))
         return RunningContainer(tenant_id=tenant_id, address="10.88.0.2", port=7777)
 
     async def stop(self, tenant_id):
@@ -136,6 +137,7 @@ _VALID = {
     "timezone": "UTC",
     "token": TOKEN,
     "task": "backup",
+    "memory_key": "mem_sk_" + "v" * 43,
 }
 
 
@@ -262,3 +264,13 @@ def test_the_runtime_the_service_talks_to_is_the_one_the_port_describes():
         f"{sorted(extra - verbs)}. "
         "The spawner is root with CAP_SYS_ADMIN; every public verb here is a "
         "privileged verb, and there are exactly six.")
+
+
+def test_start_hands_the_waku_memory_key_to_the_runtime():
+    """spec 004 A3: a key on the wire reaches the runtime, the one place that
+    puts it in a container's environment."""
+    key = "mem_sk_" + "k" * 43
+    answer, runtime = ask({"op": "start", "tenant_id": TENANT, "project_id": 2,
+                           "timezone": "UTC", "token": "t" * 43, "memory_key": key})
+    assert "error" not in answer
+    assert runtime.calls[-1] == ("start", TENANT, 2, "UTC", "t" * 43, key)

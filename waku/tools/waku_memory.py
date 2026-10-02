@@ -1,9 +1,10 @@
 """Waku Memory: one memory shared by every agent you use.
 
-The Waku agent's own memory is local, and it stays that way. Waku Memory is a
-hosted MCP server at https://api.waku.one/mcp. Claude Code, Codex, Grok Bot and
-this agent can all connect to it, so a fact saved in one can be recalled in
-another. The two stores are separate: nothing here copies local memory up.
+The Waku agent's own memory is local. Waku Memory is a hosted MCP server at
+https://api.waku.one/mcp. Claude Code, Codex, Grok Bot and this agent can all
+connect to it, so a fact saved in one can be recalled in another. Waku also
+writes each of its facts to <home>/memory/<id>.md, one file per fact, which
+is the shape the Waku Memory importer reads. Nothing in this module uploads.
 
 `waku connect waku-memory` (or `/connect waku-memory` in the dashboard chat)
 adds the server to WAKU_HOME/mcp.json next to any servers already there, then

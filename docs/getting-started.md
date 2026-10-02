@@ -63,7 +63,10 @@ Say *"Remember that Alex prefers morning meetings."* Quit, and restart. Then
 say *"Book a catch-up with Alex on Friday."*
 
 **Check:** it books 9am, and **Memory ▸ Semantic** lists the fact. Your memory
-is one file: `.waku/state.db`.
+is one file: `~/.waku/state.db`, the same from every folder. Set `WAKU_HOME`
+to keep it somewhere else. If you ran Waku before v0.2, your memory is in the
+`.waku/` folder you ran it from, and Waku keeps using it there until you copy
+it: `mkdir -p ~/.waku && cp -R ./.waku/. ~/.waku/`.
 
 ## 5. Share memory with your other agents (optional)
 

@@ -68,10 +68,14 @@ class SpawnerClient:
                          "project_id": project_id}, timeout=QUICK_ASK_TIMEOUT)
 
     async def start(self, tenant_id: str, project_id: int, timezone: str,
-                    token: str) -> RunningContainer:
-        answer = await self._ask(
-            {"op": "start", "tenant_id": tenant_id, "project_id": project_id,
-             "timezone": timezone, "token": token}, timeout=START_ASK_TIMEOUT)
+                    token: str, memory_key: str = "") -> RunningContainer:
+        payload = {"op": "start", "tenant_id": tenant_id, "project_id": project_id,
+                   "timezone": timezone, "token": token}
+        if memory_key:
+            # Sent only when there is one: `start` takes it as optional, and an
+            # empty string is not a Waku Memory key the spawner would accept.
+            payload["memory_key"] = memory_key
+        answer = await self._ask(payload, timeout=START_ASK_TIMEOUT)
         return self._container(tenant_id, answer)
 
     async def stop(self, tenant_id: str) -> None:

@@ -72,6 +72,12 @@ CREATE TABLE IF NOT EXISTS retired_project_id (
   project_id  INTEGER PRIMARY KEY,
   retired_at  REAL NOT NULL
 );
+CREATE TABLE IF NOT EXISTS memory_key (
+  tenant_id   TEXT PRIMARY KEY,
+  key         TEXT NOT NULL,
+  key_id      TEXT NOT NULL,
+  created_at  REAL NOT NULL
+);
 """
 
 _COLUMNS = "id, sub, email, timezone, status, project_id, created_at"
@@ -304,6 +310,30 @@ class ControlDb:
                 "WHERE p.hash = ? AND p.revoked_at IS NULL", (digest,)).fetchone()
         return (row[0], row[1]) if row else None
 
+    def set_memory_key(self, tenant_id: str, *, key: str, key_id: str) -> None:
+        """The tenant's Waku Memory API key (spec 004). Minted at sign-in with
+        the person's own token, so it is theirs: it reaches only their memory,
+        and they can revoke it on waku.one like any other key. Stored in
+        plaintext because the container needs the plaintext, the same way it
+        needs its proxy token -- but unlike the proxy token, nothing here can
+        mint another one, so a leak of this file is a leak of keys each person
+        can revoke, not of a platform credential."""
+        self._require_tenant_id(tenant_id)
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO memory_key (tenant_id, key, key_id, created_at) VALUES (?, ?, ?, ?) "
+                "ON CONFLICT(tenant_id) DO UPDATE SET key = excluded.key, "
+                "key_id = excluded.key_id, created_at = excluded.created_at",
+                (tenant_id, key, key_id, self._now()))
+            self._conn.commit()
+
+    def memory_key(self, tenant_id: str) -> str:
+        """The tenant's Waku Memory key, or "" when none has been minted."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT key FROM memory_key WHERE tenant_id = ?", (tenant_id,)).fetchone()
+        return row[0] if row else ""
+
     def delete_tenant(self, tenant_id: str) -> None:
         """The row goes; the archive keeps the files for 30 days.
 
@@ -320,5 +350,6 @@ class ControlDb:
                 "SELECT project_id, ? FROM tenant WHERE id = ?", (self._now(), tenant_id))
             self._conn.execute("DELETE FROM session WHERE tenant_id = ?", (tenant_id,))
             self._conn.execute("DELETE FROM proxy_token WHERE tenant_id = ?", (tenant_id,))
+            self._conn.execute("DELETE FROM memory_key WHERE tenant_id = ?", (tenant_id,))
             self._conn.execute("DELETE FROM tenant WHERE id = ?", (tenant_id,))
             self._conn.commit()

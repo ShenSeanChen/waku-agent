@@ -1,7 +1,7 @@
 """`python -m waku.ops.show_trace` — read a JSONL trace as a terminal timeline.
 
 Pass a trace file directly, or omit it to show the most recent trace in WAKU_HOME
-(the current directory's .waku/ by default). Trace records are printed one at a
+(~/.waku/ by default; see waku.config.resolve_home). Trace records are printed one at a
 time, so long-running sessions do not need to fit in memory.
 """
 

@@ -80,7 +80,7 @@ back as working memory.
    tool call, the **iteration count**, tokens, and dollar cost. A tool-using
    turn shows `iter 2` (reason, act, then reason again to reply); a plain answer
    shows `iter 1`.
-3. Open the **Ops** tab (or `.waku/traces/<today>.jsonl`) to read that same
+3. Open the **Ops** tab (or `~/.waku/traces/<today>.jsonl`) to read that same
    turn as raw events in order: `turn_start → gate → llm → tool → llm → turn_end`.
 
 **The multi-tool loop.** One tool is a loop; *chaining* tools is where loop
@@ -137,7 +137,7 @@ everything else here. The longer argument is in
    then the familiar loop animation take over.
 3. Open the **Graph** tab: the live topology is drawn from the engine's own
    `describe()`, so the picture cannot drift from the code. The trace
-   (`.waku/traces/<today>.jsonl`) shows the run as
+   (`~/.waku/traces/<today>.jsonl`) shows the run as
    `graph_start → node_start … route → graph_end`.
 
 ## The retrieval gate
@@ -159,14 +159,14 @@ The agent has tools to keep itself useful — no black box:
 - **manage_memory** — correct or forget a fact when you say it's wrong.
 - **update_soul** — save a standing preference you give it (lives in `SOUL.md`).
 - **create_skill** — when you teach it a repeatable workflow, it offers to save
-  it as a skill (written to `.waku/skills/`, live the same session).
+  it as a skill (written to `~/.waku/skills/`, live the same session).
 
 You can also edit any of this by hand on the dashboard's Memory tab (edit or
 delete facts, rewrite `SOUL.md`) or in Settings (switch provider or model,
 paste keys — kept in your local `.env`, never sent to the browser).
 
 Waku keeps the *queryable* memory in `state.db` and regenerates a readable
-`.waku/MEMORY.md` after every turn; [architecture.md](architecture.md#memorymd-vs-statedb)
+`~/.waku/MEMORY.md` after every turn; [architecture.md](architecture.md#memorymd-vs-statedb)
 explains why there are two.
 
 ## Add skills — yours or the community's

@@ -1,7 +1,7 @@
 """One SQLite file (state.db) holds everything Waku remembers and does.
 
 This mirrors the Hermes approach on the whiteboard: SQLite + FTS5, no server.
-Open it yourself anytime:  sqlite3 .waku/state.db '.tables'
+Open it yourself anytime:  sqlite3 ~/.waku/state.db '.tables'
 """
 
 from __future__ import annotations
