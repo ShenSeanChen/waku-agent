@@ -322,6 +322,7 @@ class Harness:
             jwks_url=JWKS_URL, issuer=ISSUER, audience=AUDIENCE,
             fetch=lambda _url: self.jwks, now=self.clock)
         self.forwarder: object = RecordingForwarder()
+        self.memory_keys = None
         self.session = None
         self.container = None
         self._real_forwarding = False
@@ -344,7 +345,8 @@ class Harness:
         return Gateway(config=self.config, store=self.store,
                        launcher=self.launcher, verifier=self.verifier,
                        forward=self.forwarder, turns=self.turns,
-                       plans=self.plans, now=self.clock)
+                       plans=self.plans, memory_keys=self.memory_keys,
+                       now=self.clock)
 
     def use_real_forwarding(self, container: FakeContainer) -> None:
         """Point the harness at a fake container and swap the recording

@@ -44,6 +44,7 @@ from hosted.gateway.launch import InMaintenance, Launcher, NotActive, StartFaile
 from hosted.gateway.store import SESSION_TTL_SECONDS
 from hosted.ports.control import ControlStore, Tenant
 from hosted.ports.identity import IdentityVerifier
+from hosted.ports.memory import MemoryKeys
 
 _LOG = log.get(__name__)
 
@@ -188,8 +189,10 @@ class Gateway:
                  forward: Forward,
                  turns: quota.TurnWindow | None = None,
                  plans: dict[str, quota.Plan] | None = None,
+                 memory_keys: MemoryKeys | None = None,
                  now: Callable[[], float] = time.time) -> None:
         self._config = config
+        self._memory_keys = memory_keys
         self._store = store
         self._launcher = launcher
         self._verifier = verifier
@@ -404,6 +407,7 @@ class Gateway:
                 timezone=str(payload.get("timezone", "")))
         except NotActive as exc:
             return answers.json_error(403, str(exc))
+        await self._ensure_memory_key(tenant.id, token)
         value = sessions.new_secret()
         self._remember(sessions.apex_key(value), tenant.id)
         code = self._handoffs.issue(tenant.id)
@@ -427,6 +431,27 @@ class Gateway:
         sessions.set_session_cookie(response, sessions.APEX_COOKIE, value,
                                     max_age=int(SESSION_TTL_SECONDS))
         return response
+
+    async def _ensure_memory_key(self, tenant_id: str, access_token: str) -> None:
+        """Mint the tenant's Waku Memory key the first time they sign in (spec 004).
+
+        Before the pre-warm, so the container that boots during this sign-in
+        already has it. Never fails the sign-in: a person who cannot reach Waku
+        Memory today can still use their agent, and the next sign-in tries again.
+        """
+        if self._memory_keys is None or self._store.memory_key(tenant_id):
+            return
+        try:
+            minted = await self._memory_keys.mint(access_token)
+        except Exception as exc:  # network, timeout, a malformed answer
+            _LOG.info("tenant=%s: Waku Memory key not minted: %s", tenant_id, exc)
+            return
+        if minted is None:
+            _LOG.info("tenant=%s: Waku Memory issued no key", tenant_id)
+            return
+        key, key_id = minted
+        self._store.set_memory_key(tenant_id, key=key, key_id=key_id)
+        _LOG.info("tenant=%s: Waku Memory key %s minted", tenant_id, key_id)
 
     def _sign_out(self, request: web.Request) -> web.Response:
         value = request.cookies.get(sessions.APEX_COOKIE, "")
