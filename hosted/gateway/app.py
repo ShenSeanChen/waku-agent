@@ -40,7 +40,13 @@ from hosted.core import policy, quota
 from hosted.gateway import answers, guards, sessions
 from hosted.gateway.config import GatewayConfig
 from hosted.gateway.identity import NotSignedIn
-from hosted.gateway.launch import InMaintenance, Launcher, NotActive, StartFailed
+from hosted.gateway.launch import (
+    DISABLED_MESSAGE,
+    InMaintenance,
+    Launcher,
+    NotActive,
+    StartFailed,
+)
 from hosted.gateway.store import SESSION_TTL_SECONDS
 from hosted.ports.control import ControlStore, Tenant
 from hosted.ports.identity import IdentityVerifier
@@ -152,6 +158,12 @@ def _cacheable(response: web.Response, tag: str) -> web.Response:
 
 CLEAR_SITE_DATA = '"storage"'
 SIGN_IN_REFUSED = "That sign-in did not work. Ask for a new link."
+# Spec 004 B: the chat API every gateway calls, and the container route it
+# becomes. The container's own path, so the forwarder's policy, turn quota and
+# wake-up apply exactly as they do to a turn typed into the dashboard.
+CHAT_API_PATH = "/v1/chat"
+CHAT_STREAM_PATH = "/api/chat/stream"
+CHAT_API_POST_ONLY = "Send the message as a POST."
 
 # aiohttp's own default is 1 MiB. Set explicitly, and equal to the proxy's
 # body cap in the spec's proxy step 1, so hosted waku has ONE body limit
@@ -308,6 +320,10 @@ class Gateway:
         host = guards.normalise_host(request.headers.get("Host"))
         if not host:
             return answers.refusal(request, guards.MISDIRECTED, answers.WRONG_HOST)
+        if (host == self._config.apex_host
+                and policy.split_path(request.raw_path)[0] == CHAT_API_PATH):
+            # Before the CSRF pair, on purpose: see _chat_api.
+            return await self._chat_api(request)
         if guards.csrf_refusal(request, host):
             return answers.refusal(request, guards.UNSUPPORTED_MEDIA, answers.NOT_JSON)
         if host == self._config.apex_host:
@@ -431,6 +447,48 @@ class Gateway:
         sessions.set_session_cookie(response, sessions.APEX_COOKIE, value,
                                     max_age=int(SESSION_TTL_SECONDS))
         return response
+
+    async def _chat_api(self, request: web.Request) -> web.StreamResponse:
+        """`POST /v1/chat`: one person's message to their own Waku Agent (spec 004 B).
+
+        The front door every gateway calls -- the waku.one Waku Agent tab
+        first, Slack later -- server to server, with the person's Supabase
+        token as `Authorization: Bearer`. It finds or creates their tenant,
+        mints their Waku Memory key if they have none, and hands the request
+        to the forwarder as the container's own `/api/chat/stream`, so the
+        turn quota, the wake-up and the header allowlist are the ones every
+        dashboard turn already goes through. The forwarder never passes
+        Authorization on: the container does not see the person's token.
+
+        WHY THE ORIGIN CHECK DOES NOT APPLY. CSRF needs a credential the
+        browser attaches on its own. This route ignores cookies and reads only
+        the Authorization header, which a browser never attaches by itself, so
+        a forged cross-site request arrives with no credential at all. A
+        server-to-server caller sends no Origin, and requiring one would refuse
+        every legitimate call. The JSON half stays.
+        """
+        if request.method != "POST":
+            return answers.json_error(405, CHAT_API_POST_ONLY)
+        if request.content_type != guards.JSON_CONTENT_TYPE:
+            return answers.json_error(guards.UNSUPPORTED_MEDIA, answers.NOT_JSON)
+        values = request.headers.getall("Authorization", ())
+        scheme, _, token = (values[0] if len(values) == 1 else "").partition(" ")
+        if scheme.lower() != "bearer" or not token:
+            return answers.json_error(401, SIGN_IN_REFUSED)
+        try:
+            identity = await asyncio.to_thread(self._verifier.verify, token)
+        except NotSignedIn as exc:
+            _LOG.info("chat api refused: %s", exc)
+            return answers.json_error(401, SIGN_IN_REFUSED)
+        try:
+            tenant, _created = await self._launcher.ensure_tenant(
+                sub=identity.sub, email=identity.email, timezone="")
+        except NotActive as exc:
+            return answers.json_error(403, str(exc))
+        if tenant.status != "active":
+            return answers.json_error(403, DISABLED_MESSAGE)
+        await self._ensure_memory_key(tenant.id, token)
+        return await self._forward(request.clone(rel_url=CHAT_STREAM_PATH), tenant)
 
     async def _ensure_memory_key(self, tenant_id: str, access_token: str) -> None:
         """Mint the tenant's Waku Memory key the first time they sign in (spec 004).

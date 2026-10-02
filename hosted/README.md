@@ -319,6 +319,26 @@ the next sign-in mints a new one:
 sudo sqlite3 /srv/waku/control/control.db "DELETE FROM memory_key WHERE tenant_id = '<id>'"
 ```
 
+## The chat API other surfaces call
+
+`POST https://agent.waku.one/v1/chat` sends one message to a person's own Waku
+Agent (spec 004). The waku.one Waku Agent tab calls it, and Slack will. It is
+called server to server:
+
+```bash
+curl -N https://agent.waku.one/v1/chat \
+  -H "Authorization: Bearer <the person's Supabase access token>" \
+  -H "Content-Type: application/json" \
+  -d '{"message": "what did my competitors ship this week?"}'
+```
+
+The gateway verifies the token exactly as it does at sign-in, finds or creates
+that person's tenant, mints their Waku Memory key if they have none, and relays
+the container's own `/api/chat/stream`: Server-Sent Events, ending in a frame
+with `"kind": "done"`. The turn counts against the same hourly quota as a turn
+typed into the dashboard. The container never sees the token. The route ignores
+cookies, so it does not check `Origin`; it still requires a JSON body.
+
 ## What is not enabled yet
 
 Two pieces of spec 001 are deferred, and this deployment is invite-only because
