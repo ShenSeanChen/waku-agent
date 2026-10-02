@@ -35,6 +35,9 @@ class TokenCache:
         self._ttl = ttl
         self._max_entries = max_entries
         self._answers: dict[str, tuple[float, tuple[str, str] | None]] = {}
+        # digest -> the tenant's Waku Memory key, kept beside _answers and
+        # evicted with it (spec 004 D).
+        self._memory_keys: dict[str, str] = {}
 
     def __len__(self) -> int:
         """How many answers are held. The proxy is the one service tenant code
@@ -50,8 +53,15 @@ class TokenCache:
             return
         for key in [k for k, (at, _) in self._answers.items() if now - at >= self._ttl]:
             del self._answers[key]
+            self._memory_keys.pop(key, None)
         while len(self._answers) > self._max_entries:
-            del self._answers[next(iter(self._answers))]
+            oldest = next(iter(self._answers))
+            del self._answers[oldest]
+            self._memory_keys.pop(oldest, None)
+
+    def memory_key(self, token: str) -> str:
+        """The Waku Memory key that came with this token's last answer, or ""."""
+        return self._memory_keys.get(token_hash(token), "")
 
     async def resolve(self, token: str) -> tuple[str, str] | None:
         """(tenant id, status), or None for a token the gateway does not know.
@@ -75,5 +85,7 @@ class TokenCache:
         tenant_id = answer.get("tenant")
         resolved = ((tenant_id, answer.get("status", ""))
                     if isinstance(tenant_id, str) else None)
+        key = answer.get("memory_key")
+        self._memory_keys[digest] = key if resolved and isinstance(key, str) else ""
         self._remember(digest, resolved)
         return resolved

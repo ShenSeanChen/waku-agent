@@ -324,3 +324,82 @@ def test_the_platform_key_replaces_the_tenants_token_upstream():
 
     assert _run(go()) == 12
     assert seen[0]["x-api-key"] == "sk-ant-platform"
+
+
+# --- spec 004 D: one wallet ----------------------------------------------------
+# Each settled call is charged to the person's Waku Memory credits, with their
+# own key, after the reply; a Free person at zero credits is refused before.
+
+MEMORY_KEY = "mem_sk_" + "w" * 43
+
+
+class FakeWallet:
+    def __init__(self, plan="free", left=1000, raises=False):
+        self.plan, self.left, self.raises = plan, left, raises
+        self.charges: list[tuple[str, str, float]] = []
+
+    async def balance(self, key):
+        if self.raises:
+            raise OSError("api.waku.one unreachable")
+        return self.plan, self.left
+
+    def charge(self, key, *, turn_id, model, usd):
+        self.charges.append((key, model, usd))
+
+
+class WalletRig(Rig):
+    def __init__(self, tmp_path, upstream, wallet, key=MEMORY_KEY, **config):
+        super().__init__(tmp_path, upstream, **config)
+        self.proxy = MeteringProxy(
+            config=self.config, ledger=self.ledger, upstream=upstream,
+            resolve=self.proxy._resolve, now=lambda: self.clock[0],
+            monotonic=lambda: self.mono[0], memory_key=lambda token: key, wallet=wallet)
+
+
+def test_a_settled_call_is_charged_to_the_persons_credits(tmp_path):
+    wallet = FakeWallet()
+
+    async def go():
+        async with WalletRig(tmp_path, FakeUpstream(), wallet) as rig:
+            return (await rig.call())[0]
+
+    assert _run(go()) == 200
+    assert wallet.charges == [(MEMORY_KEY, SONNET, pytest.approx(prices.cost(SONNET, USAGE)))]
+
+
+def test_a_free_person_at_zero_credits_never_reaches_anthropic(tmp_path):
+    wallet = FakeWallet(plan="free", left=0)
+
+    async def go():
+        async with WalletRig(tmp_path, FakeUpstream(), wallet) as rig:
+            status, body = await rig.call()
+            return status, json.loads(body), rig.upstream.bodies
+
+    status, body, sent = _run(go())
+    assert status == 403 and body["error"]["message"] == FREE_USED_UP and sent == []
+
+
+def test_a_pro_person_below_zero_is_still_served(tmp_path):
+    async def go():
+        async with WalletRig(tmp_path, FakeUpstream(), FakeWallet(plan="pro", left=-50)) as rig:
+            return (await rig.call())[0]
+
+    assert _run(go()) == 200
+
+
+def test_an_unreachable_wallet_falls_back_to_the_dollar_cap(tmp_path):
+    async def go():
+        async with WalletRig(tmp_path, FakeUpstream(), FakeWallet(raises=True)) as rig:
+            return (await rig.call())[0]
+
+    assert _run(go()) == 200
+
+
+def test_no_key_means_no_wallet_check_and_no_charge(tmp_path):
+    wallet = FakeWallet(left=0)
+
+    async def go():
+        async with WalletRig(tmp_path, FakeUpstream(), wallet, key="") as rig:
+            return (await rig.call())[0]
+
+    assert _run(go()) == 200 and wallet.charges == []

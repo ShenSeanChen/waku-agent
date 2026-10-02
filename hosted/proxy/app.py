@@ -13,8 +13,10 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+import uuid
 from collections import defaultdict, deque
 from collections.abc import Awaitable, Callable
+from typing import Protocol
 
 from aiohttp import web
 
@@ -34,6 +36,13 @@ QUEUE_SECONDS = 30.0
 RATE_WINDOW_SECONDS = 60.0
 
 Resolve = Callable[[str], Awaitable[tuple[str, str] | None]]
+
+
+class Wallet(Protocol):
+    """The person's Waku Memory credits (spec 004 D; hosted/proxy/wallet.py)."""
+
+    async def balance(self, key: str) -> tuple[str, int] | None: ...
+    def charge(self, key: str, *, turn_id: str, model: str, usd: float) -> None: ...
 
 
 def _answer(refused: Refused) -> web.Response:
@@ -83,13 +92,17 @@ class _StreamUsage:
 class MeteringProxy:
     def __init__(self, *, config: ProxyConfig, ledger: Ledger, resolve: Resolve,
                  upstream: Upstream, now: Callable[[], float] = time.time,
-                 monotonic: Callable[[], float] = time.monotonic) -> None:
+                 monotonic: Callable[[], float] = time.monotonic,
+                 memory_key: Callable[[str], str] | None = None,
+                 wallet: Wallet | None = None) -> None:
         self._config = config
         self._ledger = ledger
         self._resolve = resolve
         self._upstream = upstream
         self._now = now
         self._monotonic = monotonic
+        self._memory_key = memory_key
+        self._wallet = wallet
         self._in_flight: dict[str, int] = defaultdict(int)
         self._recent: dict[str, deque[float]] = defaultdict(deque)
         self._global = asyncio.Semaphore(config.global_concurrent_calls)
@@ -140,6 +153,8 @@ class MeteringProxy:
         settled, reserved = self._ledger.spend(tenant, month)
         if settled + reserved >= self._config.monthly_cap_usd:
             raise Refused(403, "permission_error", FREE_USED_UP)
+        key = self._memory_key(token) if self._memory_key is not None else ""
+        await self._refuse_at_zero_credits(key)
 
         # --- step 6: the tenant's slots and rate ----------------------------
         self._take_rate(tenant)
@@ -148,9 +163,24 @@ class MeteringProxy:
                           "Too many free-tier calls at once. Try again in a moment.")
         self._in_flight[tenant] += 1
         try:
-            return await self._reserved_call(request, tenant, month, body)
+            return await self._reserved_call(request, tenant, month, body, key)
         finally:
             self._in_flight[tenant] -= 1
+
+    async def _refuse_at_zero_credits(self, key: str) -> None:
+        """Spec 004 D: one wallet. A Free person with no credits left is
+        refused here, before anything costs anything; a Pro person may go
+        negative, as everywhere else in Waku Memory. An unreachable Waku Memory
+        leaves the dollar cap as the only limit."""
+        if not key or self._wallet is None:
+            return
+        try:
+            balance = await self._wallet.balance(key)
+        except Exception as exc:
+            _LOG.info("credits balance unavailable: %s", exc)
+            return
+        if balance is not None and balance[0] == "free" and balance[1] <= 0:
+            raise Refused(403, "permission_error", FREE_USED_UP)
 
     def _take_rate(self, tenant: str) -> None:
         now = self._monotonic()
@@ -163,7 +193,7 @@ class MeteringProxy:
         recent.append(now)
 
     async def _reserved_call(self, request: web.Request, tenant: str, month: str,
-                             body: dict) -> web.StreamResponse:
+                             body: dict, key: str) -> web.StreamResponse:
         # --- step 7: reserve the worst case ---------------------------------
         model = body["model"]
         try:
@@ -185,12 +215,12 @@ class MeteringProxy:
             raise _overloaded("The free tier is busy. Try again in a moment.") from None
         try:
             # --- steps 9 and 10 ---------------------------------------------
-            return await self._forward(request, tenant, month, body, worst)
+            return await self._forward(request, tenant, month, body, worst, key)
         finally:
             self._global.release()
 
     async def _forward(self, request: web.Request, tenant: str, month: str,
-                       body: dict, worst: float) -> web.StreamResponse:
+                       body: dict, worst: float, key: str) -> web.StreamResponse:
         model = body["model"]
         try:
             upstream = await self._upstream.messages(body, forward_headers(request.headers))
@@ -217,11 +247,15 @@ class MeteringProxy:
         finally:
             if callable(upstream.release):
                 upstream.release()
-            self._settle(tenant, month, model, worst, upstream.status, usage, bytes(held))
+            charged = self._settle(tenant, month, model, worst, upstream.status, usage,
+                                   bytes(held))
+            if charged > 0 and key and self._wallet is not None:
+                self._wallet.charge(key, turn_id=uuid.uuid4().hex, model=model, usd=charged)
         return response
 
     def _settle(self, tenant: str, month: str, model: str, worst: float, status: int,
-                usage: _StreamUsage | None, held: bytes) -> None:
+                usage: _StreamUsage | None, held: bytes) -> float:
+        """Settle the ledger and return the dollars charged."""
         if usage is not None:
             if usage.final:
                 actual = prices.cost(model, usage.usage)
@@ -237,10 +271,11 @@ class MeteringProxy:
                 actual = prices.cost(model, reported)
             elif status >= 300:
                 self._ledger.release(tenant, month, worst)   # refused, not billed
-                return
+                return 0.0
             else:
                 actual = worst
         if actual > worst:
             _LOG.warning("tenant=%s used more than its reservation: %.6f > %.6f",
                          tenant, actual, worst)
         self._ledger.settle(tenant, month, reserved=worst, actual=actual)
+        return actual
