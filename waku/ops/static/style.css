@@ -657,16 +657,14 @@ details.subterm > summary.subterm-h::-webkit-details-marker{ display:none; }
   color:var(--text-faint);cursor:pointer;font-size:var(--text-xs)}
 
 
-.connmodal-message{flex:1;min-width:160px;color:var(--text-faint);font-size:var(--text-xs)}
+/* Its own line above the buttons, so a long error wraps instead of spilling off
+   the dialog's left edge (#223). Empty, it sits beside them at zero width. */
+.connmodal-message{flex:1 1 100%;min-width:0;overflow-wrap:anywhere;color:var(--text-faint);font-size:var(--text-xs)}
+.connmodal-message:empty{flex-basis:0}
 .conn-force{margin-left:var(--space-2)}
 
 @media (max-width:720px){
   .conngrid{grid-template-columns:1fr}
-  
-  
-  
-  
-  .connmodal-message{flex-basis:100%}
 }
 
 /* --- Memory arena: the fixture, readable before any of it has been run --- */
@@ -809,7 +807,7 @@ dialog.dialog{margin:auto;background:var(--surface-raised);color:var(--text-ink)
 dialog.dialog.dialog-wide{width:min(var(--dialog-wide), 92vw)}
 .dialog-in{padding:var(--space-8)}
 dialog.dialog::backdrop{background:var(--scrim);backdrop-filter:blur(var(--scrim-blur))}
-.dialog-foot{display:flex;justify-content:flex-end;gap:var(--space-2);border-top:var(--rule-width) solid var(--rule);
+.dialog-foot{display:flex;flex-wrap:wrap;justify-content:flex-end;align-items:center;gap:var(--space-2);border-top:var(--rule-width) solid var(--rule);
              margin-top:var(--space-4);padding-top:var(--space-4)}
 /* The retrieval gate (render.js gateSplit): two figures over a thin bar in
    the chart ramp — the same figure style as the stat band. */
