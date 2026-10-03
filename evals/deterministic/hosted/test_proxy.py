@@ -405,3 +405,44 @@ def test_no_key_means_no_wallet_check_and_no_charge(tmp_path):
             return (await rig.call())[0]
 
     assert _run(go()) == 200 and wallet.charges == []
+
+
+# --- spec 004 D: the dollar cap gives way to the credit balance ----------------
+# 2026-10-02: a Pro person with 746k credits was refused "Free tier used up"
+# once one research turn had spent $1, because the cap was checked first.
+
+
+def _past_the_dollar(rig):
+    rig.ledger.reserve(TENANT, MONTH, 0.40)
+    rig.ledger.settle(TENANT, MONTH, reserved=0.40, actual=1.5)
+
+
+@pytest.mark.parametrize("plan,left", [("pro", 746_000), ("pro", -50), ("free", 20_000)])
+def test_past_the_dollar_a_person_with_a_balance_is_still_served(tmp_path, plan, left):
+    async def go():
+        async with WalletRig(tmp_path, FakeUpstream(), FakeWallet(plan=plan, left=left)) as rig:
+            _past_the_dollar(rig)
+            return (await rig.call())[0]
+
+    assert _run(go()) == 200
+
+
+def test_past_the_dollar_a_free_person_at_zero_is_refused(tmp_path):
+    async def go():
+        async with WalletRig(tmp_path, FakeUpstream(), FakeWallet(plan="free", left=0)) as rig:
+            _past_the_dollar(rig)
+            status, body = await rig.call()
+            return status, json.loads(body), rig.upstream.bodies
+
+    status, body, sent = _run(go())
+    assert status == 403 and body["error"]["message"] == FREE_USED_UP and sent == []
+
+
+@pytest.mark.parametrize("wallet,key", [(FakeWallet(raises=True), MEMORY_KEY), (FakeWallet(), "")])
+def test_with_no_balance_to_read_the_dollar_cap_still_holds(tmp_path, wallet, key):
+    async def go():
+        async with WalletRig(tmp_path, FakeUpstream(), wallet, key=key) as rig:
+            _past_the_dollar(rig)
+            return (await rig.call())[0], rig.upstream.bodies
+
+    assert _run(go()) == (403, [])

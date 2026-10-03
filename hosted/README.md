@@ -357,7 +357,9 @@ which holds the platform key and nothing else does:
 - **Models.** Sonnet 5.5 for turns, Haiku 4.5 for the retrieval gate and
   consolidation (`--free-model`, `--free-small-model`). Both are on the
   allowlist; any other model is refused.
-- **The cap.** $1 a month per person, at list prices
+- **The cap.** Credits are the limit (below). $1 a month per person, at list
+  prices, applies only when the person's balance cannot be read: no Waku
+  Memory key yet, or Waku Memory unreachable
   (`hosted/proxy/prices.py`). Each call reserves its worst case first, from
   Anthropic's `count_tokens`, and is settled from the usage Anthropic reports.
   A person at their dollar never reaches Anthropic.

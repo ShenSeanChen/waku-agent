@@ -51,19 +51,39 @@ class Wallet(Protocol):
     def charge(self, key: str, *, turn_id: str, model: str, usd: float) -> None: ...
 
 
-async def out_of_free_credits(wallet: Wallet | None, key: str) -> bool:
-    """Spec 004 D: one wallet. True for a Free person with no credits left; a
-    Pro person may go negative, as everywhere else in Waku Memory. An
-    unreachable Waku Memory answers False, leaving the other limits in place.
-    Shared by model calls and treg calls (spec 004 E)."""
+# What the person's Waku Memory balance says about a call (spec 004 D).
+OUT_OF_CREDITS = "out"      # a Free person at zero: refused
+CREDITS_GOVERN = "credits"  # a balance answered: credits are the limit
+NO_BALANCE = "unknown"      # no key yet, or Waku Memory unreachable: the dollar cap
+
+
+async def wallet_verdict(wallet: Wallet | None, key: str) -> str:
+    """Spec 004 D: one wallet, and "the dollar cap gives way to the person's
+    credit balance". A Free person with no credits left is OUT_OF_CREDITS; a
+    Pro person may go negative, as everywhere else in Waku Memory. Only when
+    no balance can be read does the monthly dollar cap stand in for it.
+
+    Until 2026-10-02 the cap was applied to everyone first: a Pro person
+    with 746k credits was refused "Free tier used up" after one research turn
+    on agent.waku.one had spent $1."""
     if not key or wallet is None:
-        return False
+        return NO_BALANCE
     try:
         balance = await wallet.balance(key)
     except Exception as exc:
         _LOG.info("credits balance unavailable: %s", exc)
-        return False
-    return balance is not None and balance[0] == "free" and balance[1] <= 0
+        return NO_BALANCE
+    if balance is None:
+        return NO_BALANCE
+    if balance[0] == "free" and balance[1] <= 0:
+        return OUT_OF_CREDITS
+    return CREDITS_GOVERN
+
+
+async def out_of_free_credits(wallet: Wallet | None, key: str) -> bool:
+    """True for a Free person with no credits left. Shared by model calls and
+    treg calls (spec 004 E)."""
+    return await wallet_verdict(wallet, key) == OUT_OF_CREDITS
 
 
 def _answer(refused: Refused) -> web.Response:
@@ -174,13 +194,18 @@ class MeteringProxy:
         body = admit(await request.read(), models=self._config.free_models,
                      ceiling=self._config.max_tokens_ceiling)
 
-        # --- step 5: the cap, before anything costs anything ----------------
+        # --- step 5: the limit, before anything costs anything --------------
+        # The person's credits when Waku Memory answers; the monthly dollar
+        # cap only when it cannot (spec 004 D).
         month = utc_month(at)
-        settled, reserved = self._ledger.spend(tenant, month)
-        if settled + reserved >= self._config.monthly_cap_usd:
-            raise Refused(403, "permission_error", FREE_USED_UP)
         key = self._memory_key(token) if self._memory_key is not None else ""
-        await self._refuse_at_zero_credits(key)
+        verdict = await wallet_verdict(self._wallet, key)
+        if verdict == OUT_OF_CREDITS:
+            raise Refused(403, "permission_error", FREE_USED_UP)
+        capped = verdict == NO_BALANCE
+        settled, reserved = self._ledger.spend(tenant, month)
+        if capped and settled + reserved >= self._config.monthly_cap_usd:
+            raise Refused(403, "permission_error", FREE_USED_UP)
 
         # --- step 6: the tenant's slots and rate ----------------------------
         self._take_rate(tenant)
@@ -189,17 +214,9 @@ class MeteringProxy:
                           "Too many free-tier calls at once. Try again in a moment.")
         self._in_flight[tenant] += 1
         try:
-            return await self._reserved_call(request, tenant, month, body, key)
+            return await self._reserved_call(request, tenant, month, body, key, capped)
         finally:
             self._in_flight[tenant] -= 1
-
-    async def _refuse_at_zero_credits(self, key: str) -> None:
-        """Spec 004 D: one wallet. A Free person with no credits left is
-        refused here, before anything costs anything; a Pro person may go
-        negative, as everywhere else in Waku Memory. An unreachable Waku Memory
-        leaves the dollar cap as the only limit."""
-        if await out_of_free_credits(self._wallet, key):
-            raise Refused(403, "permission_error", FREE_USED_UP)
 
     def _take_rate(self, tenant: str) -> None:
         now = self._monotonic()
@@ -212,7 +229,7 @@ class MeteringProxy:
         recent.append(now)
 
     async def _reserved_call(self, request: web.Request, tenant: str, month: str,
-                             body: dict, key: str) -> web.StreamResponse:
+                             body: dict, key: str, capped: bool) -> web.StreamResponse:
         # --- step 7: reserve the worst case ---------------------------------
         model = body["model"]
         try:
@@ -222,7 +239,7 @@ class MeteringProxy:
             raise _overloaded("The free tier could not size this call. Try again.") from None
         worst = prices.worst_case(model, input_tokens=counted, max_tokens=body["max_tokens"])
         settled, reserved = self._ledger.spend(tenant, month)
-        if settled + reserved + worst > self._config.monthly_cap_usd:
+        if capped and settled + reserved + worst > self._config.monthly_cap_usd:
             raise Refused(403, "permission_error", FREE_USED_UP)
         self._ledger.reserve(tenant, month, worst)
 
