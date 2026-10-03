@@ -63,3 +63,36 @@ def test_a_fresh_process_connects_without_a_circular_import(tmp_path):
     and build_registry reported it as "the 'mcp' package is missing" -- so no
     server connected in a freshly started Waku."""
     assert _run_bridge(tmp_path)["tools"] == ["whoami_whoami"]
+
+
+def test_a_slow_tool_call_says_it_timed_out_and_may_still_be_charged(tmp_path):
+    """2026-10-02: two treg calls outlived the 30s limit, treg charged both,
+    and the agent saw only an empty "failed:"."""
+    import asyncio
+
+    from waku.tools.mcp_client import MCPBridge
+
+    bridge = MCPBridge(tmp_path / "mcp.json", call_timeout=0.05)
+
+    async def slow(server, tool, args):
+        await asyncio.sleep(1)
+        return "late"
+
+    bridge._acall = slow
+    bridge._thread.start()
+    try:
+        text = bridge.call("treg", "catalog_call_write", {})
+    finally:
+        bridge._loop.call_soon_threadsafe(bridge._loop.stop)
+    assert "timed out after 0.05s" in text
+    assert "may still be charged" in text
+
+
+def test_the_call_limit_is_separate_from_the_connect_limit(tmp_path, monkeypatch):
+    from waku.tools.mcp_client import MCPBridge
+
+    monkeypatch.delenv("WAKU_MCP_CALL_TIMEOUT", raising=False)
+    bridge = MCPBridge(tmp_path / "mcp.json")
+    assert (bridge.timeout, bridge.call_timeout) == (30.0, 120.0)
+    monkeypatch.setenv("WAKU_MCP_CALL_TIMEOUT", "45")
+    assert MCPBridge(tmp_path / "mcp.json").call_timeout == 45.0

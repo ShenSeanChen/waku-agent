@@ -52,7 +52,11 @@ def remember_via(bridge):
         return None
 
     def remember(body: str, scope: str) -> str | None:
-        text = bridge.call(server, "memory.remember", {"body": body, "kind": "fact", "scope": scope})
+        # A company-research finding is knowledge about the world, which
+        # waku.one files under Knowledge only for the kinds semantic, decision
+        # and reference; `fact` shows as Activity, "what a session observed".
+        kind = "reference" if scope.startswith("project:") else "fact"
+        text = bridge.call(server, "memory.remember", {"body": body, "kind": kind, "scope": scope})
         try:
             return json.loads(text)["memory"]["id"]
         except (ValueError, KeyError, TypeError):

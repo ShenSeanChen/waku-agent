@@ -44,13 +44,21 @@ def _config(tmp_path, servers):
 HOSTED = {"name": "waku_memory", "url": waku_memory.URL, "auth_env": "WAKU_MEMORY_API_KEY"}
 
 
-def test_remember_sends_a_fact_and_returns_its_waku_memory_id(tmp_path):
+def test_research_is_sent_as_knowledge_and_returns_its_waku_memory_id(tmp_path):
+    """waku.one files `fact` under Activity and `reference` under Knowledge;
+    a company-research finding is knowledge about the world."""
     bridge = FakeBridge(_config(tmp_path, [HOSTED]))
     remember = remember_via(bridge)
     assert remember("Descript costs $24 a month.", "project:Company brain") == "4b1c0e2a"
     assert bridge.calls == [("waku_memory", "memory.remember",
-                             {"body": "Descript costs $24 a month.", "kind": "fact",
+                             {"body": "Descript costs $24 a month.", "kind": "reference",
                               "scope": "project:Company brain"})]
+
+
+def test_a_personal_fact_stays_a_fact(tmp_path):
+    bridge = FakeBridge(_config(tmp_path, [HOSTED]))
+    remember_via(bridge)("Sergey is the user's swim buddy.", "global")
+    assert bridge.calls[0][2]["kind"] == "fact"
 
 
 def test_a_failure_reported_as_text_raises(tmp_path):

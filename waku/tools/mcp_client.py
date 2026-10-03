@@ -41,6 +41,7 @@ that fails to connect is skipped with a warning — Waku still starts.
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import json
 import os
 import re
@@ -99,9 +100,17 @@ def _auth_hint(spec: dict, auth_dir: Path) -> str:
 
 
 class MCPBridge:
-    def __init__(self, config_path: Path, timeout: float = 30.0):
+    def __init__(self, config_path: Path, timeout: float = 30.0,
+                 call_timeout: float | None = None):
         self.config_path = config_path
         self.timeout = timeout
+        # How long one tool call may take, apart from how long connecting may
+        # take. 30 seconds was both until 2026-10-02, when two treg product
+        # extractions on agent.waku.one took longer: the agent gave up at 30s
+        # with an empty "failed:", treg finished anyway and charged for both,
+        # and neither the model nor the person saw the result or the cost.
+        self.call_timeout = call_timeout if call_timeout is not None else float(
+            os.environ.get("WAKU_MCP_CALL_TIMEOUT", "120"))
         self._loop = asyncio.new_event_loop()
         self._thread = threading.Thread(target=self._loop.run_forever, daemon=True)
         self._stack: AsyncExitStack | None = None
@@ -293,7 +302,13 @@ class MCPBridge:
     def call(self, server: str, tool: str, args: dict) -> str:
         try:
             fut = asyncio.run_coroutine_threadsafe(self._acall(server, tool, args), self._loop)
-            return fut.result(self.timeout)
+            return fut.result(self.call_timeout)
+        except concurrent.futures.TimeoutError:
+            # Said in full, because the bare exception prints as nothing: the
+            # server may still finish the call, and a paid one may be charged.
+            return (f"MCP call {server}_{tool} timed out after "
+                    f"{self.call_timeout:g}s. The server may still finish it, "
+                    "and a paid call may still be charged.")
         except Exception as exc:
             return f"MCP call {server}_{tool} failed: {exc}"
 
