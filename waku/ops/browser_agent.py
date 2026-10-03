@@ -93,7 +93,7 @@ def get_agent():
         # keeps the chat on screen), or starts fresh if that thread is idle.
         # Same id collect() reports, so the dock restores the right conversation.
         _dashboard_session = resume_or_new_session(conn)
-        _agent.session.session_id = _dashboard_session
+        _agent.session.switch(_dashboard_session)
     return _agent
 
 
@@ -149,7 +149,7 @@ def rebuild() -> str | None:
             # 'default' session, so without this line switching provider silently
             # dumped you into a different chat and your history vanished from the
             # dock. Same resolution get_agent() uses, so both doors agree.
-            fresh.session.session_id = (
+            fresh.session.switch(
                 old.session.session_id if old is not None else resume_or_new_session(conn)
             )
             _dashboard_session = fresh.session.session_id
