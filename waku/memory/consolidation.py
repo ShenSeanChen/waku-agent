@@ -27,7 +27,7 @@ from datetime import date
 
 import anthropic
 
-from waku.memory import slot_gate
+from waku.memory import slot_gate, tool_note
 from waku.memory.episodic.store import SqliteEpisodeStore
 from waku.memory.semantic.store import SqliteFactStore
 
@@ -143,7 +143,9 @@ def kept_if_due(
                 break
             facts.mark_synced(fact["id"])
 
-    log = "\n".join(f"{r['role']}: {r['content']}" for r in rows)
+    # tool_note.clip: a row from before tool notes were compact can carry a
+    # whole tool output, which the summarizer has no use for
+    log = "\n".join(f"{r['role']}: {tool_note.clip(r['content'])}" for r in rows)
     report = "\n\n".join(p for p in (report, *_saved_reports(rows)) if p)
     prompt = SUMMARIZER_PROMPT.format(log=log)
     if report:

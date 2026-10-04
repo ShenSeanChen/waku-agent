@@ -60,13 +60,23 @@ const toolRow = x => {
 // (meta: gate/latency/iterations/tools) render as the FULL turn card, so a
 // reopened thread looks just like when it was live. Rows without meta (from
 // before this was saved, or another gateway) fall back to a plain card.
+//
+// A stored assistant row is the model's history record: the reply, then an
+// internal "[tools used: ...]" note so the model remembers it already acted
+// (waku/memory/tool_note.py). Rows from before that note was compact carry a
+// tool's FULL output, tens of kilobytes of search JSON drawn as a block
+// thousands of lines tall. stripToolNote is the one place the note comes off,
+// and histItem is the one door every stored row comes through (dock.js's
+// loadThreadInto: switch, history, the "__all__" timeline, the embedded chat).
+const stripToolNote = t => (t || "").replace(/\s*\[tools used: [\s\S]*$/, "").trim();
 function histItem(m){
   if (m.role === "user") return {role:"user", text:m.content};
-  if (m.meta) return {role:"waku", reply:m.content, gate:m.meta.gate, slot:m.meta.slot,
+  const reply = stripToolNote(m.content);
+  if (m.meta) return {role:"waku", reply, gate:m.meta.gate, slot:m.meta.slot,
                       graph:m.meta.graph, report:m.meta.report, used:m.meta.used,
                       tools:m.meta.tools, iterations:m.meta.iterations,
                       latency_ms:m.meta.latency_ms, model:m.meta.model};
-  return {role:"waku", reply:m.content, historical:true};
+  return {role:"waku", reply, historical:true};
 }
 
 const turnCard = t => uiCard(`
@@ -242,12 +252,10 @@ const streamingCard = m => uiCard(`
          : ""}</div>`}`, {cls: "reply"});
 
 // Messages loaded from history (a switched/opened conversation) have no live
-// latency/iteration data, and their stored form carries an internal
-// "[tools used: ...]" annotation — strip both so the thread reads cleanly.
-const stripTools = t => (t || "").replace(/\s*\[tools used:[\s\S]*\]\s*$/, "").trim();
+// latency/iteration data.
 const historicalCard = m => uiCard(`
-  ${msgCopy(stripTools(m.reply))}
-  <div class="r">${renderMarkdown(stripTools(m.reply))}</div>`, {cls: "reply"});
+  ${msgCopy(m.reply)}
+  <div class="r">${renderMarkdown(m.reply)}</div>`, {cls: "reply"});
 
 function renderChatLog(){
   if (!CHAT.length)

@@ -43,6 +43,7 @@ from waku.integrations import (
     test_integration,
 )
 from waku.loop.agent import error_text
+from waku.memory import tool_note
 from waku.ops import browser_agent, commands, compare_history
 from waku.ops.arena import (
     compare_clear,
@@ -564,7 +565,8 @@ def session_list(conn) -> list[dict]:
             "SELECT DISTINCT source FROM chat_log WHERE session_id=?", (sid,)).fetchall()]
         preview = ""
         if last:
-            preview = ("you: " if last["role"] == "user" else "waku: ") + last["content"][:80]
+            preview = ("you: " if last["role"] == "user" else "waku: ") + \
+                tool_note.strip(last["content"])[:80]
         out.append({"id": sid,
                     "title": (first["content"][:60] if first else "(empty)"),
                     "last": preview,
@@ -754,7 +756,12 @@ def _thread_history(conn, sid: str) -> list[dict]:
             "SELECT role, content, meta FROM chat_log WHERE session_id=? ORDER BY id",
             (sid,),
         ).fetchall()
-    return [{"role": r["role"], "content": r["content"],
+    # An assistant row's content is the model's record, which ends in a
+    # "[tools used: ...]" note (waku/memory/tool_note.py). People read the
+    # reply, so the note comes off here, for the dock and for the front door's
+    # GET /v1/conversations/<id> alike; render.js's histItem strips it again.
+    return [{"role": r["role"],
+             "content": tool_note.strip(r["content"]) if r["role"] == "assistant" else r["content"],
              "meta": json.loads(r["meta"]) if r["meta"] else None} for r in rows]
 
 
