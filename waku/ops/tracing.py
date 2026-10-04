@@ -15,6 +15,19 @@ Two outputs from the same events:
 
    Langfuse cloud speaks OTel too — point the endpoint + auth headers there
    instead. The instrumentation below doesn't know or care which.
+
+What a line holds (spec 012, schema `v: 2`). A `tool` line carries the
+turn's `turn_id`, the tool's `source` (`treg`, `waku_memory`, `local` or
+`mcp:<server>`), `duration_ms`, `ok` and on a failure `error`, `cost_usd`,
+`endpoint_id` and `provider` when the result names them, and for a Waku
+Memory call its `query`, `results`, `memory_ids` and `retrieval_trace_id`;
+its `span` kind (`tool`, `retrieval` or `memory_write`); and the OTel GenAI
+names `gen_ai.operation.name`, `gen_ai.tool.type` and `gen_ai.tool.call.id`.
+Its `args` are redacted and trimmed to 500 characters
+(`waku/ops/observability.py`); its `output` is kept whole. An `llm` line
+carries `turn_id`, `cost_usd` (the `pricing.py` estimate for its tokens),
+`span: "llm"` and `gen_ai.operation.name: "chat"`. The OTel export uses the
+GenAI semantic-convention names (`observability.GENAI`, the one mapping).
 """
 
 from __future__ import annotations
@@ -27,6 +40,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from waku.config import Settings
+from waku.ops import observability
 
 
 def _now() -> str:
@@ -68,6 +82,9 @@ class Tracer:
         # Spec 011 A1: the turn in progress, so a ledger row and a trace event
         # can be joined to it. Empty between turns.
         self.turn_id = ""
+        # Spec 012: the MCP server names, so a tool line can say which server
+        # answered it. Read once; a server added later reads as "local".
+        self._mcp_servers = observability.mcp_servers(settings.home)
 
     def _init_otel(self, settings: Settings):
         if not settings.otel_endpoint:
@@ -133,13 +150,27 @@ class Tracer:
             # live model switching) a trace without the model is half a trace
             event = {"provider": self.settings.provider,
                      "model": self.settings.model or "", **event}
+            # Spec 012: join the call to its turn and say what it cost
+            event["turn_id"] = self.turn_id
+            event["cost_usd"] = observability.llm_cost(
+                event["provider"], event.get("model") or "", event.get("usage") or {})
+            event["span"] = "llm"
+            event["gen_ai.operation.name"] = observability.OPERATION["llm"]
+        elif kind == "tool":
+            # Spec 012: what the call did, where it went and what it cost;
+            # its arguments redacted and trimmed
+            event = observability.trace_record(event, turn_id=self.turn_id,
+                                               servers=self._mcp_servers)
         self._write({"type": kind, **event})
         if self._otel_tracer and self._span_ctx is not None:
             with self._otel_tracer.start_as_current_span(
                 f"{kind}.{event.get('tool', event.get('decision', ''))}".rstrip("."),
                 attributes={
                     "openinference.span.kind": {"llm": "LLM", "tool": "TOOL"}.get(kind, "CHAIN"),
-                    **{f"waku.{k}": json.dumps(v, default=str) for k, v in event.items()},
+                    **{f"waku.{k}": json.dumps(v, default=str) for k, v in event.items()
+                       if not k.startswith("gen_ai.") and k != "cost_usd"},
+                    # spec 012: the OTel GenAI names, mapped in one place
+                    **observability.genai_attributes(kind, event),
                 },
             ):
                 pass

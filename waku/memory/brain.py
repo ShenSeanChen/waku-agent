@@ -30,6 +30,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
@@ -123,13 +124,15 @@ def read_first(message: str, search: Search | None) -> ReadFirst:
             {"query": about, "kind": REPORT_KIND, "scope": "all", "limit": REPORT_LIMIT}]
     seen: set[str] = set()
     for args in asks:
+        started = time.perf_counter()
         try:
             text = search(args)
         except Exception as exc:
             log.warning("Waku Memory search before research failed (%s); "
                         "the turn goes on without it", exc)
             continue
-        out.calls.append({"tool": TOOL, "args": args, "output": text, "read_first": True})
+        out.calls.append({"tool": TOOL, "args": args, "output": text, "read_first": True,
+                          "duration_ms": int((time.perf_counter() - started) * 1000)})
         for entry in _entries(text):
             if entry["id"] in seen:
                 continue
