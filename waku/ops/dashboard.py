@@ -982,10 +982,27 @@ def embed_origins(header: str | None) -> tuple[str, ...]:
     return given or EMBED_ORIGINS
 
 
-def embed_page(header: str | None) -> bytes:
+# The theme of the page around the frame (waku-memory spec 040 T): waku.one
+# adds ?theme=light|dark to the embed address, the gateway carries it to
+# /embed/chat, and the page is served with data-theme already on <html>, so
+# its first paint is the console's and there is no light flash in a dark
+# console. Exactly these two values; anything else is no attribute at all.
+EMBED_THEMES = ("light", "dark")
+
+
+def embed_theme(query: str) -> str | None:
+    """The one `theme` in the request's query string, when it is light or dark."""
+    from urllib.parse import parse_qs
+
+    given = parse_qs(query).get("theme", [])
+    return given[0] if len(given) == 1 and given[0] in EMBED_THEMES else None
+
+
+def embed_page(header: str | None, theme: str | None = None) -> bytes:
     page = (STATIC / "embed.html").read_text(encoding="utf-8")
-    return page.replace("@@EMBED_ORIGINS@@",
-                        html.escape(" ".join(embed_origins(header)))).encode("utf-8")
+    attr = f' data-theme="{theme}"' if theme in EMBED_THEMES else ""
+    return (page.replace("@@EMBED_ORIGINS@@", html.escape(" ".join(embed_origins(header))))
+                .replace("<html@@THEME@@>", f"<html{attr}>")).encode("utf-8")
 
 
 # Content types for /static/. .woff2 is here because the dashboard serves its
@@ -1103,7 +1120,10 @@ class Handler(BaseHTTPRequestHandler):
             rel = unquote(parse_qs(urlparse(self.path).query).get("path", [""])[0])
             self._send(json.dumps(reveal_path(rel)).encode(), "application/json")
         elif self.path == "/embed/chat" or self.path.startswith("/embed/chat?"):
-            self._send(embed_page(self.headers.get(EMBED_ORIGINS_HEADER)),
+            from urllib.parse import urlparse
+
+            self._send(embed_page(self.headers.get(EMBED_ORIGINS_HEADER),
+                                  embed_theme(urlparse(self.path).query)),
                        "text/html; charset=utf-8", no_cache=True)
         elif self.path.startswith("/static/"):
             self._serve_static(self.path)

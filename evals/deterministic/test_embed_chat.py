@@ -559,3 +559,123 @@ def test_a_message_typed_while_a_refused_new_chat_opens_follows_the_old_one():
     console.log(JSON.stringify(state()));""")
     assert got["rows"][:4] == ["old question", "old answer",
                                "Error: could not start a new chat. agent is busy", "first message"]
+
+
+# --- spec 040 T (waku-memory), the frame's half: the console's theme -----------------
+#
+# Framed, the chat wears waku.one's theme in both directions, live. The first
+# paint comes from the server (?theme= on the address becomes data-theme on
+# <html>), every change after that from a "theme" message, and neither is
+# written to localStorage, which the frame shares with the person's own
+# dashboard on the same host.
+
+
+def test_the_page_is_served_in_the_consoles_theme():
+    assert "<html@@THEME@@>" in EMBED
+    assert dashboard.embed_page(None, "dark").decode().startswith(
+        '<!doctype html><html data-theme="dark"><head>')
+    assert '<html data-theme="light">' in dashboard.embed_page(None, "light").decode()
+    for theme in (None, "", "system", "Dark", 'dark"><script>x</script>'):
+        page = dashboard.embed_page(None, theme).decode()
+        assert "<html><head>" in page and "data-theme" not in page.split("<head>", 1)[0], theme
+        assert "@@THEME@@" not in page
+
+
+@pytest.mark.parametrize(("query", "theme"), [
+    ("theme=dark", "dark"),
+    ("theme=light", "light"),
+    ("", None),
+    ("theme=system", None),
+    ("theme=DARK", None),
+    ("theme=dark%22%3E", None),
+    ("theme=dark&theme=light", None),
+    ("theme=", None),
+], ids=["dark", "light", "none", "system", "upper-case", "injection", "twice", "empty"])
+def test_only_exactly_light_or_dark_is_read_from_the_address(query, theme):
+    assert dashboard.embed_theme(query) == theme
+
+
+def test_localhost_serves_the_page_in_the_asked_theme(server):
+    _, dark = _get(server + "/embed/chat?theme=dark")
+    assert dark.startswith(b'<!doctype html><html data-theme="dark">')
+    _, plain = _get(server + "/embed/chat?theme=sepia")
+    assert plain.startswith(b"<!doctype html><html><head>")
+
+
+def _themed(*, served: str | None, stored: str | None, messages: list[dict]) -> dict:
+    """Load the real theme.js and embed.js framed by dev.waku.one, with `served`
+    as the data-theme the server put on <html> and `stored` as the dashboard's
+    own "waku-theme". Dispatch each message (`data`, plus `origin` and
+    `from_parent` when they differ from an allowlisted parent's) and answer
+    the theme after the bootstrap, after each message, and every write to
+    localStorage."""
+    setup = {"files": CHAT_FILES + _files("theme.js"), "referrer": "https://dev.waku.one/agent",
+             "origins": DEFAULT, "framed": True, "events": [], "state": 200}
+    return _node(setup, f"""
+    const html = ctx.document.documentElement;
+    if ({json.dumps(served)} !== null) html.dataset.theme = {json.dumps(served)};
+    const writes = [];
+    ctx.localStorage = {{getItem: k => k === "waku-theme" ? {json.dumps(stored)} : null,
+                        setItem: (k, v) => writes.push([k, v])}};
+    vm.runInContext(`
+      function syncModelChip(){{}} function applyTele(){{}}
+      async function loadThreadInto(){{ return null; }}
+      function newChat(){{}}`, ctx);
+    vm.runInContext(fs.readFileSync({json.dumps(str(JS / "embed.js"))}, "utf8"), ctx);
+    await new Promise(r => setTimeout(r, 0));
+    const boot = html.dataset.theme || "system";
+    const handler = listeners.filter(l => l.type === "message")[0].fn;
+    const after = [];
+    for (const m of {json.dumps(messages)}) {{
+      const accepted = handler({{data: m.data, origin: m.origin || "https://dev.waku.one",
+                                source: m.from_parent === false ? {{}} : ctx.parent}});
+      after.push([accepted, html.dataset.theme || "system"]);
+    }}
+    console.log(JSON.stringify({{boot, after, writes}}));""")
+
+
+def _theme(value) -> dict:
+    return {"data": {"source": "waku-console", "type": "theme", "theme": value}}
+
+
+@needs_node
+def test_the_served_theme_wins_over_the_dashboards_stored_choice():
+    got = _themed(served="dark", stored="light", messages=[])
+    assert got == {"boot": "dark", "after": [], "writes": []}
+
+
+@needs_node
+def test_without_a_console_theme_the_stored_choice_still_applies():
+    """An old waku.one, or the page opened on its own: as before this change."""
+    assert _themed(served=None, stored="dark", messages=[])["boot"] == "dark"
+    assert _themed(served=None, stored=None, messages=[])["boot"] == "system"
+
+
+@needs_node
+def test_the_console_switches_the_frame_both_ways_and_nothing_is_stored():
+    got = _themed(served="dark", stored="dark",
+                  messages=[_theme("light"), _theme("dark"), _theme("light")])
+    assert got["after"] == [[True, "light"], [True, "dark"], [True, "light"]]
+    assert got["writes"] == [], "the dashboard's own choice is never overwritten"
+
+
+@needs_node
+@pytest.mark.parametrize("message", [
+    {**_theme("dark"), "origin": "https://evil.example"},
+    {**_theme("dark"), "origin": "https://dev.waku.one.evil.example"},
+    {**_theme("dark"), "origin": "https://agent.example"},
+    {**_theme("dark"), "from_parent": False},
+    {"data": {"source": "waku-agent", "type": "theme", "theme": "dark"}},
+    _theme("system"),
+    _theme("Dark"),
+    _theme(""),
+    _theme(None),
+    _theme(1),
+    _theme(["dark"]),
+    {"data": {"source": "waku-console", "type": "theme"}},
+    {"data": "theme:dark"},
+], ids=["foreign-origin", "lookalike", "own-origin", "not-the-parent", "wrong-source-tag",
+        "system", "upper-case", "empty", "null", "number", "array", "missing", "not-an-object"])
+def test_every_other_theme_message_is_ignored(message):
+    got = _themed(served="light", stored=None, messages=[message])
+    assert got == {"boot": "light", "after": [[False, "light"]], "writes": []}

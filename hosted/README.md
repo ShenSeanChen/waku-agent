@@ -102,7 +102,8 @@ sudo git -C /srv/waku/src checkout main
 
 **Pick the ref deliberately.** A deployment sits on whatever commit is checked
 out here, and `upgrade.sh` moves it: with no `--ref` it fetches `origin/main`,
-and `upgrade.sh --ref v0.4.0` pins a tag. Installing from `main` means
+and `upgrade.sh --ref v0.4.0` pins a tag. With automatic upgrades on, a timer
+moves it instead; see "Automatic upgrades" below. Installing from `main` means
 installing whatever landed today; installing from a tag means choosing when to
 move. Either is fine, and the one that is not fine is not knowing which you
 did. `install.sh` records the commit it built from in
@@ -400,7 +401,12 @@ restart costs waku.one one more call. `GET /auth/embed` must arrive as an
 iframe navigation (`Sec-Fetch-Dest: iframe`, or no fetch metadata); it sets
 `__Host-waku_embed` (`Secure; HttpOnly; SameSite=None; Partitioned`, 12 hours,
 stored in `control.db` like the other two sessions and ended by the same
-sign-out) and redirects to `/embed/chat`.
+sign-out) and redirects to `/embed/chat`. waku.one may add `&theme=light` or
+`&theme=dark` to the URL before framing it; the redirect then goes to
+`/embed/chat?theme=<it>`, and the page is served with that `data-theme` on
+`<html>`, so its first paint is in the console's theme rather than a light
+flash. Any other value, or none, redirects to `/embed/chat` alone and the chat
+uses its own stored choice.
 
 A request carrying only that cookie reaches `/embed/chat`, `/static/`,
 `POST /api/chat/stream`, `GET` and `POST /api/session` (the chat's header reads
@@ -429,16 +435,22 @@ only when that origin is on the allowlist, never `*`:
 | the session has ended | `{"source": "waku-agent", "type": "session-expired"}` |
 | the person clicks "Open report" | `{"source": "waku-agent", "type": "open-report", "memory_id": "...", "title": "..."}` |
 
-The chat listens for one message from the page around it:
+The chat listens for two messages from the page around it:
 
 | When | Message (to the frame) |
 |---|---|
 | the person clicks waku.one's "New chat" | `{"source": "waku-console", "type": "new-chat"}` |
+| the frame loads, and whenever waku.one's theme changes | `{"source": "waku-console", "type": "theme", "theme": "light"}` or `"dark"` |
 
-It is accepted only when `event.source` is `window.parent` and `event.origin`
-is on the same allowlist (never `*`, never the frame's own origin). It starts
-a new chat exactly as "+ New chat" does, and does nothing when the chat is
-already empty. Every other message is ignored (waku-memory spec 040 P2).
+Each is accepted only when `event.source` is `window.parent` and `event.origin`
+is on the same allowlist (never `*`, never the frame's own origin). `new-chat`
+starts a new chat exactly as "+ New chat" does, and does nothing when the chat
+is already empty (waku-memory spec 040 P2). `theme` restyles the chat at once;
+its value must be exactly `light` or `dark` (waku.one resolves "system"
+itself). It is applied and never stored: the frame shares `localStorage` with
+the person's own dashboard on the same host, and the console's theme must not
+replace the choice they made there with the dashboard's toggle (waku-memory
+spec 040 T). Every other message is ignored.
 
 "Open report" opens no tab while framed: waku.one opens the report in place
 (waku-memory spec 040 M3). Not framed, or framed by an origin off the list, it
@@ -642,6 +654,10 @@ sudo tenant.sh inspect-stop mei@example.com
 sudo upgrade.sh                       # fetch, rebuild, restart the services
 sudo upgrade.sh --now                 # and restart every running tenant too
 
+sudo autodeploy.sh --enable           # upgrade on every green commit on main
+sudo autodeploy.sh --status           # what is deployed, what failed, paused?
+sudo autodeploy.sh --disable          # stop the timer
+
 sudo backup.sh --all                  # what the nightly timer runs
 sudo backup.sh --init-repository      # once, before the first backup
 sudo backup.sh --snapshot-staged <id> # send a slot restic never received
@@ -658,6 +674,74 @@ sudo migrate.sh --in                  # on the new one
 gateway holds the session cache, the container addresses and the tokens in
 memory: a second process changing any of that behind its back would leave the
 gateway serving from a cache it believes is still true.
+
+`upgrade.sh` and the automatic-upgrade timer share one lock,
+`/srv/waku/run/deploy/lock`. A manual `upgrade.sh` that starts while an
+automatic upgrade runs refuses and says so; run it again when that finishes.
+
+### Automatic upgrades
+
+**Off until you turn it on.** With it on, a systemd timer checks `main` every
+5 minutes and upgrades this VM to the newest commit on `main` once both
+required checks, `skills-and-evals` and `hosted-docker`, have passed on that
+exact commit and GitHub has verified its signature. It reads both from
+GitHub's public API with no token, and it needs no inbound port and no cloud
+permission.
+
+Turn it on once, after an `upgrade.sh` by hand, so that the commit the VM is
+running is the one the timer records as the last good one:
+
+```bash
+sudo /srv/waku/src/hosted/deploy/upgrade.sh
+sudo /srv/waku/src/hosted/deploy/autodeploy.sh --enable
+```
+
+Each tick, in order:
+
+1. If `/srv/waku/config/autodeploy.off` exists, it logs "paused" and stops.
+2. It reads `main`'s commit with `git ls-remote` and stops when that commit is
+   already deployed or already failed.
+3. It refuses a commit that does not descend from the last deployed one, so a
+   force-pushed `main` never deploys on its own.
+4. It waits while either check is still running, and records the commit as
+   failed when either check failed or was cancelled.
+5. It runs `upgrade.sh --ref <commit>`, then requires both the gateway on its
+   internal address and `https://<your domain>/login` to answer 200.
+6. If either fails, it runs `upgrade.sh --ref <last good commit>` and records
+   the new commit as failed, so it is never retried. The next commit on
+   `main` is.
+7. **If the rollback fails too, it writes the kill switch itself** and stops.
+   The site may be down at that point: run `upgrade.sh --ref <last good
+   commit>` by hand and read the gateway's logs.
+
+**An automatic upgrade can cut off a chat turn in progress.** `upgrade.sh`
+recreates the gateway when its image changed, and every turn streams through
+the gateway. The timer never passes `--now`, so a running tenant keeps the old
+tenant image until their container next starts.
+
+**A merge is now a production deploy.** The review on a pull request becomes
+the last human look before this VM runs the code as root, about 10 minutes
+after the merge.
+
+The kill switch pauses every later tick without touching the timer; it does
+not stop a tick that is already upgrading:
+
+```bash
+sudo touch /srv/waku/config/autodeploy.off   # pause
+sudo rm /srv/waku/config/autodeploy.off      # resume
+```
+
+Read what it decided, one line per tick:
+
+```bash
+sudo journalctl -u waku-autodeploy --since today
+sudo autodeploy.sh --status
+```
+
+Its state is in `/srv/waku/run/deploy/`: `deployed` holds the last commit
+that passed every check, and `failed` lists the commits it will not retry,
+with the time and the reason. Delete a line from `failed` to let that commit
+be tried again.
 
 ### Looking at one person's data
 
@@ -847,7 +931,8 @@ What you cannot get back this way: the archives of tenants deleted in the last
   tenants/    one directory per tenant, home and env. Owned by uid 10001
   staging/    the handoff area backup.sh and restore.sh share
   archive/    deleted and pre-restore trees, kept 30 days
-  run/        the four unix sockets the services talk over
+  run/        the four unix sockets the services talk over, and deploy/:
+              the upgrade lock and the automatic upgrades' state
 ```
 
 Read the logs with the same invocation every script here uses, which works from
