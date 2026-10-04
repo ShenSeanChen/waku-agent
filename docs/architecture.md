@@ -44,7 +44,7 @@ flowchart TB
     SEM & EPI --- DB
 
     subgraph OPS["LLM Ops — waku/ops/ + evals/"]
-        TRACE["tracing.py — 1 trace/run<br/>JSONL always · OTel → Phoenix/Langfuse"]
+        TRACE["tracing.py — 1 trace/run<br/>JSONL always · OTel → Phoenix/Langfuse<br/>every model call · 1 receipt/turn"]
         DET["evals/deterministic — 0/1<br/>'did the right tool fire?'"]
         JUDGE["evals/judge — scored %<br/>'was the reply good?'"]
         RGATE{{"release_gate.py"}}
@@ -167,10 +167,33 @@ is dropped, and at most two facts are kept, as the person's own (scope
 title and summary from the chat log's meta.
 
 Each tool card shows `cost_usd` and the provider when the result carries them
-(treg's call, through the hosted relay too), and the turn footer shows the
-turn's total tool cost. `WAKU_UNAVAILABLE_TOOLS` names tools a deployment does
+(treg's call, through the hosted relay too). `WAKU_UNAVAILABLE_TOOLS` names tools a deployment does
 not offer, and the system prompt says not to call them; hosted containers set
 it to treg's `balance` and `resources_list`, which the relay refuses.
+
+### The turn receipt
+
+Every reply in the chat ends with one line that says what the turn did and
+cost (spec 011), for example `claude-sonnet-5 · 12.4k in / 1.9k out · $0.064
+est | treg 2 · $0.030 | memory 4 used · 2 kept · report saved | $0.094`.
+Clicking it opens a table of the same numbers, with each kept fact and the
+report linked to its page on waku.one. `waku/ops/receipt.py` builds it once
+from the turn's own events; the `done` payload carries it as `receipt`, the
+chat log keeps it in `meta.receipt`, and the trace gets one `receipt` event.
+It holds names, counts, dollars and ids, and never a tool's arguments or
+output.
+
+Every turn has a `turn_id`, written on the trace's `turn_start` and
+`turn_end`, on each `usage.jsonl` row and in the chat log's meta. Every model
+call writes a `usage.jsonl` row and an `llm` event: the loop's with `kind`
+`loop`, and the small-model calls around it with `gate`, `consolidation`,
+`report`, `triage` or `quick` (`metered()` in `waku/ops/tracing.py`).
+
+Model dollars are an estimate from `waku/ops/pricing.py`, marked "est". On
+the hosted free tier, every model call carries `X-Waku-Turn`, and the
+metering proxy answers `GET /v1/turns/<turn_id>/charges` with the exact
+charge and the credits Waku Memory took (`hosted/README.md`); the receipt
+shows those instead. A proxy that does not know the turn leaves the estimate.
 
 ## Which file is which
 

@@ -36,6 +36,7 @@ from hosted.proxy.gateway_client import TokenCache
 from hosted.proxy.internal import serve_spend
 from hosted.proxy.ledger import Ledger
 from hosted.proxy.treg import TregRelay
+from hosted.proxy.turns import TurnCharges
 from hosted.proxy.upstream import AnthropicUpstream
 from hosted.proxy.wallet import WakuMemoryWallet
 
@@ -53,16 +54,17 @@ async def main() -> None:
     spend_server = await serve_spend(config.proxy_socket, ledger)
     async with aiohttp.ClientSession(auto_decompress=False) as session:
         wallet = WakuMemoryWallet(session, config.memory_api_url)
+        turns = TurnCharges()   # per-turn charges for the receipt, in memory only
         treg = None
         if config.treg_token:
             treg = TregRelay(session=session, token=config.treg_token,
                              max_call_usd=config.treg_max_call_usd, resolve=tokens.resolve,
-                             memory_key=tokens.memory_key, wallet=wallet)
+                             memory_key=tokens.memory_key, wallet=wallet, turns=turns)
         proxy = MeteringProxy(
             config=config, ledger=ledger, resolve=tokens.resolve,
             upstream=AnthropicUpstream(session, config.upstream_base_url, config.platform_key),
             memory_key=tokens.memory_key, wallet=wallet,
-            treg=treg.handle if treg is not None else None)
+            treg=treg.handle if treg is not None else None, turns=turns)
         runner = web.AppRunner(proxy.build(), access_log=None)
         await runner.setup()
         await web.TCPSite(runner, config.bind_host, config.port).start()

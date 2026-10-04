@@ -6,15 +6,20 @@ session → loop. If you want to understand the repo in one place, start here.
 
 from __future__ import annotations
 
+import logging
+
 from waku.config import Settings, load_settings
 from waku.db import connect
 from waku.loop.agent import LoopResult, Observer, run_loop
 from waku.loop.models import get_client
 from waku.memory import brain, reports
-from waku.ops.tracing import Tracer, compose
+from waku.ops import receipt as receipts
+from waku.ops.tracing import Tracer, compose, metered
 from waku.runtime.session import Session
 from waku.tools import build_registry
 from waku.tools.waku_memory import remember_via, search_via
+
+log = logging.getLogger(__name__)
 
 
 class Waku:
@@ -58,8 +63,12 @@ class Waku:
         # them with the turn (the reopened-thread telemetry the dashboard shows)
         import time
         captured: dict = {}
+        # Spec 011: the events a receipt is built from, in the order they came
+        turn_events: list[tuple[str, dict]] = []
 
         def _capture(kind, ev):
+            if kind in ("llm", "tool", "consolidation", "report"):
+                turn_events.append((kind, ev))
             if kind == "gate":
                 captured["gate"] = {"decision": ev.get("decision"), "reason": ev.get("reason")}
             if kind == "route":
@@ -72,6 +81,8 @@ class Waku:
         t0 = time.perf_counter()
 
         with self.tracer.turn(user_message):
+            if hasattr(self.client, "turn_id"):   # waku-platform: spec 011 B1
+                self.client.turn_id = self.tracer.turn_id
             # The graph front door is optional and can NEVER make Waku worse:
             # flag off → this is exactly the old code path; flag on → the triage
             # graph decides quick vs full, and any failure anywhere falls open
@@ -93,7 +104,8 @@ class Waku:
             found = reports.find(result.reply)
             reply, report = reports.save(
                 result.reply, self.memory.remember,
-                lambda r: reports.is_company_research(self.client, self.settings.small_model, r))
+                lambda r: reports.is_company_research(
+                    metered(self.client, "report", notify), self.settings.small_model, r))
             if report is not None:
                 result.reply = reply
                 notify("report", report)
@@ -125,8 +137,9 @@ class Waku:
                 # the card a reopened thread draws in place of the report
                 "report": report,
             }
-            self.session.add_exchange(user_message, result.reply, tool_calls=result.tool_calls,
-                                      source=source, meta=meta)
+            row_id = self.session.add_exchange(user_message, result.reply,
+                                               tool_calls=result.tool_calls,
+                                               source=source, meta=meta)
             if self.memory is not None:
                 # Spec 009 B: a turn that saved a report keeps at most two
                 # facts, about the person; the findings stay in the report.
@@ -134,8 +147,30 @@ class Waku:
                     notify=notify, report=found.body if report is not None else "")
                 self.memory.export_markdown()   # keep MEMORY.md in sync
 
+            # Spec 011: the receipt, once consolidation has kept what it keeps.
+            # It goes on the result (the `done` payload), into the stored
+            # row's meta, and into the trace as one `receipt` event. The reply
+            # is already stored, so a receipt that fails is logged and skipped.
+            try:
+                self._receipt(result, turn_events, meta, row_id)
+            except Exception:
+                log.exception("the turn's receipt could not be built")
+
         self.tracer.end_turn(result.reply, result.iterations)
         return result
+
+    def _receipt(self, result: LoopResult, events: list, meta: dict, row_id: int | None) -> None:
+        charges = getattr(self.client, "charges", None)   # waku-platform only
+        turn_id = self.tracer.turn_id
+        result.receipt = receipts.build(
+            events, turn_id=turn_id, model=meta["model"] or "",
+            provider=self.settings.provider, default_model=self.settings.model or "",
+            used=len(result.used),
+            charges=charges(turn_id) if callable(charges) else None)
+        meta.update(turn_id=turn_id, receipt=result.receipt)
+        if row_id is not None:
+            self.memory.update_meta(row_id, meta)
+        self.tracer.event("receipt", result.receipt)
 
     def _run_full_turn(self, user_message: str, notify, stream: bool) -> LoopResult:
         """The classic turn: assemble working memory, run THE loop. Extracted
@@ -189,13 +224,14 @@ class Waku:
         def quick_reply(state: dict) -> str:
             prompt = QUICK_REPLY_PROMPT.format(calendar=state.get("calendar", ""),
                                                message=state["message"])
-            response = self.client.messages.create(
+            response = metered(self.client, "quick", notify).messages.create(
                 model=self.settings.small_model, max_tokens=600,
                 messages=[{"role": "user", "content": prompt}])
             return "".join(b.text for b in response.content if b.type == "text")
 
         graph = build_triage_graph(
-            classify_fn=lambda m: classify_message(self.client, self.settings.small_model, m),
+            classify_fn=lambda m: classify_message(
+                metered(self.client, "triage", notify), self.settings.small_model, m),
             calendar_fn=lambda: todays_events(self.settings.home),
             quick_fn=quick_reply,
             # the full path is the SAME method the flag-off default runs; the

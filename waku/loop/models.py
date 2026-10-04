@@ -329,8 +329,65 @@ def get_client(settings: Settings):
         kwargs: dict = {"api_key": api_key, "timeout": timeout}
         if base_url:
             kwargs["base_url"] = base_url
-        return anthropic.Anthropic(**kwargs)
+        client = anthropic.Anthropic(**kwargs)
+        # Spec 011 B1: the hosted free tier's proxy is told which turn each
+        # call belongs to, and answers what the turn was charged.
+        return TurnTagged(client) if settings.provider == PLATFORM else client
     return OpenAICompatClient(api_key=api_key, base_url=base_url, timeout=timeout)
+
+
+# The hosted free tier's provider row (providers.toml), whose endpoint is the
+# metering proxy in hosted/proxy/.
+PLATFORM = "waku-platform"
+
+
+class _TaggedMessages:
+    def __init__(self, owner: TurnTagged) -> None:
+        self._owner = owner
+
+    def _tag(self, kwargs: dict) -> dict:
+        if self._owner.turn_id:
+            kwargs["extra_headers"] = {**(kwargs.get("extra_headers") or {}),
+                                       "X-Waku-Turn": self._owner.turn_id}
+        return kwargs
+
+    def create(self, **kwargs):
+        return self._owner.client.messages.create(**self._tag(kwargs))
+
+    def stream(self, **kwargs):
+        return self._owner.client.messages.stream(**self._tag(kwargs))
+
+    def __getattr__(self, name: str):
+        return getattr(self._owner.client.messages, name)
+
+
+class TurnTagged:
+    """The `waku-platform` client (spec 011 B1). Every model call carries
+    `X-Waku-Turn: <turn_id>`, which the metering proxy reads and never
+    forwards to Anthropic, and `charges()` asks the proxy what the turn was
+    charged: `GET /v1/turns/<turn_id>/charges` answers
+    `{"model_usd", "calls", "credits"}`. It goes to the same proxy, with the
+    same platform token, as every model call; no other provider sends either.
+    """
+
+    def __init__(self, client) -> None:
+        self.client = client
+        self.turn_id = ""
+        self.messages = _TaggedMessages(self)
+
+    def __getattr__(self, name: str):
+        return getattr(self.client, name)
+
+    def charges(self, turn_id: str) -> dict | None:
+        """The proxy's answer for one turn, or None: an older proxy, a turn
+        it never saw (404) and an unreachable proxy all leave the receipt's
+        estimate in place, and never fail the turn."""
+        try:
+            answer = self.client.get(f"/v1/turns/{turn_id}/charges", cast_to=object,
+                                     options={"timeout": 10.0, "max_retries": 0})
+        except Exception:
+            return None
+        return answer if isinstance(answer, dict) else None
 
 
 class OpenAICompatClient:

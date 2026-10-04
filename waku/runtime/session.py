@@ -95,9 +95,10 @@ class Session:
         return "\n".join(parts)
 
     def add_exchange(self, user_message: str, reply: str, tool_calls: list | None = None,
-                     source: str = "cli", meta: dict | None = None) -> None:
+                     source: str = "cli", meta: dict | None = None) -> int | None:
         """Record the turn in history (working memory) and, if memory is wired,
-        in the chat log (so consolidation can distill it later).
+        in the chat log (so consolidation can distill it later). Returns the
+        chat log's assistant row id, or None without memory.
 
         Tool activity is folded into the assistant's history entry as a compact
         [tools used: ...] line. Without it, the model forgets it already acted
@@ -112,9 +113,10 @@ class Session:
             record = f"{reply}\n{tool_note.note(tool_calls)}"
         self.history.append({"role": "user", "content": user_message})
         self.history.append({"role": "assistant", "content": record})
-        if self.memory is not None:
-            self.memory.log_chat(user_message, record, session_id=self.session_id,
-                                 source=source, meta=meta)
+        if self.memory is None:
+            return None
+        return self.memory.log_chat(user_message, record, session_id=self.session_id,
+                                    source=source, meta=meta)
 
     # ---- session lifecycle (the "New chat" / history feature)
     # A session is just a tag on chat_log rows. Starting a new one clears working
