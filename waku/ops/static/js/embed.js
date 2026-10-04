@@ -80,6 +80,26 @@ statusWatchers.push(status => {
   tellParent({type: "session-expired"});
 });
 
+// --- what the page around us may ask (waku-memory spec 040 P2) ---------------
+// One message, {"source": "waku-console", "type": "new-chat"}: waku.one's own
+// "New chat" starts one here, through the same newChat() as "+ New chat".
+// Accepted ONLY from window.parent, and only when its origin is on the
+// allowlist this page was served with: never from "*", never from this
+// frame's own origin, never from another window. A chat that is already
+// empty is left as it is. Every other message is ignored.
+function acceptParentMessage(event){
+  if (!event || event.source !== window.parent || window.parent === window) return false;
+  const own = window.location && window.location.origin;
+  if (!event.origin || event.origin === own || !EMBED_ORIGINS.includes(event.origin)) return false;
+  const data = event.data;
+  if (!data || typeof data !== "object") return false;
+  if (data.source !== "waku-console" || data.type !== "new-chat") return false;
+  if (!CHAT.length) return false;   // already a new chat: nothing to start
+  newChat();
+  return true;
+}
+window.addEventListener("message", acceptParentMessage);
+
 // --- bootstrap --------------------------------------------------------------
 applyTheme(currentTheme());
 watchSlots();

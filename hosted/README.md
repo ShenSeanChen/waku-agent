@@ -429,6 +429,17 @@ only when that origin is on the allowlist, never `*`:
 | the session has ended | `{"source": "waku-agent", "type": "session-expired"}` |
 | the person clicks "Open report" | `{"source": "waku-agent", "type": "open-report", "memory_id": "...", "title": "..."}` |
 
+The chat listens for one message from the page around it:
+
+| When | Message (to the frame) |
+|---|---|
+| the person clicks waku.one's "New chat" | `{"source": "waku-console", "type": "new-chat"}` |
+
+It is accepted only when `event.source` is `window.parent` and `event.origin`
+is on the same allowlist (never `*`, never the frame's own origin). It starts
+a new chat exactly as "+ New chat" does, and does nothing when the chat is
+already empty. Every other message is ignored (waku-memory spec 040 P2).
+
 "Open report" opens no tab while framed: waku.one opens the report in place
 (waku-memory spec 040 M3). Not framed, or framed by an origin off the list, it
 opens `/memories/<id>` in a new tab as before.
