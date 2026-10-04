@@ -60,7 +60,7 @@ refuses to run until it is right.
 
 | Create | Notes |
 |---|---|
-| A VM | 4 vCPU, 16 GB RAM to start. Memory is the binding resource: about 100 MB per active tenant, and `install.sh` sizes its running cap from it as (memory minus 2 GB) divided by 150 MB, which is 95 on a 16 GB VM. Pass `--max-running N` to choose your own number. The cap limits how many tenants run at once and not how many can sign up: at the cap, the next tenant's start stops the container idle longest. Nothing stops an idle container before that, because the once-a-minute idle stop (spec 001 task E4) is not built |
+| A VM | 4 vCPU, 16 GB RAM to start. Memory is the binding resource: about 100 MB per active tenant, and `install.sh` sizes its running cap from it as (memory minus 2 GB) divided by 150 MB, which is 95 on a 16 GB VM. Pass `--max-running N` to choose your own number. Idle containers stop on their own after 15 minutes (`WAKU_IDLE_MINUTES` in `config/gateway.env`), so the cap limits how many tenants run at once and not how many can sign up. At the cap, the next tenant's start stops the container idle longest |
 | A second disk | 100 GB. It becomes `/srv/waku` |
 | **No instance role, and no service account** | The tenant firewall rules are the first line, and this is the second: if a rule is ever missing, the metadata service must have no credential to hand out |
 | Two DNS records | `agent.waku.one` and `*.agent.waku.one`, both pointing at the VM. Each tenant gets their own host, so the wildcard is not optional |
@@ -752,14 +752,30 @@ recreates the gateway when its image changed, and every turn streams through
 the gateway. The timer never passes `--now`, so a running tenant keeps the old
 tenant image until their container next starts.
 
-**A running tenant can keep the old image for days.** Nothing stops an idle
-container yet (spec 001 task E4 is not built), and a gateway restart adopts the
-containers already running. A container starts again from the new image only
-when the cap stops it for another tenant, when its Waku Memory key is replaced,
-when an operator runs `tenant.sh disable` and then `enable`, when an operator
-runs `upgrade.sh --now`, or when it exits. After a merge that changes what
-tenants run, run `upgrade.sh --now` at a quiet moment. It restarts every
-running tenant and can cut off a turn in progress.
+**A running tenant moves to the new image after 15 minutes idle.** Once a
+minute the gateway stops every tenant container that has had nothing in flight
+and no request other than a background poll for the idle window, and logs one
+`idle stop tenant=<id>` line for each. The tenant's next message starts a new
+container from the current tenant image. A gateway restart adopts the
+containers already running and starts their idle clocks fresh. A tenant who
+keeps chatting keeps the old image until they pause for the window, or until
+an operator runs `upgrade.sh --now`, which restarts every running tenant at
+once and can cut off a turn in progress.
+
+**What counts as idle.** In flight is any request the gateway is forwarding to
+the container, from before it reaches the container until the last byte of a
+streamed answer, so a container is never stopped mid-turn. Background requests
+(the dashboard's timers, sent with `X-Waku-Background: 1`) never reset the idle
+clock and never start a stopped container: they get `paused`, and the page
+waits for the next user action. Two cases the gateway cannot see: a turn that
+keeps running inside the container after the browser closed the tab, and work
+the container starts on its own. Both stop with the container once the window
+has passed since the last real request.
+
+**Changing the window.** Set `WAKU_IDLE_MINUTES` in `config/gateway.env` to a
+whole number of minutes, at least 1, and restart the gateway; it reads the
+file only at startup and logs the window it is using. A `gateway.env` without
+the line uses 15, so a VM installed before the idle loop needs no edit.
 
 **A merge is now a production deploy.** The review on a pull request becomes
 the last human look before this VM runs the code as root, about 10 minutes
