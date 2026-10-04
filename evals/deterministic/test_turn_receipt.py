@@ -81,9 +81,9 @@ EVENTS = [
     ("llm", {"kind": "consolidation", "model": HAIKU, "usage": {"in": 110, "out": 22}}),
     ("consolidation", {"new_facts": 2, "kept": [
         {"subject": "Sean", "content": "Sean films on Fridays.", "project": None,
-         "memory_id": "mem-a"},
+         "memory_id": "mem-a", "sent": True},
         {"subject": "Sean", "content": "Sean prices below Mem0.", "project": None,
-         "memory_id": "mem-b"}]}),
+         "memory_id": "mem-b", "sent": True}]}),
 ]
 # 12,000 in and 1,850 out on Sonnet at $3/$15, 410 in and 52 out on Haiku at $1/$5
 MODEL_USD = 0.06442
@@ -97,7 +97,8 @@ EXPECTED = {
               {"tool": "search_web", "provider": "", "usd": None, "status": "ok"}],
     "memory": {"searches": [{"tool": "memory_search", "found": 8, "trace_id": None},
                             {"tool": "memory_search", "found": 4, "trace_id": None}],
-               "used": 4, "kept": [{"memory_id": "mem-a"}, {"memory_id": "mem-b"}],
+               "used": 4, "kept": [{"memory_id": "mem-a", "sent": True},
+                                     {"memory_id": "mem-b", "sent": True}],
                "report": "rep-1003"},
     "total_usd": 0.09442,
     "credits": None,
@@ -125,7 +126,7 @@ def test_the_receipt_keys_are_a_closed_set_at_every_level():
     assert all(tuple(t) == receipt.TOOL_KEYS for t in r["tools"])
     assert tuple(r["memory"]) == receipt.MEMORY_KEYS
     assert all(tuple(s) == receipt.SEARCH_KEYS for s in r["memory"]["searches"])
-    assert all(set(k) == {"memory_id"} for k in r["memory"]["kept"])
+    assert all(tuple(k) == receipt.KEPT_KEYS for k in r["memory"]["kept"])
 
 
 def test_the_proxys_answer_replaces_the_estimate_and_adds_credits():
@@ -179,13 +180,14 @@ def test_bad_input_leaves_the_receipt_valid():
         ("tool", {"tool": "waku_memory_memory_search", "args": {}, "output": "Error: timed out"}),
         ("tool", {"tool": "x", "args": None, "output": None}),
         ("llm", {"usage": None}),
-        ("consolidation", {"kept": [None, {"memory_id": 7}]}),
+        ("consolidation", {"kept": [None, {"memory_id": 7, "sent": "yes"}]}),
         ("report", {"memory_id": None}),
     ]
     r = _build(events)
     assert [t["usd"] for t in r["tools"]] == [None, None, None, None]
     assert r["memory"]["searches"] == [{"tool": "memory_search", "found": None, "trace_id": None}]
-    assert r["memory"]["kept"] == [{"memory_id": None}] and r["memory"]["report"] is None
+    assert r["memory"]["kept"] == [{"memory_id": None, "sent": None}]
+    assert r["memory"]["report"] is None
     assert r["total_usd"] == 0 and json.dumps(r)
 
 
@@ -472,3 +474,40 @@ def test_a_turn_with_no_tools_and_no_memory_leaves_those_parts_out():
     got = _node(f"""console.log(JSON.stringify(
       {{parts: vm.runInContext("receiptParts", ctx)({json.dumps(bare)})}}));""")
     assert got["parts"] == ["claude-sonnet-5 · 900 in / 40 out · $0.003 est", "$0.003"]
+
+
+# --- the kept facts Waku Memory did not take ----------------------------------
+
+# 2026-10-04 on agent.waku.one: Waku Memory refused every send with "Session
+# not found", and the card still listed six facts under "Kept in memory".
+REFUSED = {"new_facts": 2, "kept": [
+    {"subject": "Sean", "content": "Sean films on Fridays.", "project": None,
+     "memory_id": None, "sent": False},
+    {"subject": "Sean", "content": "Sean prices below Mem0.", "project": None,
+     "memory_id": None, "sent": False}]}
+HALF = {"new_facts": 2, "kept": [{**REFUSED["kept"][0], "memory_id": "mem-a", "sent": True},
+                                 REFUSED["kept"][1]]}
+
+
+@needs_node
+def test_the_card_never_says_kept_in_memory_for_facts_waku_memory_refused():
+    refused = _build([("consolidation", REFUSED)])
+    half = _build([("consolidation", HALF)])
+    got = _node(f"""
+    const kept = vm.runInContext("keptList", ctx);
+    const parts = vm.runInContext("receiptParts", ctx);
+    const rows = vm.runInContext("receiptRows", ctx);
+    console.log(JSON.stringify({{
+      refused: kept({json.dumps(REFUSED)}), half: kept({json.dumps(HALF)}),
+      sent: kept({json.dumps(EVENTS[-1][1])}),
+      refusedLine: parts({json.dumps(refused)}), halfLine: parts({json.dumps(half)}),
+      refusedRows: JSON.stringify(rows({json.dumps(refused)}))}}));""")
+    assert "Kept in memory" not in got["refused"]
+    assert "Kept on this agent only" in got["refused"] and 'class="kept kept-failed"' in got["refused"]
+    assert "Waku Memory did not answer" in _text(got["refused"])
+    assert "sends them again" in _text(got["refused"])
+    assert "Kept in memory" in got["half"] and "1 of these 2 facts" in _text(got["half"])
+    assert "kept-failed" not in got["sent"] and "did not answer" not in got["sent"]
+    assert "memory 4 used · 2 kept, 2 on this agent only" in got["refusedLine"]
+    assert "memory 4 used · 2 kept, 1 on this agent only" in got["halfLine"]
+    assert "2 on this agent only" in got["refusedRows"]

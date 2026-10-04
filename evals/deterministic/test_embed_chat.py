@@ -69,7 +69,7 @@ def test_the_page_is_the_chat_column_and_nothing_else():
 
 def test_the_page_loads_the_chat_scripts_and_no_view():
     scripts = re.findall(r'<script src="/static/js/([a-z]+\.js)"></script>', EMBED)
-    assert scripts == ["util.js", "theme.js", "ui.js", "render.js", "dock.js", "embed.js"]
+    assert scripts == ["util.js", "theme.js", "ui.js", "blocks.js", "render.js", "dock.js", "embed.js"]
     assert not re.search(r"<script>", EMBED), "no inline script: the page runs only its files"
     for ref in re.findall(r'(?:src|href)="(/static/[^"]+)"', EMBED):
         assert (STATIC / ref[len("/static/"):]).is_file(), ref
