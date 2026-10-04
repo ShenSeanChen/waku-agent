@@ -263,8 +263,9 @@ class Memory:
             remember=self.remember,
             report=report,
         )
-        # Spec 006: `kept` lists each fact (subject, content, project, and its
-        # Waku Memory id when the send succeeded), so a chat panel can show
-        # what the turn kept and link each one. `new_facts` stays the count.
+        # Spec 006: `kept` lists each fact (subject, content, project, its
+        # Waku Memory id when the send succeeded, and `sent`), so a chat panel
+        # can show what the turn kept, link each one, and say which ones Waku
+        # Memory did not take. `new_facts` stays the count.
         if kept and notify:
             notify("consolidation", {"new_facts": len(kept), "kept": kept})
