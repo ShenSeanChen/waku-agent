@@ -20,6 +20,7 @@ Two outputs from the same events:
 from __future__ import annotations
 
 import json
+import secrets
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime
@@ -64,6 +65,9 @@ class Tracer:
         self._otel_tracer = self._init_otel(settings)
         self._span_ctx = None
         self._trace_encoding_checked = False
+        # Spec 011 A1: the turn in progress, so a ledger row and a trace event
+        # can be joined to it. Empty between turns.
+        self.turn_id = ""
 
     def _init_otel(self, settings: Settings):
         if not settings.otel_endpoint:
@@ -105,10 +109,16 @@ class Tracer:
         Unlike traces (which can be reset for a clean demo), this is the running
         record of what you've actually spent — never wiped, summarized per day on
         the dashboard. Tokens are the ground truth; dollar cost is derived from
-        them (pricing can change), so we store tokens + provider/model."""
+        them (pricing can change), so we store tokens + provider/model.
+
+        Every model call a turn makes lands here (spec 011 A2): the loop's
+        own (`kind` "loop"), and the side calls `metered()` reports with
+        their own `kind` and model: "gate", "consolidation", "report",
+        "triage" and "quick". Each row carries the turn's `turn_id`."""
         usage = event.get("usage", {})
         record = {"ts": _now(), "provider": self.settings.provider,
-                  "model": self.settings.model or "", "kind": "loop",
+                  "model": event.get("model") or self.settings.model or "",
+                  "kind": event.get("kind", "loop"), "turn_id": self.turn_id,
                   "in": usage.get("in", 0), "out": usage.get("out", 0)}
         with (self.settings.home / "usage.jsonl").open("a", encoding="utf-8") as f:
             f.write(json.dumps(record) + "\n")
@@ -137,7 +147,9 @@ class Tracer:
     # ---- one run = one root span + turn_start/turn_end JSONL markers
     @contextmanager
     def turn(self, user_message: str):
-        self._write({"type": "turn_start", "user_message": user_message})
+        self.turn_id = "t_" + secrets.token_hex(8)
+        self._write({"type": "turn_start", "turn_id": self.turn_id,
+                     "user_message": user_message})
         if self._otel_tracer:
             with self._otel_tracer.start_as_current_span(
                 "agent_run",
@@ -152,7 +164,9 @@ class Tracer:
             yield self
 
     def end_turn(self, reply: str, iterations: int) -> None:
-        self._write({"type": "turn_end", "reply": reply, "iterations": iterations})
+        self._write({"type": "turn_end", "turn_id": self.turn_id, "reply": reply,
+                     "iterations": iterations})
+        self.turn_id = ""
         if getattr(self, "_otel_provider", None):
             # flush per turn: the trace should survive even a killed process
             self._otel_provider.force_flush(timeout_millis=2000)
@@ -165,3 +179,30 @@ def compose(*observers) -> callable:
         for obs in active:
             obs(kind, event)
     return fanout
+
+
+class _MeteredMessages:
+    def __init__(self, client, kind: str, notify) -> None:
+        self._client, self._kind, self._notify = client, kind, notify
+
+    def create(self, **kwargs):
+        response = self._client.messages.create(**kwargs)
+        usage = getattr(response, "usage", None)
+        self._notify("llm", {"kind": self._kind, "model": kwargs.get("model", ""),
+                             "usage": {"in": getattr(usage, "input_tokens", 0) or 0,
+                                       "out": getattr(usage, "output_tokens", 0) or 0}})
+        return response
+
+
+class metered:  # noqa: N801 -- used like a function: metered(client, "gate", notify)
+    """A model client whose `messages.create` also reports the call as an
+    `llm` event with its `kind` and model (spec 011 A2).
+
+    The loop reports its own calls. The small-model calls around it (the
+    retrieval gate, consolidation, the report classifier, triage and the
+    quick reply) reached no ledger before, while a metered provider still
+    charged for them. A call that raises reports nothing and raises as before.
+    """
+
+    def __init__(self, client, kind: str, notify) -> None:
+        self.messages = _MeteredMessages(client, kind, notify)

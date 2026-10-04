@@ -61,6 +61,9 @@ class LoopResult:
     # be proposed as new facts again.
     read_first: list[LoopEvent] = field(default_factory=list)
     used: list[dict] = field(default_factory=list)
+    # Spec 011: what the turn did and cost (waku/ops/receipt.py), set by
+    # Waku.respond once the turn is over. None for a bare run_loop call.
+    receipt: dict | None = None
 
 
 def run_loop(

@@ -21,6 +21,7 @@ from waku.memory import consolidation, retrieval_gate, slot_gate
 from waku.memory.episodic.store import SqliteEpisodeStore
 from waku.memory.procedural.loader import SkillLoader
 from waku.memory.semantic.store import SqliteFactStore
+from waku.ops.tracing import metered
 
 
 def bundled_skill_dirs() -> list[Path]:
@@ -105,8 +106,10 @@ class Memory:
 
     # ---- retrieval (gated — see retrieval_gate.py for why)
     def gated_retrieve(self, message: str, notify=None) -> str:
+        # Spec 011 A2: with a notify, the gate's model call is counted too.
+        client = metered(self.client, "gate", notify) if notify else self.client
         retrieve, query, reason = retrieval_gate.should_retrieve(
-            self.client, self.settings.small_model, message
+            client, self.settings.small_model, message
         )
         if notify:
             notify("gate", {"decision": "retrieve" if retrieve else "skip", "reason": reason})
@@ -129,7 +132,9 @@ class Memory:
 
     # ---- write paths
     def log_chat(self, user_message: str, reply: str, session_id: str = "default",
-                 source: str = "cli", meta: dict | None = None) -> None:
+                 source: str = "cli", meta: dict | None = None) -> int:
+        """Store one exchange and return the assistant row's id, which
+        `update_meta` takes once the turn's receipt is built."""
         import json as _json
         self.conn.execute(
             "INSERT INTO chat_log (role, content, session_id, source) VALUES ('user', ?, ?, ?)",
@@ -137,10 +142,20 @@ class Memory:
         )
         # meta (gate/latency/iterations/tools) rides on the assistant row so a
         # reopened thread can render the full turn card, not just the text.
-        self.conn.execute(
+        row = self.conn.execute(
             "INSERT INTO chat_log (role, content, session_id, source, meta) VALUES ('assistant', ?, ?, ?, ?)",
             (reply, session_id, source, _json.dumps(meta) if meta else None),
         )
+        self.conn.commit()
+        return row.lastrowid
+
+    def update_meta(self, row_id: int, meta: dict) -> None:
+        """Replace one assistant row's meta. The turn's receipt (spec 011)
+        counts what consolidation kept, and consolidation reads the chat log
+        the exchange was just written to, so the receipt is added after."""
+        import json as _json
+        self.conn.execute("UPDATE chat_log SET meta = ? WHERE id = ?",
+                          (_json.dumps(meta), row_id))
         self.conn.commit()
 
     # ---- sessions (for the dashboard's chat history + "New chat")
@@ -240,7 +255,7 @@ class Memory:
         (spec 009 B): its findings stay in it, not in loose facts."""
         kept = consolidation.kept_if_due(
             self.conn,
-            self.client,
+            metered(self.client, "consolidation", notify) if notify else self.client,
             self.settings.small_model,
             self.settings.consolidate_every,
             self.facts,

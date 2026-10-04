@@ -13,7 +13,7 @@ import anthropic
 import pytest
 
 from waku.config import Settings
-from waku.loop.models import PROVIDERS, OpenAICompatClient, get_client
+from waku.loop.models import PLATFORM, PROVIDERS, OpenAICompatClient, TurnTagged, get_client
 
 
 @pytest.fixture(autouse=True)
@@ -41,6 +41,10 @@ def test_get_client_builds_the_right_wire(name):
     settings = Settings(provider=name, model="", small_model="", api_key="", base_url=None)
     client = get_client(settings)
     expected = anthropic.Anthropic if provider.kind == "anthropic" else OpenAICompatClient
+    if name == PLATFORM:
+        # spec 011 B1: the free tier's client tags each call with its turn
+        assert isinstance(client, TurnTagged)
+        client = client.client
     assert isinstance(client, expected)
     # defaults must be filled in so the loop never sends model=""
     assert settings.model == provider.model
