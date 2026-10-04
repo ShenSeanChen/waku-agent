@@ -1000,3 +1000,41 @@ dialog.dialog :focus-visible{outline:var(--focus-ring-width) solid var(--accent)
    file so it wins over the dock's width clamp and the narrow-screen rule
    that pins the dock over the page. */
 body.embed #dock{position:static;width:100%;height:100vh;border-left:none}
+
+/* --- Observability (spec 012): five tabs, each opening with one sentence,
+   and a turn's waterfall. A step is a stacked block (head line, a bar on the
+   turn's timeline, then its input and output), never a wide row, so it
+   reads at 420px inside waku.one. */
+.obs-cap{color:var(--text-muted);font-size:var(--text-sm);line-height:var(--leading-normal);margin:var(--space-3) 0}
+.obs-page-cap{margin-top:0}
+.obs-h-sub{text-transform:none;letter-spacing:0;font-weight:var(--font-weight-normal);margin-left:var(--space-2)}
+main h3{font-family:var(--face-mono);font-size:var(--text-xs);color:var(--text-faint);font-weight:var(--font-weight-normal);
+  margin:var(--space-4) 0 var(--space-2)}
+.obs-windows{display:flex;flex-wrap:wrap;align-items:center;gap:var(--space-2);margin-bottom:var(--space-2)}
+.obs-foot{margin-top:var(--space-3)}
+.obs-gap{margin-left:var(--space-2)}
+.obs-io{font-family:var(--face-mono);font-size:var(--text-xs);text-transform:uppercase;letter-spacing:var(--tracking-label);color:var(--text-faint)}
+.obs-wf{margin:0 0 var(--space-3)}
+.wf{display:flex;flex-direction:column;gap:var(--space-2);margin-top:var(--space-2)}
+.wf-step{border-top:var(--rule-width) solid var(--rule);padding-top:var(--space-2);min-width:0}
+.wf-head{display:flex;flex-wrap:wrap;align-items:baseline;gap:var(--spacing) var(--space-2)}
+.wf-kind{font-family:var(--face-mono);font-size:var(--text-xs);text-transform:uppercase;letter-spacing:var(--tracking-label);
+  color:var(--text-muted);min-width:64px}
+.wf-title{flex:1 1 200px;min-width:0;overflow-wrap:anywhere}
+.wf-nums{font-family:var(--face-mono);font-size:var(--text-xs);color:var(--text-muted);white-space:nowrap}
+.wf-track{position:relative;height:6px;margin-top:var(--spacing);background:var(--surface-sunk);border-radius:var(--shape-chip);overflow:hidden}
+.wf-fill{position:absolute;top:0;bottom:0;border-radius:var(--shape-chip);background:var(--chart-5)}
+
+.wf-fill.wf-tool{background:var(--chart-2)}
+
+.wf-fill.wf-gate,.wf-fill.wf-route{background:var(--chart-4)}
+.wf-detail{margin-top:var(--spacing);font-size:var(--text-xs);color:var(--text-muted);line-height:var(--leading-normal);
+  overflow-wrap:anywhere}
+.wf-detail code{font-size:var(--text-xs);white-space:normal;overflow-wrap:anywhere;border:0;background:none;padding:0}
+@media (max-width:520px){
+  .wf-nums{white-space:normal}
+  .wf-kind{min-width:0}
+}
+.obs-scores{display:flex;flex-wrap:wrap;gap:var(--space-2);margin-bottom:var(--space-2)}
+.wf-fill.wf-llm{background:var(--chart-1)}
+.wf-fill.wf-retrieval,.wf-fill.wf-memory_write{background:var(--chart-3)}

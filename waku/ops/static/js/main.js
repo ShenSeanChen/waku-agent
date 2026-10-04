@@ -8,7 +8,8 @@ let activeView = null, activeSub = null;
 // moved: after the Connections registry took keys, providers and integrations
 // out of that page, what remained was two switches that change how a turn runs,
 // which is a behaviour, not a setting.
-const TITLES = {chat:"Chat & watch", ops:"LLM Ops",
+const TITLES = {chat:"Chat & watch",
+                observability:"Observability — what each turn did, cost and remembered",
                 graph:"Graph workflows — structure around the loop",
                 // Keyed by view AND sub for the Arena, now that the sidebar
                 // names the two races separately. A single title covering both
@@ -21,7 +22,9 @@ const TITLES = {chat:"Chat & watch", ops:"LLM Ops",
                 database:"Database — everything Waku stores (state.db)"};
 function render(){
   if (!D) return;
-  const [v, subRaw] = (location.hash||"#overview").slice(1).split("/");
+  const [hashView, subRaw] = (location.hash||"#overview").slice(1).split("/");
+  // #ops is the Observability page's old name (spec 012); it still opens it.
+  const v = hashView === "ops" ? "observability" : hashView;
   const sub = subRaw || null;
   // FIRST RUN. With no usable provider, every other page is a page about a
   // loop that cannot run a turn -- and the chat box on Overview looks ready
@@ -80,7 +83,7 @@ function render(){
   document.getElementById("n-mem").textContent = (D.facts.length + D.episodes.length) || "";
   document.getElementById("n-tools").textContent = (D.calendar.length + D.outbox.length) || "";
   document.getElementById("n-db").textContent = (D.db && D.db.all_tables.length) || "";
-  document.getElementById("n-ops").textContent = D.stats.tool_errors || (D.eval_report ? "" : "!");
+  document.getElementById("n-obs").textContent = D.stats.tool_errors || "";
 }
 let lastFetch = Date.now();
 let lastCompareLoad = 0;   // throttle the Compare scoreboard self-heal to ~5s
