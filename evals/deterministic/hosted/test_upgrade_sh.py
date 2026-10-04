@@ -113,7 +113,7 @@ def _install_env(tmp_path, *, dns_provider="route53", module_version="@v1.5.0",
 def test_a_dirty_checkout_is_refused_before_anything_is_built(tmp_path):
     done = shelllib.run(UPGRADE, [], tmp_path=tmp_path,
                         env=_install_env(tmp_path),
-                        stubs=["git", "docker", "curl", "id"],
+                        stubs=["git", "docker", "curl", "flock", "id"],
                         bodies={"git": _GIT_DIRTY, "id": _ID_ROOT})
     assert done.returncode != 0
     assert "uncommitted changes" in done.stderr
@@ -138,7 +138,7 @@ def test_git_failing_to_report_status_is_refused_by_name(tmp_path):
     line rather than on this guard. The guard now reads git's exit status."""
     done = shelllib.run(UPGRADE, [], tmp_path=tmp_path,
                         env=_install_env(tmp_path),
-                        stubs=["git", "docker", "curl", "id"],
+                        stubs=["git", "docker", "curl", "flock", "id"],
                         bodies={"git": _GIT_STATUS_FAILS, "id": _ID_ROOT})
     assert done.returncode != 0
     assert "does not look like a usable git checkout" in done.stderr
@@ -149,7 +149,7 @@ def test_git_failing_to_report_status_is_refused_by_name(tmp_path):
 def test_the_images_are_rebuilt_before_the_services_restart(tmp_path):
     done = shelllib.run(UPGRADE, [], tmp_path=tmp_path,
                         env=_install_env(tmp_path),
-                        stubs=["git", "docker", "curl", "id"],
+                        stubs=["git", "docker", "curl", "flock", "id"],
                         bodies={"git": _GIT_CLEAN, "id": _ID_ROOT})
     assert done.returncode == 0, done.stderr
     calls = shelllib.calls(tmp_path)
@@ -164,7 +164,7 @@ def test_restart_all_runs_only_after_the_gateway_answers(tmp_path):
     report success having restarted nobody."""
     done = shelllib.run(UPGRADE, ["--now"], tmp_path=tmp_path,
                         env=_install_env(tmp_path),
-                        stubs=["git", "docker", "curl", "id"],
+                        stubs=["git", "docker", "curl", "flock", "id"],
                         bodies={"git": _GIT_CLEAN, "id": _ID_ROOT})
     assert done.returncode == 0, done.stderr
     calls = shelllib.calls(tmp_path)
@@ -180,7 +180,7 @@ def test_the_gateway_failing_to_answer_refuses_and_never_restarts_a_tenant(tmp_p
     a real minute doing it."""
     done = shelllib.run(UPGRADE, ["--now"], tmp_path=tmp_path,
                         env=_install_env(tmp_path),
-                        stubs=["git", "docker", "curl", "id", "sleep"],
+                        stubs=["git", "docker", "curl", "flock", "id", "sleep"],
                         bodies={"git": _GIT_CLEAN, "id": _ID_ROOT,
                                 "curl": _CURL_NEVER_READY})
     assert done.returncode != 0
@@ -190,7 +190,7 @@ def test_the_gateway_failing_to_answer_refuses_and_never_restarts_a_tenant(tmp_p
 
 def test_an_unknown_argument_is_refused(tmp_path):
     done = shelllib.run(UPGRADE, ["--force"], tmp_path=tmp_path,
-                        env=_install_env(tmp_path), stubs=["git", "docker", "curl"])
+                        env=_install_env(tmp_path), stubs=["git", "docker", "curl", "flock"])
     assert done.returncode != 0
     assert "unknown argument: --force" in done.stderr
 
@@ -199,7 +199,7 @@ def test_a_non_root_user_is_refused_before_anything_runs(tmp_path):
     if os.geteuid() == 0:
         pytest.skip("as root the run goes past waku_require_root")
     done = shelllib.run(UPGRADE, [], tmp_path=tmp_path,
-                        env=_install_env(tmp_path), stubs=["git", "docker", "curl"])
+                        env=_install_env(tmp_path), stubs=["git", "docker", "curl", "flock"])
     assert done.returncode != 0
     assert "run this as root" in done.stderr
     assert shelllib.calls(tmp_path) == []
@@ -207,7 +207,7 @@ def test_a_non_root_user_is_refused_before_anything_runs(tmp_path):
 
 def test_help_exits_zero_and_touches_nothing(tmp_path):
     done = shelllib.run(UPGRADE, ["--help"], tmp_path=tmp_path,
-                        env=_install_env(tmp_path), stubs=["git", "docker", "curl"])
+                        env=_install_env(tmp_path), stubs=["git", "docker", "curl", "flock"])
     assert done.returncode == 0, done.stderr
     assert "usage: upgrade.sh" in done.stdout
     assert shelllib.calls(tmp_path) == []
@@ -216,7 +216,7 @@ def test_help_exits_zero_and_touches_nothing(tmp_path):
 def test_ref_is_passed_through_to_the_checkout(tmp_path):
     done = shelllib.run(UPGRADE, ["--ref", "v1.2.3"], tmp_path=tmp_path,
                         env=_install_env(tmp_path),
-                        stubs=["git", "docker", "curl", "id"],
+                        stubs=["git", "docker", "curl", "flock", "id"],
                         bodies={"git": _GIT_CLEAN, "id": _ID_ROOT})
     assert done.returncode == 0, done.stderr
     calls = shelllib.calls(tmp_path)
@@ -226,7 +226,7 @@ def test_ref_is_passed_through_to_the_checkout(tmp_path):
 def test_with_no_ref_the_checkout_defaults_to_origin_main(tmp_path):
     done = shelllib.run(UPGRADE, [], tmp_path=tmp_path,
                         env=_install_env(tmp_path),
-                        stubs=["git", "docker", "curl", "id"],
+                        stubs=["git", "docker", "curl", "flock", "id"],
                         bodies={"git": _GIT_CLEAN, "id": _ID_ROOT})
     assert done.returncode == 0, done.stderr
     calls = shelllib.calls(tmp_path)
@@ -237,7 +237,7 @@ def test_ref_with_no_value_is_refused_cleanly(tmp_path):
     """`--ref` at the end of the line used to expand bash's own `$2: unbound
     variable`."""
     done = shelllib.run(UPGRADE, ["--ref"], tmp_path=tmp_path,
-                        env=_install_env(tmp_path), stubs=["git", "docker", "curl"])
+                        env=_install_env(tmp_path), stubs=["git", "docker", "curl", "flock"])
     assert done.returncode != 0
     assert "--ref needs a value" in done.stderr
     assert "unbound variable" not in done.stderr
@@ -248,7 +248,7 @@ def test_ref_given_empty_is_refused_rather_than_silently_defaulting(tmp_path):
     through; `${ref:-origin/main}` then treats empty the same as unset and
     upgrades to origin/main having silently ignored what was typed."""
     done = shelllib.run(UPGRADE, ["--ref", ""], tmp_path=tmp_path,
-                        env=_install_env(tmp_path), stubs=["git", "docker", "curl"])
+                        env=_install_env(tmp_path), stubs=["git", "docker", "curl", "flock"])
     assert done.returncode != 0
     assert "--ref needs a value" in done.stderr
 
@@ -269,7 +269,7 @@ def test_a_config_name_this_script_needs_but_the_loader_never_checked_is_refused
     install_env_path.write_text("\n".join(kept) + "\n", encoding="utf-8")
 
     done = shelllib.run(UPGRADE, [], tmp_path=tmp_path, env=env,
-                        stubs=["git", "docker", "curl", "id"],
+                        stubs=["git", "docker", "curl", "flock", "id"],
                         bodies={"git": _GIT_CLEAN, "id": _ID_ROOT})
     assert done.returncode != 0
     assert "install.env is missing WAKU_GATEWAY_ADDRESS" in done.stderr
@@ -293,7 +293,7 @@ def test_the_two_word_dns_provider_survives_being_loaded(tmp_path):
                         env=_install_env(
                             tmp_path,
                             dns_provider="cloudflare {env.CLOUDFLARE_API_TOKEN}"),
-                        stubs=["git", "docker", "curl", "id"],
+                        stubs=["git", "docker", "curl", "flock", "id"],
                         bodies={"git": _GIT_CLEAN, "id": _ID_ROOT})
     assert done.returncode == 0, done.stderr
     assert "command not found" not in done.stderr
@@ -318,7 +318,7 @@ def test_xcaddy_is_handed_the_module_and_not_the_whole_directive(tmp_path):
                         env=_install_env(
                             tmp_path,
                             dns_provider="cloudflare {env.CLOUDFLARE_API_TOKEN}"),
-                        stubs=["git", "docker", "curl", "id"],
+                        stubs=["git", "docker", "curl", "flock", "id"],
                         bodies={"git": _GIT_CLEAN, "docker": _DOCKER_PER_ARG,
                                 "id": _ID_ROOT})
     assert done.returncode == 0, done.stderr
@@ -336,7 +336,7 @@ def test_the_operators_module_pin_reaches_the_rebuild(tmp_path):
     pin sat unused -- and install.env did not carry it in any form."""
     done = shelllib.run(UPGRADE, [], tmp_path=tmp_path,
                         env=_install_env(tmp_path, module_version="@v1.5.0"),
-                        stubs=["git", "docker", "curl", "id"],
+                        stubs=["git", "docker", "curl", "flock", "id"],
                         bodies={"git": _GIT_CLEAN, "docker": _DOCKER_PER_ARG,
                                 "id": _ID_ROOT})
     assert done.returncode == 0, done.stderr
@@ -353,7 +353,7 @@ def test_an_empty_pin_is_a_note_and_an_absent_one_is_a_warning(tmp_path):
     at all on the upgrade that discarded it."""
     empty = shelllib.run(UPGRADE, [], tmp_path=tmp_path,
                          env=_install_env(tmp_path, module_version=""),
-                         stubs=["git", "docker", "curl", "id"],
+                         stubs=["git", "docker", "curl", "flock", "id"],
                          bodies={"git": _GIT_CLEAN, "id": _ID_ROOT})
     assert empty.returncode == 0, empty.stderr
     assert "NOTE: no --dns-module-version pin" in empty.stdout
@@ -363,7 +363,7 @@ def test_an_empty_pin_is_a_note_and_an_absent_one_is_a_warning(tmp_path):
     older.mkdir()
     absent = shelllib.run(UPGRADE, [], tmp_path=older,
                           env=_install_env(older, omit_module_version=True),
-                          stubs=["git", "docker", "curl", "id"],
+                          stubs=["git", "docker", "curl", "flock", "id"],
                           bodies={"git": _GIT_CLEAN, "id": _ID_ROOT})
     assert absent.returncode == 0, absent.stderr
     assert "has no WAKU_DNS_MODULE_VERSION line" in absent.stdout
@@ -391,7 +391,7 @@ def _proxy_exists(tmp_path):
 def _upgrade(tmp_path):
     return shelllib.run(UPGRADE, [], tmp_path=tmp_path,
                         env=_install_env(tmp_path),
-                        stubs=["git", "docker", "curl", "id"],
+                        stubs=["git", "docker", "curl", "flock", "id"],
                         bodies={"git": _GIT_CLEAN, "id": _ID_ROOT})
 
 
@@ -477,3 +477,44 @@ def test_the_scale_flag_goes_away_when_group_d_lands(tmp_path):
     assert up
     for line in up:
         assert "--scale" not in line, line
+
+
+# --- the deploy lock (spec 010) ------------------------------------------------
+
+# flock as it answers when another process holds the lock: `flock -n` exits 1.
+_FLOCK_HELD = """#!/bin/sh
+printf '%s %s\\n' flock "$*" >> "$WAKU_CALLS"
+exit 1
+"""
+
+
+def test_a_second_upgrade_refuses_by_name_while_the_lock_is_held(tmp_path):
+    """autodeploy.sh takes the same lock every five minutes. A manual run that
+    lands in the middle of an automatic one must refuse BEFORE it fetches or
+    checks anything out, or two upgrades move one checkout under each other's
+    builds."""
+    done = shelllib.run(UPGRADE, [], tmp_path=tmp_path,
+                        env=_install_env(tmp_path),
+                        stubs=["git", "docker", "curl", "flock", "id"],
+                        bodies={"git": _GIT_CLEAN, "id": _ID_ROOT,
+                                "flock": _FLOCK_HELD})
+    assert done.returncode != 0
+    assert "another upgrade holds" in done.stderr
+    assert "run/deploy/lock" in done.stderr
+    calls = shelllib.calls(tmp_path)
+    assert any(line.startswith("flock -n") for line in calls), calls
+    assert not [line for line in calls if line.startswith(("git", "docker", "build.sh"))]
+
+
+def test_the_upgrade_autodeploy_runs_does_not_wait_on_its_own_parents_lock(tmp_path):
+    """autodeploy.sh holds the lock and then runs upgrade.sh, saying so with
+    WAKU_DEPLOY_LOCK_HELD=yes. flock locks belong to an open file, so a child
+    that opened the lock again would refuse against its own parent and every
+    automatic upgrade would fail."""
+    done = shelllib.run(UPGRADE, [], tmp_path=tmp_path,
+                        env={**_install_env(tmp_path), "WAKU_DEPLOY_LOCK_HELD": "yes"},
+                        stubs=["git", "docker", "curl", "flock", "id"],
+                        bodies={"git": _GIT_CLEAN, "id": _ID_ROOT,
+                                "flock": _FLOCK_HELD})
+    assert done.returncode == 0, done.stderr
+    assert not [line for line in shelllib.calls(tmp_path) if line.startswith("flock")]

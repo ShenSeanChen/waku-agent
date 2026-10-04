@@ -1,0 +1,15 @@
+# How often the VM looks at main. A tick that finds nothing new makes one
+# `git ls-remote` and exits; GitHub's API is called only while a new commit is
+# undecided.
+
+[Unit]
+Description=waku automatic upgrade from green main, every 5 minutes
+
+[Timer]
+# Every five minutes on the clock. A tick still running when the next is due
+# is not started twice: systemd does not start a unit that is already active.
+OnCalendar=*:0/5
+Persistent=false
+
+[Install]
+WantedBy=timers.target
