@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import time
 import uuid
 from collections import defaultdict, deque
@@ -27,6 +28,7 @@ from hosted.proxy import prices
 from hosted.proxy.admission import Refused, admit, forward_headers
 from hosted.proxy.config import ProxyConfig
 from hosted.proxy.ledger import Ledger
+from hosted.proxy.turns import TurnCharges, turn_id
 
 _LOG = log.get(__name__)
 
@@ -37,6 +39,9 @@ QUEUE_SECONDS = 30.0
 # imports this module, so the router can name them.
 RELAY_PATHS = ("/treg/mcp", "/treg/mcp/")
 RATE_WINDOW_SECONDS = 60.0
+# Waku-agent spec 011 B1: what one chat turn was charged.
+CHARGES_PATH = re.compile(r"/v1/turns/([^/]+)/charges")
+TURN_HEADER = "X-Waku-Turn"
 
 Resolve = Callable[[str], Awaitable[tuple[str, str] | None]]
 # Spec 004 E: the treg relay's handler (hosted/proxy/treg.py), or None when
@@ -48,7 +53,9 @@ class Wallet(Protocol):
     """The person's Waku Memory credits (spec 004 D; hosted/proxy/wallet.py)."""
 
     async def balance(self, key: str) -> tuple[str, int] | None: ...
-    def charge(self, key: str, *, turn_id: str, model: str, usd: float) -> None: ...
+    # A future that answers the credits the charge took, or None (turns.py).
+    def charge(self, key: str, *, turn_id: str, model: str,
+               usd: float) -> asyncio.Future | None: ...
 
 
 # What the person's Waku Memory balance says about a call (spec 004 D).
@@ -135,7 +142,8 @@ class MeteringProxy:
                  upstream: Upstream, now: Callable[[], float] = time.time,
                  monotonic: Callable[[], float] = time.monotonic,
                  memory_key: Callable[[str], str] | None = None,
-                 wallet: Wallet | None = None, treg: Handler | None = None) -> None:
+                 wallet: Wallet | None = None, treg: Handler | None = None,
+                 turns: TurnCharges | None = None) -> None:
         self._config = config
         self._ledger = ledger
         self._resolve = resolve
@@ -145,6 +153,7 @@ class MeteringProxy:
         self._memory_key = memory_key
         self._wallet = wallet
         self._treg = treg
+        self._turns = turns if turns is not None else TurnCharges(monotonic)
         self._in_flight: dict[str, int] = defaultdict(int)
         self._recent: dict[str, deque[float]] = defaultdict(deque)
         self._global = asyncio.Semaphore(config.global_concurrent_calls)
@@ -168,6 +177,12 @@ class MeteringProxy:
                 "has_more": False,
                 "first_id": self._config.free_models[0],
                 "last_id": self._config.free_models[-1]})
+        charges = CHARGES_PATH.fullmatch(request.path)
+        if charges is not None and request.method == "GET":
+            try:
+                return await self._charges(request, charges.group(1))
+            except Refused as refused:
+                return _answer(refused)
         if request.path != "/v1/messages" or request.method != "POST":
             return _answer(Refused(404, "not_found_error", "Only POST /v1/messages exists here."))
         try:
@@ -189,6 +204,9 @@ class MeteringProxy:
         tenant = resolved[0]
         at = self._now()
         self._ledger.record_platform_call(tenant, at)
+        # Read here, never forwarded: forward_headers is an allowlist.
+        turn = turn_id(request.headers.get(TURN_HEADER))
+        self._turns.seen(tenant, turn)
 
         # --- steps 3 and 4: what is asked -----------------------------------
         body = admit(await request.read(), models=self._config.free_models,
@@ -214,7 +232,7 @@ class MeteringProxy:
                           "Too many free-tier calls at once. Try again in a moment.")
         self._in_flight[tenant] += 1
         try:
-            return await self._reserved_call(request, tenant, month, body, key, capped)
+            return await self._reserved_call(request, tenant, month, body, key, capped, turn)
         finally:
             self._in_flight[tenant] -= 1
 
@@ -229,7 +247,8 @@ class MeteringProxy:
         recent.append(now)
 
     async def _reserved_call(self, request: web.Request, tenant: str, month: str,
-                             body: dict, key: str, capped: bool) -> web.StreamResponse:
+                             body: dict, key: str, capped: bool,
+                             turn: str = "") -> web.StreamResponse:
         # --- step 7: reserve the worst case ---------------------------------
         model = body["model"]
         try:
@@ -251,12 +270,13 @@ class MeteringProxy:
             raise _overloaded("The free tier is busy. Try again in a moment.") from None
         try:
             # --- steps 9 and 10 ---------------------------------------------
-            return await self._forward(request, tenant, month, body, worst, key)
+            return await self._forward(request, tenant, month, body, worst, key, turn)
         finally:
             self._global.release()
 
     async def _forward(self, request: web.Request, tenant: str, month: str,
-                       body: dict, worst: float, key: str) -> web.StreamResponse:
+                       body: dict, worst: float, key: str,
+                       turn: str = "") -> web.StreamResponse:
         model = body["model"]
         try:
             upstream = await self._upstream.messages(body, forward_headers(request.headers))
@@ -285,9 +305,27 @@ class MeteringProxy:
                 upstream.release()
             charged = self._settle(tenant, month, model, worst, upstream.status, usage,
                                    bytes(held))
+            charge = None
             if charged > 0 and key and self._wallet is not None:
-                self._wallet.charge(key, turn_id=uuid.uuid4().hex, model=model, usd=charged)
+                charge = self._wallet.charge(key, turn_id=uuid.uuid4().hex, model=model,
+                                             usd=charged)
+            self._turns.model_call(tenant, turn, charged, charge)
         return response
+
+    async def _charges(self, request: web.Request, turn: str) -> web.Response:
+        """GET /v1/turns/<turn_id>/charges: what one of this tenant's turns
+        was charged (waku-agent spec 011 B1; hosted/proxy/turns.py). The same
+        platform token as a model call; another tenant's turn is a 404."""
+        try:
+            resolved = await self._resolve(request.headers.get("x-api-key", ""))
+        except jsonsock.Unreachable:
+            raise _overloaded("The free tier is restarting. Try again in a moment.") from None
+        if resolved is None or resolved[1] != "active":
+            raise Refused(401, "authentication_error", SIGN_IN_AGAIN)
+        answer = await self._turns.answer(resolved[0], turn_id(turn))
+        if answer is None:
+            raise Refused(404, "not_found_error", "No such turn.")
+        return web.json_response(answer)
 
     def _settle(self, tenant: str, month: str, model: str, worst: float, status: int,
                 usage: _StreamUsage | None, held: bytes) -> float:

@@ -48,6 +48,7 @@ from aiohttp import web
 from hosted import jsonsock, log
 from hosted.proxy.admission import Refused
 from hosted.proxy.app import SIGN_IN_AGAIN, Resolve, Wallet, out_of_free_credits
+from hosted.proxy.turns import TurnCharges
 
 _LOG = log.get(__name__)
 
@@ -203,7 +204,8 @@ class _Meter:
 class TregRelay:
     def __init__(self, *, session: aiohttp.ClientSession, token: str, max_call_usd: float,
                  resolve: Resolve, memory_key: Callable[[str], str],
-                 wallet: Wallet | None, upstream_url: str = TREG_MCP_URL) -> None:
+                 wallet: Wallet | None, upstream_url: str = TREG_MCP_URL,
+                 turns: TurnCharges | None = None) -> None:
         if not token:
             raise ValueError("the treg relay needs WAKU_TREG_TOKEN; without one it is off")
         self._session = session
@@ -213,6 +215,9 @@ class TregRelay:
         self._memory_key = memory_key
         self._wallet = wallet
         self._upstream_url = upstream_url
+        # Waku-agent spec 011 B1: each charge also counts toward the tenant's
+        # latest chat turn, for that turn's receipt.
+        self._turns = turns
 
     def __repr__(self) -> str:
         # Never the token: a repr is what ends up in a traceback or a log line.
@@ -374,7 +379,9 @@ class TregRelay:
                 charges.append((_turn_id(tenant, call_id, "", micro), "treg", usd))
         for turn_id, model, usd in charges:
             _LOG.info("tenant=%s treg call %s charged %.6f", tenant, turn_id, usd)
-            self._wallet.charge(key, turn_id=turn_id, model=model, usd=usd)
+            charge = self._wallet.charge(key, turn_id=turn_id, model=model, usd=usd)
+            if self._turns is not None:
+                self._turns.tool_call(tenant, charge)
 
 
 def _turn_id(tenant: str, call_id: str | None, rpc_id: str, result: object) -> str:

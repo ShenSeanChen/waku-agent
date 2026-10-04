@@ -474,6 +474,16 @@ which holds the platform key and nothing else does:
   004 D; `POST /agent-usage`). A Free person with no credits left is refused
   before their call reaches Anthropic. When Waku Memory cannot be reached, the
   $1 cap is the only limit.
+- **What a turn cost.** Each model call from a container carries
+  `X-Waku-Turn: <turn_id>`, which the proxy reads and never forwards to
+  Anthropic. For one hour, in memory, the proxy keeps each turn's settled
+  dollars, its call count, and the credits Waku Memory answered as `charged`
+  for those calls and for the treg calls the relay charged during the turn.
+  `GET /v1/turns/<turn_id>/charges`, with the container's own platform token,
+  answers `{"model_usd": 0.0712, "calls": 5, "credits": 2400}`; another
+  tenant's turn and a turn the proxy never saw answer 404. `credits` is null
+  while a charge is pending or after one failed. The chat's receipt line
+  shows these numbers (waku-agent spec 011; `hosted/proxy/turns.py`).
 
 `config/proxy.env` holds all of it. `ledger.db` holds each person's spend.
 
