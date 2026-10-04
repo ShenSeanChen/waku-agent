@@ -102,17 +102,59 @@ function applyConsoleTheme(t){
   applyTheme(t);   // theme.js; deliberately not cycleTheme, which stores it
 }
 
-// --- what the page around us may ask (waku-memory spec 040 P2, T) -----------
-// Two messages, and only these two:
+// --- what the page around us may ask (waku-memory spec 040 P2, T, V) --------
+// Three messages, and only these three:
 //   {"source": "waku-console", "type": "new-chat"}: waku.one's own "New chat"
 //     starts one here, through the same newChat() as "+ New chat". A chat
 //     that is already empty is left as it is.
 //   {"source": "waku-console", "type": "theme", "theme": "light"|"dark"}: the
 //     console's theme, applied and not stored (above).
+//   {"source": "waku-console", "type": "ask", "prompt": "brief-new",
+//    "since": "<ISO-8601 time>"}: the bird's brief card's "Ask Waku"
+//     (waku-memory spec 040 V). Starts a new chat and sends ONE fixed sentence
+//     as if the person had typed it. The console never sends words: `prompt`
+//     is an id this page maps to its own sentence (ASK_PROMPTS), so neither
+//     waku.one nor anything impersonating it can put text in the person's
+//     mouth. `since` is the only value that reaches the sentence, and only as
+//     a time this page parsed and wrote back itself: an ISO-8601 timestamp
+//     with a zone, within the last 90 days, not in the future.
 // Accepted ONLY from window.parent, and only when its origin is on the
 // allowlist this page was served with: never from "*", never from this
 // frame's own origin, never from another window. Every other message is
-// ignored, a theme other than exactly "light" or "dark" included.
+// ignored, a theme other than exactly "light" or "dark" included, and an ask
+// with an unknown prompt id or a bad `since`.
+const ASK_PROMPTS = {
+  "brief-new": since => "Brief me on what's new in my Waku Memory since " + since + ".",
+};
+const ASK_SINCE_DAYS = 90;
+const ASK_SKEW_MS = 5 * 60 * 1000;   // a console clock a little ahead is not "the future"
+const ISO_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,6})?)?(?:Z|[+-]\d{2}:\d{2})$/;
+
+// The `since` an ask may carry, written back as this page's own ISO string,
+// or null when it is not a zoned ISO-8601 time in the last 90 days.
+function askSince(value, now){
+  if (typeof value !== "string" || !ISO_TIME.test(value)) return null;
+  const t = Date.parse(value);
+  if (!Number.isFinite(t)) return null;
+  if (t > now + ASK_SKEW_MS || t < now - ASK_SINCE_DAYS * 86400000) return null;
+  return new Date(t).toISOString();
+}
+
+// The sentence an ask sends, or null for anything this page does not know.
+function askSentence(data, now){
+  if (typeof data.prompt !== "string" || !Object.prototype.hasOwnProperty.call(ASK_PROMPTS, data.prompt)) return null;
+  const since = askSince(data.since, now);
+  return since ? ASK_PROMPTS[data.prompt](since) : null;
+}
+
+// A new chat, then the sentence through sendChat, which waits for the new
+// chat to open before it posts (render.js), exactly as a message typed in
+// that gap does.
+function askInNewChat(sentence){
+  if (CHAT.length) newChat();
+  sendChat({value: sentence, focus(){}});
+}
+
 function acceptParentMessage(event){
   if (!event || event.source !== window.parent || window.parent === window) return false;
   const own = window.location && window.location.origin;
@@ -122,6 +164,12 @@ function acceptParentMessage(event){
   if (data.type === "theme"){
     if (typeof data.theme !== "string" || !CONSOLE_THEMES.includes(data.theme)) return false;
     applyConsoleTheme(data.theme);
+    return true;
+  }
+  if (data.type === "ask"){
+    const sentence = askSentence(data, Date.now());
+    if (!sentence) return false;
+    askInNewChat(sentence);
     return true;
   }
   if (data.type !== "new-chat") return false;
