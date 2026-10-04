@@ -12,6 +12,7 @@ away. What persists lives in waku/memory. Working memory =
 from __future__ import annotations
 
 from waku.config import Settings
+from waku.memory import tool_note
 
 DEFAULT_SOUL = """\
 You are Waku, a personal assistant running locally on your user's laptop.
@@ -101,11 +102,14 @@ class Session:
         Tool activity is folded into the assistant's history entry as a compact
         [tools used: ...] line. Without it, the model forgets it already acted
         and happily re-runs the same tool next turn (the triple-booked-meeting
-        bug from the first live test)."""
+        bug from the first live test). Compact means name, short args and the
+        output cut to ~300 characters, never the full output: this record is
+        re-sent to the model on every later turn and kept in chat_log, so a
+        full search result here cost tokens on every turn after it and drew a
+        block thousands of lines tall in a reopened thread (waku/memory/tool_note.py)."""
         record = reply
         if tool_calls:
-            summary = "; ".join(f"{c['tool']}({c['args']}) -> {c['output']}" for c in tool_calls)
-            record = f"{reply}\n[tools used: {summary}]"
+            record = f"{reply}\n{tool_note.note(tool_calls)}"
         self.history.append({"role": "user", "content": user_message})
         self.history.append({"role": "assistant", "content": record})
         if self.memory is not None:
@@ -130,4 +134,5 @@ class Session:
         turns = self.settings.history_turns
         for user_msg, reply in list(self.memory.session_history(session_id))[-turns:]:
             self.history.append({"role": "user", "content": user_msg})
-            self.history.append({"role": "assistant", "content": reply})
+            # rows from before notes were compact may carry a full tool output
+            self.history.append({"role": "assistant", "content": tool_note.clip(reply)})
