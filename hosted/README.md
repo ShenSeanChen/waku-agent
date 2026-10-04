@@ -60,7 +60,7 @@ refuses to run until it is right.
 
 | Create | Notes |
 |---|---|
-| A VM | 4 vCPU, 16 GB RAM to start. Memory is the binding resource: about 100 MB per active tenant, and `install.sh` sizes its running cap from it as (memory minus 2 GB) divided by 150 MB, which is 95 on a 16 GB VM. Pass `--max-running N` to choose your own number. Idle containers stop on their own, so the cap limits how many tenants run at once and not how many can sign up |
+| A VM | 4 vCPU, 16 GB RAM to start. Memory is the binding resource: about 100 MB per active tenant, and `install.sh` sizes its running cap from it as (memory minus 2 GB) divided by 150 MB, which is 95 on a 16 GB VM. Pass `--max-running N` to choose your own number. The cap limits how many tenants run at once and not how many can sign up: at the cap, the next tenant's start stops the container idle longest. Nothing stops an idle container before that, because the once-a-minute idle stop (spec 001 task E4) is not built |
 | A second disk | 100 GB. It becomes `/srv/waku` |
 | **No instance role, and no service account** | The tenant firewall rules are the first line, and this is the second: if a rule is ever missing, the metadata service must have no credential to hand out |
 | Two DNS records | `agent.waku.one` and `*.agent.waku.one`, both pointing at the VM. Each tenant gets their own host, so the wildcard is not optional |
@@ -735,6 +735,15 @@ Each tick, in order:
 recreates the gateway when its image changed, and every turn streams through
 the gateway. The timer never passes `--now`, so a running tenant keeps the old
 tenant image until their container next starts.
+
+**A running tenant can keep the old image for days.** Nothing stops an idle
+container yet (spec 001 task E4 is not built), and a gateway restart adopts the
+containers already running. A container starts again from the new image only
+when the cap stops it for another tenant, when its Waku Memory key is replaced,
+when an operator runs `tenant.sh disable` and then `enable`, when an operator
+runs `upgrade.sh --now`, or when it exits. After a merge that changes what
+tenants run, run `upgrade.sh --now` at a quiet moment. It restarts every
+running tenant and can cut off a turn in progress.
 
 **A merge is now a production deploy.** The review on a pull request becomes
 the last human look before this VM runs the code as root, about 10 minutes
