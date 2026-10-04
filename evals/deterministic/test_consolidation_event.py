@@ -39,6 +39,10 @@ def test_the_event_lists_each_kept_fact_with_its_waku_memory_id(tmp_path):
     memory.remember = lambda body, scope: next(ids)
     events = []
     memory.maybe_consolidate(notify=lambda kind, ev: events.append((kind, ev)))
+    # Spec 011 A2: the summariser's model call is reported first, as an `llm`
+    # event; test_turn_receipt.py pins that one.
+    assert events[0][0] == "llm" and events[0][1]["kind"] == "consolidation"
+    events = events[1:]
     assert events == [("consolidation", {"new_facts": 2, "kept": [
         {"subject": "Notion AI", "content": "Notion AI launched agents on 2026-09-30.",
          "project": "Company brain", "memory_id": "mem-a"},
@@ -56,7 +60,7 @@ def test_a_failed_send_is_listed_without_an_id(tmp_path):
     memory.remember = remember
     events = []
     memory.maybe_consolidate(notify=lambda kind, ev: events.append((kind, ev)))
-    assert [k["memory_id"] for k in events[0][1]["kept"]] == [None, None]
+    assert [k["memory_id"] for k in events[-1][1]["kept"]] == [None, None]
 
 
 def test_the_done_payload_carries_the_kept_facts(monkeypatch):

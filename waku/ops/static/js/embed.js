@@ -80,20 +80,51 @@ statusWatchers.push(status => {
   tellParent({type: "session-expired"});
 });
 
-// --- what the page around us may ask (waku-memory spec 040 P2) ---------------
-// One message, {"source": "waku-console", "type": "new-chat"}: waku.one's own
-// "New chat" starts one here, through the same newChat() as "+ New chat".
+// --- the console's theme (waku-memory spec 040 T) ---------------------------
+// Framed, the chat wears the theme of the page around it, not its own. The
+// first paint comes from the server: waku.one adds ?theme= to the address and
+// dashboard.py puts data-theme on <html> before any CSS applies. After that
+// the console posts {"source": "waku-console", "type": "theme", "theme": ...}
+// whenever its theme changes, an OS change included when it follows the
+// system.
+//
+// NEVER STORED. The frame shares localStorage with the person's own dashboard
+// on the same host, where "waku-theme" is the choice they made with the
+// toggle. The console's theme is the console's: writing it there would change
+// the dashboard's look the next time they open it directly. So it is applied
+// and held here, and the stored choice is read only when no console theme
+// came at all (an old waku.one, or the page opened on its own).
+const CONSOLE_THEMES = ["light", "dark"];
+const servedTheme = document.documentElement.dataset.theme;
+let consoleTheme = CONSOLE_THEMES.includes(servedTheme) ? servedTheme : null;
+function applyConsoleTheme(t){
+  consoleTheme = t;
+  applyTheme(t);   // theme.js; deliberately not cycleTheme, which stores it
+}
+
+// --- what the page around us may ask (waku-memory spec 040 P2, T) -----------
+// Two messages, and only these two:
+//   {"source": "waku-console", "type": "new-chat"}: waku.one's own "New chat"
+//     starts one here, through the same newChat() as "+ New chat". A chat
+//     that is already empty is left as it is.
+//   {"source": "waku-console", "type": "theme", "theme": "light"|"dark"}: the
+//     console's theme, applied and not stored (above).
 // Accepted ONLY from window.parent, and only when its origin is on the
 // allowlist this page was served with: never from "*", never from this
-// frame's own origin, never from another window. A chat that is already
-// empty is left as it is. Every other message is ignored.
+// frame's own origin, never from another window. Every other message is
+// ignored, a theme other than exactly "light" or "dark" included.
 function acceptParentMessage(event){
   if (!event || event.source !== window.parent || window.parent === window) return false;
   const own = window.location && window.location.origin;
   if (!event.origin || event.origin === own || !EMBED_ORIGINS.includes(event.origin)) return false;
   const data = event.data;
-  if (!data || typeof data !== "object") return false;
-  if (data.source !== "waku-console" || data.type !== "new-chat") return false;
+  if (!data || typeof data !== "object" || data.source !== "waku-console") return false;
+  if (data.type === "theme"){
+    if (typeof data.theme !== "string" || !CONSOLE_THEMES.includes(data.theme)) return false;
+    applyConsoleTheme(data.theme);
+    return true;
+  }
+  if (data.type !== "new-chat") return false;
   if (!CHAT.length) return false;   // already a new chat: nothing to start
   newChat();
   return true;
@@ -101,7 +132,7 @@ function acceptParentMessage(event){
 window.addEventListener("message", acceptParentMessage);
 
 // --- bootstrap --------------------------------------------------------------
-applyTheme(currentTheme());
+applyTheme(consoleTheme || currentTheme());
 watchSlots();
 wireComposer();
 syncChatLogs();

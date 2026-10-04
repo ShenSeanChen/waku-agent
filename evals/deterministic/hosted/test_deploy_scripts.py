@@ -38,10 +38,11 @@ import shelllib
 # block dropped envfiles.sh, which already existed and is already covered by
 # every parametrised test below -- so pasting it verbatim would have deleted a
 # script's parse check, its executable-bit check and its membership assertion
-# in one edit, with the suite green. F4 appended migrate.sh and tenant.sh.
+# in one edit, with the suite green. F4 appended migrate.sh and tenant.sh;
+# spec 010 appended autodeploy.sh.
 EXPECTED_SCRIPTS = {"backup.sh", "checks.sh", "envfiles.sh", "install.sh",
                     "lib.sh", "migrate.sh", "networks.sh", "restore.sh",
-                    "tenant.sh", "tree.sh", "upgrade.sh"}
+                    "tenant.sh", "tree.sh", "upgrade.sh", "autodeploy.sh"}
 
 COMPOSE = shelllib.DEPLOY / "compose.yaml"
 SERVICES = ("caddy", "gateway", "proxy", "spawner")
