@@ -838,3 +838,68 @@ def test_the_ask_reaches_the_new_chat_not_the_old_one():
     assert calls[0][1] == {"action": "new"}
     assert calls[1][1]["message"].startswith("Brief me on what's new in my Waku Memory since ")
     assert got["session"] == "s-new"
+
+
+# --- the "Dashboard" button: open the full dashboard signed in (2026-10-04) ---------
+
+
+def _open_dashboard(answer: dict | None, status: int = 200, *, popup: bool = True) -> dict:
+    """Click "Dashboard" with the gateway answering `answer` (None: no gateway,
+    the route is a 404 as on localhost:7777). Answers what was asked for and
+    where the new tab went."""
+    setup = {"files": CHAT_FILES, "referrer": "https://dev.waku.one/agent",
+             "origins": DEFAULT, "framed": True, "events": [], "state": 200}
+    return _node(setup, f"""
+    vm.runInContext(`
+      function applyTheme(){{}} function currentTheme(){{ return "system"; }}
+      function syncModelChip(){{}} function applyTele(){{}}
+      async function loadThreadInto(){{ return null; }}`, ctx);
+    vm.runInContext(fs.readFileSync({json.dumps(str(JS / "embed.js"))}, "utf8"), ctx);
+    await new Promise(r => setTimeout(r, 0));
+    const asked = [], opened = [];
+    const tab = {{opener: ctx, location: {{replace: u => opened.push({{tab: u}})}}}};
+    ctx.open = (u, name, features) => {{
+      opened.push({{open: u, features: features || ""}});
+      return {json.dumps(popup)} ? tab : null;
+    }};
+    ctx.fetch = async (url, init) => {{
+      asked.push({{url, method: init && init.method, type: init && init.headers["Content-Type"]}});
+      return {{ok: {status} === 200, status: {status},
+               json: async () => ({json.dumps(answer)})}};
+    }};
+    await vm.runInContext("openDashboard", ctx)();
+    console.log(JSON.stringify({{asked, opened, cutLoose: tab.opener === null, posts}}));""")
+
+
+@needs_node
+def test_the_dashboard_button_opens_the_gateways_hand_off_in_a_new_tab():
+    got = _open_dashboard({"url": "/auth/enter?code=abc"})
+    assert got["asked"] == [{"url": "/auth/dashboard", "method": "POST",
+                             "type": "application/json"}]
+    assert got["opened"] == [{"open": "", "features": ""}, {"tab": "/auth/enter?code=abc"}], \
+        "the tab opens on the click, before the await, then navigates"
+    assert got["cutLoose"], "the new tab has no handle back to the frame"
+
+
+@needs_node
+@pytest.mark.parametrize(("answer", "status"), [
+    (None, 404),
+    ({"url": "https://evil.example/auth/enter?code=abc"}, 200),
+    ({"url": "//evil.example/auth/enter?code=abc"}, 200),
+    ({"url": "javascript:alert(1)"}, 200),
+    ({}, 200),
+], ids=["no-gateway", "another-origin", "protocol-relative", "script", "no-url"])
+def test_anything_but_the_gateways_own_hand_off_opens_plain_dashboard(answer, status):
+    got = _open_dashboard(answer, status)
+    assert got["opened"][-1] == {"tab": "/"}
+
+
+@needs_node
+def test_an_ended_session_on_the_dashboard_button_tells_the_parent():
+    got = _open_dashboard({"error": "Your session has ended. Sign in again."}, 401)
+    assert got["opened"][-1] == {"tab": "/"}
+    assert [p["message"]["type"] for p in got["posts"]] == ["session-expired"]
+
+
+def test_the_header_has_the_dashboard_button():
+    assert 'onclick="openDashboard()"' in EMBED

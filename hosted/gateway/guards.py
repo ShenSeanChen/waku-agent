@@ -204,6 +204,28 @@ def handoff_refusal(request: web.Request) -> str:
     return ""
 
 
+def is_top_level_page(request: web.Request) -> bool:
+    """A GET or HEAD that is a tab's own document, not a frame or a fetch.
+
+    WHY THIS EXISTS (Sean, 2026-10-04). The embed cookie is Partitioned, and a
+    partitioned cookie is keyed by the TOP-LEVEL SITE. The frame's top-level
+    site is waku.one; a tab opened at `<tenant>.agent.waku.one` has top-level
+    site waku.one too. So the browser sends the frame's embed cookie to that
+    tab, and the gateway has to tell the two apart by the request, not by the
+    cookie. A tab's document is `Sec-Fetch-Dest: document`; with no fetch
+    metadata at all (an older Safari) it is a request that asks for HTML.
+    A repeated header is not a navigation, for handoff_refusal's reason.
+    """
+    if request.method not in CHECKED_EXEMPT_METHODS:
+        return False
+    destinations = request.headers.getall(FETCH_DEST_HEADER, ())
+    if len(destinations) > 1:
+        return False
+    if destinations:
+        return destinations[0].strip().lower() == "document"
+    return "text/html" in request.headers.get("Accept", "")
+
+
 def embed_refusal(request: web.Request) -> str:
     """Empty when GET /auth/embed may be honoured: handoff_refusal's rule for
     a navigation that is an iframe rather than a document. One copy of each

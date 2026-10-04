@@ -261,6 +261,8 @@ NETWORK_CALLERS = {
     # spec 008: the embedded chat never polls; it reads its header's state when
     # the page opens and after a turn or a model switch the person made
     ("embed.js", "refresh"): "user",
+    # the header's "Dashboard" button: one click, one sign-in hand-off code
+    ("embed.js", "openDashboard"): "user",
     ("graph.js", "runGraph"): "user",
     ("judgment.js", "loadJudgmentArena"): "background",
     ("judgment.js", "runJudgmentArena"): "user",
