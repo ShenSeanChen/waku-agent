@@ -148,6 +148,9 @@ def chat_stream(message: str, emit) -> None:
         "latency_ms": latency_ms,
         # which brain answered — shown per card; a quick graph turn was the small model
         "model": agent.settings.small_model if quick else agent.settings.model,
+        # Spec 011: the turn's receipt, the same object the chat log keeps in
+        # meta.receipt, so a reopened thread draws the same line
+        "receipt": getattr(result, "receipt", None),
     })
 
 
