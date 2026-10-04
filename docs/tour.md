@@ -163,7 +163,7 @@ The agent has tools to keep itself useful — no black box:
 
 You can also edit any of this by hand on the dashboard's Memory tab (edit or
 delete facts, rewrite `SOUL.md`) or in Settings (switch provider or model,
-paste keys — kept in your local `.env`, never sent to the browser).
+paste keys — kept in a `.env` on your machine, never sent to the browser).
 
 Waku keeps the *queryable* memory in `state.db` and regenerates a readable
 `~/.waku/MEMORY.md` after every turn; [architecture.md](architecture.md#memorymd-vs-statedb)
