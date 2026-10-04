@@ -206,13 +206,32 @@ const usedList = used => !(used || []).length ? "" : `<div class="kept">
   }).join("")}</ul>
 </div>`;
 // A `consolidation` event's `kept` (spec 006): each fact this turn put in
-// memory, linked when Waku Memory gave it an id.
-const keptList = c => !(c && (c.kept||[]).length) ? "" : `<div class="kept">
-  <div class="report-kicker">Kept in memory</div>
-  <ul class="mdlist">${c.kept.map(k => `<li>${k.memory_id
+// memory, linked when Waku Memory gave it an id. A fact whose `sent` is false
+// is on this agent only: Waku Memory did not take it, and the card says so
+// rather than claiming it was kept there. The agent sends it again later.
+function keptNote(missed, total){
+  if (!missed) return "";
+  const which = missed === total ? "these facts" : `${missed} of these ${total} facts`;
+  return `<p class="kept-note">Waku Memory did not answer, so this agent keeps ${which} on its own `
+    + `and sends them again the next time it saves memory.</p>`;
+}
+function keptList(c){
+  const kept = (c && c.kept) || [];
+  if (!kept.length) return "";
+  const missed = kept.filter(k => k.sent === false).length;
+  return `<div class="kept${missed ? " kept-failed" : ""}">
+  <div class="report-kicker">${missed === kept.length ? "Kept on this agent only" : "Kept in memory"}</div>
+  <ul class="mdlist">${kept.map(k => `<li>${k.memory_id
     ? `<a href="${esc(memoryUrl(k.memory_id))}" target="_blank" rel="noopener noreferrer">${esc(k.content)}</a>`
     : esc(k.content)}</li>`).join("")}</ul>
+  ${keptNote(missed, kept.length)}
 </div>`;
+}
+// The receipt's word for kept facts, with how many Waku Memory did not take.
+function keptSaid(kept){
+  const missed = kept.filter(k => k.sent === false).length;
+  return missed ? `, ${missed} on this agent only` : "";
+}
 
 // --- Spec 011: the turn receipt, one quiet line under every reply.
 //
@@ -246,7 +265,7 @@ function receiptParts(r){
   const said = [];
   if (mem.used) said.push(`${mem.used} used`);
   else if ((mem.searches || []).length) said.push(`searched ${mem.searches.length}`);
-  if ((mem.kept || []).length) said.push(`${mem.kept.length} kept`);
+  if ((mem.kept || []).length) said.push(`${mem.kept.length} kept${keptSaid(mem.kept)}`);
   if (mem.report) said.push("report saved");
   if (said.length) parts.push("memory " + said.join(" · "));
   parts.push(receiptUsd(r.total_usd || 0)
@@ -275,8 +294,9 @@ function receiptRows(r){
   if (mem.used) said.push(`used ${mem.used}`);
   if (kept.length){
     const ids = kept.filter(k => k.memory_id);
-    said.push(ids.length ? `kept ${kept.length} (${ids.map((k, i) =>
-      receiptLink(String(i + 1), memoryUrl(k.memory_id))).join(", ")})` : `kept ${kept.length}`);
+    said.push((ids.length ? `kept ${kept.length} (${ids.map((k, i) =>
+      receiptLink(String(i + 1), memoryUrl(k.memory_id))).join(", ")})` : `kept ${kept.length}`)
+      + esc(keptSaid(kept)));
   }
   if (mem.report) said.push(receiptLink("report saved", memoryUrl(mem.report)));
   if (said.length) rows.push([label("Memory"), said.join(" · ")]);

@@ -21,6 +21,7 @@
     <button class="btn btn-secondary btn-sm sessbtn" onclick="newChat()">+ New chat</button>
     <button class="btn btn-secondary btn-sm sessbtn" onclick="toggleSessMenu(event)">History &#9662;</button>
     <button class="btn btn-secondary btn-sm sessbtn teletoggle" id="teletoggle" onclick="toggleTele()" title="Show/hide per-turn stats: gate decision, seconds, iterations, tools">stats</button>
+    <button class="btn btn-secondary btn-sm sessbtn" id="opendash" onclick="openDashboard()" title="Open the full dashboard in a new tab, signed in">Dashboard</button>
     <button class="modelchip" id="modelchip" onclick="toggleModelMenu(event)" title="Switch the model for this chat">&hellip;</button>
   </div>
   <div class="chatlog" id="docklog"></div>
@@ -36,6 +37,7 @@
 <script src="/static/js/util.js"></script>
 <script src="/static/js/theme.js"></script>
 <script src="/static/js/ui.js"></script>
+<script src="/static/js/blocks.js"></script>
 <script src="/static/js/render.js"></script>
 <script src="/static/js/dock.js"></script>
 <script src="/static/js/embed.js"></script></body></html>

@@ -63,6 +63,19 @@ def page_location(theme: str) -> str:
     return f"{PAGE_PATH}?theme={theme}" if theme in EMBED_THEMES else PAGE_PATH
 
 
+# The frame's "Dashboard" button (waku/ops/static/js/embed.js). A POST with
+# the session the frame already has answers {"url": "/auth/enter?code=..."}:
+# a SIGN-IN hand-off code, from the same HandoffCodes the apex's sign-in uses
+# (60 seconds, single use, bound to this tenant), which the frame opens in a
+# new tab. The embed cookie itself still opens nothing but the chat: the full
+# session is only ever made by GET /auth/enter, a top-level document
+# navigation with all of _enter's checks, in a tab that is first-party. The
+# code reaches only the page that asked for it -- the route needs the CSRF
+# pair (JSON and an Origin equal to this host), and the answer carries no
+# CORS header -- so it is something the tenant's own page can do, and the
+# tenant's own page is already the dashboard's origin.
+DASHBOARD_PATH = "/auth/dashboard"
+
 EMBED_POST_ONLY = "Ask for an embedded chat with a POST."
 EMBED_REFUSED = "The embedded chat cannot open that."
 

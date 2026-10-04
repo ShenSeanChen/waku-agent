@@ -117,15 +117,28 @@ def json_ok(payload: dict) -> web.Response:
                                content_type="application/json"))
 
 
+# The sign-in page's stylesheets, in its order (tokens first: login.css reads
+# them). Both hosts serve /auth/static/ (app.py), so the link is always
+# same-origin, which CORP same-origin requires.
+ERROR_PAGE_STYLES = ("design/tokens.css", "design/type.css", "design/fonts.css",
+                     "design/controls.css", "login.css")
+
+
 def html_error(status: int, message: str) -> web.Response:
     """A page navigation that fails gets a sentence and a way back, not a
-    JSON body the browser renders as text (spec, "Error shape")."""
+    JSON body the browser renders as text (spec, "Error shape"). It wears the
+    sign-in page's card, so it is recognisably Waku rather than bare HTML."""
     safe = html.escape(message)
+    links = "".join(f"<link rel=\"stylesheet\" href=\"/auth/static/{name}\">"
+                    for name in ERROR_PAGE_STYLES)
     body = ("<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
-            "<meta name=\"viewport\" content=\"width=device-width\">"
-            "<title>waku</title></head><body>"
-            f"<h1>waku</h1><p>{safe}</p><p><a href=\"/\">Try again</a></p>"
-            "</body></html>")
+            "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
+            "<title>waku</title>"
+            "<link rel=\"icon\" href=\"/auth/static/waku-mark.svg\" type=\"image/svg+xml\">"
+            f"{links}</head><body><main>"
+            "<img id=\"mark\" src=\"/auth/static/waku-mark.svg\" alt=\"\" width=\"44\" height=\"44\">"
+            f"<h1>Waku</h1><p id=\"lede\">{safe}</p><p><a href=\"/\">Try again</a></p>"
+            "</main></body></html>")
     return harden(web.Response(status=status, text=body,
                                content_type="text/html", charset="utf-8"))
 

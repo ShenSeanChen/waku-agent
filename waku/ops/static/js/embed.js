@@ -80,6 +80,41 @@ statusWatchers.push(status => {
   tellParent({type: "session-expired"});
 });
 
+// --- the full dashboard, in a new tab ------------------------------------------
+// The "Dashboard" button. This frame's session is the embed one, which opens
+// the chat and nothing else, so a plain link to "/" would land on the sign-in
+// page. Instead the button asks the gateway for a one-time sign-in code with
+// the session the frame already has (POST /auth/dashboard, hosted/gateway/
+// embed.py DASHBOARD_PATH) and opens /auth/enter?code= in a new tab: the same
+// hand-off a sign-in uses, which makes the dashboard's own session in a tab
+// that is first-party.
+// The tab is opened FIRST, empty, while the click still counts as the
+// person's: a window.open after an await is a popup most browsers block. It
+// is then cut loose from this frame (opener = null) before it navigates.
+// Locally there is no gateway and nothing to sign in to: the route is not
+// there, and the tab goes straight to the dashboard. Only a same-origin
+// /auth/enter address from the gateway is followed, never anything else.
+const DASHBOARD_HANDOFF = "/auth/dashboard";
+async function openDashboard(){
+  const tab = window.open("", "_blank");
+  let target = "/";
+  try {
+    const res = await fetch(DASHBOARD_HANDOFF, {
+      method: "POST", headers: {"Content-Type": "application/json"}, body: "{}"});
+    noteStatus(res.status);
+    if (res.ok){
+      const answer = await res.json();
+      if (answer && typeof answer.url === "string" && answer.url.startsWith("/auth/enter?code=")) target = answer.url;
+    }
+  } catch(e){ /* the plain address still works: it asks them to sign in */ }
+  if (tab){
+    tab.opener = null;
+    tab.location.replace(target);
+  } else {
+    window.open(target, "_blank", "noopener");
+  }
+}
+
 // --- the console's theme (waku-memory spec 040 T) ---------------------------
 // Framed, the chat wears the theme of the page around it, not its own. The
 // first paint comes from the server: waku.one adds ?theme= to the address and
