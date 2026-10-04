@@ -435,12 +435,13 @@ only when that origin is on the allowlist, never `*`:
 | the session has ended | `{"source": "waku-agent", "type": "session-expired"}` |
 | the person clicks "Open report" | `{"source": "waku-agent", "type": "open-report", "memory_id": "...", "title": "..."}` |
 
-The chat listens for two messages from the page around it:
+The chat listens for three messages from the page around it:
 
 | When | Message (to the frame) |
 |---|---|
 | the person clicks waku.one's "New chat" | `{"source": "waku-console", "type": "new-chat"}` |
 | the frame loads, and whenever waku.one's theme changes | `{"source": "waku-console", "type": "theme", "theme": "light"}` or `"dark"` |
+| the person presses "Ask Waku" on the bird's brief card | `{"source": "waku-console", "type": "ask", "prompt": "brief-new", "since": "<ISO-8601 time>"}` |
 
 Each is accepted only when `event.source` is `window.parent` and `event.origin`
 is on the same allowlist (never `*`, never the frame's own origin). `new-chat`
@@ -450,7 +451,13 @@ its value must be exactly `light` or `dark` (waku.one resolves "system"
 itself). It is applied and never stored: the frame shares `localStorage` with
 the person's own dashboard on the same host, and the console's theme must not
 replace the choice they made there with the dashboard's toggle (waku-memory
-spec 040 T). Every other message is ignored.
+spec 040 T). `ask` starts a new chat and sends one sentence as if the person
+typed it, but the console never sends words: `prompt` is an id the frame maps
+to its own fixed sentence ("Brief me on what's new in my Waku Memory since
+<time>."), and `since` must be a zoned ISO-8601 time within the last 90 days,
+which the frame parses and writes back itself (waku-memory spec 040 V). An
+unknown id or a bad time is ignored, so nothing that can post as waku.one can
+put free text in the person's mouth. Every other message is ignored.
 
 "Open report" opens no tab while framed: waku.one opens the report in place
 (waku-memory spec 040 M3). Not framed, or framed by an origin off the list, it

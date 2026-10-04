@@ -33,7 +33,7 @@ runs the bootstrap and must load last**.
 | `compare.js` | the Model arena (`Arena` tab; internals keep the `compare` name) — race one message through several models at once |
 | `dock.js`    | chat sessions/history (`loadThreadInto`), model chip, stats toggle |
 | `main.js`    | `render`/`refresh` loop, resizers, voice, and the bootstrap (**loads last**) |
-| `embed.js`   | `embed.html`'s bootstrap instead of `main.js`: the header's state from `/api/session?action=state`, the `postMessage` to the page that framed it, and the two messages it accepts back (`new-chat`, and `theme`, applied but never stored) (**loads last there**) |
+| `embed.js`   | `embed.html`'s bootstrap instead of `main.js`: the header's state from `/api/session?action=state`, the `postMessage` to the page that framed it, and the three messages it accepts back (`new-chat`; `theme`, applied but never stored; `ask`, a prompt id mapped to the frame's own fixed sentence, never free text) (**loads last there**) |
 
 Data flows one way: `refresh()` (main.js) fetches `/api/data` into the global
 `D`, then `render()` writes `VIEWS[hash](D)` into `#view`. Every mutation
