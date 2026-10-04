@@ -149,6 +149,9 @@ ctx.document = {referrer: SETUP.referrer,
   getElementById: () => null, querySelectorAll: () => [],
   documentElement: {dataset: {}}};
 ctx.localStorage = {getItem: () => null, setItem(){}};
+ctx.location = {origin: SETUP.self || "https://agent.example"};
+const listeners = [];
+ctx.addEventListener = (type, fn) => listeners.push({type, fn});
 ctx.MutationObserver = class { observe(){} };
 const sse = evs => evs.map(e => "data: " + JSON.stringify(e) + "\n\n").join("");
 ctx.fetch = async (url) => {
@@ -397,3 +400,66 @@ def test_the_used_list_renders_what_the_brain_already_knew():
     assert "Used from memory" in got["card"] and "2026-09-15" in got["card"]
     assert 'href="https://www.waku.one/memories/rep-0915"' in got["card"]
     assert "Used from memory" in got["reopened"]
+
+
+# --- spec 040 P2 (waku-memory), the frame's half: waku.one asks for a new chat -------
+
+NEW_CHAT = {"source": "waku-console", "type": "new-chat"}
+
+
+def _new_chat(message: dict, *, origin: str = "https://dev.waku.one", from_parent: bool = True,
+              chat: int = 2, self_origin: str = "https://agent.example") -> dict:
+    """Load embed.js framed by dev.waku.one, put `chat` messages in the column,
+    dispatch one window "message" event to the listener embed.js added, and
+    answer how many times newChat() ran and whether the event was accepted."""
+    setup = {"files": CHAT_FILES, "referrer": "https://dev.waku.one/agent",
+             "origins": DEFAULT, "framed": True, "events": [], "state": 200,
+             "self": self_origin}
+    return _node(setup, f"""
+    vm.runInContext(`
+      function applyTheme(){{}} function currentTheme(){{ return "system"; }}
+      function syncModelChip(){{}} function applyTele(){{}}
+      async function loadThreadInto(){{ return null; }}
+      var newChats = 0; function newChat(){{ newChats += 1; CHAT.length = 0; }}`, ctx);
+    vm.runInContext(fs.readFileSync({json.dumps(str(JS / "embed.js"))}, "utf8"), ctx);
+    await new Promise(r => setTimeout(r, 0));
+    for (let i = 0; i < {chat}; i++) vm.runInContext("CHAT", ctx).push({{role: "user", text: "hi"}});
+    const handlers = listeners.filter(l => l.type === "message");
+    const event = {{data: {json.dumps(message)}, origin: {json.dumps(origin)},
+                    source: {"ctx.parent" if from_parent else "{}"}}};
+    const accepted = handlers.map(l => l.fn(event));
+    console.log(JSON.stringify({{handlers: handlers.length, accepted,
+      newChats: vm.runInContext("newChats", ctx)}}));""")
+
+
+@needs_node
+def test_an_allowlisted_parent_starts_a_new_chat():
+    got = _new_chat(NEW_CHAT)
+    assert got == {"handlers": 1, "accepted": [True], "newChats": 1}
+
+
+def test_new_chat_is_the_buttons_function():
+    """The message runs the same newChat() the "+ New chat" button runs."""
+    assert 'onclick="newChat()"' in EMBED
+    assert "newChat();" in (JS / "embed.js").read_text(encoding="utf-8")
+
+
+@needs_node
+@pytest.mark.parametrize("kwargs", [
+    {"origin": "https://evil.example"},
+    {"origin": "https://dev.waku.one.evil.example"},
+    {"origin": "null"},
+    {"origin": "https://agent.example"},
+    {"origin": "https://dev.waku.one", "self_origin": "https://dev.waku.one"},
+    {"from_parent": False},
+    {"message": {"source": "waku-agent", "type": "new-chat"}},
+    {"message": {"source": "waku-console", "type": "open-report"}},
+    {"message": "new-chat"},
+    {"chat": 0},
+], ids=["foreign-origin", "lookalike", "opaque-origin", "own-origin",
+        "own-origin-on-the-list", "not-the-parent", "wrong-source-tag", "other-type",
+        "not-an-object", "already-empty"])
+def test_every_other_message_is_ignored(kwargs):
+    message = kwargs.pop("message", NEW_CHAT)
+    got = _new_chat(message, **kwargs)
+    assert got == {"handlers": 1, "accepted": [False], "newChats": 0}
