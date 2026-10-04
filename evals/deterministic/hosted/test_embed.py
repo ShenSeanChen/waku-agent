@@ -562,3 +562,28 @@ console.log(JSON.stringify(posts));
     got = json.loads(out.stdout)
     assert [(t, o) for t, o, _ in got] == posted
     assert all(source == "waku-agent" for _, _, source in got)
+
+
+# --- spec 040 T (waku-memory): the console's theme rides the redirect ---------------
+
+
+@pytest.mark.parametrize(("query", "location"), [
+    ("&theme=dark", "/embed/chat?theme=dark"),
+    ("&theme=light", "/embed/chat?theme=light"),
+    ("", "/embed/chat"),
+    ("&theme=system", "/embed/chat"),
+    ("&theme=DARK", "/embed/chat"),
+    ("&theme=dark%0d%0aSet-Cookie:x=1", "/embed/chat"),
+    ("&theme=https://evil.example", "/embed/chat"),
+], ids=["dark", "light", "none", "system", "upper-case", "header-injection", "url"])
+def test_the_redirect_carries_only_exactly_light_or_dark(harness, query, location):
+    async def run():
+        await harness.start()
+        host, code, _ = await _minted(harness)
+        answer = await harness.send("GET", f"{embed.AUTH_PATH}?code={code}{query}",
+                                    host=host, headers=IN_A_FRAME)
+        await harness.stop()
+        return answer
+
+    status, headers, _ = asyncio.run(run())
+    assert status == 302 and headers["location"] == location

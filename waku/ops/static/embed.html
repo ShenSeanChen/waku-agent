@@ -1,4 +1,4 @@
-<!doctype html><html><head><meta charset="utf-8">
+<!doctype html><html@@THEME@@><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Waku chat</title>
 <link rel="icon" type="image/svg+xml" href="/static/waku-mark.svg">
@@ -9,7 +9,9 @@
 <link rel="stylesheet" href="/static/style.css"></head>
 <!-- The dashboard's chat column alone, for waku.one to frame (spec 008).
      Served by dashboard.py at /embed/chat, which fills in data-embed-origins:
-     the only origins this page will ever postMessage to (js/embed.js). The
+     the only origins this page will ever postMessage to (js/embed.js), and
+     the html tag's theme: data-theme="light|dark" when the address
+     carried ?theme=, so the first paint is the console's (spec 040 T). The
      markup is index.html's #dock with the parts that need the rest of the
      dashboard left out: no collapse button, no mic (voice is local only), and
      no inline script, so the page runs only the files below. -->

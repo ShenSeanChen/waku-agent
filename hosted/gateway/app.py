@@ -799,7 +799,8 @@ class Gateway:
         _enter's three checks, with the fetch-metadata rule for a frame (see
         guards.embed_refusal), and two differences that are the point of it:
         the cookie is the embed one (12 hours, SameSite=None, Partitioned) and
-        the redirect goes to the chat page, not the dashboard. Every answer,
+        the redirect goes to the chat page, not the dashboard, carrying the
+        console's `theme` when it is exactly light or dark. Every answer,
         including a refusal, is framable by the allowlist: a refusal is the
         expired page, which tells waku.one to ask for a new code.
 
@@ -819,7 +820,9 @@ class Gateway:
         self._remember(embed.embed_key(label, value), label,
                        ttl=embed.EMBED_SESSION_SECONDS)
         response = answers.allow_framing(
-            web.Response(status=302, headers={"Location": embed.PAGE_PATH}), origins)
+            web.Response(status=302, headers={
+                "Location": embed.page_location(request.query.get("theme", ""))}),
+            origins)
         embed.set_embed_cookie(response, value)
         return answers.harden(response)
 
