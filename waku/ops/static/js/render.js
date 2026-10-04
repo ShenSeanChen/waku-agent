@@ -340,6 +340,10 @@ function autogrow(el){
 const turnWatchers = [];
 const tellWatchers = ev => turnWatchers.forEach(w => { try { w(ev); } catch(e){} });
 
+// While newChat() (dock.js) waits for the server to open the new conversation,
+// this holds that request. The server sends a message to whichever
+// conversation is active, so sendChat waits for it to settle before posting.
+let sessionChange = null;
 async function sendChat(fromInput){
   const input = fromInput || document.getElementById("msg") || document.getElementById("dmsg");
   const text = (input && input.value || "").trim();
@@ -353,6 +357,7 @@ async function sendChat(fromInput){
   // tick the elapsed counter while we wait for the first token
   const ticker = setInterval(() => { if (pending.pending && !pending.stream) syncChatLogs(); }, 1000);
   try {
+    if (sessionChange) await sessionChange;   // a new chat is still opening
     const res = await fetch("/api/chat/stream", {method:"POST",
       headers:{"Content-Type":"application/json"}, body:JSON.stringify({message:text})});
     noteStatus(res.status);
