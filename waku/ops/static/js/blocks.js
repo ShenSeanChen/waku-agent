@@ -21,11 +21,11 @@
 // https address; anything else stays text.
 
 const REPORT_BLOCKS = {
-  "waku-metrics": ["Numbers", metricsBlock],
-  "waku-chart": ["Chart", chartBlock],
-  "waku-compare": ["Comparison", compareBlock],
-  "waku-timeline": ["Timeline", timelineBlock],
-  "waku-sources": ["Sources", sourcesBlock],
+  "waku-metrics": ["metrics", metricsBlock],
+  "waku-chart": ["chart", chartBlock],
+  "waku-compare": ["comparison", compareBlock],
+  "waku-timeline": ["timeline", timelineBlock],
+  "waku-sources": ["sources", sourcesBlock],
 };
 
 // raw: the fence's body as the model wrote it, not yet escaped.
@@ -35,9 +35,11 @@ function reportBlock(lang, raw){
   let body;
   try { body = known[1](JSON.parse(raw)); } catch (e) { return null; }
   if (!body) return null;
+  // No label in the head: the report's own heading already names the block.
   // The raw JSON rides along hidden, so copyCode (util.js) copies it as before.
-  const copy = uiButton("Copy", {level: "tertiary", size: "sm", cls: "mdcode-copy", onclick: "copyCode(this)"});
-  return `<div class="mdcode rblock rblock-${lang.slice(5)}"><div class="mdcode-head"><span class="mdcode-lang">${known[0]}</span>${copy}</div>`
+  const copy = uiButton("Copy", {level: "tertiary", size: "sm", cls: "mdcode-copy", onclick: "copyCode(this)",
+    attrs: `aria-label="Copy ${known[0]} JSON"`});
+  return `<div class="mdcode rblock rblock-${lang.slice(5)}"><div class="mdcode-head">${copy}</div>`
     + `<div class="rblock-body">${body}</div><pre hidden><code>${esc(raw)}</code></pre></div>`;
 }
 

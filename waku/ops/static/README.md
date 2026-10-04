@@ -26,7 +26,7 @@ runs the bootstrap and must load last**.
 | `theme.js`   | the system / light / dark toggle (`cycleTheme`), stored as `waku-theme` like the Memory console |
 | `memory.js`  | inline Memory / SOUL / skill editing actions |
 | `models.js`  | `applyModel` (the one `/api/settings` writer), model picker / catalog / pins |
-| `blocks.js`  | a research report's five fenced blocks (`waku-metrics`, `-chart`, `-compare`, `-timeline`, `-sources`) drawn as UI; `renderMarkdown` calls `reportBlock`, and anything it cannot read stays a code block. The bodies are model output: everything through `esc`, links only to http(s) |
+| `blocks.js`  | a research report's five fenced blocks (`waku-metrics`, `-chart`, `-compare`, `-timeline`, `-sources`) drawn as UI, with no label of their own (the report's heading names them) and a Copy for the raw JSON; `renderMarkdown` calls `reportBlock`, and anything it cannot read stays a code block. The bodies are model output: everything through `esc`, links only to http(s) |
 | `render.js`  | formatters + chat card renderers (`stagesRow`/`teleFooter`, the turn receipt `receiptBlock`/`toggleReceipt`) + chatlog + streaming + `sendChat` |
 | `diagram.js` | `archSVG` (the architecture chart) **and** its live animation (`STAGE`/`hot`/`pollEvents`) |
 | `graph.js`   | graph workflows: data-driven topology chart (`graphSVG` from `d.graph.workflows`), the Overview panel (`graphPanel`), and `animateGraphStage` for `graph_*`/`route` events |

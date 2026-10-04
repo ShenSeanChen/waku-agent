@@ -173,6 +173,7 @@
   /* A research report's fenced blocks, drawn as UI (js/blocks.js). The code
      block's frame and head, on paper instead of the sunk code ground. */
   .rblock{background:var(--surface-paper)}
+  .rblock .mdcode-head{justify-content:flex-end}
   .rblock-body{padding:var(--space-3);white-space:normal;font-size:var(--text-sm);color:var(--text-ink)}
   .rb-note{display:block;font-family:var(--face-mono);font-size:var(--text-xs);color:var(--text-faint)}
   .rb-sr{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}

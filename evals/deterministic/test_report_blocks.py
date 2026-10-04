@@ -93,8 +93,13 @@ def test_each_block_renders_as_ui_and_keeps_its_json_for_copy():
     blocks = [("waku-metrics", METRICS), ("waku-chart", CHART), ("waku-compare", COMPARE),
               ("waku-timeline", TIMELINE), ("waku-sources", SOURCES)]
     html = _render(*(_fence(lang, body) for lang, body in blocks))
+    names = {"waku-metrics": "metrics", "waku-chart": "chart", "waku-compare": "comparison",
+             "waku-timeline": "timeline", "waku-sources": "sources"}
     for (lang, body), got in zip(blocks, html, strict=True):
-        assert got.startswith(f'<div class="mdcode rblock rblock-{lang[5:]}">'), got[:120]
+        assert got.startswith(f'<div class="mdcode rblock rblock-{lang[5:]}"><div class="mdcode-head">'
+                              '<button '), "the head holds the Copy button and no label"
+        assert "mdcode-lang" not in got, f"{lang} repeats the report's own heading"
+        assert f'aria-label="Copy {names[lang]} JSON"' in got, f"{lang}'s Copy has no accessible name"
         assert "onclick=\"copyCode(this)\"" in got, f"{lang} lost its Copy button"
         hidden = re.search(r"<pre hidden><code>(.*)</code></pre>", got)
         assert hidden, f"{lang} has no raw JSON for Copy"
@@ -206,3 +211,8 @@ def test_both_pages_load_blocks_before_the_chat_renders():
         scripts = re.findall(r'<script src="/static/js/([a-z]+\.js)"></script>',
                              (STATIC / page).read_text(encoding="utf-8"))
         assert scripts.index("ui.js") < scripts.index("blocks.js") < scripts.index("render.js"), page
+
+
+def test_the_copy_control_sits_at_the_right_of_a_labelless_head():
+    css = (STATIC / "style.css").read_text(encoding="utf-8")
+    assert ".rblock .mdcode-head{justify-content:flex-end}" in css
