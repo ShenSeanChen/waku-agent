@@ -371,3 +371,32 @@ waku_is_snapshot_id() {
 waku_render_backup_unit() {
   sed -e "s|@WAKU_BACKUP@|$2|g" -e "s|@WAKU_INSTALL_ENV@|$3|g" "$1"
 }
+
+# --- appended by spec 010: the deploy lock ------------------------------------
+
+# ONE LOCK, SHARED BY upgrade.sh AND autodeploy.sh, so a manual upgrade and the
+# timer never rebuild the same checkout at once. Two upgrades racing each other
+# check out two different commits under one another's builds, and the images
+# that come out belong to neither.
+#
+# RETURNS 1 WHEN THE LOCK IS TAKEN rather than dying, because the two callers
+# want different things: upgrade.sh refuses by name, and autodeploy.sh logs
+# the skipped tick and exits 0 so the timer does not show as failed every five
+# minutes while an operator upgrades by hand.
+#
+# WAKU_DEPLOY_LOCK_HELD=yes is set by autodeploy.sh, and only on the line that
+# runs upgrade.sh: autodeploy.sh already holds this lock for the whole
+# decision, and flock locks belong to an open file, so the child opening the
+# file again would wait on its own parent for ever.
+#
+# FD 8, because waku_flock_staging owns 9. The directory is root's, 0700, under
+# run/ (0755 root, tree.sh).
+waku_flock_deploy() {
+  local dir
+  [ "${WAKU_DEPLOY_LOCK_HELD:-}" = yes ] && return 0
+  dir="$WAKU_ROOT/run/deploy"
+  mkdir -p "$dir"
+  chmod 0700 "$dir"
+  exec 8>"$dir/lock"
+  flock -n 8
+}

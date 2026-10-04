@@ -1,0 +1,26 @@
+# One automatic-upgrade tick, run by waku-autodeploy.timer. Installed by
+# `autodeploy.sh --enable`, never by install.sh: automatic upgrades are off
+# until an operator chooses them.
+#
+# BOTH PATHS ARE PLACEHOLDERS, for the reason waku-backup.service gives in
+# capitals: a hardcoded /srv/waku path installs cleanly on a VM whose checkout
+# or root is elsewhere and then fails inside a timer, where nobody is looking.
+#
+# NO Restart=. A tick that failed has either rolled back or written the kill
+# switch; the timer brings the next one.
+#
+# TimeoutStartSec BECAUSE A ONESHOT'S DEFAULT IS INFINITY, and a tick holds the
+# deploy lock that a manual upgrade.sh also needs. An hour sits well above one
+# upgrade plus one rollback, each of which rebuilds three images.
+
+[Unit]
+Description=waku automatic upgrade from green main
+After=docker.service network-online.target
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=oneshot
+TimeoutStartSec=1h
+Environment=WAKU_INSTALL_ENV=@WAKU_INSTALL_ENV@
+ExecStart=@WAKU_AUTODEPLOY@
