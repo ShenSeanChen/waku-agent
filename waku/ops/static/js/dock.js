@@ -4,10 +4,30 @@
 
 // --- chat sessions (the "New chat" + history picker, like a chat app)
 let SESSION = "default";
-async function newChat(){
-  const r = await postJSON("/api/session", {action:"new"});
-  if (r.session_id){ liveView = null; SESSION = r.session_id; CHAT.length = 0; syncChatLogs(); }
+// The column empties at once, before the server answers: through the hosted
+// gateway that answer takes 0.3-0.5 s, and the old conversation sitting there
+// meanwhile reads as a slow open. `sessionChange` (render.js) holds the request
+// until it settles, and sendChat waits on it, so a message typed in that gap
+// goes to the new conversation and never to the old one. If the server says
+// no, the old conversation comes back with an error card under it, the way a
+// failed turn shows, and anything typed meanwhile follows it.
+function newChat(){
   closeSessMenu();
+  if (sessionChange) return sessionChange;   // a second click while the first is out
+  const before = {chat: CHAT.slice(), session: SESSION, liveView};
+  liveView = null; CHAT.length = 0; syncChatLogs();
+  sessionChange = (async () => {
+    let r = null, why = "";
+    try { r = await postJSON("/api/session", {action:"new"}); }
+    catch(e){ why = String(e); }
+    if (r && r.session_id){ SESSION = r.session_id; return; }
+    SESSION = before.session; liveView = before.liveView;
+    const failed = {role:"waku", reply:"Error: could not start a new chat. "
+      + ((r && r.error) || why || "The server did not answer.")};
+    CHAT.splice(0, 0, ...before.chat, failed);   // typed-meanwhile rows stay last
+    syncChatLogs();
+  })().finally(() => { sessionChange = null; });
+  return sessionChange;
 }
 // The ONE way to pull a thread's rows into the dock, so the paths can't drift
 // (they used to: some dropped meta, some added a length-guard, some didn't).

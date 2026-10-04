@@ -463,3 +463,99 @@ def test_every_other_message_is_ignored(kwargs):
     message = kwargs.pop("message", NEW_CHAT)
     got = _new_chat(message, **kwargs)
     assert got == {"handlers": 1, "accepted": [False], "newChats": 0}
+
+
+# --- newChat() empties the column before the server answers ----------------------
+#
+# newChat() is the one function behind "+ New chat" and the new-chat message. It
+# used to clear the column only after /api/session answered, so the old
+# conversation stayed on screen for the gateway round trip (0.3-0.5 s on
+# dev.waku.one). These run the real dock.js, hold that answer back, and look at
+# the column while it is out.
+
+def _held_new_chat(answer: str, body: str) -> dict:
+    """Load the chat's scripts and dock.js (main.js's `paused` stubbed), with
+    two old rows on screen in session "s-old" and /api/session held until
+    `release()` answers `answer` ("ok", "refused" or "unreachable"). Then run
+    `body`. `calls` lists each
+    request in the order it was sent, and `log` is the painted column."""
+    setup = {"files": CHAT_FILES + _files("dock.js"), "referrer": "", "origins": DEFAULT,
+             "framed": False, "events": [DONE], "state": 200}
+    return _node(setup, f"""
+    const log = {{innerHTML: "", scrollHeight: 0}};
+    ctx.document.querySelectorAll = sel => sel === ".chatlog" ? [log] : [];
+    const calls = [];
+    let release;
+    const held = new Promise(r => {{ release = r; }});
+    const streamFetch = ctx.fetch;
+    ctx.fetch = async (url, opts) => {{
+      calls.push(String(url));
+      if (String(url) !== "/api/session") return streamFetch(url, opts);
+      await held;
+      if ({json.dumps(answer)} === "unreachable") throw new TypeError("Failed to fetch");
+      const json = {json.dumps(answer)} === "ok" ? {{ok: true, session_id: "s-new", history: []}}
+                                               : {{error: "agent is busy"}};
+      return {{ok: true, status: 200, json: async () => json}};
+    }};
+    vm.runInContext(`var paused = false; SESSION = "s-old";
+      CHAT.push({{role: "user", text: "old question"}}, {{role: "waku", reply: "old answer"}});`, ctx);
+    const state = () => ({{session: vm.runInContext("SESSION", ctx),
+      rows: vm.runInContext("CHAT", ctx).map(m => m.text || m.reply || ""),
+      painted: log.innerHTML}});
+    {body}""")
+
+
+@needs_node
+def test_new_chat_empties_the_column_before_the_server_answers():
+    got = _held_new_chat("ok", """
+    const done = vm.runInContext("newChat", ctx)();
+    const during = state();
+    release(); await done;
+    console.log(JSON.stringify({during, after: state(), calls}));""")
+    assert got["during"]["rows"] == []
+    assert "old question" not in got["during"]["painted"]
+    assert got["during"]["session"] == "s-old"
+    assert got["after"]["session"] == "s-new" and got["after"]["rows"] == []
+    assert got["calls"] == ["/api/session"]
+
+
+@needs_node
+@pytest.mark.parametrize(("answer", "why"), [("refused", "agent is busy"),
+                                             ("unreachable", "Failed to fetch")])
+def test_a_new_chat_the_server_refuses_brings_the_old_one_back(answer, why):
+    got = _held_new_chat(answer, """
+    const done = vm.runInContext("newChat", ctx)();
+    release(); await done;
+    console.log(JSON.stringify(state()));""")
+    assert got["session"] == "s-old"
+    assert got["rows"][:2] == ["old question", "old answer"]
+    assert len(got["rows"]) == 3 and got["rows"][2].startswith("Error: could not start a new chat")
+    assert why in got["rows"][2] and "old question" in got["painted"]
+
+
+@needs_node
+def test_a_message_typed_while_the_new_chat_opens_waits_for_it():
+    """The server sends a message to its active conversation, so a message
+    posted before the new one exists would land in the old one."""
+    got = _held_new_chat("ok", """
+    const done = vm.runInContext("newChat", ctx)();
+    const sent = vm.runInContext("sendChat", ctx)({value: "first message", focus(){}});
+    await new Promise(r => setTimeout(r, 10));
+    const before = calls.slice();
+    release(); await done; await sent;
+    console.log(JSON.stringify({before, calls, after: state()}));""")
+    assert got["before"] == ["/api/session"]
+    assert got["calls"] == ["/api/session", "/api/chat/stream"]
+    assert got["after"]["session"] == "s-new"
+    assert got["after"]["rows"][0] == "first message"
+
+
+@needs_node
+def test_a_message_typed_while_a_refused_new_chat_opens_follows_the_old_one():
+    got = _held_new_chat("refused", """
+    const done = vm.runInContext("newChat", ctx)();
+    const sent = vm.runInContext("sendChat", ctx)({value: "first message", focus(){}});
+    release(); await done; await sent;
+    console.log(JSON.stringify(state()));""")
+    assert got["rows"][:4] == ["old question", "old answer",
+                               "Error: could not start a new chat. agent is busy", "first message"]

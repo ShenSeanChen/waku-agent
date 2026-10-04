@@ -130,7 +130,7 @@ async function restoreDock(background = false){
   // opening the dock and hold a hosted container awake.
   dockRestored = true;
   const sid = D && D.current_session;
-  if (!sid || CHAT.length) return;
+  if (!sid || CHAT.length || sessionChange) return;   // a new chat is opening: leave it empty
   await loadThreadInto(sid, {setSession: true, background});
 }
 // A reply whose body is {"code": "paused", "error": "…"} — the hosted
