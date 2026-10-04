@@ -54,6 +54,7 @@ from hosted.gateway.launch import Launcher
 from hosted.gateway.memory_keys import WakuMemoryKeys
 from hosted.gateway.spawner_client import SpawnerClient
 from hosted.gateway.store import ControlDb
+from hosted.gateway.sweep import IdleLoop
 
 _LOG = log.get(__name__)
 
@@ -75,7 +76,7 @@ async def main() -> None:
     plans = quota.plans_from_env(os.environ)
     store = ControlDb(config.control_db)
     spawner = SpawnerClient(config.spawner_socket)
-    fleet = idle.Fleet(time.time, config.max_running)
+    fleet = idle.Fleet(time.time, config.max_running, config.idle_seconds)
     launcher = Launcher(store=store, spawner=spawner, fleet=fleet)
     verifier = JwksVerifier(jwks_url=config.supabase_jwks_url,
                             issuer=config.supabase_issuer,
@@ -104,9 +105,18 @@ async def main() -> None:
         await site.start()
         _LOG.info("gateway listening on %s:%s for %s",
                   config.bind_host, config.port, config.apex_host)
+        # Spec 001 E4. Started after the startup resync, so every adopted
+        # container already has a fresh idle clock when the first sweep runs.
+        # The control directory is on the /srv/waku filesystem, which is the
+        # one the disk warning is about.
+        idle_loop = asyncio.create_task(
+            IdleLoop(launcher, disk_path=config.control_db.parent).run())
+        _LOG.info("idle loop: stopping containers after %s minutes idle",
+                  config.idle_seconds // 60)
         try:
             await asyncio.Event().wait()
         finally:
+            idle_loop.cancel()
             await runner.cleanup()
             for server in (token_server, admin_server):
                 server.close()

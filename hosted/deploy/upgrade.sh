@@ -6,10 +6,11 @@
 # cannot change and each start carries a new proxy token, so every start creates
 # a new container from the current image tag. A tenant whose container has
 # stopped is therefore upgraded the moment they come back, for free. A RUNNING
-# container is not: nothing stops an idle one yet (spec 001 task E4 is not
-# built), so it keeps the old image until the cap evicts it or --now restarts
-# it. --now is for the case where the upgrade fixes something a running tenant
-# is suffering from, and it costs every open dashboard an interrupted turn.
+# container keeps the old image until the gateway's idle loop stops it, after
+# 15 minutes with nothing in flight (WAKU_IDLE_MINUTES), or the cap evicts it,
+# or --now restarts it. --now is for the case where the upgrade fixes something
+# a running tenant is suffering from, and it costs every open dashboard an
+# interrupted turn.
 #
 # NOTHING HERE TOUCHES config/ OR tenants/. An upgrade that rewrote config would
 # be an install; an upgrade that touched tenants/ would be a restore.

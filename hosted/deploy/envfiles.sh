@@ -49,6 +49,7 @@ WAKU_SUPABASE_PUBLISHABLE_KEY=$supabase_publishable_key
 WAKU_FREE_TURNS_PER_HOUR=30
 WAKU_BYOK_TURNS_PER_HOUR=120
 WAKU_EMBED_ORIGINS=https://www.waku.one https://waku.one https://dev.waku.one
+WAKU_IDLE_MINUTES=15
 EOF
 }
 

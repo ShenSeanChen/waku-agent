@@ -37,7 +37,13 @@ from dataclasses import dataclass
 
 from hosted.core import policy
 
+# The default idle window. config/gateway.env can move it with
+# WAKU_IDLE_MINUTES (hosted/gateway/config.py); the Fleet takes the number it
+# was built with, so a test or an operator never has to patch this constant.
 IDLE_SECONDS = 15 * 60
+# How often the gateway's idle loop sweeps (hosted/gateway/sweep.py). The
+# spec's "once a minute".
+SWEEP_SECONDS = 60
 START_TIMEOUT_SECONDS = 15
 # Every request forwarded to a container that is not a turn or another stream
 # gets this, so a query that never returns cannot hold a container awake.
@@ -78,9 +84,11 @@ class Admission:
 class Fleet:
     """Every container the gateway believes exists, and the decisions about it."""
 
-    def __init__(self, now: Callable[[], float], max_running: int) -> None:
+    def __init__(self, now: Callable[[], float], max_running: int,
+                 idle_seconds: float = IDLE_SECONDS) -> None:
         self._now = now
         self._max_running = max_running
+        self._idle_seconds = idle_seconds
         self._states: dict[str, ContainerState] = {}
 
     def _state(self, tenant_id: str) -> ContainerState:
@@ -128,10 +136,32 @@ class Fleet:
 
     def idle_stops(self) -> list[str]:
         """Once a minute: every container with nothing in flight and no
-        non-background request for fifteen minutes."""
-        cutoff = self._now() - IDLE_SECONDS
-        return sorted(s.tenant_id for s in self._states.values()
-                      if s.status == RUNNING and s.in_flight == 0 and s.last_activity <= cutoff)
+        non-background request for the idle window (fifteen minutes unless
+        WAKU_IDLE_MINUTES says otherwise)."""
+        return sorted(s.tenant_id for s in self._states.values() if self._idle(s))
+
+    def is_idle(self, tenant_id: str) -> bool:
+        """The same question as idle_stops, for one tenant, NOW.
+
+        The idle loop asks this again immediately before each stop, because
+        it stops containers one at a time and every stop awaits the spawner.
+        A request that arrived for the second tenant on the list while the
+        first was being stopped has touched the clock or entered the fleet,
+        and the answer the list gave a moment ago is no longer true.
+        """
+        state = self._states.get(tenant_id)
+        return state is not None and self._idle(state)
+
+    def seconds_idle(self, tenant_id: str) -> float:
+        """How long since the last non-background request, for the log line
+        the idle loop writes. 0.0 for a tenant the fleet has no state for."""
+        state = self._states.get(tenant_id)
+        return self._now() - state.last_activity if state is not None else 0.0
+
+    def _idle(self, state: ContainerState) -> bool:
+        cutoff = self._now() - self._idle_seconds
+        return (state.status == RUNNING and state.in_flight == 0
+                and state.last_activity <= cutoff)
 
     def _evictable(self) -> str | None:
         candidates = [s for s in self._states.values()
