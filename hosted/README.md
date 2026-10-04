@@ -401,7 +401,12 @@ restart costs waku.one one more call. `GET /auth/embed` must arrive as an
 iframe navigation (`Sec-Fetch-Dest: iframe`, or no fetch metadata); it sets
 `__Host-waku_embed` (`Secure; HttpOnly; SameSite=None; Partitioned`, 12 hours,
 stored in `control.db` like the other two sessions and ended by the same
-sign-out) and redirects to `/embed/chat`.
+sign-out) and redirects to `/embed/chat`. waku.one may add `&theme=light` or
+`&theme=dark` to the URL before framing it; the redirect then goes to
+`/embed/chat?theme=<it>`, and the page is served with that `data-theme` on
+`<html>`, so its first paint is in the console's theme rather than a light
+flash. Any other value, or none, redirects to `/embed/chat` alone and the chat
+uses its own stored choice.
 
 A request carrying only that cookie reaches `/embed/chat`, `/static/`,
 `POST /api/chat/stream`, `GET` and `POST /api/session` (the chat's header reads
@@ -430,16 +435,22 @@ only when that origin is on the allowlist, never `*`:
 | the session has ended | `{"source": "waku-agent", "type": "session-expired"}` |
 | the person clicks "Open report" | `{"source": "waku-agent", "type": "open-report", "memory_id": "...", "title": "..."}` |
 
-The chat listens for one message from the page around it:
+The chat listens for two messages from the page around it:
 
 | When | Message (to the frame) |
 |---|---|
 | the person clicks waku.one's "New chat" | `{"source": "waku-console", "type": "new-chat"}` |
+| the frame loads, and whenever waku.one's theme changes | `{"source": "waku-console", "type": "theme", "theme": "light"}` or `"dark"` |
 
-It is accepted only when `event.source` is `window.parent` and `event.origin`
-is on the same allowlist (never `*`, never the frame's own origin). It starts
-a new chat exactly as "+ New chat" does, and does nothing when the chat is
-already empty. Every other message is ignored (waku-memory spec 040 P2).
+Each is accepted only when `event.source` is `window.parent` and `event.origin`
+is on the same allowlist (never `*`, never the frame's own origin). `new-chat`
+starts a new chat exactly as "+ New chat" does, and does nothing when the chat
+is already empty (waku-memory spec 040 P2). `theme` restyles the chat at once;
+its value must be exactly `light` or `dark` (waku.one resolves "system"
+itself). It is applied and never stored: the frame shares `localStorage` with
+the person's own dashboard on the same host, and the console's theme must not
+replace the choice they made there with the dashboard's toggle (waku-memory
+spec 040 T). Every other message is ignored.
 
 "Open report" opens no tab while framed: waku.one opens the report in place
 (waku-memory spec 040 M3). Not framed, or framed by an origin off the list, it
