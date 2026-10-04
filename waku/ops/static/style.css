@@ -170,6 +170,49 @@
   .mdcode pre{margin:0;padding:var(--space-3) var(--space-3);overflow-x:auto;font-family:var(--face-mono);
               font-size:var(--text-xs);line-height:var(--leading-normal);color:var(--text-muted);white-space:pre}
   .mdcode code{font-family:var(--face-mono);background:none;border:none;padding:0;border-radius:0;font-size:var(--text-xs)}
+  /* A research report's fenced blocks, drawn as UI (js/blocks.js). The code
+     block's frame and head, on paper instead of the sunk code ground. */
+  .rblock{background:var(--surface-paper)}
+  .rblock .mdcode-head{justify-content:flex-end}
+  .rblock-body{padding:var(--space-3);white-space:normal;font-size:var(--text-sm);color:var(--text-ink)}
+  .rb-note{display:block;font-family:var(--face-mono);font-size:var(--text-xs);color:var(--text-faint)}
+  .rb-sr{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+  .rb-metrics{display:grid;grid-template-columns:repeat(auto-fill,minmax(8rem,1fr));gap:var(--space-2)}
+  .rb-metric{display:flex;flex-direction:column;gap:calc(var(--spacing) * 0.5);min-width:0;
+    padding:var(--space-2);border:var(--rule-width) solid var(--rule);border-radius:var(--radius)}
+  .rb-label{font-family:var(--face-mono);font-size:var(--text-xs);text-transform:uppercase;
+    letter-spacing:var(--tracking-label);color:var(--text-faint)}
+  .rb-value{font-family:var(--face-mono);font-size:var(--text-base);line-height:var(--leading-tight);
+    font-weight:var(--font-weight-medium);color:var(--text-ink)}
+  .rb-chart-title{font-weight:var(--font-weight-medium);margin-bottom:var(--space-2)}
+  .rb-bars{display:grid;grid-template-columns:minmax(0,max-content) minmax(4rem,1fr) auto;
+    gap:var(--spacing) var(--space-2);align-items:center}
+  .rb-bar-row{display:contents}
+  .rb-bar-label{max-width:12rem;color:var(--text-muted)}
+  .rb-bar{display:block;height:var(--space-2);background:var(--surface-sunk);border-radius:var(--radius);overflow:hidden}
+  .rb-bar-fill{display:block;height:100%;background:var(--chart-1)}
+  .rb-bar-value{font-family:var(--face-mono);font-size:var(--text-xs);color:var(--text-ink);
+    font-variant-numeric:tabular-nums;white-space:nowrap}
+  /* The comparison keeps its columns and scrolls sideways in its own box,
+     the names pinned at the left over an opaque ground. */
+  .rb-compare .tbl-wrap{margin-bottom:0;overflow-wrap:normal}
+  .rb-compare .tbl th,.rb-compare .tbl td{white-space:nowrap}
+  .rb-compare .tbl td{min-width:6rem;max-width:16rem;white-space:normal}
+  .rb-compare .tbl tr>:first-child{position:sticky;left:0;z-index:var(--z-inside);background:var(--surface-paper);
+    border-right:var(--rule-width) solid var(--rule);font-weight:var(--font-weight-medium);color:var(--text-ink)}
+  .rb-compare .tbl tr:hover>:first-child{background:var(--surface-raised)}
+  .rb-yes{color:var(--text-ink)} .rb-no{color:var(--text-muted)} .rb-unknown{color:var(--text-faint)}
+  .rb-yes,.rb-no,.rb-unknown{white-space:nowrap}
+  .rb-timeline,.rb-sources{margin:0;display:flex;flex-direction:column;gap:var(--space-2)}
+  .rb-timeline{list-style:none;padding:0}
+  .rb-timeline li{display:grid;grid-template-columns:7rem minmax(0,1fr);gap:var(--space-2)}
+  .rb-date{font-family:var(--face-mono);font-size:var(--text-xs);color:var(--text-faint);
+    font-variant-numeric:tabular-nums;padding-top:calc(var(--spacing) * 0.5)}
+  .rb-subject{font-weight:var(--font-weight-medium)}
+  .rb-sources{padding-left:var(--space-6)}
+  .rb-sources li::marker{font-family:var(--face-mono);font-size:var(--text-xs);color:var(--text-faint)}
+  .rb-sources a{color:var(--accent-fg);text-decoration:underline}
+  .rblock-body>.rb-note{margin-top:var(--space-3);color:var(--text-muted)}
   /* horizontal rule */
   .mdhr{border:none;border-top:1px solid var(--rule-hard);margin:var(--space-3) 0}
   /* copy-message button — appears on card hover */
