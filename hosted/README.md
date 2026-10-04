@@ -296,6 +296,12 @@ Signup is off, so people arrive by invitation: invite an email address from the
 Supabase dashboard. They open the magic link, land on `agent.waku.one/login`,
 and finish at `https://<their id>.agent.waku.one`.
 
+The link opens in a new tab. If the tab they asked for it from is still open in
+the same browser, that tab signs in instead, and the new tab says they can
+close it: the two talk over a same-origin `BroadcastChannel` in
+`hosted/gateway/static/login.js`, because the enter code works once. In another
+browser, or with no asking tab open, the new tab signs in as before.
+
 ## Each person's Waku Memory
 
 Every tenant's agent reaches that person's own Waku Memory without a browser
