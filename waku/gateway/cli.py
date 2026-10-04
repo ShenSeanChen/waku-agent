@@ -49,7 +49,9 @@ def _observer(kind: str, event: dict) -> None:
     elif kind == "gate":
         console.print(f"  [dim]gate · {event['decision']} — {event.get('reason','')}[/dim]")
     elif kind == "consolidation":
-        console.print(f"  [dim]memory · consolidated {event['new_facts']} fact(s) from recent chats[/dim]")
+        missed = sum(1 for k in event.get("kept") or [] if k.get("sent") is False)
+        note = f"; Waku Memory did not answer, {missed} kept here only" if missed else ""
+        console.print(f"  [dim]memory · consolidated {event['new_facts']} fact(s) from recent chats{note}[/dim]")
 
 
 def main() -> None:

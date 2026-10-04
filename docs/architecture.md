@@ -119,7 +119,11 @@ company research. Facts from a flagged batch go to scope
 
 The `facts` table records each pending send with `synced = 0` and the scope.
 A failed send is logged and never fails the turn, and the next consolidation
-sends pending facts before new ones. Rows from before spec 006 count as sent,
+sends pending facts before new ones. Each kept fact in the event carries
+`sent`: true when Waku Memory took it, false when it did not, and null without
+Waku Memory. When `sent` is false, the chat's card reads "Kept on this agent
+only" and says Waku Memory did not answer, and the receipt reads "2 kept, 2 on
+this agent only", so neither claims a fact Waku Memory never stored. Rows from before spec 006 count as sent,
 because the capture shim imports that backlog from `memory/<id>.md`. Hosted
 containers consolidate every turn; laptops consolidate every 6 exchanges.
 Without a connected server, nothing is sent.

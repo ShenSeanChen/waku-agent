@@ -230,6 +230,10 @@
   .report-card .mdlist,.kept .mdlist{margin:var(--spacing) 0 var(--space-2);padding-left:var(--space-4)}
   .report-open{display:inline-block;text-decoration:none}
   .kept a{color:inherit}
+  /* Waku Memory did not take some kept facts: the kicker takes the failed
+     colour, as a failed notice's mark does, and a note says what happens next. */
+  .kept-failed .report-kicker{color:var(--bad)}
+  .kept-note{margin:0 0 var(--spacing);font-size:var(--text-sm);color:var(--text-muted)}
   /* Spec 011: the turn receipt. One quiet mono line under the reply, a
      tertiary button that opens a table of the same numbers. */
   .receipt{margin-top:var(--space-2);padding-top:var(--spacing);border-top:var(--rule-width) solid var(--rule)}

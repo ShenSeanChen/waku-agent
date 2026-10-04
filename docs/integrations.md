@@ -217,6 +217,11 @@ that file gets pasted into bug reports, and a bearer token in one is a leaked
 credential. If the variable is not exported, Waku says so by name rather than
 connecting anonymously and letting the server's 401 look like an outage.
 
+A remote server that restarts forgets every session it had, and answers the
+next call with HTTP 404 "Session not found". Waku then opens a new session and
+sends that call once more, as the MCP spec asks of a client. Calls that find
+the session gone at the same moment share one new session.
+
 ### Signing in instead of holding a key
 
 A server that speaks MCP's authorization spec needs no key at all. Say so, and

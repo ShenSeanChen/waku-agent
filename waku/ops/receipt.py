@@ -38,6 +38,9 @@ MODEL_KEYS = ("id", "in", "out", "usd", "estimate", "calls")
 TOOL_KEYS = ("tool", "provider", "usd", "status")
 MEMORY_KEYS = ("searches", "used", "kept", "report")
 SEARCH_KEYS = ("tool", "found", "trace_id")
+# `sent`: True when Waku Memory took the fact, False when it did not, None
+# when no Waku Memory is connected (waku/memory/consolidation.py).
+KEPT_KEYS = ("memory_id", "sent")
 
 # The Waku Memory tools whose results are counted as searches, not tools.
 # The loop names an MCP tool <server>_<tool>.
@@ -138,7 +141,8 @@ def build(events: list[tuple[str, dict]], *, turn_id: str, model: str, provider:
                           "usd": round(cost[0], 6) if cost else None,
                           "status": _status(ev.get("output"))})
         elif kind == "consolidation":
-            kept = [{"memory_id": _id(k.get("memory_id"))}
+            kept = [{"memory_id": _id(k.get("memory_id")),
+                     "sent": k.get("sent") if isinstance(k.get("sent"), bool) else None}
                     for k in (ev.get("kept") or []) if isinstance(k, dict)]
         elif kind == "report":
             report = _id(ev.get("memory_id"))
