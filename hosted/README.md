@@ -412,7 +412,23 @@ A request carrying only that cookie reaches `/embed/chat`, `/static/`,
 `POST /api/chat/stream`, `GET` and `POST /api/session` (the chat's header reads
 `GET /api/session?action=state`), and `POST /api/providers` with a body that
 names a model and nothing else, which is the header's model picker. Everything
-else answers 403. The dashboard's own cookie is unaffected.
+else answers 403 inside the frame. The dashboard's own cookie is unaffected.
+
+A browser tab at the tenant host gets the frame's cookie too: the cookie is
+partitioned by top-level site, and a frame on `dev.waku.one` and a tab at
+`<tenant>.agent.waku.one` share the site `waku.one`. So on a top-level page
+(`Sec-Fetch-Dest: document`, or no fetch metadata and an HTML `Accept`) the
+gateway ignores the embed cookie for anything but the chat and redirects to
+`https://agent.waku.one/login`, as for anyone signed out. The 403 stays for
+requests from inside the frame, where a 401 would read as a session that ended.
+
+The chat's own "Dashboard" button opens the full dashboard signed in. It posts
+to `/auth/dashboard` with the session it has (the JSON-and-Origin pair applies),
+which answers `{"url": "/auth/enter?code=<code>"}`: a sign-in hand-off code from
+the same set the apex's sign-in uses (60 seconds, once, this tenant only), and
+the button opens it in a new tab. The full session is still made only by
+`/auth/enter`, as a top-level navigation that is not cross-site. A plain link
+to `https://<tenant>.agent.waku.one/` from waku.one lands on the sign-in page.
 
 Only `/embed/chat` and `/auth/embed` may be framed, and only by the origins in
 `WAKU_EMBED_ORIGINS`: they carry `Content-Security-Policy: frame-ancestors

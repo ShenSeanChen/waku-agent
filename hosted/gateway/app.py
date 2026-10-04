@@ -730,6 +730,12 @@ class Gateway:
             return self._enter(request, label)
         if request.method == "GET" and path == embed.AUTH_PATH:
             return self._enter_embed(request, label)
+        if request.method == "GET" and path.startswith("/auth/static/"):
+            # The sign-in page's public stylesheets and faces, on this host
+            # too: the gateway's own error page (answers.html_error) links
+            # them, and CORP same-origin keeps a tenant host from loading
+            # the apex's copies.
+            return self._static(request, path[len("/auth/static/"):])
         value = request.cookies.get(sessions.TENANT_COOKIE, "")
         tenant_id = (self._resolve(sessions.tenant_key(label, value))
                      if value else None)
@@ -760,10 +766,24 @@ class Gateway:
             if tenant is not None:
                 self.end_sessions(tenant.id)
             return self._no_session(request, path)
+        if request.method == "POST" and path == embed.DASHBOARD_PATH:
+            return self._dashboard_handoff(tenant)
         if embed_only:
             body = await request.read() if request.method == "POST" else b""
             refused = embed.route_refusal(request.method, path, body)
+            if refused and guards.is_top_level_page(request):
+                # A tab, not the frame: the partitioned embed cookie reached
+                # it because both have top-level site waku.one (see
+                # guards.is_top_level_page). It is no session here. The tab
+                # gets what a signed-out visitor gets, the sign-in page.
+                _LOG.info("embed cookie ignored on a top-level page for "
+                          "tenant=%s: %s", tenant.id, path)
+                return answers.redirect(f"https://{self._config.apex_host}/login")
             if refused:
+                # From inside the frame (its fetches, or a navigation of the
+                # frame itself): 403 and not 401, because a 401 tells
+                # waku.one the session ended and it would re-mint and reload
+                # the chat, which would ask again.
                 _LOG.info("embed session for tenant=%s refused %s %s: %s",
                           tenant.id, request.method, path, refused)
                 return answers.refusal(request, 403, embed.EMBED_REFUSED)
@@ -825,6 +845,17 @@ class Gateway:
             origins)
         embed.set_embed_cookie(response, value)
         return answers.harden(response)
+
+    def _dashboard_handoff(self, tenant: Tenant) -> web.Response:
+        """POST /auth/dashboard: a sign-in hand-off code for the frame's
+        "Dashboard" button (embed.DASHBOARD_PATH says why this is safe).
+
+        The code is the apex's kind, from the same HandoffCodes, so it is
+        redeemed by _enter and nothing else: 60 seconds, once, this tenant
+        only, and only as a document navigation that is not cross-site.
+        """
+        code = self._handoffs.issue(tenant.id)
+        return answers.json_ok({"url": f"/auth/enter?code={code}"})
 
     def _enter(self, request: web.Request, label: str) -> web.Response:
         """The hand-off: a code from the apex becomes this host's session.
