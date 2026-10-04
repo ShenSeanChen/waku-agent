@@ -116,7 +116,11 @@ def kept_if_due(
     report: str = "",
 ) -> list[dict]:
     """The facts this consolidation kept, each as {subject, content, project,
-    memory_id}. [] when it was not due or nothing was worth keeping.
+    memory_id, sent}. [] when it was not due or nothing was worth keeping.
+    `sent` is True when Waku Memory took the fact, False when it did not (the
+    fact is kept on this agent and sent again next time), and None when no
+    Waku Memory is connected. Only `sent` says whether a send worked:
+    `memory_id` is also None when the server took a fact and named no id.
 
     `report` is the research report this turn saved. A batch whose rows saved
     one earlier (a laptop consolidates every six exchanges) is a report batch
@@ -185,7 +189,7 @@ def kept_if_due(
     out = []
     for fact in kept:
         record = {"subject": fact["subject"], "content": fact["content"],
-                  "project": project, "memory_id": None}
+                  "project": project, "memory_id": None, "sent": None}
         if tracked:
             fact_id = facts.add_unsynced(fact["subject"], fact["content"], scope)
         else:
@@ -195,6 +199,9 @@ def kept_if_due(
             reachable, record["memory_id"] = _send(remember, fact["content"], scope)
             if reachable and fact_id is not None:
                 facts.mark_synced(fact_id)
+        if remember is not None:
+            # a fact never tried, because an earlier send failed, was not sent
+            record["sent"] = reachable
         out.append(record)
     if distilled.get("episode"):
         episodes.add(distilled["episode"], happened_at=date.today().isoformat())

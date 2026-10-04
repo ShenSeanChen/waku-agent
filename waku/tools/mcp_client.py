@@ -36,6 +36,12 @@ HTTP+SSE transport is deprecated and is deliberately not supported here.
 
 Each server's tools register as `<server>_<tool>` on the ToolRegistry. A server
 that fails to connect is skipped with a warning — Waku still starts.
+
+A remote server keeps each session in its own memory, so a server that
+restarts (a redeploy) forgets every session it had and answers the next call
+with HTTP 404 "Session not found". The MCP spec says the client must then
+start a new session, and the bridge does: it opens a new session and sends
+the call once more (`_acall`).
 """
 
 from __future__ import annotations
@@ -43,6 +49,7 @@ from __future__ import annotations
 import asyncio
 import concurrent.futures
 import json
+import logging
 import os
 import re
 import threading
@@ -56,6 +63,21 @@ from waku.tools.registry import Tool
 # Origin from it (`waku` for any name containing "waku"); a client that sends
 # no name of its own is filed under the SDK's default and shows up as `web`.
 CLIENT_NAME = "waku-agent"
+
+log = logging.getLogger(__name__)
+
+
+def _session_expired(exc: BaseException) -> bool:
+    """Whether a failed call means the server no longer knows our session.
+
+    A Streamable HTTP server answers a request for a session it does not hold
+    with HTTP 404. The SDK hands that back as an error whose message is the
+    server's own, "Session not found", or, when the 404 carries no JSON-RPC
+    body, its stand-in "Session terminated". Nothing else is a reason to start
+    over: a tool's own error must reach the model as it is.
+    """
+    text = str(exc).lower()
+    return "session not found" in text or "session terminated" in text
 
 
 def _model_safe_name(server: str, tool: str) -> str:
@@ -115,6 +137,13 @@ class MCPBridge:
         self._thread = threading.Thread(target=self._loop.run_forever, daemon=True)
         self._stack: AsyncExitStack | None = None
         self._sessions: dict = {}
+        # Each server's mcp.json entry, kept so an expired session can be
+        # opened again the way the first one was.
+        self._specs: dict[str, dict] = {}
+        # One lock per server, so calls that all find the session expired
+        # open one new session between them, not one each. Every call runs on
+        # the bridge's one event loop, which makes an asyncio.Lock enough.
+        self._reopening: dict[str, asyncio.Lock] = {}
 
     def _deadline(self, servers: list[dict]) -> float:
         """How long to wait for every server to connect.
@@ -240,6 +269,7 @@ class MCPBridge:
         from mcp import ClientSession, types
 
         name = spec["name"]
+        self._specs[name] = spec
         read, write = await self._open_streams(spec)
         info = types.Implementation(name=CLIENT_NAME, version=__version__)
         session = await self._stack.enter_async_context(
@@ -316,11 +346,42 @@ class MCPBridge:
         session = self._sessions.get(server)
         if session is None:
             return f"MCP server '{server}' is not connected."
-        result = await session.call_tool(tool, args)
+        try:
+            result = await session.call_tool(tool, args)
+        except Exception as exc:
+            # 2026-10-04: api.waku.one was redeployed during a research turn,
+            # forgot the agent's session, and answered every later call
+            # "Session not found". The agent kept sending the dead session's
+            # id until its container restarted, so no search ran and no fact
+            # or report reached Waku Memory. The server refused the call
+            # before running it, so sending it again cannot run it twice.
+            if not _session_expired(exc):
+                raise
+            log.info("MCP server '%s' no longer knows this session (%s); "
+                     "opening a new one", server, exc)
+            session = await self._reopen(server, session)
+            result = await session.call_tool(tool, args)
         parts = []
         for block in result.content:
             parts.append(getattr(block, "text", None) or "[non-text content]")
         return "\n".join(parts) or "(no output)"
+
+    async def _reopen(self, server: str, expired):
+        """A new session for `server`, opened once however many calls ask.
+
+        The first call to find `expired` dead opens the new session; a call
+        that was waiting on the lock finds it already replaced and uses it.
+        The expired session's streams stay on the exit stack and close with
+        the bridge: closing them here would exit their task group from a
+        different task than the one that entered it, which anyio refuses.
+        """
+        lock = self._reopening.setdefault(server, asyncio.Lock())
+        async with lock:
+            current = self._sessions.get(server)
+            if current is not None and current is not expired:
+                return current
+            await self._connect_one(self._specs[server])
+            return self._sessions[server]
 
     def close(self) -> None:
         if self._stack is not None:
