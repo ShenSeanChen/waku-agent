@@ -49,6 +49,11 @@ which carries them. Neither license grants any right in them.
 
 ## Running it
 
+For a small deployment with browser password prompts, static containers and
+an existing ext4 disk, use [the static deployment](deploy/simple/README.md).
+That option does not use Supabase or the spawner and does not enforce disk
+quotas. The installation below describes the full hosted deployment.
+
 Hosted waku runs on **one Ubuntu 24.04 VM**. Everything below is done once, in
 this order. The example domain here is the deployment this was built for,
 `agent.waku.one`; substitute your own.
