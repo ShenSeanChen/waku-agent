@@ -27,7 +27,7 @@ Each tab is one pillar, linked to the real files:
 | **Memory** | sub-tabs per pillar — semantic facts, episodes, editable skills + SOUL, consolidation |
 | **Tools** | the agent's available tools (grouped by origin), its results, and MCP connectors |
 | **Data** | a live SQLite browser: per-table tabs, schema, and a read-only SQL console over `state.db` |
-| **Ops** | eval verdict + history, the gate decisions, slowest turns, and inline JSONL traces |
+| **Observability** | five tabs: **Turns** (each turn as a waterfall of its steps, with time and cost), **Tools** (calls grouped by treg with endpoints, Waku Memory and local), **Memory** (gate decisions, memories used and kept), **Spend** (estimated and charged), **Evals** (what exists, the release gate and its history). `#ops` still opens it |
 
 The sidebar and chat dock are drag-resizable and hideable, and the chat has
 *New chat* + history like any chat app.
@@ -40,7 +40,7 @@ Type these in the chat dock (or `make run`) and watch the dashboard light up:
 |---|---|---|
 | *"Schedule a tennis game with Raj this Saturday at 8am"* | the Loop calls a tool (`create_event`) | the **LOOP** box pulses; **Loop** tab shows `iter 2` |
 | *"What's on my calendar today?"* | reading the calendar (`list_events`) | it answers from `state.db`, no made-up events |
-| *"When am I swimming with Sergey?"* then *"what's 12 × 8?"* | the **retrieval gate** — retrieve vs skip | Overview gate bar; **Ops** shows the per-turn decision |
+| *"When am I swimming with Sergey?"* then *"what's 12 × 8?"* | the **retrieval gate** — retrieve vs skip | Overview gate bar; **Observability ▸ Memory** shows the per-turn decision |
 | *"Remember that Raj prefers evening games"* | memory self-management (`save_note`) | **Memory ▸ Semantic** gains a fact; `MEMORY.md` updates |
 | *"Search for the World Cup games still left to play and add each one to my calendar"* | **multi-tool loop engineering** | **Loop** tab shows `iter 8`: `search_web` × N → `create_event` × N |
 | chat from `make run` **and** the browser | one brain, many gateways | the **Gateway** tab tags each message `cli` / `dashboard` |
