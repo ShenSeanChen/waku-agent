@@ -45,6 +45,12 @@ waku_require_root
 waku_load_install_env WAKU_TENANT_IMAGE WAKU_SERVICES_IMAGE WAKU_CADDY_IMAGE \
                       WAKU_DNS_PROVIDER WAKU_GATEWAY_ADDRESS
 
+# ONE UPGRADE AT A TIME (lib.sh, waku_flock_deploy). autodeploy.sh takes the
+# same lock every five minutes when the timer is on, so a manual run that lands
+# in the middle of an automatic one refuses here, before it fetches anything.
+waku_flock_deploy \
+  || waku_die "another upgrade holds $WAKU_ROOT/run/deploy/lock: an automatic upgrade (journalctl -u waku-autodeploy) or a second upgrade.sh. They share one lock so two upgrades never rebuild the checkout at once. Wait for it to finish and rerun."
+
 # CURL IS CHECKED HERE, before anything is fetched or rebuilt, not left to
 # fail 60 seconds into the readiness loop below with a message that blames the
 # gateway for a missing binary.
