@@ -93,8 +93,9 @@ def run_loop(
 
     `trim`, when given, may shorten tool results the model has already read
     before each later call, so one large result is not re-sent on every
-    iteration after it. app.py passes reports.shrink_read, which cuts a whole
-    earlier research report to its digest; None leaves `messages` as they are."""
+    iteration after it. app.py chains reports.shrink_read, which cuts a whole
+    earlier research report to its digest, and trim.shrink_seen, which cuts
+    any other long result to its opening; None leaves `messages` as they are."""
     notify = observer or (lambda kind, ev: None)
     result = LoopResult(reply="")
     can_stream = stream and hasattr(client.messages, "stream")

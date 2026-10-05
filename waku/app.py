@@ -10,6 +10,7 @@ import logging
 
 from waku.config import Settings, load_settings
 from waku.db import connect
+from waku.loop import trim
 from waku.loop.agent import LoopResult, Observer, run_loop
 from waku.loop.models import get_client
 from waku.memory import brain, reports
@@ -231,9 +232,10 @@ class Waku:
             max_tokens=self.settings.max_tokens,
             observer=notify,
             stream=stream,
-            # a whole earlier report the model read is cut to its digest
-            # before each later call (spec 009 A)
-            trim=reports.shrink_read,
+            # before each later call, a whole earlier report the model read
+            # is cut to its digest (spec 009 A), and any other long result it
+            # read is cut to its opening (waku/loop/trim.py)
+            trim=trim.chain(reports.shrink_read, trim.shrink_seen),
         )
         result.read_first, result.used = known.calls, known.used
         result.recalled = "\n".join(p for p in (self.session.retrieved, known.context) if p)
