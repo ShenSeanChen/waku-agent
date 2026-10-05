@@ -226,6 +226,10 @@ GenAI attribute exists, the OTel export uses it, mapped in one table
 (`GENAI` in `waku/ops/observability.py`). The dashboard's Observability page
 (`GET /api/observability`) reads these lines, and reads a line written
 before spec 012 with the same functions, leaving empty what it cannot derive.
+Each turn it returns carries `scores`: the five turn checks of
+`waku/ops/turn_evals.py` (source `code`, value 1, 0 or null for n/a), run on
+every read rather than stored, plus any `score` event written for the turn
+(spec 015, `docs/evals.md`).
 
 Every turn has a `turn_id`, written on the trace's `turn_start` and
 `turn_end`, on each `usage.jsonl` row and in the chat log's meta. Every model

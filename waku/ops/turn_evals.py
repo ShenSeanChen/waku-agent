@@ -490,7 +490,12 @@ def your_turns(turns: list[dict], window: str, now: datetime | None = None) -> d
         rows.append({"name": name, "what": what, "passed": passed, "failed": failed, "na": na,
                      "pass_rate": passed / scored if scored else None, "newest_fail": newest})
     judged = [s for t in inside for s in t.get("scores") or [] if s["source"] == "judge"]
+    graded = [[s["value"] for s in t.get("scores") or [] if s["source"] == "code" and s["value"] is not None]
+              for t in inside]
     return {"window": window, "turns": len(inside), "checks": rows,
+            # turns with at least one scored check, and those that passed every one
+            "turns_scored": sum(1 for g in graded if g),
+            "turns_passed": sum(1 for g in graded if g and all(v >= 1 for v in g)),
             "judge": {"judged": len(judged),
                       "average": round(sum(s["value"] for s in judged) / len(judged), 2) if judged else None,
                       "passed": sum(1 for s in judged if s["value"] >= JUDGE_PASS)}}

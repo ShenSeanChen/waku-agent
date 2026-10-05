@@ -260,6 +260,8 @@ def test_the_evals_payload_counts_each_check_per_window(tmp_path):
     # the 2026-10-02 trace's turn ran at 2026-10-03 18:58 UTC: inside 7 days, not today
     assert yours["7d"]["turns"] == 4 and yours["today"]["turns"] == 3
     assert yours["all"]["judge"] == {"judged": 0, "average": None, "passed": 0}
+    # the Overview's "your turns n/m": only the 2026-10-02 turn passed every check
+    assert (yours["all"]["turns_passed"], yours["all"]["turns_scored"]) == (1, 4)
 
 
 # ---- 6. the command ---------------------------------------------------------

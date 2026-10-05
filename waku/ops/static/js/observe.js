@@ -296,18 +296,18 @@ function obsYourTurns(e){
     const scored = r.passed + r.failed;
     const f = r.newest_fail;
     const fkey = f ? obsTurnKey(f, "") : "";
-    return `<tr><td><code>${obsCheckName(r.name)}</code></td><td class="meta">${esc(r.what)}</td>
+    return `<tr><td><code>${obsCheckName(r.name)}</code><div class="meta">${esc(r.what)}</div></td>
       <td>${scored ? uiBadge(`${r.passed} of ${scored} passed`, r.failed ? "bad" : "ok") : `<span class="meta">—</span>`}</td>
       <td class="meta">${r.failed}</td><td class="meta">${r.na}</td><td class="meta">${rate(r)}</td>
       <td class="meta">${f ? uiButton("open the newest failure", {level: "tertiary", size: "sm", title: f.note || "",
         onclick: `obsOpenTurn('${fkey}')`}) : "—"}</td></tr>`;
   });
   const j = yt.judge || {judged: 0};
-  rows.push(`<tr><td><code>judge</code></td><td class="meta">a model reads the reply and the tool outputs, on demand</td>
+  rows.push(`<tr><td><code>judge</code><div class="meta">a model reads the reply and the tool outputs, on demand</div></td>
     <td>${j.judged ? uiBadge(`${j.passed} of ${j.judged} passed`, j.passed === j.judged ? "ok" : "bad") : `<span class="meta">—</span>`}</td>
     <td class="meta">${j.judged ? j.judged - j.passed : 0}</td><td class="meta">${yt.turns - j.judged}</td>
     <td class="meta">${j.average != null ? "avg " + esc(String(j.average)) : "—"}</td><td class="meta">${j.judged} judged</td></tr>`);
-  h += table(["check", "what it checks", win, "failed", "n/a", "pass rate", ""], rows);
+  h += table(["check", win, "failed", "n/a", "pass rate", ""], rows);
   return h + `<div class="meta obs-foot">${obsNum(yt.turns)} turn(s) in this window. The checks run each time this page reads your traces, so an old turn is graded too.</div>`;
 }
 
