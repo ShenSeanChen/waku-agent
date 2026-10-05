@@ -8,7 +8,7 @@ except for the parts listed under "What this license does not cover" below.
 Earlier versions stay MIT
 -------------------------
 
-Until pull request #PR_NUMBER, waku-agent was released under the MIT License.
+Until pull request #289, waku-agent was released under the MIT License.
 Every version released before that change (v0.1.8 and earlier, on PyPI and
 on GitHub), and every commit on main before it, remains available under the
 MIT License. Nothing here withdraws or narrows that grant.
