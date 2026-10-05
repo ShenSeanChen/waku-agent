@@ -194,11 +194,16 @@ function openReport(link){
   return false;
 }
 // Spec 009 A: what the company brain already knew, read before a research
-// turn: each memory with the date it was saved, linked to waku.one.
+// turn: each memory with the date it was saved, linked to waku.one. A report
+// reads as its title and first Summary line, a fact as its prose: brain.py
+// builds both, never a raw window into a report's Sources block.
+const usedLabel = u => u.report
+  ? `Report${u.title ? ` "${u.title}"` : ""}${u.text ? `: ${u.text}` : ""}`
+  : (u.text || "Memory");
 const usedList = used => !(used || []).length ? "" : `<div class="kept">
   <div class="report-kicker">Used from memory</div>
   <ul class="mdlist">${used.map(u => {
-    const label = (u.report ? `Report${u.title ? ` "${u.title}"` : ""}: ` : "") + (u.text || "");
+    const label = usedLabel(u);
     const short = label.length > 160 ? label.slice(0, 159) + "\u2026" : label;
     return `<li>${u.created_at ? `<span class="meta">${esc(u.created_at)}</span> ` : ""}${u.id
       ? `<a href="${esc(memoryUrl(u.id))}" target="_blank" rel="noopener noreferrer">${esc(short)}</a>`
