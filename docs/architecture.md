@@ -228,8 +228,10 @@ GenAI attribute exists, the OTel export uses it, mapped in one table
 before spec 012 with the same functions, leaving empty what it cannot derive.
 Each turn it returns carries `scores`: the five turn checks of
 `waku/ops/turn_evals.py` (source `code`, value 1, 0 or null for n/a), run on
-every read rather than stored, plus any `score` event written for the turn
-(spec 015, `docs/evals.md`).
+every read rather than stored, plus any `score` event written for the turn:
+the AI judge's, written once when someone presses "Judge this turn" (spec
+015, `docs/evals.md`). The judge's call carries an `X-Waku-Turn` id of its
+own, so the metering proxy answers its exact charge.
 
 Every turn has a `turn_id`, written on the trace's `turn_start` and
 `turn_end`, on each `usage.jsonl` row and in the chat log's meta. Every model
