@@ -48,8 +48,9 @@ it in. Run `make gate` → green → the eval history records the run.
 Every LLM call's tokens are appended to `~/.waku/usage.jsonl`, an append-only
 ledger that a demo reset never wipes. The **Spend** tab of the
 **Observability** page shows the all-time cost and tokens, broken down per
-model and per day. That cost is labelled "estimated": tokens × list price. On agent.waku.one each turn's receipt also records what the platform
-charged, and the tab shows that total as "charged" beside the estimate.
+model and per day. Tokens × list price is the estimate. On agent.waku.one each turn's receipt also records what the platform
+charged, and for that turn the charge replaces the estimate. The Spend card and tab lead with one
+total, "$X total · $Y charged + $Z estimated", and the model, treg and memory split adds up to it.
 
 ## Tracing is always on
 
