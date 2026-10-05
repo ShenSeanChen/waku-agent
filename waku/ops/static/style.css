@@ -1005,10 +1005,8 @@ dialog.dialog :focus-visible{outline:var(--focus-ring-width) solid var(--accent)
    that pins the dock over the page. */
 body.embed #dock{position:static;width:100%;height:100vh;border-left:none}
 
-/* --- Observability (spec 012): five tabs, each opening with one sentence,
-   and a turn's waterfall. A step is a stacked block (head line, a bar on the
-   turn's timeline, then its input and output), never a wide row, so it
-   reads at 420px inside waku.one. */
+/* --- Observability (spec 012): four tabs, each opening with one sentence,
+   and a turn's waterfall (spec 016, at the end of this section). */
 .obs-cap{color:var(--text-muted);font-size:var(--text-sm);line-height:var(--leading-normal);margin:var(--space-3) 0}
 .obs-page-cap{margin-top:0}
 .obs-h-sub{text-transform:none;letter-spacing:0;font-weight:var(--font-weight-normal);margin-left:var(--space-2)}
@@ -1018,33 +1016,12 @@ main h3{font-family:var(--face-mono);font-size:var(--text-xs);color:var(--text-f
 .obs-foot{margin-top:var(--space-3)}
 .obs-gap{margin-left:var(--space-2)}
 .obs-io{font-family:var(--face-mono);font-size:var(--text-xs);text-transform:uppercase;letter-spacing:var(--tracking-label);color:var(--text-faint)}
-.obs-wf{margin:0 0 var(--space-3)}
-.wf{display:flex;flex-direction:column;gap:var(--space-2);margin-top:var(--space-2)}
-.wf-step{border-top:var(--rule-width) solid var(--rule);padding-top:var(--space-2);min-width:0}
-.wf-head{display:flex;flex-wrap:wrap;align-items:baseline;gap:var(--spacing) var(--space-2)}
-.wf-kind{font-family:var(--face-mono);font-size:var(--text-xs);text-transform:uppercase;letter-spacing:var(--tracking-label);
-  color:var(--text-muted);min-width:64px}
-.wf-title{flex:1 1 200px;min-width:0;overflow-wrap:anywhere}
-.wf-nums{font-family:var(--face-mono);font-size:var(--text-xs);color:var(--text-muted);white-space:nowrap}
-.wf-track{position:relative;height:6px;margin-top:var(--spacing);background:var(--surface-sunk);border-radius:var(--shape-chip);overflow:hidden}
-.wf-fill{position:absolute;top:0;bottom:0;border-radius:var(--shape-chip);background:var(--chart-5)}
-
-.wf-fill.wf-tool{background:var(--chart-2)}
-
-.wf-fill.wf-gate,.wf-fill.wf-route{background:var(--chart-4)}
-.wf-detail{margin-top:var(--spacing);font-size:var(--text-xs);color:var(--text-muted);line-height:var(--leading-normal);
-  overflow-wrap:anywhere}
-.wf-detail code{font-size:var(--text-xs);white-space:normal;overflow-wrap:anywhere;border:0;background:none;padding:0}
 @media (max-width:520px){
-  .wf-nums{white-space:normal}
-  .wf-kind{min-width:0}
   /* two stats a row, so a long label (DETERMINISTIC) never runs into the next */
   .stat-band{grid-template-columns:repeat(auto-fit,minmax(160px,1fr))}
   .stat{min-width:0}
 }
 .obs-scores{display:flex;flex-wrap:wrap;gap:var(--space-2);margin-bottom:var(--space-2)}
-.wf-fill.wf-llm{background:var(--chart-1)}
-.wf-fill.wf-retrieval,.wf-fill.wf-memory_write{background:var(--chart-3)}
 
 /* Observability's visual pass: four cards, one per tab, that open their tab, bars drawn
    with plain spans (no chart library), and the waterfall grouped by loop. */
@@ -1067,7 +1044,62 @@ main h3{font-family:var(--face-mono);font-size:var(--text-xs);color:var(--text-f
 .obs-legend{display:flex;flex-wrap:wrap;gap:var(--space-3);font-size:var(--text-xs);color:var(--text-muted);margin-bottom:var(--space-2)}
 .obs-legend span{display:inline-flex;align-items:center;gap:var(--spacing)}
 .obs-swatch{display:inline-block;width:10px;height:10px;border-radius:var(--shape-chip)}
-.wf-group{display:flex;flex-direction:column;gap:var(--space-2);padding-left:var(--space-3);border-left:var(--rule-width) solid var(--rule)}
-.wf-graph{padding:var(--space-2);border:var(--rule-width) dashed var(--rule);border-radius:var(--radius)}
-.wf-ghead{display:flex;flex-wrap:wrap;align-items:baseline;justify-content:space-between;gap:var(--spacing) var(--space-2)}
-.wf-gname{font-family:var(--face-mono);font-size:var(--text-xs);text-transform:uppercase;letter-spacing:var(--tracking-label);color:var(--text-ink)}
+
+/* The turn waterfall (spec 016): one grid with one shared time axis. Every
+   row has the same columns, so the bars line up. In a card 760px wide or
+   more a row is one line: kind, name, bar, hotspot, time, dollars, details.
+   Narrower (the chat dock open, or a 420px phone) a row takes two lines:
+   kind, name, hotspot and details on the first, and the bar, time and
+   dollars on the second. The card is the container, so the dock counts. */
+.obs-wf{margin:0 0 var(--space-3);container-type:inline-size}
+.wf{display:flex;flex-direction:column;margin-top:var(--space-2);min-width:0}
+.wf-row{display:grid;grid-template-columns:80px minmax(0,1fr) 56px 56px 64px;
+  grid-template-areas:"kind name name name hot" "bar bar time usd more";align-items:center;
+  gap:calc(var(--spacing) * 0.5) var(--space-2);padding:calc(var(--spacing) * 1.5) 0;border-top:var(--rule-width) solid var(--rule);min-width:0}
+@container (min-width:760px){
+  .wf-row{grid-template-columns:88px minmax(0,1.5fr) minmax(120px,1fr) 160px 64px 64px 72px;
+    grid-template-areas:"kind name bar hot time usd more";padding:calc(var(--spacing) * 1) 0}
+}
+.wf-c-kind{grid-area:kind;font-family:var(--face-mono);font-size:var(--text-xs);text-transform:uppercase;
+  letter-spacing:var(--tracking-label);color:var(--text-muted);white-space:nowrap}
+.wf-c-name{grid-area:name;min-width:0;font-size:var(--text-sm);overflow-wrap:anywhere}
+.wf-c-name code{font-size:var(--text-xs)}
+.wf-c-bar{grid-area:bar;min-width:0}
+.wf-c-hot{grid-area:hot;display:flex;flex-wrap:wrap;justify-content:flex-end;gap:calc(var(--spacing) * 1)}
+.wf-c-time,.wf-c-usd{font-family:var(--face-mono);font-size:var(--text-xs);color:var(--text-muted);text-align:right;white-space:nowrap}
+.wf-c-time{grid-area:time}
+.wf-c-usd{grid-area:usd}
+.wf-c-more{grid-area:more;text-align:right}
+.wf-c-kind .btn{text-transform:uppercase;font-family:var(--face-mono);font-size:var(--text-xs);letter-spacing:var(--tracking-label);
+  color:var(--text-ink);padding:0}
+.wf-axis{border-top:0}
+.wf-axis span{font-family:var(--face-mono);font-size:var(--text-xs);text-transform:uppercase;letter-spacing:var(--tracking-label);color:var(--text-faint)}
+.wf-axis-ends{display:flex;justify-content:space-between;border-bottom:var(--rule-width) solid var(--rule-hard)}
+.wf-axis .wf-axis-ends span{text-transform:none;letter-spacing:0}
+@container (max-width:759px){
+  .wf-axis .wf-c-kind,.wf-axis .wf-c-name,.wf-axis .wf-c-hot,.wf-axis .wf-c-more{display:none}
+}
+.wf-loop.on{background:var(--surface-raised)}
+.wf-child .wf-c-kind,.wf-child .wf-c-name{padding-left:var(--space-3)}
+.wf-failed .wf-c-kind{color:var(--bad)}
+.wf-total{border-top:var(--rule-width) solid var(--rule-hard)}
+.wf-total .wf-c-name,.wf-total .wf-c-time,.wf-total .wf-c-usd{color:var(--text-ink);font-weight:var(--font-weight-medium)}
+.wf-track{display:block;position:relative;height:8px;background:var(--surface-sunk);border-radius:var(--shape-chip);overflow:hidden}
+.wf-fill{position:absolute;top:0;bottom:0;border-radius:var(--shape-chip);background:var(--chart-5)}
+.wf-fill.wf-llm{background:var(--chart-1)}
+.wf-fill.wf-tool{background:var(--chart-2)}
+.wf-fill.wf-retrieval,.wf-fill.wf-memory_write{background:var(--chart-3)}
+.wf-fill.wf-gate,.wf-fill.wf-route{background:var(--chart-4)}
+.wf-detail{padding:calc(var(--spacing) * 1) 0 var(--space-2);font-size:var(--text-xs);color:var(--text-muted);
+  line-height:var(--leading-normal);overflow-wrap:anywhere}
+.wf-detail-body{min-width:0;padding-left:var(--space-8)}
+.wf-detail.wf-child .wf-detail-body{padding-left:calc(var(--space-8) + var(--space-3))}
+.wf-detail code{font-size:var(--text-xs);white-space:normal;overflow-wrap:anywhere;border:0;background:none;padding:0}
+.wf-story{display:flex;flex-wrap:wrap;align-items:baseline;gap:calc(var(--spacing) * 1);font-size:var(--text-sm);color:var(--text-ink)}
+.wf-story .btn{padding:0;text-transform:none;letter-spacing:0;font-family:var(--face-sans);font-size:var(--text-sm);color:var(--text-ink);
+  text-decoration:underline;text-decoration-color:var(--rule-hard);text-underline-offset:3px}
+.wf-arrow,.wf-tail{color:var(--text-faint);font-family:var(--face-mono);font-size:var(--text-xs)}
+.wf-meta{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:var(--space-2);margin-top:var(--space-2)}
+.wf-meta .meta{font-size:var(--text-xs)}
+.wf-tools{display:flex;gap:var(--space-2)}
+.obs-wf .notice{margin-top:var(--space-2)}

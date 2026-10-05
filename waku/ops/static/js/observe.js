@@ -23,7 +23,7 @@ const OBS_WINDOWS = [["today","Today"],["7d","7 days"],["all","All"]];
 // The page's own state: the window the Tools tab reads, the last answer, and
 // which turns are open. Kept here so the 5s refresh redraws without closing
 // a waterfall someone is reading.
-const OBS = {window: "7d", data: null, at: 0, loading: false, open: new Set()};
+const OBS = {window: "7d", data: null, at: 0, loading: false, open: new Set(), drawn: new Set()};
 
 async function loadObservability(background = false){
   if (OBS.loading) return;
@@ -60,79 +60,155 @@ function obsBar(segments, max){
 const SOURCE_LABEL = {treg: "treg", waku_memory: "Waku Memory", local: "local"};
 const obsSource = s => esc(SOURCE_LABEL[s] || s || "local");
 
-// ---------- Turns: one row per turn; open it for the waterfall
-function obsStep(s, total){
-  // The label is the step's span kind: llm, tool, retrieval, memory_write,
-  // gate, and the bookkeeping kinds route and receipt.
-  const kind = s.span || s.kind;
-  let title = "", nums = [], detail = [];
+// ---------- Turns: one row per turn; open it for the waterfall (spec 016)
+// The waterfall is one grid with one shared time axis. Its head says what
+// the turn did in one line (the story, built by observability.story()), then
+// lists any failures, then the rows: what ran before the loop, one summary
+// row per loop (closed until clicked, unless it holds a failure), and what
+// ran after the reply. A step's arguments and output sit behind "details".
+// Open loops and open details live in OBS.open beside the open turns, keyed
+// "<turn>|l<loop>" and "<turn>|s<step>", so the 5s refresh keeps them.
+const obsTurnKey = (t, i) => String(t.turn_id || t.ts || i).replace(/[^A-Za-z0-9_:.+-]/g, "");
+const obsRowId = (key, part) => "wf-" + key.replace(/[^A-Za-z0-9_-]/g, "") + "-" + part;
+function obsLoopToggle(key, loop){ obsToggle(`${key}|l${loop}`); }
+function obsDetailToggle(key, i){ obsToggle(`${key}|s${i}`); }
+function obsAllLoops(key, loops, open){
+  for (let n = 1; n <= loops; n++){ if (open) OBS.open.add(`${key}|l${n}`); else OBS.open.delete(`${key}|l${n}`); }
+  render();
+}
+// Open a row's loop (and its details, for a failure), redraw, and scroll to it.
+function obsJump(key, loop, step, details){
+  if (loop) OBS.open.add(`${key}|l${loop}`);
+  if (details && step != null) OBS.open.add(`${key}|s${step}`);
+  render();
+  const el = document.getElementById(obsRowId(key, step != null ? "s" + step : "l" + loop));
+  if (el) el.scrollIntoView({block: "center"});
+}
+// What one step is, in the row's name cell, and what it keeps behind "details".
+function obsStepName(s){
+  let name = "", detail = [];
   if (s.kind === "gate"){
-    title = uiBadge(esc(s.decision || "?"), s.decision === "retrieve" ? "ok" : "neutral");
+    name = esc(s.decision || "?");
     if (s.reason) detail.push(esc(s.reason));
   } else if (s.kind === "llm"){
-    title = `${esc(s.call)} · <code>${esc(s.model||"")}</code>`;
-    nums.push(`${obsNum(s.in)} in / ${obsNum(s.out)} out`, obsUsd(s.usd));
+    name = `${s.call && s.call !== "loop" ? esc(s.call) + " · " : ""}<code>${esc(s.model || "")}</code> · ${obsTok(s.in)} in / ${obsTok(s.out)} out`;
   } else if (s.kind === "tool" || s.kind === "memory"){
-    title = `<code>${esc(s.tool)}</code> ${uiBadge(obsSource(s.source), "value")} ${uiBadge(s.ok ? "ok" : "error", s.ok ? "ok" : "bad")}`;
-    if (s.usd != null) nums.push(obsUsd(s.usd));
-    if (s.endpoint_id) detail.push(`endpoint <code>${esc(s.endpoint_id)}</code>`);
+    name = `<code>${esc(s.tool)}</code>${s.endpoint_id ? ` <code>${esc(s.endpoint_id)}</code>` : ""}`;
+    if (s.source === "waku_memory" && s.span === "retrieval" && s.results != null) name += ` · ${s.results} came back`;
+    if (!s.ok) name += " " + uiBadge("error", "bad");
+    detail.push(`<span class="obs-io">source</span> ${obsSource(s.source)}`);
     if (s.source === "waku_memory" && s.span === "retrieval"){
-      if (s.query) detail.push(`searched “${esc(s.query)}”`);
-      if (s.results != null) detail.push(`${s.results} came back`);
+      if (s.query) detail.push(`<span class="obs-io">query</span> “${esc(s.query)}”`);
       detail.push(uiLink("see the match on waku.one", matchesUrl(s.retrieval_trace_id)));
     }
     if (s.args) detail.push(`<span class="obs-io">in</span> <code>${esc(s.args)}</code>`);
     if (s.error) detail.push(`<span class="obs-io">error</span> ${esc(s.error)}`);
     else if (s.output) detail.push(`<span class="obs-io">out</span> <code>${esc(s.output)}</code>`);
   } else if (s.kind === "consolidation"){
-    title = `consolidation kept ${s.new_facts} fact(s)`;
-    if (s.sent) nums.push(`${s.sent} sent to Waku Memory`);
-    if (s.local_only) nums.push(`${s.local_only} local only`);
-    (s.facts||[]).forEach(f => detail.push(esc(f)));
+    name = `consolidation kept ${s.new_facts}${s.sent ? ` · ${s.sent} sent` : ""}${s.local_only ? ` · ${s.local_only} local only` : ""}`;
+    (s.facts || []).forEach(f => detail.push(esc(f)));
   } else if (s.kind === "report"){
-    title = `report saved${s.title ? ": " + esc(s.title) : ""}`;
-  } else if (s.kind === "receipt"){
-    title = `total ${obsUsd(s.total_usd)}${s.estimate === false ? " charged" : " est"}`;
-    if (s.credits != null) nums.push(`${obsNum(s.credits)} credits`);
+    name = `report saved${s.title ? " · " + esc(s.title) : ""}`;
   } else {
-    title = esc(s.detail || "");
+    name = esc(s.detail || s.kind || "");
   }
-  const dur = s.duration_ms != null ? secs(s.duration_ms) : (s.span_ms != null ? "~" + secs(s.span_ms) : "");
-  if (dur && s.kind !== "receipt") nums.push(dur);
-  const left = total && s.at_ms != null && s.span_ms != null ? Math.max(0, (s.at_ms - s.span_ms) / total * 100) : null;
-  const width = total && s.span_ms != null ? Math.max(0.6, s.span_ms / total * 100) : null;
-  const bar = left != null && width != null
-    ? `<div class="wf-track"><span class="wf-fill wf-${kind}" style="left:${left.toFixed(2)}%;width:${Math.min(width, 100 - left).toFixed(2)}%"></span></div>` : "";
-  return `<div class="wf-step">
-    <div class="wf-head"><span class="wf-kind">${kind}</span><span class="wf-title">${title}</span><span class="wf-nums">${nums.join(" · ")}</span></div>
-    ${bar}${detail.length ? `<div class="wf-detail">${detail.map(x => `<div>${x}</div>`).join("")}</div>` : ""}
-  </div>`;
+  return {name, detail};
 }
-// Steps grouped the way the loop ran them: what ran before the model's
-// first call, then loop 1, loop 2… (a model call and the tools it asked
-// for), then what ran after the reply. A turn that went through a graph
-// workflow draws its node path above, around the groups.
-function obsWaterfall(t, total){
-  const groups = [];
-  for (const s of t.steps){
-    const key = s.phase === "loop" ? "loop " + s.loop : (s.phase || "before");
-    let g = groups[groups.length - 1];
-    if (!g || g.key !== key){ g = {key, steps: []}; groups.push(g); }
-    g.steps.push(s);
-  }
-  const label = k => k === "before" ? "before the loop" : k === "after" ? "after the reply" : k;
-  const body = groups.map(g => {
-    const usd = g.steps.reduce((a, s) => a + (s.usd || 0), 0);
-    const ms = g.steps.reduce((a, s) => a + (s.span_ms || 0), 0);
-    const node = (g.steps.find(s => s.node) || {}).node;
-    return `<div class="wf-group"><div class="wf-ghead"><span class="wf-gname">${esc(label(g.key))}</span>
-      <span class="wf-nums">${[node ? "node " + esc(node) : "", ms ? "~" + secs(ms) : "", usd ? obsUsd(usd) : ""].filter(Boolean).join(" · ")}</span></div>
-      ${g.steps.map(s => obsStep(s, total)).join("")}</div>`;
-  }).join("");
-  if (!t.graph) return `<div class="wf">${body}</div>`;
-  const path = t.graph.path.map(esc).join(" &rarr; ");
-  return `<div class="wf wf-graph"><div class="wf-ghead"><span class="wf-gname">graph ${esc(t.graph.workflow)}</span>
-    <span class="wf-nums">${path}${t.graph.ms != null ? " · " + secs(t.graph.ms) : ""}</span></div>${body}</div>`;
+const obsHot = labels => (labels || []).map(l => uiBadge(esc(l), "warn")).join(" ");
+// One bar on the turn's axis: from..to in ms, drawn segmented. A sub-second
+// step keeps a 0.6% sliver so its place on the axis stays visible.
+function obsAxisBar(from, ms, total, kind){
+  if (!total || from == null || ms == null) return "";
+  const left = Math.max(0, from / total * 100), width = Math.max(0.6, ms / total * 100);
+  return `<span class="wf-track"><span class="wf-fill wf-${kind}" style="left:${left.toFixed(2)}%;width:${Math.min(width, 100 - left).toFixed(2)}%"></span></span>`;
+}
+// One grid row: kind, name, bar, hotspot labels, time, dollars, and the details toggle.
+const obsGridRow = (cls, id, cells) => `<div class="wf-row ${cls}"${id ? ` id="${id}"` : ""}>${
+  ["kind", "name", "bar", "hot", "time", "usd", "more"].map((c, i) => `<span class="wf-c-${c}">${cells[i] || ""}</span>`).join("")}</div>`;
+// The kind column's word: the span kind, with memory_write said as "write".
+const obsKindLabel = kind => kind === "memory_write" ? "write" : kind;
+function obsStepRow(t, key, s, i, total, child){
+  const kind = s.span || s.kind;
+  const {name, detail} = obsStepName(s);
+  const time = s.duration_ms != null ? secs(s.duration_ms) : (s.span_ms != null ? "~" + secs(s.span_ms) : "");
+  const usd = s.kind === "llm" || s.usd != null ? obsUsd(s.usd) : "—";
+  const open = OBS.open.has(`${key}|s${i}`);
+  const more = detail.length ? uiButton(open ? "details &#9662;" : "details", {level: "tertiary", size: "sm", onclick: `obsDetailToggle('${key}',${i})`}) : "";
+  const at = s.at_ms != null && s.span_ms != null ? s.at_ms - s.span_ms : null;
+  const row = obsGridRow(`wf-step${child ? " wf-child" : ""}${s.ok === false ? " wf-failed" : ""}`, obsRowId(key, "s" + i),
+    [obsKindLabel(kind), name, obsAxisBar(at, s.span_ms, total, kind), obsHot(s.hot), time, usd, more]);
+  return row + (open ? `<div class="wf-detail${child ? " wf-child" : ""}"><div class="wf-detail-body">${detail.map(x => `<div>${x}</div>`).join("")}</div></div>` : "");
+}
+// A loop's summary row: its model, how many tools it called, its failures,
+// its span on the axis, its time and dollars, and its steps' hotspot labels.
+function obsLoopRow(t, key, n, items, total){
+  const open = OBS.open.has(`${key}|l${n}`);
+  const steps = items.map(([s]) => s);
+  const llm = steps.find(s => s.kind === "llm") || {};
+  const tools = steps.filter(s => s.kind === "tool" || s.kind === "memory").length;
+  const errors = steps.filter(s => s.ok === false).length;
+  const starts = steps.filter(s => s.at_ms != null && s.span_ms != null).map(s => s.at_ms - s.span_ms);
+  const ends = steps.filter(s => s.at_ms != null).map(s => s.at_ms);
+  const from = starts.length ? Math.min(...starts) : null, to = ends.length ? Math.max(...ends) : null;
+  const ms = from != null && to != null ? to - from : null;
+  const usd = steps.reduce((a, s) => a + (s.usd || 0), 0);
+  const hot = [...new Set(steps.flatMap(s => s.hot || []))];
+  const name = [`<code>${esc(llm.model || "")}</code>`, tools ? `${tools} tool${tools === 1 ? "" : "s"}` : "reply",
+                errors ? `${errors} error${errors === 1 ? "" : "s"}` : ""]
+    .filter(Boolean).join(" · ");
+  const head = uiButton(`${open ? "&#9662;" : "&#9656;"} loop ${n}`, {level: "tertiary", size: "sm", onclick: `obsLoopToggle('${key}',${n})`,
+    attrs: `aria-expanded="${open}"`});
+  const row = obsGridRow(`wf-loop${open ? " on" : ""}`, obsRowId(key, "l" + n),
+    [head, name, obsAxisBar(from, ms, total, "llm"), obsHot(hot), ms != null ? "~" + secs(ms) : "", obsUsd(usd), ""]);
+  return row + (open ? items.map(([s, i]) => obsStepRow(t, key, s, i, total, true)).join("") : "");
+}
+function obsWaterfall(t, key, total){
+  // the receipt is bookkeeping: the total row carries what it says
+  const rows = [];
+  t.steps.forEach((s, i) => {
+    if (s.kind === "receipt") return;
+    const last = rows[rows.length - 1];
+    if (s.phase === "loop"){
+      if (last && last.loop === s.loop) last.items.push([s, i]);
+      else rows.push({loop: s.loop, items: [[s, i]]});
+    } else rows.push({step: s, i});
+  });
+  const axis = obsGridRow("wf-axis", "", ["kind", "name",
+    `<span class="wf-axis-ends"><span>0s</span><span>${total ? secs(total) : ""}</span></span>`, "", "time", "$", ""]);
+  const receipt = [...t.steps].reverse().find(s => s.kind === "receipt");
+  const foot = obsGridRow("wf-total", "", ["", `total${receipt && receipt.credits != null ? ` · ${obsNum(receipt.credits)} credits` : ""}`,
+    "", "", secs(t.latency_ms), obsUsd(t.usd) + (t.has_receipt && receipt && receipt.estimate === false ? "" : " est"), ""]);
+  const body = rows.map(r => r.items ? obsLoopRow(t, key, r.loop, r.items, total) : obsStepRow(t, key, r.step, r.i, total, false)).join("");
+  return `<div class="wf" role="table">${axis}${body}${foot}</div>`;
+}
+// The one slot for a turn's badges, under the story line: today the scores
+// spec 012 reads from `score` events; spec 015's pass/fail chips go here too.
+function obsTurnBadges(t){
+  const scores = (t.scores || []).map(x => uiBadge(`${esc(x.source)}${x.name ? " · " + esc(x.name) : ""} · ${esc(String(x.value))}`, "value", x.note || ""));
+  return scores.length ? `<div class="obs-scores">${scores.join(" ")}</div>` : "";
+}
+// The waterfall's head: the story line (each part opens its row), the badges
+// slot, one notice per failure, and Open all / Close all.
+function obsTurnHead(t, key){
+  const steps = t.steps;
+  const parts = (t.story || []).map(p => {
+    const text = esc(p.text) + (p.part === "treg" ? " " + obsUsd(p.usd) : "");
+    if (p.step == null && p.loop == null) return `<span>${text}</span>`;
+    const s = p.step != null ? steps[p.step] : null;
+    const loop = s ? (s.phase === "loop" ? s.loop : 0) : p.loop;
+    return uiButton(text, {level: "tertiary", size: "sm", cls: "wf-part", onclick: `obsJump('${key}',${loop},${p.step != null ? p.step : "null"},false)`});
+  });
+  const tail = [secs(t.latency_ms), obsUsd(t.usd) + (t.has_receipt ? "" : " est")].join(" · ");
+  const story = `<div class="wf-story">${parts.join(`<span class="wf-arrow">&rarr;</span>`)}<span class="wf-tail">· ${tail}</span></div>`;
+  const errors = (t.errors || []).map(e => uiNotice("failed",
+    `<code>${esc(e.tool)}</code>${e.endpoint_id ? ` <code>${esc(e.endpoint_id)}</code>` : ""} ${esc(e.error)}`,
+    `<span class="meta">${e.phase === "loop" ? "loop " + e.loop : e.phase === "after" ? "after the reply" : "before the loop"}</span> `
+      + uiButton("show", {level: "tertiary", size: "sm", onclick: `obsJump('${key}',${e.phase === "loop" ? e.loop : 0},${e.step},true)`}))).join("");
+  const graph = t.graph ? `graph ${esc(t.graph.workflow)}: ${t.graph.path.map(esc).join(" &rarr; ")}${t.graph.ms != null ? " · " + secs(t.graph.ms) : ""} · ` : "";
+  const where = t.turn_id ? `turn <code>${esc(t.turn_id)}</code> · ` : "older trace: no turn id or tool durations; times are measured between lines · ";
+  const tools = t.loops ? `<span class="wf-tools">${uiButton("Open all", {level: "tertiary", size: "sm", onclick: `obsAllLoops('${key}',${t.loops},true)`})}${
+    uiButton("Close all", {level: "tertiary", size: "sm", onclick: `obsAllLoops('${key}',${t.loops},false)`})}</span>` : "";
+  return story + obsTurnBadges(t) + errors + `<div class="wf-meta"><span class="meta">${graph}${where}${obsWhen(t.ts)}</span>${tools}</div>`;
 }
 function obsTurns(d){
   const turns = d.turns || [];
@@ -143,7 +219,7 @@ function obsTurns(d){
   }
   if (!turns.length) return h + uiCard(`<span class="empty">no turns traced yet. Send Waku a message and it appears here.</span>`);
   h += turns.map((t, i) => {
-    const key = t.turn_id || t.ts || String(i);
+    const key = obsTurnKey(t, i);
     const open = OBS.open.has(key);
     const meta = [secs(t.latency_ms), ...(t.scores||[]).map(x => `${esc(x.source)} score ${esc(String(x.value))}`),
                   t.loops ? `${t.loops} loop${t.loops === 1 ? "" : "s"}` : "", `${t.tool_calls} tool${t.tool_calls === 1 ? "" : "s"}`,
@@ -152,13 +228,16 @@ function obsTurns(d){
                   t.gate ? `gate ${esc(t.gate)}` : "", t.unfinished ? "never finished" : ""].filter(Boolean).join(" · ");
     const row = uiRow(`<span class="meta">${obsWhen(t.ts).slice(5,16)}</span>`,
       `${open ? "&#9662;" : "&#9656;"} ${esc(t.user_message || "(no message)")}`, meta,
-      {onclick: `obsToggle('${esc(key).replace(/'/g, "")}')`, cls: open ? "on" : ""});
+      {onclick: `obsToggle('${key}')`, cls: open ? "on" : ""});
     if (!open) return row;
+    // A failed step opens its loop the first time the turn is drawn open, so
+    // a failure is never behind a closed row; after that, the reader decides.
+    if (!OBS.drawn.has(key)){
+      OBS.drawn.add(key);
+      (t.errors || []).forEach(e => { if (e.phase === "loop") OBS.open.add(`${key}|l${e.loop}`); });
+    }
     const total = Math.max(t.latency_ms || 0, ...t.steps.map(s => s.at_ms || 0)) || null;
-    const scores = (t.scores||[]).length
-      ? `<div class="obs-scores">${t.scores.map(x => uiBadge(`${esc(x.source)}${x.name ? " · " + esc(x.name) : ""} · ${esc(String(x.value))}`, "value", x.note || "")).join(" ")}</div>` : "";
-    const head = scores + `<div class="meta">${t.turn_id ? `turn <code>${esc(t.turn_id)}</code> · ` : "older trace: no turn id or tool durations; times are measured between lines · "}${obsWhen(t.ts)}</div>`;
-    return row + uiCard(head + obsWaterfall(t, total), {size: "sm", cls: "obs-wf"});
+    return row + uiCard(obsTurnHead(t, key) + obsWaterfall(t, key, total), {size: "sm", cls: "obs-wf"});
   }).join("");
   return h;
 }
