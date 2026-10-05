@@ -22,6 +22,8 @@ import json
 
 from aiohttp import web
 
+from hosted.core import idle
+
 NOT_FOUND = "That is not a page this service serves."
 WRONG_HOST = "That host is not served here."
 NOT_JSON = "This route takes a JSON body sent from its own page."
@@ -124,21 +126,45 @@ ERROR_PAGE_STYLES = ("design/tokens.css", "design/type.css", "design/fonts.css",
                      "design/controls.css", "login.css")
 
 
+def _page(message: str, *, head: str = "", action: str = "") -> str:
+    links = "".join(f"<link rel=\"stylesheet\" href=\"/auth/static/{name}\">"
+                    for name in ERROR_PAGE_STYLES)
+    return ("<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
+            "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
+            f"{head}<title>waku</title>"
+            "<link rel=\"icon\" href=\"/auth/static/waku-mark.svg\" type=\"image/svg+xml\">"
+            f"{links}</head><body><main>"
+            "<img id=\"mark\" src=\"/auth/static/waku-mark.svg\" alt=\"\" width=\"44\" height=\"44\">"
+            f"<h1>Waku</h1><p id=\"lede\">{html.escape(message)}</p>{action}"
+            "</main></body></html>")
+
+
+# The starting page is a 503 with Retry-After, so a script or a monitor reads
+# "not yet" while a person reads the sentence. It reloads ITSELF, the URL the
+# browser asked for and nothing else: the dashboard, or /embed/chat inside
+# waku.one's frame. Each reload is an ordinary request, so it joins the start
+# already under way (Fleet.admit says "wait") rather than starting another.
+STARTING_STATUS = 503
+
+
+def starting_page(path: str) -> web.Response:
+    """A page navigation whose container is still starting: a sentence, and
+    a reload every idle.STARTING_RELOAD_SECONDS until the container answers."""
+    target = path if path.startswith("/") and not path.startswith("//") else "/"
+    seconds = idle.STARTING_RELOAD_SECONDS
+    head = f"<meta http-equiv=\"refresh\" content=\"{seconds}; url={html.escape(target)}\">"
+    action = f"<p><a href=\"{html.escape(target)}\">Open it now</a></p>"
+    body = _page(idle.STARTING_MESSAGE, head=head, action=action)
+    response = web.Response(status=STARTING_STATUS, text=body, content_type="text/html",
+                            charset="utf-8", headers={"Retry-After": str(seconds)})
+    return harden(response)
+
+
 def html_error(status: int, message: str) -> web.Response:
     """A page navigation that fails gets a sentence and a way back, not a
     JSON body the browser renders as text (spec, "Error shape"). It wears the
     sign-in page's card, so it is recognisably Waku rather than bare HTML."""
-    safe = html.escape(message)
-    links = "".join(f"<link rel=\"stylesheet\" href=\"/auth/static/{name}\">"
-                    for name in ERROR_PAGE_STYLES)
-    body = ("<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
-            "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
-            "<title>waku</title>"
-            "<link rel=\"icon\" href=\"/auth/static/waku-mark.svg\" type=\"image/svg+xml\">"
-            f"{links}</head><body><main>"
-            "<img id=\"mark\" src=\"/auth/static/waku-mark.svg\" alt=\"\" width=\"44\" height=\"44\">"
-            f"<h1>Waku</h1><p id=\"lede\">{safe}</p><p><a href=\"/\">Try again</a></p>"
-            "</main></body></html>")
+    body = _page(message, action="<p><a href=\"/\">Try again</a></p>")
     return harden(web.Response(status=status, text=body,
                                content_type="text/html", charset="utf-8"))
 

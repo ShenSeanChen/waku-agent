@@ -44,7 +44,22 @@ IDLE_SECONDS = 15 * 60
 # How often the gateway's idle loop sweeps (hosted/gateway/sweep.py). The
 # spec's "once a minute".
 SWEEP_SECONDS = 60
-START_TIMEOUT_SECONDS = 15
+# How long a request waits for the spawner to start a container. It was 15
+# seconds, and the first open after `upgrade.sh --now` or an idle stop kept
+# showing "taking too long to start" while the start was still on its way:
+# the spawner provisions (a container run to completion) and then creates and
+# starts the tenant's, and on a cold page cache that passed 15 seconds. The
+# wait cancelled the gateway's side of a start the spawner went on to finish,
+# and the next open started it all over again. 60 seconds is that sequence's
+# worst case with room to spare; spawner_client.START_ASK_TIMEOUT stays above it.
+START_TIMEOUT_SECONDS = 60
+# After the spawner answers, the container's dashboard is still importing and
+# has not bound its port: a connection in that window is refused. The gateway
+# waits up to this long for it to accept one before it gives up on the request.
+READY_TIMEOUT_SECONDS = 30
+# A page navigation that outlasts both waits gets a page that says the
+# assistant is starting and reloads itself this often, never a dead end.
+STARTING_RELOAD_SECONDS = 3
 # Every request forwarded to a container that is not a turn or another stream
 # gets this, so a query that never returns cannot hold a container awake.
 FORWARD_TIMEOUT_SECONDS = 120
@@ -56,6 +71,7 @@ DISK_WARNING_FRACTION = 0.80
 
 CAPACITY_MESSAGE = "At capacity, try again shortly."
 START_TIMEOUT_MESSAGE = "Your assistant is taking too long to start. Try again."
+STARTING_MESSAGE = "Your assistant is starting. This page opens it as soon as it is ready."
 MAINTENANCE_MESSAGE = "Your assistant is under maintenance. Try again in a few minutes."
 
 RUNNING = "running"

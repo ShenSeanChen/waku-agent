@@ -242,7 +242,8 @@ def test_the_disk_warning_fires_at_eighty_percent():
 
 def test_the_timeouts_are_the_specs_timeouts():
     assert idle.IDLE_SECONDS == 15 * 60
-    assert idle.START_TIMEOUT_SECONDS == 15
+    assert idle.START_TIMEOUT_SECONDS == 60
+    assert idle.READY_TIMEOUT_SECONDS == 30
     assert idle.FORWARD_TIMEOUT_SECONDS == 120
     assert idle.SESSION_CACHE_SECONDS == 60
 
