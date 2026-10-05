@@ -1072,8 +1072,10 @@ def last_run(report: dict | None, history: list) -> dict | None:
 
 def payload(home: Path, *, provider: str = "", model: str = "", window: str = "7d",
             hosted: bool = False, release_file: Path | None = None,
-            now: datetime | None = None) -> dict:
-    """Everything the Observability page draws, in one answer."""
+            now: datetime | None = None, judge_model: str = "") -> dict:
+    """Everything the Observability page draws, in one answer. `judge_model`
+    is the small model the "Judge this turn" button would call (spec 015);
+    each listed turn says what that call should cost."""
     from waku.ops import turn_evals  # noqa: PLC0415 -- turn_evals imports this module
 
     window = window if window in WINDOWS else "7d"
@@ -1097,7 +1099,8 @@ def payload(home: Path, *, provider: str = "", model: str = "", window: str = "7
         "trace_files": len(files),
         "trace_file": files[-1] if files else None,
         "trace_errors": errors,
-        "turns": all_turns[::-1][:MAX_TURNS],
+        "turns": [{**built, "judge_offer": turn_evals.judge_offer(raw, provider, judge_model)}
+                  for raw, built in list(zip(grouped, all_turns, strict=True))[::-1][:MAX_TURNS]],
         "tools": tools,
         "memory": memory_per_turn(all_turns[::-1][:MAX_TURNS]),
         "spend": spend(home, events, servers),

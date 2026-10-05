@@ -240,7 +240,7 @@ def test_a_v1_trace_gets_the_checks_and_v2_only_checks_are_na():
 # ---- 9. Your turns on the Evals page ----------------------------------------
 
 def _home(tmp_path, names):
-    (tmp_path / "traces").mkdir()
+    (tmp_path / "traces").mkdir(parents=True)
     lines = [line for n in names for line in (FIXTURES / n).read_text(encoding="utf-8").splitlines()]
     (tmp_path / "traces" / "2026-10-05.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8")
     return tmp_path
@@ -284,3 +284,146 @@ def test_the_cli_routes_evals_turns(monkeypatch, capsys):
     with pytest.raises(SystemExit) as done:
         entry.main()
     assert done.value.code == 0 and seen == [["--window", "all"]]
+
+
+# ---- 10, 11. the AI judge, on demand (group B) -------------------------------
+
+class _FakeMessages:
+    def __init__(self, answer):
+        self.answer, self.calls = answer, []
+
+    def create(self, **kwargs):
+        from types import SimpleNamespace
+
+        self.calls.append(kwargs)
+        return SimpleNamespace(content=[SimpleNamespace(type="text", text=self.answer)],
+                               usage=SimpleNamespace(input_tokens=1200, output_tokens=60))
+
+
+class _FakeClient:
+    def __init__(self, answer='{"addresses_question": 9, "grounded": 3, "reason": "says $0.00; Tomba charged"}'):
+        self.messages = _FakeMessages(answer)
+
+
+@pytest.fixture(autouse=False)
+def judged_home(tmp_path):
+    te._RECENT.clear()
+    return _home(tmp_path, [REHEARSAL])
+
+
+TID = "t_5e1f0c2a9b7d4e36"
+
+
+def test_the_judge_prompt_comes_from_the_stored_turn_only(judged_home):
+    turn, _ = te.find_turn(judged_home, TID)
+    prompt = te.judge_prompt(turn)
+    assert "The research cost $0.00" in prompt and "tomba.companies.similar" in prompt
+    assert "research with treg the competitors of mem0 and waku.one" in prompt
+    outputs = prompt.split("each cut to 800 characters):")[1]
+    assert all(len(line) <= te.OUTPUT_CHARS + 40 for line in outputs.splitlines() if line.startswith("["))
+
+
+def test_the_judge_writes_one_score_event_with_cost_and_model(judged_home):
+    client = _FakeClient()
+    event = te.judge_turn(judged_home, TID, client, "claude-haiku-4-5-20251001", "anthropic", now=1e9)
+    assert len(client.messages.calls) == 1 and client.messages.calls[0]["max_tokens"] == 300
+    assert event["value"] == 0.3 and event["source"] == "judge" and event["check"] == "answer_grounded"
+    assert event["judge"] == "claude-haiku-4-5-20251001"
+    assert event["cost_usd"] == obs.llm_cost("anthropic", "claude-haiku-4-5-20251001", {"in": 1200, "out": 60})
+    lines = [json.loads(x) for p in (judged_home / "traces").glob("*.jsonl")
+             for x in p.read_text().splitlines()]
+    assert [e for e in lines if e["type"] == "score"] == [{**event, "ts": lines[-1]["ts"]}]
+    ledger = [json.loads(x) for x in (judged_home / "usage.jsonl").read_text().splitlines()]
+    assert ledger[0]["kind"] == "judge" and ledger[0]["in"] == 1200
+    # the page shows the judge's chip, with the model named in its note
+    turn = obs.payload(judged_home, window="all", now=NOW)["turns"][0]
+    judge = [s for s in turn["scores"] if s["source"] == "judge"]
+    assert judge[0]["value"] == 0.3 and judge[0]["judge"] == "claude-haiku-4-5-20251001"
+    assert "judged by claude-haiku-4-5-20251001" in judge[0]["note"]
+
+
+def test_the_judge_refuses_an_unknown_turn_and_a_repeat_within_a_minute(judged_home):
+    with pytest.raises(te.JudgeRefused):
+        te.judge_turn(judged_home, "t_ffffffffffffffff", _FakeClient(), "m", "anthropic")
+    with pytest.raises(te.JudgeRefused):
+        te.judge_turn(judged_home, "../etc/passwd", _FakeClient(), "m", "anthropic")
+    te.judge_turn(judged_home, TID, _FakeClient(), "m", "anthropic")
+    with pytest.raises(te.JudgeRefused, match="less than a minute"):
+        te.judge_turn(judged_home, TID, _FakeClient(), "m", "anthropic")
+    # a restarted dashboard still refuses: the score's own timestamp says so
+    te._RECENT.clear()
+    with pytest.raises(te.JudgeRefused, match="less than a minute"):
+        te.judge_turn(judged_home, TID, _FakeClient(), "m", "anthropic")
+
+
+def test_an_unreadable_verdict_writes_no_score(judged_home):
+    with pytest.raises(te.JudgeRefused, match="readable score"):
+        te.judge_turn(judged_home, TID, _FakeClient("I think it is fine."), "m", "anthropic")
+    assert te.parse_verdict('{"addresses_question": 8, "grounded": 9, "reason": "ok"}')["value"] == 0.8
+
+
+def test_the_newest_judge_score_wins(judged_home):
+    te.judge_turn(judged_home, TID, _FakeClient(), "m", "anthropic", now=1e9)
+    te._RECENT.clear()
+    with open(next((judged_home / "traces").glob("*.jsonl")), "a") as f:
+        f.write(json.dumps({"type": "score", "turn_id": TID, "source": "judge", "name": "answer_grounded",
+                            "value": 0.9, "note": "newer", "ts": "2999-01-01T00:00:00+00:00"}) + "\n")
+    turn = obs.payload(judged_home, window="all", now=NOW)["turns"][0]
+    assert [s["value"] for s in turn["scores"] if s["source"] == "judge"] == [0.9]
+
+
+def test_the_button_estimate_is_pricings_price_for_the_prompt(judged_home):
+    turn, _ = te.find_turn(judged_home, TID)
+    offer = te.judge_offer(turn, "anthropic", "claude-haiku-4-5-20251001")
+    p_in, p_out = 1.0, 5.0   # pricing.MODEL_PRICING["claude-haiku-4-5-20251001"]
+    assert offer["usd"] == round(len(te.judge_prompt(turn)) / 4 / 1e6 * p_in + 300 / 1e6 * p_out, 6)
+    payload_turn = obs.payload(judged_home, window="all", now=NOW, provider="anthropic",
+                               judge_model="claude-haiku-4-5-20251001")["turns"][0]
+    assert payload_turn["judge_offer"] == offer
+    assert te.judge_offer({**turn, "turn_id": ""}, "anthropic", "m") is None
+
+
+def test_on_hosted_the_judge_is_the_platform_small_model_tagged_with_its_own_turn(monkeypatch, tmp_path):
+    from waku.config import Settings
+    from waku.loop.models import TurnTagged
+
+    monkeypatch.setenv("WAKU_PLATFORM_BASE_URL", "http://proxy.invalid")
+    monkeypatch.setenv("WAKU_PLATFORM_TOKEN", "platform-token-for-test")
+    monkeypatch.delenv("WAKU_PLATFORM_SMALL_MODEL", raising=False)
+    monkeypatch.delenv("WAKU_SMALL_MODEL", raising=False)
+    client, model, provider = te.judge_client(Settings(home=tmp_path, provider="waku-platform"))
+    assert isinstance(client, TurnTagged) and provider == "waku-platform"
+    assert model == "claude-haiku-4-5-20251001"
+
+    # the call carries an X-Waku-Turn id of its own, and its exact charge wins
+    te._RECENT.clear()
+    home = _home(tmp_path / "h", [REHEARSAL])
+    inner = _FakeClient()
+    tagged = TurnTagged(inner)
+    tagged.charges = lambda turn_id: {"model_usd": 0.0021, "calls": 1, "credits": 53}
+    event = te.judge_turn(home, TID, tagged, model, provider)
+    header = inner.messages.calls[0]["extra_headers"]["X-Waku-Turn"]
+    assert header.startswith("j_") and header != TID and tagged.turn_id == ""
+    assert event["cost_usd"] == 0.0021
+
+
+def test_the_route_is_pinned_and_passes_on_hosted(monkeypatch, tmp_path):
+    import importlib.util
+
+    from hosted.core import policy
+    from waku.ops import dashboard
+
+    spec = importlib.util.spec_from_file_location(
+        "pins", Path(__file__).resolve().parent / "test_dashboard_routes.py")
+    pins = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(pins)
+    assert "/api/turn-evals/judge" in pins.PINNED_POST
+    assert policy.DECISIONS["/api/turn-evals/judge"] == policy.PASS
+    assert policy.decide("POST", "/api/turn-evals/judge", {"turn_id": TID}).verdict == "pass"
+    # the route reads only the turn id: an unknown one is refused before any call
+    monkeypatch.setenv("WAKU_HOME", str(tmp_path))
+    monkeypatch.setenv("WAKU_PROVIDER", "anthropic")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "placeholder-for-test")
+    te._RECENT.clear()
+    out = dashboard.judge_turn({"turn_id": "t_0123456789abcdef", "reply": "injected"})
+    assert out == {"error": "No turn with that id in this home's traces."}

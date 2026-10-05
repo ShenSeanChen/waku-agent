@@ -59,6 +59,23 @@ the newest failing turn. In a terminal, `waku evals turns --window 7d` prints
 the same table and every failing turn. A check grades a finished turn: it
 never stops or rewrites a reply, and a failed check is not shown in the chat.
 
+One more check runs only when you ask. "Judge this turn" in a turn's
+waterfall sends that stored turn's message, reply and tool outputs to the
+small model of the provider you use now (Haiku on the hosted free tier) and
+asks whether the reply answers the question and stays grounded in the tool
+outputs. The button shows the estimated cost first ("about $0.002 with
+claude-haiku-4-5"). The answer is written once to the trace as a `score`
+event (`answer_grounded`, 0 to 1, passing at 0.7) with the model that judged
+and what the call cost, and the chip reads "judge · answer grounded 0.3".
+On the hosted free tier the call goes through the metering proxy, so it is
+charged in Waku Memory credits like any model call; with your own key it is
+charged to that key. The route (`POST /api/turn-evals/judge`) reads the turn
+from your own traces, makes one call of at most 300 output tokens, and
+refuses a second judge of the same turn within 60 seconds. The judge is often
+the same model family as the agent, which favours its own answers, so the
+note names the model. `evals/judge/test_turn_judge.py` checks the judge
+itself in `make gate`.
+
 ## Catching bugs
 
 When you catch a bug by using the thing live, you fix it AND add a

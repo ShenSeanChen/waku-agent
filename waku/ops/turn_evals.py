@@ -30,12 +30,17 @@ the person already uses for every turn, and only when they press the button.
 
 from __future__ import annotations
 
+import json
 import os
 import re
-from datetime import datetime
+import secrets
+import threading
+import time
+from datetime import UTC, datetime
 from pathlib import Path
 
 from waku.ops import observability as obs
+from waku.ops.pricing import price_for
 
 PASS, FAIL, NA = 1, 0, None
 DEFAULT_BUDGET_USD = 1.00
@@ -504,6 +509,200 @@ def your_turns(turns: list[dict], window: str, now: datetime | None = None) -> d
 # ---------------------------------------------------------------------------
 # The AI judge, on demand
 # ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# The AI judge, on demand
+# ---------------------------------------------------------------------------
+
+JUDGE_CHECK = "answer_grounded"
+JUDGE_MAX_TOKENS = 300
+JUDGE_REPEAT_SECONDS = 60
+REPLY_CHARS = 4000
+OUTPUT_CHARS = 800
+OUTPUTS_CHARS = 6000
+
+JUDGE_RUBRIC = """You are a strict, fair judge grading one turn of an AI assistant.
+
+The person asked:
+{message}
+
+The assistant replied:
+{reply}
+
+The tool outputs the assistant saw this turn (each cut to {output_chars} characters):
+{outputs}
+
+Score two things from 0 to 10:
+- addresses_question: does the reply answer what the person asked?
+- grounded: is every fact, number and claim in the reply supported by the tool
+  outputs above or the person's message? A claim the outputs contradict scores 0-3.
+
+Reply with ONLY a JSON object, no prose:
+{{"addresses_question": <int 0-10>, "grounded": <int 0-10>, "reason": "<one short sentence>"}}"""
+
+
+def judge_prompt(turn: dict) -> str:
+    """The judge's prompt, built from the stored turn only: its message, the
+    first 4,000 characters of its reply, and its tool outputs, each cut to
+    800 characters and together to 6,000."""
+    outputs, used = [], 0
+    for ev in turn.get("events") or []:
+        if ev.get("type") != "tool" or used >= OUTPUTS_CHARS:
+            continue
+        text = obs.redact(str(ev.get("output") or ""))[:OUTPUT_CHARS]
+        text = text[:OUTPUTS_CHARS - used]
+        used += len(text)
+        outputs.append(f"[{ev.get('tool') or 'tool'}] {text}")
+    return JUDGE_RUBRIC.format(message=str(turn.get("user_message") or "")[:2000],
+                               reply=str(turn.get("reply") or "")[:REPLY_CHARS],
+                               output_chars=OUTPUT_CHARS,
+                               outputs="\n".join(outputs) or "(no tools ran this turn)")
+
+
+def judge_estimate(prompt: str, provider: str, model: str) -> float:
+    """What one judge call should cost, from `pricing.py`: the prompt's
+    characters divided by 4 as input tokens, plus 300 output tokens."""
+    p_in, p_out = price_for(provider or "", model or "")
+    return round(len(prompt) / 4 / 1e6 * p_in + JUDGE_MAX_TOKENS / 1e6 * p_out, 6)
+
+
+def judge_offer(turn: dict, provider: str, model: str) -> dict | None:
+    """What the "Judge this turn" button says before it is pressed: the
+    model that would judge and its estimated cost. None for a turn the
+    route would refuse (no turn id, no reply)."""
+    if not turn.get("turn_id") or not str(turn.get("reply") or "").strip() or not model:
+        return None
+    return {"model": model, "usd": judge_estimate(judge_prompt(turn), provider, model)}
+
+
+def parse_verdict(text: str) -> dict | None:
+    """{"value", "reason", "addresses_question", "grounded"} from the judge's
+    answer, or None when it holds no readable JSON. The score is the lower
+    of the two marks divided by 10."""
+    try:
+        obj = json.loads(text[text.index("{"): text.rindex("}") + 1])
+        a = max(0, min(10, int(obj["addresses_question"])))
+        g = max(0, min(10, int(obj["grounded"])))
+    except (ValueError, KeyError, TypeError):
+        return None
+    return {"value": round(min(a, g) / 10, 2), "reason": str(obj.get("reason") or "")[:200],
+            "addresses_question": a, "grounded": g}
+
+
+def judge_client(settings):
+    """(client, model, provider) for the judge: the small model of the
+    provider this home uses now. On the hosted free tier that is the
+    `waku-platform` row, so the call goes through the metering proxy and is
+    charged in Waku Memory credits; with a person's own key it is charged to
+    that key."""
+    from dataclasses import replace  # noqa: PLC0415
+
+    from waku.loop.models import get_client  # noqa: PLC0415
+
+    copy = replace(settings)
+    client = get_client(copy)   # fills in the provider's default ids
+    model = copy.small_model or copy.model
+    return client, model, copy.provider
+
+
+class JudgeRefused(Exception):
+    """The judge route's answer for a turn it will not judge."""
+
+
+_RECENT: dict[str, float] = {}
+_RECENT_LOCK = threading.Lock()
+
+
+def find_turn(home: Path, turn_id: str) -> tuple[dict | None, list[dict]]:
+    """The grouped turn with this id from this home's traces, and every
+    judge score already written for it."""
+    events, _, _ = obs.read_events(home)
+    turn = next((t for t in obs.group_turns(events) if t.get("turn_id") == turn_id), None)
+    judged = [e for e in events if e.get("type") == "score" and e.get("turn_id") == turn_id
+              and e.get("source") == "judge"]
+    return turn, judged
+
+
+def _claim(turn_id: str, judged: list[dict], now: float) -> None:
+    """Refuse a second judge of the same turn within 60 seconds: one already
+    running or finished in this process, or a score written that recently."""
+    newest = max((obs._ts(e.get("ts")) for e in judged if obs._ts(e.get("ts"))), default=None)
+    if newest is not None and now - newest.timestamp() < JUDGE_REPEAT_SECONDS:
+        raise JudgeRefused("This turn was judged less than a minute ago.")
+    with _RECENT_LOCK:
+        if now - _RECENT.get(turn_id, 0) < JUDGE_REPEAT_SECONDS:
+            raise JudgeRefused("This turn was judged less than a minute ago.")
+        _RECENT[turn_id] = now
+
+
+def judge_turn(home: Path, turn_id: str, client, model: str, provider: str,
+               now: float | None = None) -> dict:
+    """Judge one stored turn and write the result as one `score` trace event
+    (source `judge`, joined by `turn_id`), with the model that judged and
+    what the call cost. Raises JudgeRefused for an unknown turn, a turn with
+    no reply, or a repeat within 60 seconds."""
+    if not isinstance(turn_id, str) or not re.fullmatch(r"t_[0-9a-f]{4,32}", turn_id):
+        raise JudgeRefused("No turn with that id in this home's traces.")
+    turn, judged = find_turn(home, turn_id)
+    if turn is None:
+        raise JudgeRefused("No turn with that id in this home's traces.")
+    if not str(turn.get("reply") or "").strip():
+        raise JudgeRefused("This turn has no reply to judge.")
+    now = time.time() if now is None else now
+    _claim(turn_id, judged, now)
+    prompt = judge_prompt(turn)
+    # The judge's own id, so the metering proxy can answer this call's exact
+    # charge (GET /v1/turns/<id>/charges) apart from the turn it judges.
+    call_id = "j_" + secrets.token_hex(8)
+    if hasattr(client, "turn_id"):
+        client.turn_id = call_id
+    try:
+        resp = client.messages.create(model=model, max_tokens=JUDGE_MAX_TOKENS,
+                                      messages=[{"role": "user", "content": prompt}])
+    except Exception as exc:
+        with _RECENT_LOCK:
+            _RECENT.pop(turn_id, None)   # a failed call may be retried at once
+        raise JudgeRefused(f"The judge could not be reached: {type(exc).__name__}.") from exc
+    finally:
+        if hasattr(client, "turn_id"):
+            client.turn_id = ""
+    text = "".join(getattr(b, "text", "") for b in getattr(resp, "content", []) or []
+                   if getattr(b, "type", "") == "text")
+    usage = getattr(resp, "usage", None)
+    n_in, n_out = int(getattr(usage, "input_tokens", 0) or 0), int(getattr(usage, "output_tokens", 0) or 0)
+    cost = obs.llm_cost(provider, model, {"in": n_in, "out": n_out})
+    charged = client.charges(call_id) if hasattr(client, "charges") else None
+    if isinstance(charged, dict) and isinstance(charged.get("model_usd"), int | float):
+        cost = round(float(charged["model_usd"]), 6)
+    _record_usage(home, provider, model, call_id, n_in, n_out)
+    verdict = parse_verdict(text)
+    if verdict is None:
+        raise JudgeRefused(f"The judge answered without a readable score ({money(cost)} spent).")
+    event = {"type": "score", "turn_id": turn_id, "source": "judge", "name": JUDGE_CHECK,
+             "check": JUDGE_CHECK, "value": verdict["value"], "judge": model, "cost_usd": cost,
+             "note": f"{verdict['reason']} (judged by {model}, {money(cost)})",
+             "addresses_question": verdict["addresses_question"], "grounded": verdict["grounded"]}
+    write_score(home, event)
+    return event
+
+
+def write_score(home: Path, event: dict) -> None:
+    """Append one `score` event to today's trace file, as the tracer writes lines."""
+    path = home / "traces" / f"{datetime.now().strftime('%Y-%m-%d')}.jsonl"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    record = {**event, "ts": datetime.now(UTC).isoformat(timespec="milliseconds")}
+    with path.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(obs.redact(record), ensure_ascii=False, default=str) + "\n")
+
+
+def _record_usage(home: Path, provider: str, model: str, call_id: str, n_in: int, n_out: int) -> None:
+    """The judge's tokens in the spend ledger (usage.jsonl), as kind
+    "judge", so the Spend tab counts every model call this home paid for."""
+    record = {"ts": datetime.now(UTC).isoformat(timespec="milliseconds"), "provider": provider,
+              "model": model, "kind": "judge", "turn_id": call_id, "in": n_in, "out": n_out}
+    with (home / "usage.jsonl").open("a", encoding="utf-8") as f:
+        f.write(json.dumps(record) + "\n")
+
 
 # ---------------------------------------------------------------------------
 # waku evals turns

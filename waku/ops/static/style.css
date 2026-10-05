@@ -1122,3 +1122,4 @@ main h3{font-family:var(--face-mono);font-size:var(--text-xs);color:var(--text-f
    button around a badge, so a tap writes its note out under the chips. */
 .btn-tertiary.btn-sm.obs-chip{padding:0}
 .obs-notes{margin:0 0 var(--space-2);overflow-wrap:anywhere}
+.btn.obs-judge{white-space:normal;text-align:left;line-height:var(--leading-snug)}
