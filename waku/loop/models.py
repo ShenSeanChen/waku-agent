@@ -402,7 +402,8 @@ class OpenAICompatClient:
         self._client = openai.OpenAI(api_key=api_key, base_url=base_url, timeout=timeout)
         self.messages = SimpleNamespace(create=self._create, stream=self._stream)
 
-    def _to_openai(self, *, model, messages, max_tokens, system=None, tools=None) -> dict:
+    def _to_openai(self, *, model, messages, max_tokens, system=None, tools=None,
+                   tool_choice=None) -> dict:
         oai_messages = []
         if system:
             oai_messages.append({"role": "system", "content": system})
@@ -446,6 +447,10 @@ class OpenAICompatClient:
                               "parameters": t["input_schema"]}}
                 for t in tools
             ]
+            # Anthropic's {"type": "none"} is OpenAI's "none": the tools are
+            # described but may not be called (the loop's final answer).
+            if tool_choice and tool_choice.get("type") == "none":
+                kwargs["tool_choice"] = "none"
         return kwargs
 
     def _call(self, kwargs: dict, **extra):
@@ -465,9 +470,10 @@ class OpenAICompatClient:
             k["max_tokens"] = k.pop("max_completion_tokens", None)
             return self._client.chat.completions.create(**k, **extra)
 
-    def _create(self, *, model, messages, max_tokens, system=None, tools=None):
+    def _create(self, *, model, messages, max_tokens, system=None, tools=None, tool_choice=None):
         response = self._call(self._to_openai(
-            model=model, messages=messages, max_tokens=max_tokens, system=system, tools=tools))
+            model=model, messages=messages, max_tokens=max_tokens, system=system, tools=tools,
+            tool_choice=tool_choice))
         if not getattr(response, "choices", None):
             # some OpenAI-compatible endpoints (e.g. OpenRouter on a rate
             # limit) return 200 with an error body and no choices: surface

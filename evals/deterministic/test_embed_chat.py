@@ -403,6 +403,22 @@ def test_the_used_list_renders_what_the_brain_already_knew():
     assert "Used from memory" in got["reopened"]
 
 
+@needs_node
+def test_a_used_report_reads_as_its_title_and_summary_line():
+    """brain.read_first sends a report's title and first Summary line, or
+    nothing it could read; the card never dangles a colon."""
+    used = [{"id": "rep-1", "text": "Letta raised a $10M seed.", "created_at": "2026-10-05",
+             "report": True, "title": "Funding of Mem0's competitors"},
+            {"id": "rep-2", "text": "", "created_at": "2026-10-04", "report": True, "title": ""},
+            {"id": "f-1", "text": "", "created_at": "2026-10-03", "report": False, "title": ""}]
+    got = _node({"files": CHAT_FILES, "referrer": "", "origins": DEFAULT, "framed": False,
+                 "events": [], "state": 200}, f"""
+    const label = vm.runInContext("usedLabel", ctx);
+    console.log(JSON.stringify({{labels: {json.dumps(used)}.map(label)}}));""")
+    assert got["labels"] == ['Report "Funding of Mem0\'s competitors": Letta raised a $10M seed.',
+                             "Report", "Memory"]
+
+
 # --- spec 040 P2 (waku-memory), the frame's half: waku.one asks for a new chat -------
 
 NEW_CHAT = {"source": "waku-console", "type": "new-chat"}

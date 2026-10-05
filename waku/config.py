@@ -194,7 +194,11 @@ class Settings:
     home: Path = field(default_factory=lambda: resolve_home().path)
 
     # --- Loop guardrails
-    max_iterations: int = field(default_factory=lambda: int(os.getenv("WAKU_MAX_ITERATIONS", "10")))
+    # 15, not 10: a research turn that fails a lookup or two and then fetches
+    # per item (five videos' comments) needs more than ten steps. Hitting the
+    # limit no longer loses the turn either way: the loop makes one tools-off
+    # call for an answer from what it gathered (waku/loop/agent.py).
+    max_iterations: int = field(default_factory=lambda: int(os.getenv("WAKU_MAX_ITERATIONS", "15")))
     # Headroom matters for REASONING models (kimi-k3, gpt-5.x, gemini-*-pro):
     # they spend output tokens thinking before the answer, so a low cap makes
     # them hit stop_reason=max_tokens mid-thought and return an EMPTY reply

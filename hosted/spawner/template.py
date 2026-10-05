@@ -35,6 +35,8 @@ from hosted.core.tenant import (
 )
 
 DASHBOARD_PORT = 7777
+# The most model calls with tools one tenant turn may make (WAKU_MAX_ITERATIONS).
+TENANT_MAX_ITERATIONS = 15
 
 # Spec, the container template table. Every number is the spec's, spelled with
 # its unit beside it so the next reader does not have to divide.
@@ -72,7 +74,7 @@ KIND_INSPECT = "inspect"
 # `start` does to itself, every time, on its way to starting the container --
 # so labelling it KIND_TASK makes a tenant's own start refuse a concurrent or
 # retried start of the same tenant with {"code": "busy"}. The spec's start path
-# retries: "a start that does not answer within 15 seconds returns 'Your
+# retries: "a start that does not answer within 60 seconds returns 'Your
 # assistant is taking too long to start. Try again.'", and a container that
 # refuses the connection is "looked up again ... and only if it is gone does
 # the gateway start it once more". Both retries would land on Busy, and the
@@ -329,6 +331,11 @@ def tenant_container(config: SpawnerConfig, *, tenant_id: str, project_id: int,
             f"WAKU_DASHBOARD_PORT={DASHBOARD_PORT}",
             f"TZ={timezone}",
             "HOME=/tmp",
+            # The loop's step limit, pinned here rather than left to stock
+            # waku's default, so the platform decides what a tenant's turn
+            # may spend. A research turn with a failed lookup or two needs
+            # more than ten; at the limit the loop still answers, tools off.
+            f"WAKU_MAX_ITERATIONS={TENANT_MAX_ITERATIONS}",
             # The free tier's four, present only when there IS one. Stock
             # waku decides whether to offer the row by whether these are set
             # (waku/integrations.py, the hidden_unless_env row), so omitting

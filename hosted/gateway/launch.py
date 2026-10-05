@@ -56,6 +56,12 @@ class StartFailed(RuntimeError):
     """The container did not start. The caller sends the spec's sentence."""
 
 
+class StartTimedOut(StartFailed):
+    """The start outlasted idle.START_TIMEOUT_SECONDS. It may still finish: a
+    page navigation is shown the starting page, which reloads, rather than
+    the sentence."""
+
+
 class Launcher:
     def __init__(self, *, store: ControlStore, spawner: SpawnerClient,
                  fleet: idle.Fleet, now: Callable[[], float] = time.time) -> None:
@@ -233,7 +239,12 @@ class Launcher:
         except SpawnerBusy as exc:
             self._forget_running(tenant.id)
             raise InMaintenance(idle.MAINTENANCE_MESSAGE) from exc
-        except (TimeoutError, SpawnerError, OSError) as exc:
+        except TimeoutError as exc:
+            self._forget_running(tenant.id)
+            _LOG.warning("start of tenant=%s took longer than %ss",
+                         tenant.id, idle.START_TIMEOUT_SECONDS)
+            raise StartTimedOut(idle.START_TIMEOUT_MESSAGE) from exc
+        except (SpawnerError, OSError) as exc:
             self._forget_running(tenant.id)
             _LOG.warning("start of tenant=%s failed: %s", tenant.id, exc)
             raise StartFailed(idle.START_TIMEOUT_MESSAGE) from exc

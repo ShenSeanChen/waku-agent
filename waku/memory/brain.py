@@ -109,23 +109,67 @@ def _is_report(entry: dict) -> bool:
     return body.lstrip().startswith(MARKER) or entry.get("kind") == REPORT_KIND
 
 
-def _title(entry: dict) -> str:
+def _raw(entry: dict) -> str:
+    return str(entry.get("body") or entry.get("snippet") or "")
+
+
+def _title(body: str) -> str:
     """A report's `# ` line, when the body that came back still has it."""
-    for line in str(entry.get("body") or "").splitlines():
+    for line in body.splitlines():
         if line.startswith("# "):
             return line[2:].strip()
     return ""
 
 
+def _first_summary_line(body: str) -> str:
+    """The first bullet under a report's `## Summary`, when the body that
+    came back still has that section."""
+    inside = False
+    for line in body.splitlines():
+        if line.startswith("## "):
+            inside = line[3:].strip().lower() == "summary"
+        elif inside and line.lstrip().startswith(("- ", "* ")):
+            return line.lstrip()[2:].strip()
+    return ""
+
+
+# A search snippet is a window into a body, and for a report the window often
+# lands in its Sources or metrics block: `cognee.ai\"}, "url": "https://...`.
+# Prose keeps Waku Memory's <<match>> marks; these go.
+_FENCE = re.compile(r"```.*?```", re.DOTALL)
+_LONE_FENCE = re.compile(r"```\w*")
+_COMMENT = re.compile(r"<!--.*?-->", re.DOTALL)
+_JSON_PAIR = re.compile(
+    r"\\?\"?[\w$.\- ]*\\?\"\s*:\s*(?:\\?\"(?:[^\"\\]|\\.)*?\\?\"|-?[\d.]+|true|false|null)")
+_JSON_DEBRIS = re.compile(r"\\?\"\s*[}\]]+|[{}\[\]]+|\\\"|(?<=\s),(?=\s)|^\s*[,:]+")
+
+
+def _prose(text: str) -> str:
+    """`text` without fenced code, comments (the report marker among them)
+    and JSON fragments, on one line."""
+    text = _LONE_FENCE.sub(" ", _FENCE.sub(" ", _COMMENT.sub(" ", text)))
+    text = _JSON_DEBRIS.sub(" ", _JSON_PAIR.sub(" ", text))
+    text = re.sub(r"\s+([,;.])", r"\1", " ".join(text.split()))
+    text = re.sub(r"[,;](?:\s*[,;])+", ",", text)
+    return text.strip(" ,;:")
+
+
+def _clip(text: str) -> str:
+    return text if len(text) <= TEXT_CHARS else text[:TEXT_CHARS - 1] + "…"
+
+
 def _text(entry: dict) -> str:
-    body = str(entry.get("body") or entry.get("snippet") or "").replace(MARKER, "").strip()
-    body = " ".join(body.split())
-    return body if len(body) <= TEXT_CHARS else body[:TEXT_CHARS - 1] + "…"
+    """What a memory says, for the Used list and the prompt: a fact's prose,
+    and a report's first Summary line (its title is shown beside it)."""
+    raw = _raw(entry)
+    if _is_report(entry):
+        return _clip(_first_summary_line(raw))
+    return _clip(_prose(raw))
 
 
-def _report_digest(get: Get, memory_id: str) -> str:
-    """One earlier report's digest, read with memory.get, or "" when the read
-    failed or the memory is not a report."""
+def _report_body(get: Get, memory_id: str) -> str:
+    """One earlier report's whole body, read with memory.get, or "" when the
+    read failed or the memory is not a report."""
     try:
         answer = json.loads(get(memory_id))
     except Exception as exc:
@@ -136,7 +180,7 @@ def _report_digest(get: Get, memory_id: str) -> str:
         return ""
     memory = answer.get("memory") if isinstance(answer.get("memory"), dict) else answer
     body = str(memory.get("body") or "")
-    return digest(body) if body.lstrip().startswith(MARKER) else ""
+    return body if body.lstrip().startswith(MARKER) else ""
 
 
 def read_first(message: str, search: Search | None, get: Get | None = None) -> ReadFirst:
@@ -168,12 +212,16 @@ def read_first(message: str, search: Search | None, get: Get | None = None) -> R
             out.used.append({"id": entry["id"], "text": _text(entry),
                              "created_at": str(entry.get("created_at") or "")[:10],
                              "kind": entry.get("kind"), "report": report,
-                             "title": _title(entry) if report else ""})
+                             "title": _title(_raw(entry)) if report else ""})
     if get is not None:
         for u in [u for u in out.used if u["report"]][:REPORT_LIMIT]:
-            found = _report_digest(get, u["id"])
-            if found:
-                out.digests[u["id"]] = found
+            body = _report_body(get, u["id"])
+            if body:
+                # The whole report: its own title and first Summary line, in
+                # place of whatever window of it the search snippet showed.
+                out.digests[u["id"]] = digest(body)
+                u["title"] = _title(body) or u["title"]
+                u["text"] = _clip(_first_summary_line(body)) or u["text"]
     out.context = context(out.used, out.digests)
     return out
 

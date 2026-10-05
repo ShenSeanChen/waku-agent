@@ -397,7 +397,8 @@ def _step(ev: dict, servers, provider: str, model: str) -> dict | None:
             usd = llm_cost(ev.get("provider") or provider, call_model, usage)
         return {**base, "call": ev.get("kind") or "loop", "model": call_model,
                 "in": int(usage.get("in") or 0), "out": int(usage.get("out") or 0),
-                "usd": round(float(usd), 6), "stop_reason": ev.get("stop_reason")}
+                "usd": round(float(usd), 6), "stop_reason": ev.get("stop_reason"),
+                "final_answer": ev.get("final_answer") is True}
     if kind == "tool":
         info = describe(ev, servers)
         step = {**base, "kind": "memory" if info["source"] == "waku_memory" else "tool",
@@ -538,7 +539,7 @@ LEAF_KINDS = ("llm", "tool", "memory")
 
 def story(turn: dict) -> list[dict]:
     """The turn in one line, in order: question, the gate, memories used,
-    loops, treg endpoint calls and their dollars, a saved report. A part that
+    loops (and the final answer, when they hit the limit), treg endpoint calls and their dollars, a saved report. A part that
     did not happen (no gate, 0 memories, no treg call) is left out. Each part
     names the row it opens: `step`, an index into `steps`, or `loop`."""
     steps = turn["steps"]
@@ -556,6 +557,9 @@ def story(turn: dict) -> list[dict]:
     if turn.get("loops"):
         n = turn["loops"]
         parts.append({"part": "loops", "text": f"{n} loop{'' if n == 1 else 's'}", "loop": 1})
+    final = next((i for i, s in enumerate(steps) if s.get("final_answer")), None)
+    if final is not None:
+        parts.append({"part": "limit", "text": "limit reached → final answer", "step": final})
     treg = [i for i, s in enumerate(steps) if s.get("source") == "treg" and runs_endpoint(s.get("tool") or "")]
     if treg:
         parts.append({"part": "treg", "text": f"{len(treg)} treg call{'' if len(treg) == 1 else 's'}",

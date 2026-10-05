@@ -177,7 +177,10 @@ model has already read to its first 2,000 characters and a note
 keeps every output whole. Each search is shown as
 a `waku_memory_memory_search` tool call (waku.one reads its `entries` as
 Used), the `done` payload and the turn's meta carry them as `used`, and the
-dashboard's chat lists them under "Used from memory". The searches are not
+dashboard's chat lists them under "Used from memory": a report as its title
+and first Summary line, any other memory as its snippet without fenced code
+or JSON (a search snippet of a report often starts inside its Sources
+block). The searches are not
 folded into the chat log. A failed search is logged and skipped; the turn
 goes on without it.
 
@@ -243,7 +246,10 @@ Every turn has a `turn_id`, written on the trace's `turn_start` and
 `turn_end`, on each `usage.jsonl` row and in the chat log's meta. Every model
 call writes a `usage.jsonl` row and an `llm` event: the loop's with `kind`
 `loop`, and the small-model calls around it with `gate`, `consolidation`,
-`report`, `triage` or `quick` (`metered()` in `waku/ops/tracing.py`).
+`report`, `triage` or `quick` (`metered()` in `waku/ops/tracing.py`). When a
+turn hits `max_iterations`, the loop makes one more call with tools off and
+its `llm` event has `kind` `final` and `final_answer: true`; the waterfall's story line shows
+it as "limit reached → final answer".
 
 Model dollars are an estimate from `waku/ops/pricing.py`, marked "est". On
 the hosted free tier, every model call carries `X-Waku-Turn`, and the

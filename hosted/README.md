@@ -661,6 +661,13 @@ instructions say not to call them (spec 009 E). It is in the container's
 environment, not in `SOUL.md`, so a tenant provisioned earlier gets it on its
 next start.
 
+**A tenant turn gets fifteen steps.** Every tenant container starts with
+`WAKU_MAX_ITERATIONS=15` (`TENANT_MAX_ITERATIONS` in `spawner/template.py`),
+the most model calls with tools one turn may make. At the limit the loop makes
+one more call with tools off and answers from what the turn gathered. Like
+the line above, a running tenant gets it on its next start; `upgrade.sh --now`
+restarts every tenant onto it at once.
+
 ### A second fence: treg's per-customer daily budget
 
 Every call is tagged `customer=<tenant id>`, so treg can cap each tenant per
@@ -791,6 +798,20 @@ containers already running and starts their idle clocks fresh. A tenant who
 keeps chatting keeps the old image until they pause for the window, or until
 an operator runs `upgrade.sh --now`, which restarts every running tenant at
 once and can cut off a turn in progress.
+
+**The first open after a stop starts the container, and waits for it.** The
+request that finds a tenant stopped (after an idle stop or `upgrade.sh --now`)
+waits up to 60 seconds for the spawner to provision and start the container
+(`START_TIMEOUT_SECONDS` in `hosted/core/idle.py`), then up to 30 more for the
+dashboard inside to accept a connection (`READY_TIMEOUT_SECONDS`): the spawner
+answers once Docker has started the container, before the dashboard has bound
+its port. A page navigation that outlasts either wait, the dashboard on the
+tenant host or the chat in waku.one's frame, gets a 503 page saying the
+assistant is starting, which reloads itself every 3 seconds and joins the
+start already under way. A fetch or a stream still gets "Your assistant is
+taking too long to start. Try again." A gateway log line `start of tenant=<id>
+took longer than 60s` or `started but did not listen within 30s` is the sign
+that a start ran long.
 
 **What counts as idle.** In flight is any request the gateway is forwarding to
 the container, from before it reaches the container until the last byte of a

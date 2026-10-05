@@ -493,7 +493,10 @@ class FakeContainer:
         self._server: ThreadingHTTPServer | None = None
         self.port = 0
 
-    def start(self) -> None:
+    def start(self, port: int = 0) -> None:
+        """Listen on `port`, or on a free one. A test that has stopped the
+        container passes its old port to bring it back where the spawner
+        says it is: a dashboard that binds after its container started."""
         recorder = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -538,7 +541,7 @@ class FakeContainer:
 
             do_POST = do_GET
 
-        self._server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self._server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
         self.port = self._server.server_address[1]
         threading.Thread(target=self._server.serve_forever, daemon=True).start()
 
