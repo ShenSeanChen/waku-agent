@@ -44,6 +44,7 @@ from waku.integrations import (
 )
 from waku.key_locations import model_key_locations
 from waku.loop.agent import error_text
+from waku.loop.models import models_for
 from waku.memory import tool_note
 from waku.ops import browser_agent, commands, compare_history
 from waku.ops.arena import (
@@ -553,11 +554,36 @@ def observability_data(window: str = "7d") -> dict:
     settings.ensure_home()
     if settings.base_url or settings.provider == "openrouter":
         list_models()  # warm the per-model price cache, as collect() does
+    try:   # the model "Judge this turn" would call: the provider's small model
+        judge_model = models_for(settings.provider, settings.model or "", settings.small_model or "")[1]
+    except Exception:
+        judge_model = ""
     return observability.payload(settings.home, provider=settings.provider,
-                                 model=settings.model or "", window=window,
+                                 model=settings.model or "", window=window, judge_model=judge_model,
                                  hosted=settings.provider == "waku-platform",
                                  release_file=Path(os.environ["WAKU_RELEASE_FILE"])
                                  if os.environ.get("WAKU_RELEASE_FILE") else None)
+
+
+def judge_turn(payload: dict) -> dict:
+    """POST /api/turn-evals/judge {turn_id} (spec 015): ask the small model of
+    the provider in use whether one stored turn's reply answers its question
+    and stays grounded in its tool outputs. The turn is read from this home's
+    own traces, so a request cannot supply text to judge. On the hosted free
+    tier the call goes through the metering proxy and is charged in credits.
+    Answers {"score": <the score event>} or {"error": <sentence>}."""
+    from waku.ops import turn_evals
+
+    settings = load_settings()
+    settings.ensure_home()
+    turn_id = payload.get("turn_id") if isinstance(payload, dict) else None
+    try:
+        client, model, provider = turn_evals.judge_client(settings)
+        return {"score": turn_evals.judge_turn(settings.home, turn_id, client, model, provider)}
+    except turn_evals.JudgeRefused as exc:
+        return {"error": str(exc)}
+    except SystemExit as exc:   # get_client's "no key" and "unknown provider" sentences
+        return {"error": str(exc)}
 
 
 def _rel_to_home(path, home) -> str:
@@ -1331,7 +1357,8 @@ class Handler(BaseHTTPRequestHandler):
                   "/api/connections": None, "/api/connections/test": None,
                   "/api/providers": None,
                   "/api/compare/clear": compare_clear,
-                  "/api/compare/regrade": compare_regrade, "/api/compare/delete_run": compare_delete_run}
+                  "/api/compare/regrade": compare_regrade, "/api/compare/delete_run": compare_delete_run,
+                  "/api/turn-evals/judge": judge_turn}
         if self.path not in routes:
             self.send_response(404)
             self.end_headers()

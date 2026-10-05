@@ -42,6 +42,8 @@ POST_ROUTES = {
     "/api/compare/clear",
     "/api/compare/regrade",
     "/api/compare/delete_run",
+    # spec 015: judge one stored turn, on demand
+    "/api/turn-evals/judge",
 }
 
 # Paths served on GET, either exactly or as a prefix.
