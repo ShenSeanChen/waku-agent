@@ -161,7 +161,14 @@ same `/connect treg` in the chat.
 
 A hosted Waku Agent on waku.one needs none of this: its container reaches treg
 through the platform's relay, and the calls are charged to its credits
-([hosted/README.md](../hosted/README.md)).
+([hosted/README.md](../hosted/README.md)). To use your own treg account there
+instead, click Configure on the treg card and paste an org-scoped treg key:
+calls then go straight to `https://treg.to/mcp/` and treg bills your account,
+not your credits. Clear the key to go back to the relay.
+
+`TREG_API_KEY` works the same on your own machine: when it is set in `.env`,
+Waku reaches the `treg` server in `mcp.json` at treg.to with that key instead
+of the sign-in, and the key is sent only to treg.
 
 ## Let Jev decide which memories earn a slot
 

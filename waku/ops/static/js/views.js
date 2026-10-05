@@ -339,12 +339,18 @@ const MCP_STATE_DISPLAY = {
   not_added: {label:"not added", className:"not-configured"},
 };
 
+// Spec 014: a card that can take a key of the person's own (`configurable`:
+// treg through the hosted relay, or with a key already set) offers Configure,
+// which opens the registry row of the same key in the connection dialog. The
+// detail line says who pays, and never names an environment variable on hosted.
 function mcpConnectionCard(item){
   const display = MCP_STATE_DISPLAY[item.state] || MCP_STATE_DISPLAY.not_added;
   const why = item.detail ? `<div class="connwhy">${esc(item.detail)}</div>` : "";
-  const action = item.state === "connected" ? "" : `<div class="provactions connactions">
-      ${uiButton("Connect", {level: "secondary", onclick: `connectInChat('${esc(item.key)}')`})}
-    </div>`;
+  const button = item.configurable
+    ? uiButton("Configure", {level: "secondary", onclick: `openConnectionModal('${esc(item.key)}')`})
+    : item.state === "connected" ? ""
+    : uiButton("Connect", {level: "secondary", onclick: `connectInChat('${esc(item.key)}')`});
+  const action = button ? `<div class="provactions connactions">${button}</div>` : "";
   return uiCard(`
     <img class="provlogo connlogo" src="/static/logos/connections/${esc(item.key)}.svg" alt="">
     <div class="connstatus ${display.className}"><span class="conndot"></span>${esc(display.label)}</div>
@@ -363,7 +369,11 @@ function connectInChat(key){
 
 function connectionsGrid(items, mcpItems = []){
   const grouped = Object.fromEntries(CONNECTION_GROUPS.map(group => [group, []]));
-  items.forEach(item => grouped[connectionDisplayGroup(item)].push(connectionCard(item)));
+  // A registry row that an MCP card stands for (treg's key) is drawn once, as
+  // that MCP card; its dialog is still the registry row's.
+  const drawnAsMcp = new Set(mcpItems.map(item => item.key));
+  items.filter(item => !drawnAsMcp.has(item.key))
+    .forEach(item => grouped[connectionDisplayGroup(item)].push(connectionCard(item)));
   mcpItems.forEach(item => grouped[connectionDisplayGroup(item)].push(mcpConnectionCard(item)));
   return CONNECTION_GROUPS.map(group => `<section class="connsection">
     <h2>${group}</h2>

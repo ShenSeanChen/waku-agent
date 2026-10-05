@@ -78,11 +78,14 @@ class Session:
                  (f"Your model: you are running on '{self.settings.model}' via the "
                  f"'{self.settings.provider}' provider, inside Waku, a local-first "
                  f"open-source agent harness (github.com/ShenSeanChen/waku-agent).")]
-        if self.settings.unavailable_tools:
-            # Spec 009 E: a call the deployment refuses is a wasted step and,
-            # on a metered tenant, a wasted turn.
+        # Spec 009 E: a call the deployment refuses is a wasted step and, on a
+        # metered tenant, a wasted turn. Spec 014: with the person's own treg
+        # key the relay is not in the path, so treg's tools are all theirs.
+        from waku.tools.treg import unavailable
+
+        if unavailable_tools := unavailable(self.settings.unavailable_tools):
             parts.append("\nNot available here, so never call them: "
-                         + ", ".join(self.settings.unavailable_tools) + ".")
+                         + ", ".join(unavailable_tools) + ".")
 
         if self.memory is not None:
             # Hero moment #1: a cheap judge decides IF we retrieve at all —

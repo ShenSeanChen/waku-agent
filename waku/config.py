@@ -211,6 +211,7 @@ class Settings:
     # them (<server>_<tool> for MCP). The system prompt says not to call them.
     # Empty on a laptop; a hosted container is started with treg's balance and
     # resources_list here, which the relay refuses by design (spec 009 E).
+    # A treg key of the person's own lifts treg's two (spec 014, treg.unavailable).
     unavailable_tools: tuple[str, ...] = field(default_factory=lambda: tuple(
         t.strip() for t in os.getenv("WAKU_UNAVAILABLE_TOOLS", "").split(",") if t.strip()))
 

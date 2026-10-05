@@ -12,6 +12,7 @@ import json
 import os
 import socket
 import sys
+import urllib.error
 import urllib.request
 from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass
@@ -250,6 +251,16 @@ INTEGRATIONS: tuple[Integration, ...] = (
     Integration("tavily", "Search & Observability", "Tavily", "Lets Waku search the web.",
                 (EnvField("TAVILY_API_KEY", "API key", secret=True),), None, None,
                 "https://tavily.com", ReloadMode.LIVE, lambda env: bool(env.get("TAVILY_API_KEY")), None),
+    # Spec 014: a person's own treg key. Its card is treg's MCP card
+    # (waku/tools/treg.py), which opens this row's dialog; views.js draws no
+    # second card for it. Saving rebuilds the agent, which reconnects treg
+    # with the key (treg.resolve), so the switch is live on the next message.
+    Integration("treg", "Search & Observability", "treg",
+                "Your own treg key. treg then bills your treg account, not your Waku credits.",
+                (EnvField("TREG_API_KEY", "API key", secret=True,
+                          help="An org-scoped key from your treg dashboard. It is sent only to treg."),),
+                None, None, "https://treg.to", ReloadMode.AGENT,
+                lambda env: bool(env.get("TREG_API_KEY")), None),
     # Spec 005: Jev decides which memories earn a slot. Both fields, or it
     # stays off: WAKU_SLOT_GATE=jev is the switch, the key is the credential.
     Integration("typesafe", "Memory & Storage", "TypeSafe Jev",
@@ -575,6 +586,23 @@ def _tavily_probe(values: Mapping[str, str]) -> None:
             raise ValueError(f"Tavily returned HTTP {response.status}")
 
 
+def _treg_probe(values: Mapping[str, str]) -> None:
+    """Ask treg whether the key is good: GET /tools lists the team's own tools,
+    is free, writes nothing and answers 401 on a bad key. Straight to treg.to,
+    never through a relay, and never `balance`."""
+    request = urllib.request.Request("https://treg.to/tools",
+                                     headers={"X-Treg-Token": values.get("TREG_API_KEY", ""),
+                                              "Accept": "application/json"})
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:  # noqa: S310 - fixed provider endpoint
+            if response.status >= 300:
+                raise ValueError(f"treg returned HTTP {response.status}")
+    except urllib.error.HTTPError as exc:
+        if exc.code in (401, 403):
+            raise ValueError("treg did not accept this key") from None
+        raise ValueError(f"treg returned HTTP {exc.code}") from None
+
+
 def _otel_probe(values: Mapping[str, str]) -> None:
     """Check that the configured OTLP/gRPC collector accepts TCP connections."""
     endpoint = values.get("OTEL_EXPORTER_OTLP_ENDPOINT", "").strip()
@@ -616,6 +644,8 @@ def _probed(integration: Integration) -> Integration:
         return Integration(**{**integration.__dict__, "probe": _notion_probe})
     if integration.key == "tavily":
         return Integration(**{**integration.__dict__, "probe": _tavily_probe})
+    if integration.key == "treg":
+        return Integration(**{**integration.__dict__, "probe": _treg_probe})
     if integration.key == "otel":
         return Integration(**{**integration.__dict__, "probe": _otel_probe})
     return integration
