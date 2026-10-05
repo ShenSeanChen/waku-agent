@@ -1038,6 +1038,9 @@ main h3{font-family:var(--face-mono);font-size:var(--text-xs);color:var(--text-f
 @media (max-width:520px){
   .wf-nums{white-space:normal}
   .wf-kind{min-width:0}
+  /* two stats a row, so a long label (DETERMINISTIC) never runs into the next */
+  .stat-band{grid-template-columns:repeat(auto-fit,minmax(160px,1fr))}
+  .stat{min-width:0}
 }
 .obs-scores{display:flex;flex-wrap:wrap;gap:var(--space-2);margin-bottom:var(--space-2)}
 .wf-fill.wf-llm{background:var(--chart-1)}

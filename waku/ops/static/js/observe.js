@@ -260,16 +260,31 @@ function obsEvals(d){
   const e = d.evals || {};
   const verdict = v => v === "pass" ? "ok" : v === "fail" ? "bad" : "neutral";
   let h = "";
-  const det = e.deterministic;
-  h += uiStatBand([
-    {label: "deterministic", value: det ? obsNum(det.tests) : "in CI", sub: det ? `test functions in ${det.files} files, 0/1, offline` : "not shipped in this container"},
-    {label: "AI judge", value: e.judge_suites ? String(e.judge_suites.length) : "in CI", sub: e.judge_suites ? "suites, scored by a model" : "run by make gate"},
-    {label: "last gate", value: e.last ? esc(e.last.deterministic === "pass" && e.last.judge !== "fail" ? "open" : "closed") : "—",
-     sub: e.last ? obsWhen(e.last.ran_at) : "make gate has not run here", tone: e.last && e.last.deterministic === "pass" && e.last.judge !== "fail" ? "ok" : ""},
+  const det = e.deterministic, run = e.last_run;
+  const gate = run ? run.verdict : e.last;
+  const open = !!gate && gate.deterministic === "pass" && gate.judge !== "fail";
+  // The cards report the last make gate run's own counts. Without a run, they
+  // say what is on disk and call it that: test functions and suite files,
+  // which are not results.
+  const runCard = (label, c) => c
+    ? {label, value: `${obsNum(c.passed)} <span class="obs-of">passed</span>`,
+       sub: `${obsNum(c.failed)} failed · last gate ${obsWhen(run.ran_at)}`, tone: c.failed ? "" : "ok"}
+    : {label, value: "—", sub: `did not run in the last gate, ${obsWhen(run.ran_at)}`};
+  h += uiStatBand(run ? [
+    runCard("deterministic", run.deterministic),
+    runCard("AI judge", run.judge),
+    {label: "last gate", value: open ? "open" : "closed", sub: obsWhen(run.ran_at), tone: open ? "ok" : ""},
+  ] : [
+    {label: "deterministic", value: det ? obsNum(det.tests) : "in CI",
+     sub: det ? `test functions in ${det.files} files, counted on disk; no gate run recorded` : "not shipped in this container"},
+    {label: "AI judge", value: e.judge_suites ? obsNum(e.judge_suites.length) : "in CI",
+     sub: e.judge_suites ? "suite files, counted on disk; no gate run recorded" : "run by make gate"},
+    {label: "last gate", value: e.last ? (open ? "open" : "closed") : "—",
+     sub: e.last ? obsWhen(e.last.ran_at) : "make gate has not run here", tone: open ? "ok" : ""},
   ]);
   h += table(["kind","what it checks","where"], [
-    `<tr><td>Deterministic</td><td class="meta">Pass or fail with no model: trace shape, redaction, routes, the receipt, the design system${det ? ` (${obsNum(det.tests)} tests)` : ""}.</td><td class="meta"><code>evals/deterministic/</code>, every PR in CI</td></tr>`,
-    `<tr><td>AI judge</td><td class="meta">A model scores answers against a rubric${e.judge_suites ? ": " + e.judge_suites.map(s => `<code>${esc(s)}</code>`).join(", ") : ""}.</td><td class="meta"><code>evals/judge/</code>, in <code>make gate</code></td></tr>`,
+    `<tr><td>Deterministic</td><td class="meta">Pass or fail with no model: trace shape, redaction, routes, the receipt, the design system${det ? ` (${obsNum(det.tests)} test functions in ${det.files} files)` : ""}.</td><td class="meta"><code>evals/deterministic/</code>, every PR in CI</td></tr>`,
+    `<tr><td>AI judge</td><td class="meta">A model scores answers against a rubric${e.judge_suites ? ", one suite file each: " + e.judge_suites.map(s => `<code>${esc(s)}</code>`).join(", ") : ""}.</td><td class="meta"><code>evals/judge/</code>, in <code>make gate</code></td></tr>`,
     `<tr><td>Human</td><td class="meta">You read a turn's waterfall and decide whether it did the right thing.</td><td class="meta">${uiLink("Turns", "#observability/turns")}</td></tr>`,
   ]);
   if (e.hosted){

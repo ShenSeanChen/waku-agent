@@ -29,7 +29,8 @@ no daemon, it skips the whole directory and says why.
 
 **Where the results show:** the terminal, and the dashboard's **Evals** page,
 under Observability in the sidebar: how many deterministic tests and judge
-suites exist, the release-gate verdict, and an eval-history table with one row
+suites exist, what the last `make gate` run passed and failed per suite, the
+release-gate verdict, and an eval-history table with one row
 per `make gate`. On agent.waku.one the page says that evals run in CI and in
 `make gate` before an upgrade, because a tenant container ships no `evals/`.
 
