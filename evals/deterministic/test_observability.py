@@ -730,3 +730,105 @@ def test_a_malformed_count_becomes_no_count(tmp_path):
                                                "failed": 0, "skipped": 0}}
     record.write_text(json.dumps({**_RELEASE, "checks": [bad]}), encoding="utf-8")
     assert obs.release_info(record)["checks"][0]["tests"] is None
+
+
+# ---- spec 016: the story line, the hotspots and the failures ---------------
+
+def _research_turn():
+    """Sean's "research mem0's competitors" turn, cut down: the gate
+    retrieved, a memory search, three loops, three treg calls (one failed),
+    a saved report and consolidation, and a receipt that says 6 memories
+    went into the prompt."""
+    t0 = datetime(2026, 10, 5, 9, 0, tzinfo=UTC)
+    at = lambda s: (t0 + timedelta(seconds=s)).isoformat()  # noqa: E731
+    fail = json.dumps({"status": 402, "endpoint_id": "predictleads.companies.lookalike",
+                       "error": "balance too low: estimated_cost_micro 600000"})
+    tool = lambda name, out, s, ms, **kw: {"type": "tool", "v": 2, "tool": name, "args": kw.pop("args", {}),  # noqa: E731
+                                          "output": out, "duration_ms": ms, "ts": at(s), **kw}
+    return [
+        {"type": "turn_start", "turn_id": "t_mem0", "user_message": "research mem0's competitors", "ts": at(0)},
+        {"type": "gate", "decision": "retrieve", "ts": at(1)},
+        tool("waku_memory_memory_search", SEARCH_OUT, 2, 800, args={"query": "mem0 competitors"}),
+        {"type": "llm", "kind": "loop", "stop_reason": "tool_use", "model": "claude-sonnet-5",
+         "usage": {"in": 10000, "out": 300}, "ts": at(10)},
+        tool("treg_call", TREG_OUT, 11, 800, args={"endpoint_id": "tomba.companies.similar"}),
+        {"type": "llm", "kind": "loop", "stop_reason": "tool_use", "model": "claude-sonnet-5",
+         "usage": {"in": 30000, "out": 900}, "ts": at(50)},
+        tool("treg_call", TREG_OUT, 51, 800, args={"endpoint_id": "tomba.companies.similar"}),
+        tool("treg_call", fail, 53, 1100, args={"endpoint_id": "predictleads.companies.lookalike"}),
+        {"type": "llm", "kind": "loop", "stop_reason": "end_turn", "model": "claude-sonnet-5",
+         "usage": {"in": 40000, "out": 3000}, "ts": at(75)},
+        {"type": "report", "memory_id": "r1", "title": "mem0 competitors", "ts": at(76)},
+        {"type": "consolidation", "new_facts": 2, "kept": [{"content": "a", "sent": True}], "ts": at(79)},
+        {"type": "receipt", "turn_id": "t_mem0", "total_usd": 0.63, "memory": {"used": 6, "kept": [{}, {}]},
+         "ts": at(80)},
+        {"type": "turn_end", "turn_id": "t_mem0", "reply": "ok", "iterations": 3, "ts": at(80)},
+    ]
+
+
+def _greeting_turn():
+    t0 = datetime(2026, 10, 5, 9, 5, tzinfo=UTC)
+    at = lambda s: (t0 + timedelta(seconds=s)).isoformat()  # noqa: E731
+    return [
+        {"type": "turn_start", "turn_id": "t_hi", "user_message": "hi", "ts": at(0)},
+        {"type": "gate", "decision": "skip", "ts": at(1)},
+        {"type": "llm", "kind": "loop", "stop_reason": "end_turn", "usage": {"in": 900, "out": 20}, "ts": at(3)},
+        {"type": "turn_end", "turn_id": "t_hi", "reply": "hey", "iterations": 1, "ts": at(3)},
+    ]
+
+
+def _built(events):
+    return obs.build_turn(obs.group_turns(events)[0], servers=("waku_memory", "treg"),
+                          provider="anthropic", model="claude-sonnet-5")
+
+
+def test_the_story_line_names_each_part_in_order_and_leaves_out_empty_ones():
+    turn = _built(_research_turn())
+    story = turn["story"]
+    assert " → ".join(p["text"] for p in story) == \
+        "question → gate retrieve → 6 memories → 3 loops → 3 treg calls → report saved"
+    treg = next(p for p in story if p["part"] == "treg")
+    assert treg["usd"] == round(0.0089 * 2, 6), "the failed call cost nothing"
+    # every part but the question opens its row
+    steps = turn["steps"]
+    assert steps[next(p for p in story if p["part"] == "gate")["step"]]["kind"] == "gate"
+    assert steps[next(p for p in story if p["part"] == "memories")["step"]]["span"] == "retrieval"
+    assert next(p for p in story if p["part"] == "loops")["loop"] == 1
+    assert steps[treg["step"]]["tool"] == "treg_call"
+    assert steps[next(p for p in story if p["part"] == "report")["step"]]["kind"] == "report"
+
+    greeting = _built(_greeting_turn())
+    assert " → ".join(p["text"] for p in greeting["story"]) == "question → gate skip → 1 loop"
+
+
+def test_hotspots_mark_one_slowest_and_one_most_expensive_leaf_step():
+    turn = _built(_research_turn())
+    steps = turn["steps"]
+    slow, rich = turn["hotspots"]["slowest"], turn["hotspots"]["most_usd"]
+    assert steps[slow]["kind"] == "llm" and steps[slow]["loop"] == 2 and steps[slow]["span_ms"] == 39000
+    assert steps[rich]["kind"] == "llm" and steps[rich]["loop"] == 3
+    assert steps[slow]["hot"] == ["slowest"] and steps[rich]["hot"] == ["most $"]
+    marked = [s for s in steps if s.get("hot")]
+    assert len(marked) == 2 and all(s["kind"] in obs.LEAF_KINDS for s in marked)
+
+    # a tie goes to the earlier step, and one step can carry both labels
+    tie = [{"kind": "tool", "span_ms": 5, "usd": 0.1}, {"kind": "tool", "span_ms": 5, "usd": 0.1},
+           {"kind": "receipt", "span_ms": 50}]
+    assert obs.hotspots(tie) == {"slowest": 0, "most_usd": 0}
+    assert tie[0]["hot"] == ["slowest", "most $"] and "hot" not in tie[1] and "hot" not in tie[2]
+
+    # a turn with one step marks nothing
+    greeting = _built(_greeting_turn())
+    assert greeting["hotspots"] == {"slowest": None, "most_usd": None}
+    assert not any(s.get("hot") for s in greeting["steps"])
+
+
+def test_every_failed_step_is_in_the_error_list_with_its_loop():
+    turn = _built(_research_turn())
+    failed = [i for i, s in enumerate(turn["steps"]) if s.get("ok") is False]
+    assert [e["step"] for e in turn["errors"]] == failed and len(failed) == 1
+    err = turn["errors"][0]
+    assert err["loop"] == 2 and err["tool"] == "treg_call"
+    assert err["endpoint_id"] == "predictleads.companies.lookalike"
+    assert err["error"].startswith("balance too low")
+    assert _built(_greeting_turn())["errors"] == []
