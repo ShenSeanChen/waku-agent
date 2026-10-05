@@ -3,31 +3,22 @@ name: research-report
 description: Research report on companies, competitors, markets or products: research a company, compare competitors, market landscape, funding, pricing, launches.
 ---
 
-Write a report when the person asks you to research companies, competitors,
-markets, products or people. Anything else gets a normal answer.
+Write a report when the person asks you to research companies, competitors, markets, products or people. Anything else gets a normal answer.
 
 ## Start from what is known
-With Waku Memory connected, Waku searches it first and lists the hits, each with its
-date, under "What the company brain already knows". Start there: name an earlier report
-and its date, list it in Sources (`"via": "waku-memory"`), and research only what is missing or older than 30 days.
-Each earlier report is listed as its summary, which is enough to start from. Call
-`waku_memory_memory_get` for a whole earlier report only when the person asks to compare details.
+With Waku Memory connected, Waku searches it first and lists the hits, each with its date, under "What the company brain already knows".
+Start there: name an earlier report and its date, list it in Sources (`"via": "waku-memory"`), and research only what is missing or older than 30 days.
+Each earlier report is listed as its summary; call `waku_memory_memory_get` for a whole one only when the person asks to compare details.
 
 ## Cheap first
 - Prefer free and preview endpoints, and keep `limit` small (5 rows unless asked).
 - Read `catalog_get`'s price before any paid call.
 - Ask before this turn's treg spend would pass $0.25, saying what it would buy.
-
-## Cost: say only the treg cost
-- Call what treg charged the "treg cost", or name each endpoint and its cost.
-- Never state a total, a model cost, or what the run or turn cost: your own tokens
-  cost money too, and you cannot see that number. The receipt under the reply shows the totals.
+- Call what treg charged the "treg cost", or name each endpoint and its cost. Never state a total, a model cost, or what the run or turn cost: your own tokens cost money too, and you cannot see that number. The receipt under the reply shows the totals.
 - No cost tile in Numbers; `cost_usd` in Sources is the only cost the report carries.
 
 ## The reply
-Two or three plain sentences on what you found, then the report from its marker line
-(once per reply). The chat keeps only your sentences, so they must stand alone.
-Waku saves the report to Waku Memory itself, once: never save it with `memory_remember`.
+Two or three plain sentences on what you found, then the report from its marker line (once per reply). The chat keeps only your sentences, so they must stand alone. Waku saves the report to Waku Memory itself, once: never save it with `memory_remember`.
 
 ## House language
 - Plain sentences. Every number has its unit and a date ("$24 a month, 2026-09").
