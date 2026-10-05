@@ -175,14 +175,16 @@ def save_key(key: str) -> dict:
     The key is the user's. It is written to their .env and set on this process;
     it is never sent anywhere except api.typesafe.ai, and never logged.
     """
-    from dotenv import find_dotenv, set_key
+    from dotenv import set_key
+
+    from waku.config import env_write_path
 
     key = (key or "").strip()
     if not key:
         return {"error": "paste a key first"}
     if not key.isascii():
         return {"error": "that key has a non-ASCII character in it -- check for a smart quote"}
-    env_path = find_dotenv(usecwd=True) or ".env"
+    env_path = str(env_write_path())
     set_key(env_path, "TYPESAFE_API_KEY", key)
     os.environ["TYPESAFE_API_KEY"] = key
     return {"ok": True, "ready": True, "where": env_path}

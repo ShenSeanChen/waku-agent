@@ -37,9 +37,19 @@ cp .env.example .env
 
 Set `WAKU_PROVIDER=` and paste that provider's key. Anthropic is the default;
 OpenAI, Gemini, DeepSeek, MiniMax, Kimi, GLM, OpenRouter, OpenCode Zen and
-OpenCode Go work the same way. You can also paste a key in the dashboard's
-Settings later. Either way it stays in your local `.env` and is never sent to
-the browser.
+OpenCode Go work the same way. You can also paste a key in the dashboard
+later. Either way the key stays in a `.env` on your machine and is never sent
+to the browser.
+
+Waku reads a model key from three places, and the first one that has it wins:
+environment variables set before Waku starts, the `.env` in the folder you run
+Waku from (or the nearest folder above it), and `~/.waku/.env`. A key you paste
+in the dashboard goes to the folder's `.env` when there is one, and to
+`~/.waku/.env` when there is not, so Waku finds it from any folder. When Waku
+finds no key, the dashboard's "Set up Waku" page lists the paths it checked,
+and `waku connections` prints the same list under "Model key". A git worktree
+does not see the main checkout's `.env`: start Waku in the main checkout, or
+copy the key's line into `~/.waku/.env`.
 
 **Check:** run `waku` and say hi. It answers in the terminal.
 

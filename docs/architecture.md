@@ -233,6 +233,12 @@ shows those instead. A proxy that does not know the turn leaves the estimate.
 - `~/.waku/` — runtime state: `state.db`, `calendar.ics`, `outbox/`, `traces/`.
   `WAKU_HOME` moves it; `make` sets it to the repo's own `.waku/`, which is
   gitignored. `waku/config.py` `resolve_home()` has the rules.
+- `.env` — a model key is read from the environment, then the nearest `.env`
+  from the working directory upward, then `<home>/.env`, the first one winning.
+  A dashboard save writes to that nearest `.env` when one exists and to
+  `<home>/.env` otherwise (`waku/config.py` `env_write_target()`).
+  `waku/key_locations.py` reports those places to the setup page and to
+  `waku connections`, as paths and yes or no, never a value.
 
 ## Design decisions worth stealing
 
