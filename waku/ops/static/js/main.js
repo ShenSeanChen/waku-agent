@@ -10,6 +10,7 @@ let activeView = null, activeSub = null;
 // which is a behaviour, not a setting.
 const TITLES = {chat:"Chat & watch",
                 observability:"Observability — what each turn did, cost and remembered",
+                evals:"Evals — whether a turn or a release was good",
                 graph:"Graph workflows — structure around the loop",
                 // Keyed by view AND sub for the Arena, now that the sidebar
                 // names the two races separately. A single title covering both
@@ -22,8 +23,14 @@ const TITLES = {chat:"Chat & watch",
                 database:"Database — everything Waku stores (state.db)"};
 function render(){
   if (!D) return;
-  const [hashView, subRaw] = (location.hash||"#overview").slice(1).split("/");
+  let [hashView, subRaw] = (location.hash||"#overview").slice(1).split("/");
   // #ops is the Observability page's old name (spec 012); it still opens it.
+  // Evals were a tab there and are a page of their own now, so the old
+  // #observability/evals link lands on #evals.
+  if (hashView === "observability" && subRaw === "evals"){
+    history.replaceState(null, "", "#evals");
+    hashView = "evals"; subRaw = undefined;
+  }
   const v = hashView === "ops" ? "observability" : hashView;
   const sub = subRaw || null;
   // FIRST RUN. With no usable provider, every other page is a page about a

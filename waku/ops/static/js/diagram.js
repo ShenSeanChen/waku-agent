@@ -85,11 +85,11 @@ function archSVG(d){
     ${flowLbl(688,96,"each turn")}
     ${box(752,92,250,50,"Trace",s.trace_files+" file(s) · always on","observability/turns","","trace")}
     ${flow("M878 142 L878 156")}
-    ${box(752,156,250,50,"Eval","deterministic + judge","observability/evals")}
+    ${box(752,156,250,50,"Eval","deterministic + judge","evals")}
     ${flow("M878 206 L878 220")}
-    ${box(752,220,250,50,"Release gate",d.eval_report?"det "+d.eval_report.deterministic+" · judge "+d.eval_report.judge:"run make gate","observability/evals")}
+    ${box(752,220,250,50,"Release gate",d.eval_report?"det "+d.eval_report.deterministic+" · judge "+d.eval_report.judge:"run make gate","evals")}
     ${flow("M878 270 L878 284")}
-    ${box(752,284,250,50,"Release","new prompt · model · config","observability/evals")}
+    ${box(752,284,250,50,"Release","new prompt · model · config","evals")}
     <!-- feedback: Release improves the Harness — a short arrow across the gap,
          so the outer loop closes without a long wrap crowding the margins -->
     <path class="flow dash" d="M752 312 C712 324 698 352 676 358" marker-end="url(#arr)"/>

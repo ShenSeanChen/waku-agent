@@ -27,7 +27,8 @@ Each tab is one pillar, linked to the real files:
 | **Memory** | sub-tabs per pillar — semantic facts, episodes, editable skills + SOUL, consolidation |
 | **Tools** | the agent's available tools (grouped by origin), its results, and MCP connectors |
 | **Data** | a live SQLite browser: per-table tabs, schema, and a read-only SQL console over `state.db` |
-| **Observability** | a summary strip (spend by source, tokens, tool calls, turns and loops for today, 7 days or all) over five tabs: **Turns** (each turn as a waterfall of its steps grouped by loop, with time, tokens and cost), **Tools** (calls grouped by treg with endpoints, Waku Memory and local), **Memory** (gate decisions, memories used and kept), **Spend** (estimated and charged), **Evals** (what exists, the release gate and its history). `#ops` still opens it |
+| **Observability** | four cards over four tabs, in the same order and with the same names, each card opening its tab, for today, 7 days or all: **Turns** (count and average loops; each turn as a waterfall of its steps grouped by loop, with time, tokens and cost), **Tools** (calls by source and errors; grouped by treg with endpoints, Waku Memory and local), **Memory** (retrievals, writes and the gate's retrieve or skip; memories used and kept per turn), **Spend** (charged or estimated dollars by model, treg and memory, with tokens in and out). `#ops` still opens it |
+| **Evals** | whether a turn or a release was good: what deterministic tests and judge suites exist, the last release gate and its history. `#observability/evals` still opens it |
 
 The sidebar and chat dock are drag-resizable and hideable, and the chat has
 *New chat* + history like any chat app.

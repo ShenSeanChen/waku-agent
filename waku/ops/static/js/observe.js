@@ -1,19 +1,23 @@
-// waku dashboard — the Observability page (spec 012). Classic <script>,
-// shared global scope; load order and rules: static/README.md.
+// waku dashboard — the Observability page and the Evals page (spec 012).
+// Classic <script>, shared global scope; load order and rules: static/README.md.
 //
-// Five tabs, each opening with one plain sentence: Turns (traces), Tools,
-// Memory, Spend and Evals. The data comes from GET /api/observability, which
+// Observability shows what happened: four cards over four tabs, in one order
+// with one set of names (Turns, Tools, Memory, Spend), each card opening its
+// tab. Evals judge whether it was good, so they have a page of their own,
+// #evals; #observability/evals is its old address and render() in main.js
+// sends it there. Both pages read GET /api/observability, which
 // waku/ops/observability.py builds from this home's traces, usage.jsonl and
-// receipts. #ops is the old name of this page; render() in main.js maps it here.
+// receipts. #ops is the old name of Observability; render() maps it here.
 
-const OBS_TABS = [["turns","Turns"],["tools","Tools"],["memory","Memory"],["spend","Spend"],["evals","Evals"]];
+const OBS_TABS = [["turns","Turns"],["tools","Tools"],["memory","Memory"],["spend","Spend"]];
 const OBS_CAPTION = {
   page: "Observability answers three questions from your traces and spend ledger: what did it do, what did it cost, and what did it remember.",
   turns: "A trace is the record of one turn: its steps in order, each with its input, output, time and cost. Open a turn to see them.",
   tools: "Every tool call in your traces, grouped by where it went: treg, Waku Memory, or this machine.",
   memory: "Each turn's memory: whether the retrieval gate looked, how many memories went into the prompt, and how many facts it kept afterwards.",
   spend: "What the turns cost. Estimated is tokens × list price; charged is what the platform actually billed.",
-  evals: "Evals judge whether an answer was good: deterministic tests, an AI judge, or a human. The release gate is the evals deciding whether a change ships.",
+  tokens: "Tokens are what model calls are charged by; tools and memory are charged per call.",
+  evals: "Evals judge whether a turn or a release was good: tests, an AI judge, a human.",
 };
 const OBS_WINDOWS = [["today","Today"],["7d","7 days"],["all","All"]];
 // The page's own state: the window the Tools tab reads, the last answer, and
@@ -29,7 +33,7 @@ async function loadObservability(background = false){
     if (res.ok){ OBS.data = await res.json(); OBS.at = Date.now(); }
   } catch(e){ /* server restarting: keep the last answer */ }
   finally { OBS.loading = false; }
-  if (activeView === "observability") render();
+  if (activeView === "observability" || activeView === "evals") render();
 }
 function obsWindow(w){
   OBS.window = w; OBS.at = 0;
@@ -219,7 +223,7 @@ function obsMemory(d, D){
 function obsSpend(d){
   const s = d.spend || {ledger: {by_day: [], by_provider: []}};
   const u = s.ledger || {by_day: [], by_provider: [], calls: 0, total_in: 0, total_out: 0};
-  let h = obsCap("spend");
+  let h = obsCap("spend") + obsCap("tokens");
   h += uiStatBand([
     {label: "estimated", value: obsUsd(s.estimated_usd), sub: "tokens × list price, all-time"},
     {label: "charged", value: s.charged_usd == null ? "—" : obsUsd(s.charged_usd),
@@ -231,34 +235,31 @@ function obsSpend(d){
     reset never wipes. The estimate prices those tokens at list price. On agent.waku.one the metering proxy
     knows the exact charge, and each turn's receipt records it as charged.</span>`,
     {footer: reveal("usage.jsonl","open usage.jsonl")});
+  const models = s.by_model || [];
+  if (models.length){
+    h += `<h2>By model</h2>` + table(["model","provider","calls","tokens in","tokens out","estimated"], models.map(r =>
+      `<tr><td><code>${esc(r.model)}</code></td><td class="meta">${esc(r.provider)}</td><td class="meta">${obsNum(r.calls)}</td>
+        <td class="meta">${obsNum(r.in)}</td><td class="meta">${obsNum(r.out)}</td><td class="meta">${obsUsd(r.usd)}</td></tr>`));
+  }
   const days = d.spend_by_day || [];
   if (days.length){
     const max = Math.max(...days.map(r => r.total), 0);
-    h += `<h2>Spend per day</h2><div class="obs-legend">${[["model", 1], ["treg tools", 2], ["Waku Memory", 3]].map(([l, c]) =>
+    h += `<h2>Per day</h2><div class="obs-legend">${[["model", 1], ["treg tools", 2], ["Waku Memory", 3]].map(([l, c]) =>
       `<span><i class="obs-swatch obs-c${c}"></i>${l}</span>`).join("")}</div>`;
-    h += `<div class="obs-days">${days.map(r => `<div class="obs-day"><span class="meta">${esc(r.date.slice(5))}</span>
-      ${obsBar([[r.model, 1, "model " + obsUsd(r.model)], [r.treg, 2, "treg " + obsUsd(r.treg)], [r.memory + r.other, 3, "Waku Memory and other tools " + obsUsd(r.memory + r.other)]], max)}
-      <span class="meta">${obsUsd(r.total)}</span></div>`).join("")}</div>`;
+    h += table(["day","","tokens in","tokens out","$"], days.map(r =>
+      `<tr><td class="meta">${esc(r.date.slice(5))}</td>
+        <td class="obs-barcell">${obsBar([[r.model, 1, "model " + obsUsd(r.model)], [r.treg, 2, "treg " + obsUsd(r.treg)], [r.memory + r.other, 3, "Waku Memory and other tools " + obsUsd(r.memory + r.other)]], max)}</td>
+        <td class="meta">${obsTok(r.in)}</td><td class="meta">${obsTok(r.out)}</td><td class="meta">${obsUsd(r.total)}</td></tr>`));
     h += `<div class="meta obs-foot">Model dollars are estimated from usage.jsonl; tool dollars are what each tool's answer said it cost.</div>`;
-  }
-  if ((u.by_provider||[]).length){
-    h += `<h2>By provider</h2>` + table(["provider","model calls","tokens in","tokens out","estimated"], u.by_provider.map(p =>
-      `<tr><td><code>${esc(p.provider)}</code></td><td class="meta">${p.calls}</td>
-        <td class="meta">${obsNum(p.in)}</td><td class="meta">${obsNum(p.out)}</td><td class="meta">${obsUsd(p.cost)}</td></tr>`));
-  }
-  if ((u.by_day||[]).length){
-    h += `<h2>Model calls per day</h2>` + table(["day","model calls","tokens in","tokens out","estimated"], u.by_day.map(r =>
-      `<tr><td class="meta">${esc(r.date)}</td><td class="meta">${r.calls}</td>
-        <td class="meta">${obsNum(r.in)}</td><td class="meta">${obsNum(r.out)}</td><td class="meta">${obsUsd(r.cost)}</td></tr>`));
   }
   return h;
 }
 
-// ---------- Evals: what exists, the last gate, where they run
+// ---------- Evals (its own page): what exists, the last gate, where they run
 function obsEvals(d){
   const e = d.evals || {};
   const verdict = v => v === "pass" ? "ok" : v === "fail" ? "bad" : "neutral";
-  let h = obsCap("evals");
+  let h = "";
   const det = e.deterministic;
   h += uiStatBand([
     {label: "deterministic", value: det ? obsNum(det.tests) : "in CI", sub: det ? `test functions in ${det.files} files, 0/1, offline` : "not shipped in this container"},
@@ -293,45 +294,67 @@ function obsEvals(d){
   return h;
 }
 
-// The summary strip: four tiles for the chosen window, each a link to the
-// tab that explains it.
-function obsStrip(m){
-  const tile = (href, label, value, sub, bar = "") =>
-    `<a class="obs-tile" href="${href}"><span class="stat-label">${label}</span><b class="stat-value">${value}</b>${bar}<span class="stat-sub">${sub}</span></a>`;
-  if (!m) return `<div class="obs-strip">${tile("#observability/spend", "spend", "…", "")}</div>`;
-  const sp = m.spend, tl = m.tools, est = sp.model_usd + sp.treg_usd + sp.memory_usd + sp.other_usd;
-  const toolCalls = tl.treg.calls + tl.waku_memory.calls + tl.other.calls;
-  const errors = tl.treg.errors + tl.waku_memory.errors + tl.other.errors;
-  return `<div class="obs-strip">${[
-    tile("#observability/spend", sp.charged_usd != null ? "spend · charged" : "spend · estimated",
-      sp.charged_usd != null ? obsUsd(sp.charged_usd) : obsUsd(est),
-      `model ${obsUsd(sp.model_usd)} · treg ${obsUsd(sp.treg_usd)} · memory ${obsUsd(sp.memory_usd)}${sp.charged_usd != null ? ` · est ${obsUsd(est)}` : ""}`,
-      obsBar([[sp.model_usd, 1, "model"], [sp.treg_usd, 2, "treg"], [sp.memory_usd + sp.other_usd, 3, "Waku Memory and other tools"]])),
-    tile("#observability/spend", "tokens", `${obsTok(m.tokens.in)} <span class="obs-of">in</span> / ${obsTok(m.tokens.out)} <span class="obs-of">out</span>`,
-      `${obsNum(m.tokens.calls)} model calls`),
-    tile("#observability/tools", "tool calls", obsNum(toolCalls),
-      `treg ${tl.treg.calls} · memory ${tl.waku_memory.calls} · local ${tl.other.calls}${errors ? ` · ${errors} error${errors === 1 ? "" : "s"}` : ""}`,
-      obsBar([[tl.treg.calls, 2, "treg"], [tl.waku_memory.calls, 3, "Waku Memory"], [tl.other.calls, 4, "local and MCP"]])),
-    tile("#observability/turns", "turns", obsNum(m.turns.count),
-      m.turns.avg_loops != null ? `avg ${m.turns.avg_loops} loops per turn` : "no loop calls traced"),
-  ].join("")}</div>`;
+// The four cards, one per tab and in the tabs' order, for the chosen window.
+// Each card opens its tab, and the open tab's card is drawn selected.
+function obsCardBody(k, m){
+  const of = t => `<span class="obs-of">${t}</span>`;
+  const sub = lines => lines.filter(Boolean).map(l => `<span class="stat-sub">${l}</span>`).join("");
+  if (k === "turns"){
+    return {value: obsNum(m.turns.count),
+      sub: sub([m.turns.avg_loops != null ? `avg ${m.turns.avg_loops} loops per turn` : "no loop calls traced"])};
+  }
+  if (k === "tools"){
+    const tl = m.tools, total = tl.treg.calls + tl.waku_memory.calls + tl.other.calls;
+    const errors = tl.treg.errors + tl.waku_memory.errors + tl.other.errors;
+    return {value: `${obsNum(total)} ${of("calls")}`,
+      bar: obsBar([[tl.treg.calls, 2, "treg"], [tl.waku_memory.calls, 3, "Waku Memory"], [tl.other.calls, 4, "local and MCP"]]),
+      sub: sub([`treg ${tl.treg.calls} · Waku Memory ${tl.waku_memory.calls} · local ${tl.other.calls}`,
+                `${errors} error${errors === 1 ? "" : "s"}`])};
+  }
+  if (k === "memory"){
+    const me = m.memory || {retrievals: 0, writes: 0, kept: 0, gate_retrieve: 0, gate_skip: 0};
+    return {value: `${obsNum(me.retrievals)} ${of(me.retrievals === 1 ? "retrieval" : "retrievals")}`,
+      bar: obsBar([[me.gate_retrieve, 1, `gate retrieve ${me.gate_retrieve}`], [me.gate_skip, 3, `gate skip ${me.gate_skip}`]]),
+      sub: sub([me.avg_results != null ? `avg ${me.avg_results} results per retrieval` : "no results counted",
+                `${obsNum(me.writes)} write${me.writes === 1 ? "" : "s"} · ${obsNum(me.kept)} fact${me.kept === 1 ? "" : "s"} kept`,
+                `gate: retrieve ${me.gate_retrieve} · skip ${me.gate_skip}`])};
+  }
+  const sp = m.spend, est = sp.model_usd + sp.treg_usd + sp.memory_usd + sp.other_usd;
+  const charged = sp.charged_usd != null;
+  return {value: `${charged ? obsUsd(sp.charged_usd) : obsUsd(est)} ${of(charged ? "charged" : "estimated")}`,
+    bar: obsBar([[sp.model_usd, 1, "model"], [sp.treg_usd, 2, "treg"], [sp.memory_usd + sp.other_usd, 3, "Waku Memory and other tools"]]),
+    sub: sub([`model ${obsUsd(sp.model_usd)} · treg ${obsUsd(sp.treg_usd)} · memory ${obsUsd(sp.memory_usd)}${charged ? ` · estimated ${obsUsd(est)}` : ""}`,
+              `${obsTok(m.tokens.in)} in / ${obsTok(m.tokens.out)} out · ${obsNum(m.tokens.calls)} model calls`])};
 }
+function obsCards(m, active){
+  return `<div class="obs-strip">${OBS_TABS.map(([k, label]) => {
+    const b = m ? obsCardBody(k, m) : {value: "…", sub: ""};
+    const on = k === active;
+    return `<a class="obs-tile${on ? " on" : ""}" href="#observability/${k}" data-card="${k}"${on ? ' aria-current="page"' : ""}>
+      <span class="stat-label">${label}</span><b class="stat-value">${b.value}</b>${b.bar || ""}${b.sub}</a>`;
+  }).join("")}</div>`;
+}
+const obsWindowBar = () => `<div class="obs-windows">${OBS_WINDOWS.map(([k,l]) =>
+    uiButton(l, {level: k === OBS.window ? "primary" : "secondary", size: "sm", onclick: `obsWindow('${k}')`})).join("")}
+    ${OBS.loading ? `<span class="meta">loading…</span>` : ""}</div>`;
 VIEWS.observability = function(D, sub){
   sub = OBS_TABS.some(([k]) => k === sub) ? sub : "turns";
   if (!OBS.loading && Date.now() - OBS.at > 5000) deferBg(loadObservability);
   const d = OBS.data;
-  const tools = d ? d.tools : null;
   let h = `<div class="obs-cap obs-page-cap">${esc(OBS_CAPTION.page)}</div>`;
-  h += `<div class="obs-windows">${OBS_WINDOWS.map(([k,l]) =>
-    uiButton(l, {level: k === OBS.window ? "primary" : "secondary", size: "sm", onclick: `obsWindow('${k}')`})).join("")}
-    ${OBS.loading ? `<span class="meta">loading…</span>` : ""}</div>`;
-  h += obsStrip(d && d.summary);
-  const counts = d ? {turns: d.turns.length, tools: tools.treg.calls + tools.waku_memory.calls + tools.other.calls} : {};
-  h += subtabBar("observability", OBS_TABS.map(([k, l]) => [k, l, counts[k]]), sub);
+  h += obsWindowBar();
+  h += obsCards(d && d.summary, sub);
+  // no counts on the tabs: the card above each tab carries its numbers
+  h += subtabBar("observability", OBS_TABS, sub);
   if (!d) return h + uiCard(`<span class="empty">reading traces…</span>`);
   if (sub === "tools") return h + obsTools(d);
   if (sub === "memory") return h + obsMemory(d, D);
   if (sub === "spend") return h + obsSpend(d);
-  if (sub === "evals") return h + obsEvals(d);
   return h + obsTurns(d);
+};
+VIEWS.evals = function(){
+  if (!OBS.loading && Date.now() - OBS.at > 5000) deferBg(loadObservability);
+  const h = `<div class="obs-cap obs-page-cap">${esc(OBS_CAPTION.evals)}</div>`;
+  if (!OBS.data) return h + uiCard(`<span class="empty">reading the eval record…</span>`);
+  return h + obsEvals(OBS.data);
 };
