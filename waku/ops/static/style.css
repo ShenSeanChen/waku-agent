@@ -294,6 +294,8 @@
   .arch .ns{fill:var(--text-muted);font-size:11.5px}
   .arch .grp{fill:var(--text-faint);font-size:11px;font-weight:var(--font-weight-medium);letter-spacing:.06em}
   .arch .fl{fill:var(--text-faint);font-size:10.5px}
+  .arch .nlink{fill:var(--accent-fg);text-decoration:underline;cursor:pointer}
+  .arch .nlink:hover{fill:var(--text-ink)}
   .arch .flow{fill:none;stroke:var(--text-faint);stroke-width:1.3;marker-end:url(#arr)}
   .arch .flow.dash{stroke-dasharray:4 3;opacity:.75}
   .arch .head{fill:var(--text-faint)}

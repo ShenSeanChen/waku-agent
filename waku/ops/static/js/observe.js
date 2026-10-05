@@ -391,7 +391,7 @@ function obsEvals(d){
     const out = href => `<a class="link" href="${esc(href)}" target="_blank" rel="noopener noreferrer">`;
     const tests = t => t ? `${esc(t.label)}: ${obsNum(t.passed)} passed, ${obsNum(t.failed)} failed, ${obsNum(t.skipped)} skipped`
                          : "no count recorded";
-    h += `<h2>This release</h2>` + uiCard(
+    h += `<h2 id="evals-release">This release</h2>` + uiCard(
       `<div>Commit ${out(rel.commit_url)}<code>${esc(rel.short_sha)}</code></a>, deployed ${obsWhen(rel.deployed_at)}.
          It shipped because every required check below passed on that exact commit.</div>`)
       + table(["required check","result","tests","run"], rel.checks.map(c =>
@@ -400,7 +400,7 @@ function obsEvals(d){
           <td class="meta">${tests(c.tests)}</td>
           <td class="meta">${out(c.url)}view on GitHub</a></td></tr>`));
   }
-  h += `<h2>Release gate</h2>`;
+  h += `<h2 id="evals-gate">Release gate</h2>`;
   h += e.last ? uiCard(`${uiBadge(`deterministic · ${esc(e.last.deterministic)}`, verdict(e.last.deterministic))}
         <span class="obs-gap">${uiBadge(`AI judge · ${esc(e.last.judge)}`, verdict(e.last.judge))}</span>
         <div class="meta">last run ${obsWhen(e.last.ran_at)}. Run it again with <code>make gate</code>.</div>`)
@@ -481,9 +481,18 @@ VIEWS.observability = function(D, sub){
   if (sub === "spend") return h + obsSpend(d);
   return h + obsTurns(d);
 };
-VIEWS.evals = function(){
+// #evals/release (the Overview chart's Release box) opens Evals at "This
+// release", or at "Release gate" where no release record exists. It scrolls
+// once per visit, so the 5s refresh leaves the reader where they are.
+function obsJumpRelease(){
+  const el = document.getElementById("evals-release") || document.getElementById("evals-gate");
+  if (el) el.scrollIntoView({block: "start"});
+}
+VIEWS.evals = function(D, sub){
   if (!OBS.loading && Date.now() - OBS.at > 5000) deferBg(loadObservability);
   const h = `<div class="obs-cap obs-page-cap">${esc(OBS_CAPTION.evals)}</div>`;
   if (!OBS.data) return h + uiCard(`<span class="empty">reading the eval record…</span>`);
+  if (sub !== "release") OBS.jumped = false;
+  else if (!OBS.jumped){ OBS.jumped = true; setTimeout(obsJumpRelease, 0); }
   return h + obsEvals(OBS.data);
 };

@@ -550,7 +550,7 @@ def test_the_cards_are_the_tabs_in_one_order_and_evals_has_its_own_page():
 
     diagram = _static("js/diagram.js")
     assert '"Trace",s.trace_files+" file(s) · always on","observability/turns"' in diagram
-    assert '"Eval","deterministic + judge","evals"' in diagram
+    assert '"Evals",archEvalsLine(d),"evals"' in diagram
     assert "observability/evals" not in diagram
 
 
@@ -832,3 +832,54 @@ def test_every_failed_step_is_in_the_error_list_with_its_loop():
     assert err["endpoint_id"] == "predictleads.companies.lookalike"
     assert err["error"].startswith("balance too low")
     assert _built(_greeting_turn())["errors"] == []
+
+
+# ---- spec 016 (b): the Overview chart's LLM Ops panel -------------------------
+
+# sha256 of archSVG from its first line up to the LLM Ops panel's comment.
+# Spec 016 changed the panel only; everything before it is byte-frozen.
+ARCH_OUTSIDE_PANEL = "f3eaf60cde3f9fcb8bf30bc772f17a441300130b0e5f20bc545246182c7e6fb2"
+
+
+def _arch_svg() -> str:
+    """archSVG's output, rendered by node from diagram.js with stub data."""
+    import shutil
+    import subprocess
+
+    if not shutil.which("node"):
+        pytest.skip("node is not installed")
+    script = (_static("js/diagram.js") + """
+const esc = s => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;");
+process.stdout.write(archSVG({stats: {gate_skips: 1, gate_retrieves: 2, trace_files: 214}, skills: [], facts: [],
+  episodes: [], consolidate_every: 5, chat_pending: 0, eval_report: {deterministic: "pass", judge: "skipped"}}));""")
+    return subprocess.run(["node", "-e", script], capture_output=True, text=True, check=True).stdout
+
+
+def test_the_llm_ops_panel_names_observability_and_evals_and_closes_the_loop():
+    import hashlib
+    import re
+
+    src = _static("js/diagram.js")
+    outside = src[src.index("function archSVG(d){"):src.index("<!-- LLM OPS")]
+    assert hashlib.sha256(outside.encode()).hexdigest() == ARCH_OUTSIDE_PANEL, (
+        "archSVG outside the LLM Ops panel is byte-frozen (waku/ops/static/README.md)")
+
+    svg = _arch_svg()
+    nodes = set(re.findall(r'data-node="([^"]+)"', svg))
+    edges = set(re.findall(r'data-edge="([^"]+)"', svg))
+    before = {"gateway", "wm", "llm", "tools", "reply", "gate", "procedural", "semantic", "episodic",
+              "consolidation", "trace"}
+    assert nodes == before | {"observe", "evals", "release"}
+    assert {"e-gw-wm", "e-wm-loop", "e-reply-gw", "e-reply-save", "e-gate-wm", "e-gate-proc", "e-gate-sem",
+            "e-gate-epi", "e-consol-sem", "e-reply-trace", "e-release-loop"} <= edges
+    assert "LLM OPS — watch, judge, ship" in svg
+    assert "release gate: det pass · judge skipped" in svg and "214 file(s) · always on" in svg
+    # the Observability box opens the page, and each of its four words its own tab
+    assert re.search(r'data-node="observe" onclick="location.hash=\'observability\'"', svg)
+    for tab in ("turns", "tools", "memory", "spend"):
+        assert f"archGo(event,'observability/{tab}')" in svg
+    # every arrow inside the panel has a head, and Release's ends on the LOOP box's right edge
+    panel = svg[svg.index("<!-- LLM OPS"):]
+    assert all("marker-end" in p for p in re.findall(r"<path [^>]*>", panel))
+    release = re.search(r'data-edge="e-release-loop" d="([^"]+)"', svg).group(1)
+    assert release.startswith("M752 309") and release.endswith("538 190")
