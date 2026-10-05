@@ -44,6 +44,15 @@ const obsCap = key => `<div class="obs-cap">${esc(OBS_CAPTION[key])}</div>`;
 const obsUsd = n => n == null ? "—" : Number(n) === 0 ? "$0" : money(Number(n));
 const obsWhen = ts => esc((ts||"").replace("T"," ").slice(0,19));
 const obsNum = n => n == null ? "—" : Number(n).toLocaleString();
+const obsTok = n => n == null ? "—" : n >= 1e6 ? (n/1e6).toFixed(1) + "M" : n >= 1e3 ? (n/1e3).toFixed(1) + "k" : String(n);
+// A bar with no chart library: segments [[value, chartIndex, label]], each
+// sized by its share of `max` (default: their own sum).
+function obsBar(segments, max){
+  const total = max || segments.reduce((a, [v]) => a + (v || 0), 0);
+  if (!total) return `<span class="obs-bar"></span>`;
+  return `<span class="obs-bar">${segments.filter(([v]) => v > 0).map(([v, c, label]) =>
+    `<i class="obs-seg obs-c${c}" style="width:${(v / total * 100).toFixed(2)}%" title="${esc(label || "")}"></i>`).join("")}</span>`;
+}
 const SOURCE_LABEL = {treg: "treg", waku_memory: "Waku Memory", local: "local"};
 const obsSource = s => esc(SOURCE_LABEL[s] || s || "local");
 
@@ -95,6 +104,32 @@ function obsStep(s, total){
     ${bar}${detail.length ? `<div class="wf-detail">${detail.map(x => `<div>${x}</div>`).join("")}</div>` : ""}
   </div>`;
 }
+// Steps grouped the way the loop ran them: what ran before the model's
+// first call, then loop 1, loop 2… (a model call and the tools it asked
+// for), then what ran after the reply. A turn that went through a graph
+// workflow draws its node path above, around the groups.
+function obsWaterfall(t, total){
+  const groups = [];
+  for (const s of t.steps){
+    const key = s.phase === "loop" ? "loop " + s.loop : (s.phase || "before");
+    let g = groups[groups.length - 1];
+    if (!g || g.key !== key){ g = {key, steps: []}; groups.push(g); }
+    g.steps.push(s);
+  }
+  const label = k => k === "before" ? "before the loop" : k === "after" ? "after the reply" : k;
+  const body = groups.map(g => {
+    const usd = g.steps.reduce((a, s) => a + (s.usd || 0), 0);
+    const ms = g.steps.reduce((a, s) => a + (s.span_ms || 0), 0);
+    const node = (g.steps.find(s => s.node) || {}).node;
+    return `<div class="wf-group"><div class="wf-ghead"><span class="wf-gname">${esc(label(g.key))}</span>
+      <span class="wf-nums">${[node ? "node " + esc(node) : "", ms ? "~" + secs(ms) : "", usd ? obsUsd(usd) : ""].filter(Boolean).join(" · ")}</span></div>
+      ${g.steps.map(s => obsStep(s, total)).join("")}</div>`;
+  }).join("");
+  if (!t.graph) return `<div class="wf">${body}</div>`;
+  const path = t.graph.path.map(esc).join(" &rarr; ");
+  return `<div class="wf wf-graph"><div class="wf-ghead"><span class="wf-gname">graph ${esc(t.graph.workflow)}</span>
+    <span class="wf-nums">${path}${t.graph.ms != null ? " · " + secs(t.graph.ms) : ""}</span></div>${body}</div>`;
+}
 function obsTurns(d){
   const turns = d.turns || [];
   let h = obsCap("turns");
@@ -106,7 +141,9 @@ function obsTurns(d){
   h += turns.map((t, i) => {
     const key = t.turn_id || t.ts || String(i);
     const open = OBS.open.has(key);
-    const meta = [secs(t.latency_ms), ...(t.scores||[]).map(x => `${esc(x.source)} score ${esc(String(x.value))}`), `${t.steps.length} steps`, `${t.tool_calls} tool call(s)`,
+    const meta = [secs(t.latency_ms), ...(t.scores||[]).map(x => `${esc(x.source)} score ${esc(String(x.value))}`),
+                  t.loops ? `${t.loops} loop${t.loops === 1 ? "" : "s"}` : "", `${t.tool_calls} tool${t.tool_calls === 1 ? "" : "s"}`,
+                  t.tokens_in || t.tokens_out ? `${obsTok(t.tokens_in)} in / ${obsTok(t.tokens_out)} out` : "",
                   obsUsd(t.usd) + (t.has_receipt ? "" : " est"),
                   t.gate ? `gate ${esc(t.gate)}` : "", t.unfinished ? "never finished" : ""].filter(Boolean).join(" · ");
     const row = uiRow(`<span class="meta">${obsWhen(t.ts).slice(5,16)}</span>`,
@@ -117,15 +154,18 @@ function obsTurns(d){
     const scores = (t.scores||[]).length
       ? `<div class="obs-scores">${t.scores.map(x => uiBadge(`${esc(x.source)}${x.name ? " · " + esc(x.name) : ""} · ${esc(String(x.value))}`, "value", x.note || "")).join(" ")}</div>` : "";
     const head = scores + `<div class="meta">${t.turn_id ? `turn <code>${esc(t.turn_id)}</code> · ` : "older trace: no turn id or tool durations; times are measured between lines · "}${obsWhen(t.ts)}</div>`;
-    return row + uiCard(head + `<div class="wf">${t.steps.map(s => obsStep(s, total)).join("")}</div>`, {size: "sm", cls: "obs-wf"});
+    return row + uiCard(head + obsWaterfall(t, total), {size: "sm", cls: "obs-wf"});
   }).join("");
   return h;
 }
 
 // ---------- Tools: grouped by source, treg with its endpoints
-function obsToolTable(rows, {results = false, source = false} = {}){
-  const heads = ["tool", ...(source ? ["source"] : []), "calls", "errors", "avg time", ...(results ? ["avg results"] : ["$"])];
-  return table(heads, rows.map(r => `<tr><td><code>${esc(r.tool)}</code></td>${source ? `<td class="meta">${obsSource(r.source)}</td>` : ""}
+function obsToolTable(rows, {results = false, source = false, byUsd = false} = {}){
+  // the bar is sized by dollars for treg, by calls everywhere else
+  const max = Math.max(...rows.map(r => byUsd ? (r.usd || 0) : r.calls), 0);
+  const heads = ["tool", "", ...(source ? ["source"] : []), "calls", "errors", "avg time", ...(results ? ["avg results"] : ["$"])];
+  return table(heads, rows.map(r => `<tr><td><code>${esc(r.tool)}</code></td>
+    <td class="obs-barcell">${obsBar([[byUsd ? (r.usd || 0) : r.calls, byUsd ? 2 : 3, byUsd ? obsUsd(r.usd) : r.calls + " calls"]], max)}</td>${source ? `<td class="meta">${obsSource(r.source)}</td>` : ""}
     <td class="meta">${r.calls}</td><td>${r.errors ? uiBadge(String(r.errors), "bad") : `<span class="meta">0</span>`}</td>
     <td class="meta">${r.avg_ms != null ? secs(r.avg_ms) : "—"}</td>
     <td class="meta">${results ? (r.avg_results ?? "—") : obsUsd(r.usd)}</td></tr>`));
@@ -133,15 +173,13 @@ function obsToolTable(rows, {results = false, source = false} = {}){
 function obsTools(d){
   const t = d.tools || {treg:{tools:[],endpoints:[]}, waku_memory:{tools:[],recent_queries:[]}, other:{tools:[]}};
   let h = obsCap("tools");
-  h += `<div class="obs-windows">${OBS_WINDOWS.map(([k,l]) =>
-    uiButton(l, {level: k === OBS.window ? "primary" : "secondary", size: "sm", onclick: `obsWindow('${k}')`})).join("")}
-    ${OBS.loading ? `<span class="meta">loading…</span>` : ""}</div>`;
   h += `<h2>treg <span class="meta obs-h-sub">${t.treg.calls} call(s) · ${obsUsd(t.treg.usd)}</span></h2>`;
-  h += obsToolTable(t.treg.tools);
+  h += obsToolTable(t.treg.tools, {byUsd: true});
   if ((t.treg.endpoints||[]).length){
     h += `<h3>treg endpoints called</h3>`;
-    h += table(["endpoint","provider","calls","$"], t.treg.endpoints.map(e =>
-      `<tr><td><code>${esc(e.endpoint_id)}</code></td><td class="meta">${esc(e.provider||"")}</td>
+    const emax = Math.max(...t.treg.endpoints.map(e => e.usd || 0), 0);
+    h += table(["endpoint","","provider","calls","$"], t.treg.endpoints.map(e =>
+      `<tr><td><code>${esc(e.endpoint_id)}</code></td><td class="obs-barcell">${obsBar([[e.usd || 0, 2, obsUsd(e.usd)]], emax)}</td><td class="meta">${esc(e.provider||"")}</td>
         <td class="meta">${e.calls}${e.errors ? " · " + uiBadge(e.errors + " error", "bad") : ""}</td><td class="meta">${obsUsd(e.usd)}</td></tr>`));
   }
   h += `<h2>Waku Memory <span class="meta obs-h-sub">${t.waku_memory.calls} call(s)</span></h2>`;
@@ -193,13 +231,23 @@ function obsSpend(d){
     reset never wipes. The estimate prices those tokens at list price. On agent.waku.one the metering proxy
     knows the exact charge, and each turn's receipt records it as charged.</span>`,
     {footer: reveal("usage.jsonl","open usage.jsonl")});
+  const days = d.spend_by_day || [];
+  if (days.length){
+    const max = Math.max(...days.map(r => r.total), 0);
+    h += `<h2>Spend per day</h2><div class="obs-legend">${[["model", 1], ["treg tools", 2], ["Waku Memory", 3]].map(([l, c]) =>
+      `<span><i class="obs-swatch obs-c${c}"></i>${l}</span>`).join("")}</div>`;
+    h += `<div class="obs-days">${days.map(r => `<div class="obs-day"><span class="meta">${esc(r.date.slice(5))}</span>
+      ${obsBar([[r.model, 1, "model " + obsUsd(r.model)], [r.treg, 2, "treg " + obsUsd(r.treg)], [r.memory + r.other, 3, "Waku Memory and other tools " + obsUsd(r.memory + r.other)]], max)}
+      <span class="meta">${obsUsd(r.total)}</span></div>`).join("")}</div>`;
+    h += `<div class="meta obs-foot">Model dollars are estimated from usage.jsonl; tool dollars are what each tool's answer said it cost.</div>`;
+  }
   if ((u.by_provider||[]).length){
     h += `<h2>By provider</h2>` + table(["provider","model calls","tokens in","tokens out","estimated"], u.by_provider.map(p =>
       `<tr><td><code>${esc(p.provider)}</code></td><td class="meta">${p.calls}</td>
         <td class="meta">${obsNum(p.in)}</td><td class="meta">${obsNum(p.out)}</td><td class="meta">${obsUsd(p.cost)}</td></tr>`));
   }
   if ((u.by_day||[]).length){
-    h += `<h2>Per day</h2>` + table(["day","model calls","tokens in","tokens out","estimated"], u.by_day.map(r =>
+    h += `<h2>Model calls per day</h2>` + table(["day","model calls","tokens in","tokens out","estimated"], u.by_day.map(r =>
       `<tr><td class="meta">${esc(r.date)}</td><td class="meta">${r.calls}</td>
         <td class="meta">${obsNum(r.in)}</td><td class="meta">${obsNum(r.out)}</td><td class="meta">${obsUsd(r.cost)}</td></tr>`));
   }
@@ -245,19 +293,39 @@ function obsEvals(d){
   return h;
 }
 
+// The summary strip: four tiles for the chosen window, each a link to the
+// tab that explains it.
+function obsStrip(m){
+  const tile = (href, label, value, sub, bar = "") =>
+    `<a class="obs-tile" href="${href}"><span class="stat-label">${label}</span><b class="stat-value">${value}</b>${bar}<span class="stat-sub">${sub}</span></a>`;
+  if (!m) return `<div class="obs-strip">${tile("#observability/spend", "spend", "…", "")}</div>`;
+  const sp = m.spend, tl = m.tools, est = sp.model_usd + sp.treg_usd + sp.memory_usd + sp.other_usd;
+  const toolCalls = tl.treg.calls + tl.waku_memory.calls + tl.other.calls;
+  const errors = tl.treg.errors + tl.waku_memory.errors + tl.other.errors;
+  return `<div class="obs-strip">${[
+    tile("#observability/spend", sp.charged_usd != null ? "spend · charged" : "spend · estimated",
+      sp.charged_usd != null ? obsUsd(sp.charged_usd) : obsUsd(est),
+      `model ${obsUsd(sp.model_usd)} · treg ${obsUsd(sp.treg_usd)} · memory ${obsUsd(sp.memory_usd)}${sp.charged_usd != null ? ` · est ${obsUsd(est)}` : ""}`,
+      obsBar([[sp.model_usd, 1, "model"], [sp.treg_usd, 2, "treg"], [sp.memory_usd + sp.other_usd, 3, "Waku Memory and other tools"]])),
+    tile("#observability/spend", "tokens", `${obsTok(m.tokens.in)} <span class="obs-of">in</span> / ${obsTok(m.tokens.out)} <span class="obs-of">out</span>`,
+      `${obsNum(m.tokens.calls)} model calls`),
+    tile("#observability/tools", "tool calls", obsNum(toolCalls),
+      `treg ${tl.treg.calls} · memory ${tl.waku_memory.calls} · local ${tl.other.calls}${errors ? ` · ${errors} error${errors === 1 ? "" : "s"}` : ""}`,
+      obsBar([[tl.treg.calls, 2, "treg"], [tl.waku_memory.calls, 3, "Waku Memory"], [tl.other.calls, 4, "local and MCP"]])),
+    tile("#observability/turns", "turns", obsNum(m.turns.count),
+      m.turns.avg_loops != null ? `avg ${m.turns.avg_loops} loops per turn` : "no loop calls traced"),
+  ].join("")}</div>`;
+}
 VIEWS.observability = function(D, sub){
   sub = OBS_TABS.some(([k]) => k === sub) ? sub : "turns";
   if (!OBS.loading && Date.now() - OBS.at > 5000) deferBg(loadObservability);
   const d = OBS.data;
   const tools = d ? d.tools : null;
   let h = `<div class="obs-cap obs-page-cap">${esc(OBS_CAPTION.page)}</div>`;
-  h += uiStatBand([
-    {label: "turns traced", value: d ? obsNum(d.turns.length) : "…", sub: d ? `${d.trace_files} trace file(s)` : ""},
-    {label: "tool calls", value: tools ? obsNum(tools.treg.calls + tools.waku_memory.calls + tools.other.calls) : "…",
-     sub: (OBS_WINDOWS.find(([k]) => k === OBS.window) || [0, ""])[1]},
-    {label: "treg", value: tools ? obsUsd(tools.treg.usd) : "…", sub: tools ? `${tools.treg.endpoints.length} endpoint(s)` : ""},
-    {label: "estimated", value: d ? obsUsd(d.spend.estimated_usd) : "…", sub: "all-time"},
-  ]);
+  h += `<div class="obs-windows">${OBS_WINDOWS.map(([k,l]) =>
+    uiButton(l, {level: k === OBS.window ? "primary" : "secondary", size: "sm", onclick: `obsWindow('${k}')`})).join("")}
+    ${OBS.loading ? `<span class="meta">loading…</span>` : ""}</div>`;
+  h += obsStrip(d && d.summary);
   const counts = d ? {turns: d.turns.length, tools: tools.treg.calls + tools.waku_memory.calls + tools.other.calls} : {};
   h += subtabBar("observability", OBS_TABS.map(([k, l]) => [k, l, counts[k]]), sub);
   if (!d) return h + uiCard(`<span class="empty">reading traces…</span>`);

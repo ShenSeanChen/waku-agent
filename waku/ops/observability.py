@@ -384,7 +384,8 @@ def _step(ev: dict, servers, provider: str, model: str) -> dict | None:
     kind = ev.get("type")
     span = {"gate": "gate", "llm": "llm", "consolidation": "memory_write", "report": "memory_write",
             "receipt": "receipt", "triage": "route", "route": "route"}.get(kind)
-    base = {"kind": kind, "span": span, "ts": ev.get("ts")}
+    base = {"kind": kind, "span": span, "ts": ev.get("ts"),
+            "node": ev.get("node") if isinstance(ev.get("node"), str) else None}
     if kind == "gate":
         return {**base, "decision": ev.get("decision"), "reason": _trim(str(ev.get("reason") or ""), 160)}
     if kind == "llm":
@@ -462,6 +463,7 @@ def build_turn(turn: dict, servers=(), provider: str = "", model: str = "",
             span = step["duration_ms"]
         step["span_ms"] = max(span, 0) if span is not None else None
         previous = at or previous
+    loops = _group_loops(steps)
     receipt = next((s for s in reversed(steps) if s["kind"] == "receipt"), None)
     steps_usd = sum(s.get("usd") or 0 for s in steps if s["kind"] in ("llm", "tool", "memory"))
     total = receipt["total_usd"] if receipt and isinstance(receipt.get("total_usd"), int | float) else steps_usd
@@ -486,8 +488,48 @@ def build_turn(turn: dict, servers=(), provider: str = "", model: str = "",
                  else (consolidation["new_facts"] if consolidation else None)),
         "gate": next((s["decision"] for s in steps if s["kind"] == "gate"), None),
         "tool_calls": sum(1 for s in steps if s["kind"] in ("tool", "memory")),
+        "loops": loops,
+        "tokens_in": sum(s.get("in") or 0 for s in steps if s["kind"] == "llm"),
+        "tokens_out": sum(s.get("out") or 0 for s in steps if s["kind"] == "llm"),
+        "graph": _graph(turn["events"]),
         "steps": steps,
     }
+
+
+def _group_loops(steps: list[dict]) -> int:
+    """Give every step its place in the loop: `loop` 0 and phase "before" for
+    what runs before the model's first call (gate, routing, read-first
+    searches), `loop` n and phase "loop" for iteration n (its model call and
+    the tools that call asked for), and phase "after" for what follows the
+    reply (consolidation, a saved report, the receipt). A loop model call
+    (kind "loop", or no kind on an old line) starts the next iteration; a
+    side call (gate, consolidation, …) never does. Returns the iterations."""
+    n, after = 0, False
+    for step in steps:
+        is_loop_call = step["kind"] == "llm" and step.get("call") in ("loop", None)
+        if is_loop_call:
+            n, after = n + 1, False
+            step["loop"], step["phase"] = n, "loop"
+            after = step.get("stop_reason") not in ("tool_use", None)
+            continue
+        step["loop"] = n
+        step["phase"] = "after" if after or (n and step["kind"] in ("consolidation", "report", "receipt")) \
+            else ("loop" if n else "before")
+    return n
+
+
+def _graph(events: list[dict]) -> dict | None:
+    """The graph workflow a turn ran through, when it ran through one: its
+    name, the nodes in the order they ran, and how long it took."""
+    start = next((e for e in events if e.get("type") == "graph_start"), None)
+    if start is None:
+        return None
+    end = next((e for e in events if e.get("type") == "graph_end"), None) or {}
+    path = end.get("path") if isinstance(end.get("path"), list) else [
+        e.get("node") for e in events if e.get("type") == "node_start"]
+    return {"workflow": start.get("workflow") or "", "path": [str(p) for p in path if p],
+            "ms": end.get("ms") if isinstance(end.get("ms"), int) else None,
+            "error": _trim(str(end.get("error")), 160) if end.get("error") else None}
 
 
 # ---------------------------------------------------------------------------
@@ -624,6 +666,100 @@ def spend(home: Path, events: list[dict]) -> dict:
     }
 
 
+def _ledger_rows(home: Path) -> list[dict]:
+    rows = []
+    try:
+        for line in (home / "usage.jsonl").read_text(encoding="utf-8").splitlines():
+            try:
+                row = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(row, dict):
+                rows.append(row)
+    except OSError:
+        pass
+    return rows
+
+
+def _row_cost(row: dict) -> float:
+    return llm_cost(row.get("provider") or "", row.get("model") or "",
+                    {"in": row.get("in"), "out": row.get("out")})
+
+
+def _tool_costs(events: list[dict], start: datetime | None, servers=()) -> list[tuple[str, str, float]]:
+    """(ts, source, dollars) for every priced tool call in the window."""
+    out = []
+    for ev in events:
+        if ev.get("type") != "tool" or not _in_window(ev, start):
+            continue
+        info = describe(ev, servers)
+        if info.get("cost_usd") is not None:
+            out.append((str(ev.get("ts") or ""), info["source"], float(info["cost_usd"])))
+    return out
+
+
+def summary(home: Path, events: list[dict], turns: list[dict], tools: dict,
+            window: str = "7d", now: datetime | None = None, servers=()) -> dict:
+    """The strip at the top of the page, for one window: spend by source,
+    tokens, tool calls by source with errors, and turns with their average
+    loop iterations. Model dollars and tokens come from usage.jsonl, which
+    counts every model call; tool dollars from the traces."""
+    start = window_start(window, now)
+    rows = [r for r in _ledger_rows(home) if _in_window(r, start)]
+    tool_costs = _tool_costs(events, start, servers)
+    charged = [ev for ev in events if ev.get("type") == "receipt" and _in_window(ev, start)
+               and isinstance(ev.get("model"), dict) and ev["model"].get("estimate") is False]
+    credits = [ev.get("credits") for ev in charged
+               if isinstance(ev.get("credits"), int) and not isinstance(ev.get("credits"), bool)]
+    in_window = [t for t in turns if _in_window(t, start)]
+    loops = [t["loops"] for t in in_window if t.get("loops")]
+
+    def calls(group: str) -> dict:
+        rows_ = tools[group]["tools"]
+        return {"calls": sum(r["calls"] for r in rows_), "errors": sum(r["errors"] for r in rows_)}
+
+    return {
+        "window": window,
+        "spend": {
+            "model_usd": round(sum(_row_cost(r) for r in rows), 6),
+            "treg_usd": round(sum(c for _, src, c in tool_costs if src == "treg"), 6),
+            "memory_usd": round(sum(c for _, src, c in tool_costs if src == "waku_memory"), 6),
+            "other_usd": round(sum(c for _, src, c in tool_costs
+                                   if src not in ("treg", "waku_memory")), 6),
+            "charged_usd": (round(sum(float(ev.get("total_usd") or 0) for ev in charged), 6)
+                            if charged else None),
+            "credits": sum(credits) if credits else None,
+        },
+        "tokens": {"in": sum(int(r.get("in") or 0) for r in rows),
+                   "out": sum(int(r.get("out") or 0) for r in rows),
+                   "calls": len(rows)},
+        "tools": {"treg": calls("treg"), "waku_memory": calls("waku_memory"), "other": calls("other")},
+        "turns": {"count": len(in_window),
+                  "avg_loops": round(sum(loops) / len(loops), 1) if loops else None},
+    }
+
+
+def spend_by_day(home: Path, events: list[dict], days: int = 14, servers=()) -> list[dict]:
+    """Newest first, one row per day (UTC, as the ledger dates them): model
+    dollars from usage.jsonl, treg and Waku Memory dollars from the traces."""
+    out: dict[str, dict] = {}
+
+    def day(key: str) -> dict:
+        return out.setdefault(key, {"date": key, "model": 0.0, "treg": 0.0, "memory": 0.0, "other": 0.0})
+
+    for row in _ledger_rows(home):
+        key = str(row.get("ts") or "")[:10]
+        if key:
+            day(key)["model"] += _row_cost(row)
+    for ts, source, cost in _tool_costs(events, None, servers):
+        if ts[:10]:
+            bucket = {"treg": "treg", "waku_memory": "memory"}.get(source, "other")
+            day(ts[:10])[bucket] += cost
+    rows = sorted(out.values(), key=lambda r: r["date"], reverse=True)[:days]
+    return [{**r, **{k: round(r[k], 6) for k in ("model", "treg", "memory", "other")},
+             "total": round(r["model"] + r["treg"] + r["memory"] + r["other"], 6)} for r in rows]
+
+
 def memory_per_turn(turns: list[dict]) -> list[dict]:
     """Per turn, newest first: the gate, memories used and facts kept."""
     return [{"turn_id": t["turn_id"], "ts": t["ts"], "user_message": t["user_message"],
@@ -679,17 +815,20 @@ def payload(home: Path, *, provider: str = "", model: str = "", window: str = "7
         if ev.get("type") == "score" and ev.get("turn_id"):
             late.setdefault(ev["turn_id"], []).append(ev)
     grouped = group_turns(events)
-    turns = [build_turn(t, servers, provider, model,
-                        [e for e in late.get(t.get("turn_id") or "", []) if e not in t["events"]])
-             for t in grouped][::-1][:MAX_TURNS]
+    all_turns = [build_turn(t, servers, provider, model,
+                            [e for e in late.get(t.get("turn_id") or "", []) if e not in t["events"]])
+                 for t in grouped]
+    tools = tool_stats(events, servers, window, now)
     return {
         "generated_at": datetime.now(UTC).isoformat(timespec="seconds"),
+        "summary": summary(home, events, all_turns, tools, window, now, servers),
+        "spend_by_day": spend_by_day(home, events, servers=servers),
         "trace_files": len(files),
         "trace_file": files[-1] if files else None,
         "trace_errors": errors,
-        "turns": turns,
-        "tools": tool_stats(events, servers, window, now),
-        "memory": memory_per_turn(turns),
+        "turns": all_turns[::-1][:MAX_TURNS],
+        "tools": tools,
+        "memory": memory_per_turn(all_turns[::-1][:MAX_TURNS]),
         "spend": spend(home, events),
         "evals": evals_info(home, hosted=hosted),
     }

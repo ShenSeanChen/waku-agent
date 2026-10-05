@@ -355,3 +355,93 @@ def test_the_otel_span_carries_genai_names_and_waku_cost(tmp_path):
     assert attrs["gen_ai.operation.name"] == "execute_tool" and attrs["mcp.method.name"] == "tools/call"
     assert attrs["waku.cost.usd"] == 0.0089 and "waku.cost_usd" not in attrs
     assert all(not isinstance(v, dict) for v in attrs.values())
+
+
+# ---- the visual pass: loops, graph, summary strip, spend per day -------------
+
+def test_steps_group_by_loop_iteration():
+    t0 = datetime(2026, 10, 4, 9, 0, tzinfo=UTC)
+    at = lambda s: (t0 + timedelta(seconds=s)).isoformat()  # noqa: E731
+    events = [
+        {"type": "turn_start", "turn_id": "t_1", "user_message": "x", "ts": at(0)},
+        {"type": "graph_start", "workflow": "triage", "nodes": ["classify", "full_agent"], "ts": at(0)},
+        {"type": "node_start", "node": "classify", "ts": at(0)},
+        {"type": "llm", "kind": "triage", "usage": {"in": 5, "out": 1}, "node": "classify", "ts": at(1)},
+        {"type": "gate", "decision": "skip", "node": "full_agent", "ts": at(2)},
+        {"type": "llm", "kind": "gate", "usage": {"in": 5, "out": 1}, "ts": at(2)},
+        {"type": "llm", "kind": "loop", "iteration": 1, "stop_reason": "tool_use",
+         "usage": {"in": 100, "out": 10}, "node": "full_agent", "ts": at(3)},
+        {"type": "tool", "tool": "save_note", "args": {}, "output": "saved", "ts": at(4)},
+        {"type": "llm", "kind": "loop", "iteration": 2, "stop_reason": "tool_use",
+         "usage": {"in": 200, "out": 20}, "ts": at(5)},
+        {"type": "tool", "tool": "treg_call", "args": {}, "output": TREG_OUT, "ts": at(6)},
+        {"type": "llm", "kind": "loop", "iteration": 3, "stop_reason": "end_turn",
+         "usage": {"in": 300, "out": 30}, "ts": at(7)},
+        {"type": "llm", "kind": "consolidation", "usage": {"in": 50, "out": 5}, "ts": at(8)},
+        {"type": "consolidation", "new_facts": 1, "kept": [], "ts": at(8)},
+        {"type": "graph_end", "workflow": "triage", "ms": 8000, "steps": 2,
+         "path": ["classify", "full_agent"], "ts": at(8)},
+        {"type": "turn_end", "turn_id": "t_1", "reply": "ok", "iterations": 3, "ts": at(9)},
+    ]
+    turn = obs.build_turn(obs.group_turns(events)[0], provider="anthropic", model="claude-sonnet-5")
+    assert turn["loops"] == 3
+    placed = [(s["kind"], s.get("call"), s["phase"], s["loop"]) for s in turn["steps"]]
+    assert placed == [
+        ("llm", "triage", "before", 0), ("gate", None, "before", 0), ("llm", "gate", "before", 0),
+        ("llm", "loop", "loop", 1), ("tool", None, "loop", 1),
+        ("llm", "loop", "loop", 2), ("tool", None, "loop", 2),
+        ("llm", "loop", "loop", 3),
+        ("llm", "consolidation", "after", 3), ("consolidation", None, "after", 3)]
+    assert turn["tokens_in"] == 660 and turn["tokens_out"] == 67
+    assert turn["graph"] == {"workflow": "triage", "path": ["classify", "full_agent"],
+                             "ms": 8000, "error": None}
+    assert turn["steps"][3]["node"] == "full_agent"
+
+
+def test_an_old_turn_without_kinds_still_counts_its_loops():
+    turn = obs.build_turn(obs.group_turns(_v1_trace())[0])
+    assert turn["loops"] == 1 and turn["graph"] is None
+    assert [s["phase"] for s in turn["steps"]] == ["before", "loop", "loop", "loop", "after"]
+
+
+def test_the_summary_strip_and_spend_per_day(tmp_path):
+    day = lambda d, h=10: datetime(2026, 10, d, h, tzinfo=UTC).isoformat()  # noqa: E731
+    (tmp_path / "usage.jsonl").write_text("\n".join(json.dumps(r) for r in [
+        {"ts": day(4), "provider": "anthropic", "model": "claude-sonnet-5", "in": 1_000_000, "out": 0},
+        {"ts": day(3), "provider": "anthropic", "model": "claude-sonnet-5", "in": 0, "out": 100_000},
+        {"ts": day(1), "provider": "anthropic", "model": "claude-sonnet-5", "in": 500, "out": 0},
+    ]) + "\n")
+    serp = json.dumps({"status": 200, "endpoint_id": "spyfu.x", "cost_usd": 0.02})
+    events = [
+        {"type": "turn_start", "turn_id": "t_a", "user_message": "a", "ts": day(4, 9)},
+        {"type": "llm", "kind": "loop", "iteration": 1, "stop_reason": "tool_use",
+         "usage": {"in": 1, "out": 1}, "ts": day(4, 9)},
+        {"type": "tool", "tool": "treg_call", "args": {}, "output": serp, "ts": day(4, 9)},
+        {"type": "tool", "tool": "waku_memory_memory_search", "args": {"query": "q"},
+         "output": "MCP call failed: down", "ts": day(4, 9)},
+        {"type": "llm", "kind": "loop", "iteration": 2, "stop_reason": "end_turn",
+         "usage": {"in": 1, "out": 1}, "ts": day(4, 9)},
+        {"type": "receipt", "total_usd": 0.5, "model": {"estimate": False}, "credits": 1000,
+         "ts": day(4, 9)},
+        {"type": "turn_end", "turn_id": "t_a", "reply": "", "iterations": 2, "ts": day(4, 9)},
+        {"type": "turn_start", "turn_id": "t_b", "user_message": "b", "ts": day(1)},
+        {"type": "tool", "tool": "treg_call", "args": {}, "output": serp, "ts": day(1)},
+        {"type": "turn_end", "turn_id": "t_b", "reply": "", "iterations": 1, "ts": day(1)},
+    ]
+    now = datetime(2026, 10, 4, 12, tzinfo=UTC)
+    turns = [obs.build_turn(t) for t in obs.group_turns(events)]
+    tools = obs.tool_stats(events, (), "7d", now)
+    m = obs.summary(tmp_path, events, turns, tools, "7d", now)
+    sonnet_in, sonnet_out = obs.price_for("anthropic", "claude-sonnet-5")
+    assert m["spend"]["model_usd"] == round(sonnet_in + 0.1 * sonnet_out + 500 / 1e6 * sonnet_in, 6)
+    assert m["spend"]["treg_usd"] == 0.04 and m["spend"]["memory_usd"] == 0
+    assert m["spend"]["charged_usd"] == 0.5 and m["spend"]["credits"] == 1000
+    assert m["tokens"] == {"in": 1_000_500, "out": 100_000, "calls": 3}
+    assert m["tools"]["treg"] == {"calls": 2, "errors": 0}
+    assert m["tools"]["waku_memory"] == {"calls": 1, "errors": 1}
+    assert m["turns"] == {"count": 2, "avg_loops": 2.0}
+
+    days = obs.spend_by_day(tmp_path, events)
+    assert [r["date"] for r in days] == ["2026-10-04", "2026-10-03", "2026-10-01"]
+    assert days[0]["model"] == round(sonnet_in, 6) and days[0]["treg"] == 0.02
+    assert days[2]["treg"] == 0.02 and days[2]["total"] == round(days[2]["model"] + 0.02, 6)
