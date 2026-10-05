@@ -69,7 +69,9 @@ while not done:
 ```
 
 Two guardrails end every turn: the model stops asking for tools (natural end),
-or it hits `max_iterations` (hard stop — it never spins forever). That's "loop
+or it hits `max_iterations` (hard stop — it never spins forever). At that stop
+the loop makes one last call with tools off, so the reply answers from what the
+turn already gathered instead of throwing it away. That's "loop
 engineering": the exit conditions, the tool round-trip, and feeding results
 back as working memory.
 

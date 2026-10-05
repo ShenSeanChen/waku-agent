@@ -661,6 +661,13 @@ instructions say not to call them (spec 009 E). It is in the container's
 environment, not in `SOUL.md`, so a tenant provisioned earlier gets it on its
 next start.
 
+**A tenant turn gets fifteen steps.** Every tenant container starts with
+`WAKU_MAX_ITERATIONS=15` (`TENANT_MAX_ITERATIONS` in `spawner/template.py`),
+the most model calls with tools one turn may make. At the limit the loop makes
+one more call with tools off and answers from what the turn gathered. Like
+the line above, a running tenant gets it on its next start; `upgrade.sh --now`
+restarts every tenant onto it at once.
+
 ### A second fence: treg's per-customer daily budget
 
 Every call is tagged `customer=<tenant id>`, so treg can cap each tenant per

@@ -35,6 +35,8 @@ from hosted.core.tenant import (
 )
 
 DASHBOARD_PORT = 7777
+# The most model calls with tools one tenant turn may make (WAKU_MAX_ITERATIONS).
+TENANT_MAX_ITERATIONS = 15
 
 # Spec, the container template table. Every number is the spec's, spelled with
 # its unit beside it so the next reader does not have to divide.
@@ -329,6 +331,11 @@ def tenant_container(config: SpawnerConfig, *, tenant_id: str, project_id: int,
             f"WAKU_DASHBOARD_PORT={DASHBOARD_PORT}",
             f"TZ={timezone}",
             "HOME=/tmp",
+            # The loop's step limit, pinned here rather than left to stock
+            # waku's default, so the platform decides what a tenant's turn
+            # may spend. A research turn with a failed lookup or two needs
+            # more than ten; at the limit the loop still answers, tools off.
+            f"WAKU_MAX_ITERATIONS={TENANT_MAX_ITERATIONS}",
             # The free tier's four, present only when there IS one. Stock
             # waku decides whether to offer the row by whether these are set
             # (waku/integrations.py, the hidden_unless_env row), so omitting
