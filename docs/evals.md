@@ -43,10 +43,10 @@ fail or n/a with a one-line note:
 
 | Check | Passes when |
 |---|---|
-| `spend_claim` | every dollar figure, "free" or "no cost" the reply states for this turn matches the trace's treg dollars, or the named provider's own calls ("LeadsForge's free preview ($0.00)") |
-| `one_report` | a research turn saved exactly one report, or its reply carries the report when no Waku Memory is connected |
-| `grounded_numbers` | 90% of the reply's money amounts, percentages, dates and numbers of two or more digits appear in a tool output, a memory or your message |
-| `errors_handled` | every failed tool call was retried or the reply says it failed |
+| `spend_claim` | every dollar figure, "free" or "no cost" the reply states for this turn matches the trace's treg dollars, or the named provider's own calls ("LeadsForge's free preview ($0.00)"); "four Aviato calls at $0.01 each" states $0.04 |
+| `one_report` | a research turn saved exactly one report, or its reply carries the report when no Waku Memory is connected. The model's own `memory_remember` of a report counts as a save. A question answered from memory alone (no other tool ran, no save asked) is n/a |
+| `grounded_numbers` | 90% of the reply's money amounts, percentages, dates and numbers of two or more digits appear in a tool output, a memory or your message ($1.58M and 1575000, 275K and 274,812 match). The turn's own date is not counted. A turn that ran only Waku Memory is n/a rather than failed: its numbers may come from the chat's earlier turns, which the trace does not keep |
+| `errors_handled` | every failed tool call was retried, or the reply names it ("YouTube" for a `tikhub.youtube.*` call) or says it failed or did not run |
 | `under_budget` | the turn cost at most `WAKU_TURN_BUDGET_USD` (default $1.00) |
 
 The dashboard runs the checks each time it reads your traces, so an old turn
@@ -58,6 +58,8 @@ turns counts passed, failed and n/a per check for today, 7 days or all, with
 the newest failing turn. In a terminal, `waku evals turns --window 7d` prints
 the same table and every failing turn. A check grades a finished turn: it
 never stops or rewrites a reply, and a failed check is not shown in the chat.
+A check fails only when a reader of the trace would agree; when the trace
+cannot settle it, the check says n/a and its note says why.
 
 One more check runs only when you ask. "Judge this turn" in a turn's
 waterfall sends that stored turn's message, reply and tool outputs to the
