@@ -314,7 +314,7 @@ class DockerRuntime:
             # core/requests.parse, so this is the in-process path's guard.
             raise ValueError(f"not a tenant id: {tenant_id!r}")
         # One tenant, one start at a time. Without this, the gateway's
-        # documented retry ("a start that does not answer within 15 seconds ...
+        # documented retry ("a start that does not answer within 60 seconds ...
         # Try again.") can run concurrently with the start it is retrying, and
         # the two race over the same container name and the same directories.
         async with self._lock_for(tenant_id):

@@ -29,10 +29,11 @@ from hosted import jsonsock
 from hosted.core.tenant import is_tenant_id
 from hosted.ports.runtime import RunningContainer
 
-# Long enough that the gateway's own 15-second start budget is what expires
-# first, so the tenant is told "taking too long to start" rather than being
-# handed a socket error the sentence for does not exist.
-START_ASK_TIMEOUT = 30.0
+# Longer than the gateway's own 60-second start budget
+# (idle.START_TIMEOUT_SECONDS), so that budget is what expires first and the
+# tenant is shown the starting page rather than a socket error the sentence
+# for does not exist.
+START_ASK_TIMEOUT = 75.0
 # An operator task: a backup, a restore, an archive. Nobody is watching a
 # browser tab on these; the admin command is.
 TASK_ASK_TIMEOUT = 900.0

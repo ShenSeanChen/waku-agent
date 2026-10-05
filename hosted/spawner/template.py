@@ -74,7 +74,7 @@ KIND_INSPECT = "inspect"
 # `start` does to itself, every time, on its way to starting the container --
 # so labelling it KIND_TASK makes a tenant's own start refuse a concurrent or
 # retried start of the same tenant with {"code": "busy"}. The spec's start path
-# retries: "a start that does not answer within 15 seconds returns 'Your
+# retries: "a start that does not answer within 60 seconds returns 'Your
 # assistant is taking too long to start. Try again.'", and a container that
 # refuses the connection is "looked up again ... and only if it is gone does
 # the gateway start it once more". Both retries would land on Busy, and the
