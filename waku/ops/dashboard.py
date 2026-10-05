@@ -42,6 +42,7 @@ from waku.integrations import (
     list_providers,
     test_integration,
 )
+from waku.key_locations import model_key_locations
 from waku.loop.agent import error_text
 from waku.memory import tool_note
 from waku.ops import browser_agent, commands, compare_history
@@ -528,6 +529,9 @@ def collect() -> dict:
         "db": db_info,
         "settings": info,
         "providers": [asdict(view) for view in list_providers()],
+        # Where a model key was looked for, for the setup page (spec 013).
+        # Paths and yes-or-no only: no value ever enters this payload.
+        "key_locations": model_key_locations(),
         "connections": [asdict(view) for view in list_connections()],
         # MCP servers that sign in on their own page rather than through an
         # .env field (spec 007 E). Files only: no browser, no network.
@@ -535,6 +539,21 @@ def collect() -> dict:
         "tools": tools_info(),
         "usage": usage_summary(home),
     }
+
+
+def observability_data(window: str = "7d") -> dict:
+    """The Observability page's data (spec 012, `waku/ops/observability.py`).
+    A hosted container runs the `waku-platform` provider and ships no
+    `evals/`, so the Evals page explains where evals run instead."""
+    from waku.ops import observability
+
+    settings = load_settings()
+    settings.ensure_home()
+    if settings.base_url or settings.provider == "openrouter":
+        list_models()  # warm the per-model price cache, as collect() does
+    return observability.payload(settings.home, provider=settings.provider,
+                                 model=settings.model or "", window=window,
+                                 hosted=settings.provider == "waku-platform")
 
 
 def _rel_to_home(path, home) -> str:
@@ -1038,6 +1057,14 @@ class Handler(BaseHTTPRequestHandler):
                    if action in ("list", "history", "state")
                    else {"error": "GET /api/session reads only: action=list, history or state"})
             self._send(json.dumps(out, default=str).encode(), "application/json")
+        elif self.path == "/api/observability" or self.path.startswith("/api/observability?"):
+            # Spec 012: the Observability page's turns, tools, memory, spend
+            # and evals, read from this home's traces and ledger only.
+            from urllib.parse import parse_qs, urlparse
+
+            window = parse_qs(urlparse(self.path).query).get("window", ["7d"])[0]
+            self._send(json.dumps(observability_data(window), default=str).encode(),
+                       "application/json")
         elif self.path == "/api/judgment-arena":
             from waku.ops import judgment_arena, judgment_cases  # noqa: PLC0415
             self._send(json.dumps({"suites": judgment_cases.suite_list(),

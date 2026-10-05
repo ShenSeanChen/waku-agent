@@ -187,6 +187,18 @@ chat log keeps it in `meta.receipt`, and the trace gets one `receipt` event.
 It holds names, counts, dollars and ids, and never a tool's arguments or
 output.
 
+Every `tool` trace line (schema `v: 2`, spec 012) carries the turn's
+`turn_id`, its `source` (`treg`, `waku_memory`, `local` or `mcp:<server>`),
+its span kind (`tool`, `retrieval` or `memory_write`), `duration_ms`, `ok`
+and on a failure `error`, `cost_usd`, `endpoint_id` and `provider` when the
+result names them, the Waku Memory `query`, `results`, `memory_ids` and
+`retrieval_trace_id`, and its `args` redacted and trimmed to 500 characters.
+Every `llm` line carries `turn_id` and `cost_usd`. Where an OpenTelemetry
+GenAI attribute exists, the OTel export uses it, mapped in one table
+(`GENAI` in `waku/ops/observability.py`). The dashboard's Observability page
+(`GET /api/observability`) reads these lines, and reads a line written
+before spec 012 with the same functions, leaving empty what it cannot derive.
+
 Every turn has a `turn_id`, written on the trace's `turn_start` and
 `turn_end`, on each `usage.jsonl` row and in the chat log's meta. Every model
 call writes a `usage.jsonl` row and an `llm` event: the loop's with `kind`
@@ -233,6 +245,12 @@ shows those instead. A proxy that does not know the turn leaves the estimate.
 - `~/.waku/` — runtime state: `state.db`, `calendar.ics`, `outbox/`, `traces/`.
   `WAKU_HOME` moves it; `make` sets it to the repo's own `.waku/`, which is
   gitignored. `waku/config.py` `resolve_home()` has the rules.
+- `.env` — a model key is read from the environment, then the nearest `.env`
+  from the working directory upward, then `<home>/.env`, the first one winning.
+  A dashboard save writes to that nearest `.env` when one exists and to
+  `<home>/.env` otherwise (`waku/config.py` `env_write_target()`).
+  `waku/key_locations.py` reports those places to the setup page and to
+  `waku connections`, as paths and yes or no, never a value.
 
 ## Design decisions worth stealing
 

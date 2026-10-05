@@ -31,6 +31,7 @@ runs the bootstrap and must load last**.
 | `diagram.js` | `archSVG` (the architecture chart) **and** its live animation (`STAGE`/`hot`/`pollEvents`) |
 | `graph.js`   | graph workflows: data-driven topology chart (`graphSVG` from `d.graph.workflows`), the Overview panel (`graphPanel`), and `animateGraphStage` for `graph_*`/`route` events |
 | `views.js`   | subtab/db helpers, SQL console, Memory/Tools sub-views, the `VIEWS` router object |
+| `observe.js` | the Observability page (spec 012): four cards that match and open its four tabs, Turns (a waterfall per turn), Tools (by source, treg endpoints), Memory, Spend; and the Evals page (`#evals`). Both read `GET /api/observability` through `loadObservability`; `#ops` still opens Observability and `#observability/evals` lands on Evals |
 | `compare.js` | the Model arena (`Arena` tab; internals keep the `compare` name) — race one message through several models at once |
 | `dock.js`    | chat sessions/history (`loadThreadInto`), model chip, stats toggle |
 | `main.js`    | `render`/`refresh` loop, resizers, voice, and the bootstrap (**loads last**) |

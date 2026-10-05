@@ -515,8 +515,10 @@ def test_a_gateway_env_from_before_spec_008_still_starts():
     """upgrade.sh never rewrites config/: an existing gateway.env has no
     WAKU_EMBED_ORIGINS line, and the gateway must start on the default."""
     env = _example_env()
-    assert set(env) == set(REQUIRED_ENV_NAMES) - {"WAKU_EMBED_ORIGINS"}
-    assert MAY_BE_ABSENT == {"WAKU_EMBED_ORIGINS"}
+    # Spec 001 E4 added the second optional name, WAKU_IDLE_MINUTES, for the
+    # same reason; test_idle_loop.py pins its own default.
+    assert set(env) == set(REQUIRED_ENV_NAMES) - {"WAKU_EMBED_ORIGINS", "WAKU_IDLE_MINUTES"}
+    assert MAY_BE_ABSENT == {"WAKU_EMBED_ORIGINS", "WAKU_IDLE_MINUTES"}
     assert config_from_env(env).embed_origins == DEFAULT_EMBED_ORIGINS
     assert config_from_env(env | {"WAKU_EMBED_ORIGINS": ""}).embed_origins == DEFAULT_EMBED_ORIGINS
     with pytest.raises(ValueError, match="WAKU_SUPABASE_URL"):

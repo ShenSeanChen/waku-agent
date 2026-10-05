@@ -366,6 +366,40 @@ class Launcher:
             _LOG.warning("stop of tenant=%s failed: %s; resync will stop it "
                          "again -- its token is already revoked", tenant_id, exc)
 
+    async def stop_idle(self) -> list[str]:
+        """Stop every container the fleet says is idle, and say so in the log.
+        Returns the tenant ids stopped. The idle loop (hosted/gateway/sweep.py)
+        calls this once a minute.
+
+        THE DECISION IS Fleet's, AND IT IS ASKED TWICE. idle_stops() gives the
+        list; is_idle() is asked again right before each stop, because each
+        stop awaits the spawner and a request for the next tenant on the list
+        can arrive in that await. That request either touched the idle clock
+        (a non-background one, in Fleet.admit) or entered the fleet (every
+        forwarded one, in ContainerForwarder._deliver), and either makes
+        is_idle() false. There is no await between the second question and
+        the stop's own _forget_running, so nothing can slip in after it.
+
+        NOTHING HERE STOPS A CONTAINER MID-TURN. A turn is a forwarded request,
+        and a forwarded request is in flight from before it reaches the
+        container until its last streamed byte is written; idle_stops() skips
+        anything with in_flight above zero, whatever its clock says.
+
+        The next request from a stopped tenant goes through Fleet.admit like
+        any other: a non-background one starts a new container from the
+        current tenant image, and a background poll reads `paused`.
+        """
+        stopped: list[str] = []
+        for tenant_id in self._fleet.idle_stops():
+            if not self._fleet.is_idle(tenant_id):
+                continue
+            _LOG.info("idle stop tenant=%s: nothing in flight and no request "
+                      "for %d minutes", tenant_id,
+                      self._fleet.seconds_idle(tenant_id) // 60)
+            await self.stop(tenant_id)
+            stopped.append(tenant_id)
+        return stopped
+
     def _forget_running(self, tenant_id: str) -> None:
         self._addresses.pop(tenant_id, None)
         self._fleet.set_status(tenant_id, idle.STOPPED)
@@ -428,8 +462,19 @@ class Launcher:
         it in that state -- a stop whose spawner call failed, an eviction, an
         idle sweep, a restore, a delete. On this branch that means it is
         repaired at gateway startup, on a refused connection, and on
-        `restart-all`; the once-a-minute sweep that would also call this is
-        E4's and E4 is deferred.
+        `restart-all`.
+
+        THE ONCE-A-MINUTE IDLE LOOP DOES NOT CALL THIS, on purpose. Its list
+        is a snapshot taken before an await, and the loop at the bottom
+        forgets every address that is not in it. A start that finishes inside
+        that await records an address the snapshot never saw, and this would
+        mark that tenant STOPPED while their first turn is still streaming;
+        their next request would then start a second container over the
+        first. Here that window opens only on a refused connection or at
+        startup. Run every minute, it would open every minute. A container
+        whose idle stop failed is repaired anyway: its token is revoked and
+        the fleet says STOPPED, so the tenant's next request starts a new
+        one.
 
         THE ADDRESS IS CHECKED AGAINST THE PROJECT ID. DockerRuntime.list
         already refuses an address outside the tenant subnet, and this is the

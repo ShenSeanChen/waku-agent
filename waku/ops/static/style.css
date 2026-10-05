@@ -994,9 +994,80 @@ dialog.dialog :focus-visible{outline:var(--focus-ring-width) solid var(--accent)
                    margin-bottom: var(--space-4) }
   .setup-note { color: var(--text-faint); font-size: var(--text-sm);
                 margin: var(--space-2) 0 0 }
+  .setup-places { color: var(--text-muted); font-size: var(--text-sm);
+                  margin: var(--space-2) 0 var(--space-4); padding-left: var(--space-4) }
+  .setup-places code { overflow-wrap: anywhere }
+  .setup-looked { margin-bottom: var(--space-4) }
 
 /* ---- The embedded chat (embed.html, spec 008) ------------------------------
    The chat column alone, filling whatever frame waku.one gives it. Last in the
    file so it wins over the dock's width clamp and the narrow-screen rule
    that pins the dock over the page. */
 body.embed #dock{position:static;width:100%;height:100vh;border-left:none}
+
+/* --- Observability (spec 012): five tabs, each opening with one sentence,
+   and a turn's waterfall. A step is a stacked block (head line, a bar on the
+   turn's timeline, then its input and output), never a wide row, so it
+   reads at 420px inside waku.one. */
+.obs-cap{color:var(--text-muted);font-size:var(--text-sm);line-height:var(--leading-normal);margin:var(--space-3) 0}
+.obs-page-cap{margin-top:0}
+.obs-h-sub{text-transform:none;letter-spacing:0;font-weight:var(--font-weight-normal);margin-left:var(--space-2)}
+main h3{font-family:var(--face-mono);font-size:var(--text-xs);color:var(--text-faint);font-weight:var(--font-weight-normal);
+  margin:var(--space-4) 0 var(--space-2)}
+.obs-windows{display:flex;flex-wrap:wrap;align-items:center;gap:var(--space-2);margin-bottom:var(--space-2)}
+.obs-foot{margin-top:var(--space-3)}
+.obs-gap{margin-left:var(--space-2)}
+.obs-io{font-family:var(--face-mono);font-size:var(--text-xs);text-transform:uppercase;letter-spacing:var(--tracking-label);color:var(--text-faint)}
+.obs-wf{margin:0 0 var(--space-3)}
+.wf{display:flex;flex-direction:column;gap:var(--space-2);margin-top:var(--space-2)}
+.wf-step{border-top:var(--rule-width) solid var(--rule);padding-top:var(--space-2);min-width:0}
+.wf-head{display:flex;flex-wrap:wrap;align-items:baseline;gap:var(--spacing) var(--space-2)}
+.wf-kind{font-family:var(--face-mono);font-size:var(--text-xs);text-transform:uppercase;letter-spacing:var(--tracking-label);
+  color:var(--text-muted);min-width:64px}
+.wf-title{flex:1 1 200px;min-width:0;overflow-wrap:anywhere}
+.wf-nums{font-family:var(--face-mono);font-size:var(--text-xs);color:var(--text-muted);white-space:nowrap}
+.wf-track{position:relative;height:6px;margin-top:var(--spacing);background:var(--surface-sunk);border-radius:var(--shape-chip);overflow:hidden}
+.wf-fill{position:absolute;top:0;bottom:0;border-radius:var(--shape-chip);background:var(--chart-5)}
+
+.wf-fill.wf-tool{background:var(--chart-2)}
+
+.wf-fill.wf-gate,.wf-fill.wf-route{background:var(--chart-4)}
+.wf-detail{margin-top:var(--spacing);font-size:var(--text-xs);color:var(--text-muted);line-height:var(--leading-normal);
+  overflow-wrap:anywhere}
+.wf-detail code{font-size:var(--text-xs);white-space:normal;overflow-wrap:anywhere;border:0;background:none;padding:0}
+@media (max-width:520px){
+  .wf-nums{white-space:normal}
+  .wf-kind{min-width:0}
+  /* two stats a row, so a long label (DETERMINISTIC) never runs into the next */
+  .stat-band{grid-template-columns:repeat(auto-fit,minmax(160px,1fr))}
+  .stat{min-width:0}
+}
+.obs-scores{display:flex;flex-wrap:wrap;gap:var(--space-2);margin-bottom:var(--space-2)}
+.wf-fill.wf-llm{background:var(--chart-1)}
+.wf-fill.wf-retrieval,.wf-fill.wf-memory_write{background:var(--chart-3)}
+
+/* Observability's visual pass: four cards, one per tab, that open their tab, bars drawn
+   with plain spans (no chart library), and the waterfall grouped by loop. */
+.obs-strip{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:var(--space-2);margin-bottom:var(--space-4)}
+.obs-tile{display:flex;flex-direction:column;gap:var(--spacing);padding:var(--space-3);border:var(--rule-width) solid var(--rule);
+  border-radius:var(--radius);background:var(--surface-paper);color:var(--text-ink);text-decoration:none;min-width:0}
+.obs-tile:hover{border-color:var(--rule-hard)}
+/* the card whose tab is open, drawn like a selected stage */
+.obs-tile.on{border-color:var(--accent);background:var(--surface-raised)}
+.obs-tile.on .stat-label{color:var(--accent-fg)}
+.obs-tile .stat-value{overflow-wrap:anywhere}
+.obs-of{font-size:var(--text-xs);color:var(--text-muted);font-weight:var(--font-weight-normal)}
+.obs-bar{display:flex;width:100%;height:8px;min-width:48px;background:var(--surface-sunk);border-radius:var(--shape-chip);overflow:hidden}
+.obs-seg{display:block;height:100%}
+.obs-c1{background:var(--chart-1)}
+.obs-c2{background:var(--chart-2)}
+.obs-c3{background:var(--chart-3)}
+.obs-c4{background:var(--chart-4)}
+.obs-barcell{width:22%;min-width:64px}
+.obs-legend{display:flex;flex-wrap:wrap;gap:var(--space-3);font-size:var(--text-xs);color:var(--text-muted);margin-bottom:var(--space-2)}
+.obs-legend span{display:inline-flex;align-items:center;gap:var(--spacing)}
+.obs-swatch{display:inline-block;width:10px;height:10px;border-radius:var(--shape-chip)}
+.wf-group{display:flex;flex-direction:column;gap:var(--space-2);padding-left:var(--space-3);border-left:var(--rule-width) solid var(--rule)}
+.wf-graph{padding:var(--space-2);border:var(--rule-width) dashed var(--rule);border-radius:var(--radius)}
+.wf-ghead{display:flex;flex-wrap:wrap;align-items:baseline;justify-content:space-between;gap:var(--spacing) var(--space-2)}
+.wf-gname{font-family:var(--face-mono);font-size:var(--text-xs);text-transform:uppercase;letter-spacing:var(--tracking-label);color:var(--text-ink)}

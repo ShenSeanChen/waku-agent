@@ -27,9 +27,12 @@ it runs in its own `hosted-docker` CI job and not in `make gate`. It is only
 for `hosted/`, the deployment that runs waku for other people on a server. With
 no daemon, it skips the whole directory and says why.
 
-**Where the results show:** the terminal, and the dashboard's **Ops** tab — the
-release-gate verdict, an **eval-history** table (one row per `make gate`), the
-per-turn gate decisions, and the raw traces inline.
+**Where the results show:** the terminal, and the dashboard's **Evals** page,
+under Observability in the sidebar: how many deterministic tests and judge
+suites exist, what the last `make gate` run passed and failed per suite, the
+release-gate verdict, and an eval-history table with one row
+per `make gate`. On agent.waku.one the page says that evals run in CI and in
+`make gate` before an upgrade, because a tenant container ships no `evals/`.
 
 ## Catching bugs
 
@@ -43,15 +46,25 @@ it in. Run `make gate` → green → the eval history records the run.
 ## Spend is permanent
 
 Every LLM call's tokens are appended to `~/.waku/usage.jsonl`, an append-only
-ledger that a demo reset never wipes. The **Ops** tab shows the all-time cost,
-tokens, and a per-day / per-provider breakdown (dollar cost is estimated from
-tokens, which are the ground truth). So the number on screen is your real
-running total, not a per-session guess.
+ledger that a demo reset never wipes. The **Spend** tab of the
+**Observability** page shows the all-time cost and tokens, broken down per
+model and per day. That cost is labelled "estimated": tokens × list price. On agent.waku.one each turn's receipt also records what the platform
+charged, and the tab shows that total as "charged" beside the estimate.
 
 ## Tracing is always on
 
 Every turn appends readable lines to `~/.waku/traces/<date>.jsonl` with zero
-setup — a trace is just "what happened, in order." For span-waterfall views:
+setup. A trace is the record of one turn: its steps in order, each with its
+input, output, time and cost. The **Turns** tab of the **Observability** page
+lists the turns and opens each one into a waterfall of its steps, and the
+**Tools** tab counts every tool call by where it went (treg with each
+endpoint and its cost, Waku Memory, local and MCP tools). Each step carries a
+span kind: `llm`, `tool`, `retrieval`, `memory_write` or `gate`. The OTel
+export below uses the OpenTelemetry GenAI attribute names
+(`gen_ai.operation.name`, `gen_ai.usage.input_tokens`, `gen_ai.tool.name`, …),
+mapped in one table, `GENAI` in `waku/ops/observability.py`.
+
+For span-waterfall views in Phoenix:
 
 ```bash
 pip install -e '.[tracing]'
