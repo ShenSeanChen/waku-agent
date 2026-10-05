@@ -835,8 +835,32 @@ def evals_info(home: Path, repo: Path | None = None, *, hosted: bool = False) ->
                 pass
     except OSError:
         pass
+    history = history[::-1]
     return {"deterministic": deterministic, "judge_suites": judge, "hosted": hosted,
-            "last": report, "history": history[::-1]}
+            "last": report, "history": history, "last_run": last_run(report, history)}
+
+
+def _suite(value) -> dict | None:
+    if not isinstance(value, dict):
+        return None
+    counts = {k: value.get(k) for k in ("passed", "failed")}
+    if not all(isinstance(n, int) and not isinstance(n, bool) for n in counts.values()):
+        return None
+    return counts
+
+
+def last_run(report: dict | None, history: list) -> dict | None:
+    """What the newest `make gate` run recorded: passed and failed per suite,
+    and when it ran. The page shows these, never a count of test functions,
+    as the run's result. None when no run recorded suite counts."""
+    for run in [report, *history]:
+        if not isinstance(run, dict) or not isinstance(run.get("suites"), dict):
+            continue
+        suites = {name: _suite(run["suites"].get(name)) for name in ("deterministic", "judge")}
+        if any(suites.values()):
+            return {"ran_at": run.get("ran_at"), **suites,
+                    "verdict": {"deterministic": run.get("deterministic"), "judge": run.get("judge")}}
+    return None
 
 
 def payload(home: Path, *, provider: str = "", model: str = "", window: str = "7d",
