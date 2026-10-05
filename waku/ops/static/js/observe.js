@@ -15,7 +15,7 @@ const OBS_CAPTION = {
   turns: "A trace is the record of one turn: its steps in order, each with its input, output, time and cost. Open a turn to see them.",
   tools: "Every tool call in your traces, grouped by where it went: treg, Waku Memory, or this machine.",
   memory: "Each turn's memory: whether the retrieval gate looked, how many memories went into the prompt, and how many facts it kept afterwards.",
-  spend: "What the turns cost. Estimated is tokens × list price; charged is what the platform actually billed.",
+  spend: "What the turns cost. Total is charged plus estimated: charged is what the platform billed for the turns it priced exactly, estimated is tokens × list price for the rest.",
   tokens: "Tokens are what model calls are charged by; tools and memory are charged per call.",
   evals: "Evals judge whether a turn or a release was good: tests, an AI judge, a human.",
 };
@@ -222,22 +222,26 @@ function obsMemory(d, D){
 // ---------- Spend: estimated vs charged
 function obsSpend(d){
   const s = d.spend || {ledger: {by_day: [], by_provider: []}};
-  const u = s.ledger || {by_day: [], by_provider: [], calls: 0, total_in: 0, total_out: 0};
+  const m = d.summary || {};
+  const sp = m.spend || s, tok = m.tokens || {in: 0, out: 0, calls: 0};
+  const win = (OBS_WINDOWS.find(([k]) => k === m.window) || [, "all"])[1].toLowerCase();
   let h = obsCap("spend") + obsCap("tokens");
   h += uiStatBand([
-    {label: "estimated", value: obsUsd(s.estimated_usd), sub: "tokens × list price, all-time"},
-    {label: "charged", value: s.charged_usd == null ? "—" : obsUsd(s.charged_usd),
-     sub: s.charged_usd == null ? "only the hosted platform bills" : `${s.charged_turns} turn(s) billed by the platform`, tone: s.charged_usd == null ? "" : "ok"},
-    {label: "credits", value: s.credits == null ? "—" : obsNum(s.credits), sub: "Waku Memory credits"},
-    {label: "model calls", value: obsNum(u.calls), sub: `${obsNum(u.total_in)} in / ${obsNum(u.total_out)} out`},
+    {label: "total", value: obsUsd(sp.total_usd), sub: `${esc(win)}: ${obsSpendSplit(sp)}`},
+    {label: "charged", value: sp.charged_usd == null ? "—" : obsUsd(sp.charged_usd),
+     sub: sp.charged_usd == null ? "only the hosted platform bills" : `${sp.charged_turns} turn(s) priced exactly by the platform`, tone: sp.charged_usd == null ? "" : "ok"},
+    {label: "estimated", value: obsUsd(sp.estimated_usd), sub: "every other turn, tokens × list price"},
+    {label: "credits", value: sp.credits == null ? "—" : obsNum(sp.credits), sub: "Waku Memory credits"},
+    {label: "model calls", value: obsNum(tok.calls), sub: `${obsNum(tok.in)} in / ${obsNum(tok.out)} out`},
   ]);
   h += uiCard(`<span class="r prose">Every model call's tokens are logged to <code>usage.jsonl</code>, which a demo
     reset never wipes. The estimate prices those tokens at list price. On agent.waku.one the metering proxy
-    knows the exact charge, and each turn's receipt records it as charged.</span>`,
+    knows the exact charge, and each turn's receipt records it as charged; that figure replaces the
+    turn's estimate, so no dollar is counted twice.</span>`,
     {footer: reveal("usage.jsonl","open usage.jsonl")});
   const models = s.by_model || [];
   if (models.length){
-    h += `<h2>By model</h2>` + table(["model","provider","calls","tokens in","tokens out","estimated"], models.map(r =>
+    h += `<h2>By model, all-time</h2>` + table(["model","provider","calls","tokens in","tokens out","at list price"], models.map(r =>
       `<tr><td><code>${esc(r.model)}</code></td><td class="meta">${esc(r.provider)}</td><td class="meta">${obsNum(r.calls)}</td>
         <td class="meta">${obsNum(r.in)}</td><td class="meta">${obsNum(r.out)}</td><td class="meta">${obsUsd(r.usd)}</td></tr>`));
   }
@@ -250,7 +254,7 @@ function obsSpend(d){
       `<tr><td class="meta">${esc(r.date.slice(5))}</td>
         <td class="obs-barcell">${obsBar([[r.model, 1, "model " + obsUsd(r.model)], [r.treg, 2, "treg " + obsUsd(r.treg)], [r.memory + r.other, 3, "Waku Memory and other tools " + obsUsd(r.memory + r.other)]], max)}</td>
         <td class="meta">${obsTok(r.in)}</td><td class="meta">${obsTok(r.out)}</td><td class="meta">${obsUsd(r.total)}</td></tr>`));
-    h += `<div class="meta obs-foot">Model dollars are estimated from usage.jsonl; tool dollars are what each tool's answer said it cost.</div>`;
+    h += `<div class="meta obs-foot">Model dollars are charged for the turns the platform priced exactly and estimated from usage.jsonl for the rest; tool dollars are what each tool's answer said it cost.</div>`;
   }
   return h;
 }
@@ -334,13 +338,19 @@ function obsCardBody(k, m){
                 `${obsNum(me.writes)} write${me.writes === 1 ? "" : "s"} · ${obsNum(me.kept)} fact${me.kept === 1 ? "" : "s"} kept`,
                 `gate: retrieve ${me.gate_retrieve} · skip ${me.gate_skip}`])};
   }
-  const sp = m.spend, est = sp.model_usd + sp.treg_usd + sp.memory_usd + sp.other_usd;
-  const charged = sp.charged_usd != null;
-  return {value: `${charged ? obsUsd(sp.charged_usd) : obsUsd(est)} ${of(charged ? "charged" : "estimated")}`,
+  const sp = m.spend;
+  return {value: `${obsUsd(sp.total_usd)} ${of("total")}`,
     bar: obsBar([[sp.model_usd, 1, "model"], [sp.treg_usd, 2, "treg"], [sp.memory_usd + sp.other_usd, 3, "Waku Memory and other tools"]]),
-    sub: sub([`model ${obsUsd(sp.model_usd)} · treg ${obsUsd(sp.treg_usd)} · memory ${obsUsd(sp.memory_usd)}${charged ? ` · estimated ${obsUsd(est)}` : ""}`,
+    sub: sub([obsSpendSplit(sp), obsChargedLine(sp),
               `${obsTok(m.tokens.in)} in / ${obsTok(m.tokens.out)} out · ${obsNum(m.tokens.calls)} model calls`])};
 }
+// The two ways one total splits (observability.spend_totals): by where the
+// dollars went, and by charged (a turn the platform priced exactly) plus
+// estimated (tokens × list price for every other turn). Both add up to it.
+const obsSpendSplit = sp => `model ${obsUsd(sp.model_usd)} · treg ${obsUsd(sp.treg_usd)} · memory ${obsUsd(sp.memory_usd)}`
+  + (sp.other_usd ? ` · other ${obsUsd(sp.other_usd)}` : "");
+const obsChargedLine = sp => sp.charged_usd == null ? "all estimated: tokens × list price"
+  : `${obsUsd(sp.charged_usd)} charged + ${obsUsd(sp.estimated_usd)} estimated`;
 function obsCards(m, active){
   return `<div class="obs-strip">${OBS_TABS.map(([k, label]) => {
     const b = m ? obsCardBody(k, m) : {value: "…", sub: ""};

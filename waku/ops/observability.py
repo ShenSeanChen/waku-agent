@@ -648,23 +648,92 @@ def tool_stats(events: list[dict], servers=(), window: str = "all",
 # ---------------------------------------------------------------------------
 
 
-def spend(home: Path, events: list[dict]) -> dict:
-    """The ledger's estimate, and what receipts say was charged. A receipt
-    whose model figure is not an estimate came from the metering proxy."""
-    ledger = usage_summary(home)
-    charged = [ev for ev in events if ev.get("type") == "receipt"
-               and isinstance(ev.get("model"), dict) and ev["model"].get("estimate") is False]
-    credits = [ev.get("credits") for ev in charged
+def _charged_receipts(events: list[dict]) -> dict[str, dict]:
+    """turn_id -> the receipt of every turn the metering proxy priced
+    exactly (its model figure is not an estimate). A receipt that names no
+    turn takes the turn it sits in."""
+    out, current = {}, ""
+    for n, ev in enumerate(events):
+        kind = ev.get("type")
+        if kind == "turn_start":
+            current = ev.get("turn_id") or ""
+        elif (kind == "receipt" and isinstance(ev.get("model"), dict)
+              and ev["model"].get("estimate") is False):
+            # a receipt outside any turn still counts, joined to nothing
+            out[ev.get("turn_id") or current or f"receipt-{n}"] = ev
+    return out
+
+
+def _receipt_model_usd(receipt: dict) -> float:
+    """The exact model dollars on a charged receipt: its own model figure,
+    or its total less the tools it priced when an old receipt has none."""
+    usd = receipt["model"].get("usd")
+    if isinstance(usd, int | float) and not isinstance(usd, bool):
+        return float(usd)
+    tools = sum(float(t.get("usd") or 0) for t in receipt.get("tools") or [] if isinstance(t, dict))
+    return max(float(receipt.get("total_usd") or 0) - tools, 0.0)
+
+
+def spend_items(home: Path, events: list[dict], servers=()) -> list[dict]:
+    """Every dollar this home spent, once: {ts, bucket, usd, charged}.
+
+    One rule for the Spend card, the Spend tab and the days: a turn the
+    platform charged exactly counts its receipt's model dollars (charged);
+    every other turn counts its usage.jsonl rows at list price (estimated).
+    Tool dollars are what each tool's answer said it cost, charged when
+    their turn was. So the split by bucket and the split by charged and
+    estimated are two views of the same items and add up to one total."""
+    charged = _charged_receipts(events)
+    items = [{"ts": str(ev.get("ts") or ""), "bucket": "model", "usd": _receipt_model_usd(ev),
+              "charged": True} for ev in charged.values()]
+    for row in _ledger_rows(home):
+        if row.get("turn_id") and row["turn_id"] in charged:
+            continue   # the receipt's exact figure replaces this estimate
+        items.append({"ts": str(row.get("ts") or ""), "bucket": "model", "usd": _row_cost(row),
+                      "charged": False})
+    current = ""
+    for ev in events:
+        if ev.get("type") == "turn_start":
+            current = ev.get("turn_id") or ""
+        if ev.get("type") != "tool":
+            continue
+        info = describe(ev, servers)
+        if info.get("cost_usd") is None:
+            continue
+        bucket = {"treg": "treg", "waku_memory": "memory"}.get(info["source"], "other")
+        items.append({"ts": str(ev.get("ts") or ""), "bucket": bucket, "usd": float(info["cost_usd"]),
+                      "charged": (ev.get("turn_id") or current) in charged})
+    return items
+
+
+def spend_totals(items: list[dict], start: datetime | None = None,
+                 events: list[dict] | None = None) -> dict:
+    """The window's dollars: by bucket (model, treg, memory, other), and as
+    charged plus estimated. Both splits sum to `total_usd`."""
+    inside = [i for i in items if _in_window(i, start)]
+
+    def add(pick) -> float:
+        return round(sum(i["usd"] for i in inside if pick(i)), 6)
+
+    out = {f"{b}_usd": add(lambda i, b=b: i["bucket"] == b) for b in ("model", "treg", "memory", "other")}
+    total = round(sum(out.values()), 6)
+    charged = add(lambda i: i["charged"])
+    receipts = [ev for ev in _charged_receipts(events or []).values() if _in_window(ev, start)]
+    credits = [ev.get("credits") for ev in receipts
                if isinstance(ev.get("credits"), int) and not isinstance(ev.get("credits"), bool)]
-    return {
-        "estimated_usd": ledger["total_cost"],
-        "charged_usd": (round(sum(float(ev.get("total_usd") or 0) for ev in charged), 6)
-                        if charged else None),
-        "charged_turns": len(charged),
-        "credits": sum(credits) if credits else None,
-        "ledger": ledger,
-        "by_model": by_model(home),
-    }
+    return {**out, "total_usd": total,
+            "charged_usd": charged if receipts else None,
+            "estimated_usd": round(total - (charged if receipts else 0), 6),
+            "charged_turns": len(receipts),
+            "credits": sum(credits) if credits else None}
+
+
+def spend(home: Path, events: list[dict], servers=()) -> dict:
+    """All-time spend under the one rule `spend_items` keeps, with the
+    ledger's tokens and the list-price estimate per model."""
+    return {**spend_totals(spend_items(home, events, servers), None, events),
+            "ledger": usage_summary(home),
+            "by_model": by_model(home)}
 
 
 def by_model(home: Path) -> list[dict]:
@@ -703,32 +772,15 @@ def _row_cost(row: dict) -> float:
                     {"in": row.get("in"), "out": row.get("out")})
 
 
-def _tool_costs(events: list[dict], start: datetime | None, servers=()) -> list[tuple[str, str, float]]:
-    """(ts, source, dollars) for every priced tool call in the window."""
-    out = []
-    for ev in events:
-        if ev.get("type") != "tool" or not _in_window(ev, start):
-            continue
-        info = describe(ev, servers)
-        if info.get("cost_usd") is not None:
-            out.append((str(ev.get("ts") or ""), info["source"], float(info["cost_usd"])))
-    return out
-
-
 def summary(home: Path, events: list[dict], turns: list[dict], tools: dict,
             window: str = "7d", now: datetime | None = None, servers=()) -> dict:
     """The four cards at the top of the page, for one window, in the order of
     the tabs below them: turns with their average loop iterations, tool calls
     by source with errors, memory read and written with the gate's split, and
-    spend by source with its tokens. Model dollars and tokens come from
-    usage.jsonl, which counts every model call; tool dollars from the traces."""
+    spend by source with its tokens. Tokens come from usage.jsonl, which
+    counts every model call; dollars follow the one rule in `spend_items`."""
     start = window_start(window, now)
     rows = [r for r in _ledger_rows(home) if _in_window(r, start)]
-    tool_costs = _tool_costs(events, start, servers)
-    charged = [ev for ev in events if ev.get("type") == "receipt" and _in_window(ev, start)
-               and isinstance(ev.get("model"), dict) and ev["model"].get("estimate") is False]
-    credits = [ev.get("credits") for ev in charged
-               if isinstance(ev.get("credits"), int) and not isinstance(ev.get("credits"), bool)]
     in_window = [t for t in turns if _in_window(t, start)]
     loops = [t["loops"] for t in in_window if t.get("loops")]
     reads = [r for r in tools["waku_memory"]["tools"] if r["span"] == "retrieval"]
@@ -743,16 +795,7 @@ def summary(home: Path, events: list[dict], turns: list[dict], tools: dict,
 
     return {
         "window": window,
-        "spend": {
-            "model_usd": round(sum(_row_cost(r) for r in rows), 6),
-            "treg_usd": round(sum(c for _, src, c in tool_costs if src == "treg"), 6),
-            "memory_usd": round(sum(c for _, src, c in tool_costs if src == "waku_memory"), 6),
-            "other_usd": round(sum(c for _, src, c in tool_costs
-                                   if src not in ("treg", "waku_memory")), 6),
-            "charged_usd": (round(sum(float(ev.get("total_usd") or 0) for ev in charged), 6)
-                            if charged else None),
-            "credits": sum(credits) if credits else None,
-        },
+        "spend": spend_totals(spend_items(home, events, servers), start, events),
         "tokens": {"in": sum(int(r.get("in") or 0) for r in rows),
                    "out": sum(int(r.get("out") or 0) for r in rows),
                    "calls": len(rows)},
@@ -771,27 +814,28 @@ def summary(home: Path, events: list[dict], turns: list[dict], tools: dict,
 
 
 def spend_by_day(home: Path, events: list[dict], days: int = 14, servers=()) -> list[dict]:
-    """Newest first, one row per day (UTC, as the ledger dates them): model
-    dollars and tokens from usage.jsonl, treg and Waku Memory dollars from
-    the traces."""
+    """Newest first, one row per day (UTC, as the ledger dates them): the
+    dollars `spend_items` counts, by bucket and as charged, with the
+    ledger's tokens."""
     out: dict[str, dict] = {}
 
     def day(key: str) -> dict:
         return out.setdefault(key, {"date": key, "model": 0.0, "treg": 0.0, "memory": 0.0, "other": 0.0,
-                                    "in": 0, "out": 0})
+                                    "charged": 0.0, "in": 0, "out": 0})
 
     for row in _ledger_rows(home):
         key = str(row.get("ts") or "")[:10]
         if key:
-            day(key)["model"] += _row_cost(row)
             day(key)["in"] += int(row.get("in") or 0)
             day(key)["out"] += int(row.get("out") or 0)
-    for ts, source, cost in _tool_costs(events, None, servers):
-        if ts[:10]:
-            bucket = {"treg": "treg", "waku_memory": "memory"}.get(source, "other")
-            day(ts[:10])[bucket] += cost
+    for item in spend_items(home, events, servers):
+        if item["ts"][:10]:
+            bucket = day(item["ts"][:10])
+            bucket[item["bucket"]] += item["usd"]
+            if item["charged"]:
+                bucket["charged"] += item["usd"]
     rows = sorted(out.values(), key=lambda r: r["date"], reverse=True)[:days]
-    return [{**r, **{k: round(r[k], 6) for k in ("model", "treg", "memory", "other")},
+    return [{**r, **{k: round(r[k], 6) for k in ("model", "treg", "memory", "other", "charged")},
              "total": round(r["model"] + r["treg"] + r["memory"] + r["other"], 6)} for r in rows]
 
 
@@ -888,6 +932,6 @@ def payload(home: Path, *, provider: str = "", model: str = "", window: str = "7
         "turns": all_turns[::-1][:MAX_TURNS],
         "tools": tools,
         "memory": memory_per_turn(all_turns[::-1][:MAX_TURNS]),
-        "spend": spend(home, events),
+        "spend": spend(home, events, servers),
         "evals": evals_info(home, hosted=hosted),
     }

@@ -98,6 +98,39 @@ def search_via(bridge):
     return search
 
 
+def get_via(bridge):
+    """A get(memory_id) for the read-first step's earlier reports (spec 009 A),
+    or None if Waku Memory is not connected. It returns memory.get's answer as
+    text and raises when that is not a memory: the bridge reports a failure
+    as text."""
+    server = _server(bridge)
+    if server is None:
+        return None
+
+    def get(memory_id: str) -> str:
+        text = bridge.call(server, "memory.get", {"id": memory_id})
+        try:
+            found = isinstance(json.loads(text), dict)
+        except ValueError:
+            found = False
+        if not found:
+            raise RuntimeError(text[:200])
+        return text
+
+    return get
+
+
+def tool_name(bridge, tool: str) -> str | None:
+    """The name the model calls one of Waku Memory's tools by, such as
+    waku_memory_memory_remember, or None if Waku Memory is not connected."""
+    server = _server(bridge)
+    if server is None:
+        return None
+    from waku.tools.mcp_client import _model_safe_name
+
+    return _model_safe_name(server, tool)
+
+
 def _has_mcp() -> bool:
     return importlib.util.find_spec("mcp") is not None
 

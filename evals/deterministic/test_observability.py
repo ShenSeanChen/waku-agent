@@ -407,9 +407,11 @@ def test_an_old_turn_without_kinds_still_counts_its_loops():
 def test_the_summary_strip_and_spend_per_day(tmp_path):
     day = lambda d, h=10: datetime(2026, 10, d, h, tzinfo=UTC).isoformat()  # noqa: E731
     (tmp_path / "usage.jsonl").write_text("\n".join(json.dumps(r) for r in [
-        {"ts": day(4), "provider": "anthropic", "model": "claude-sonnet-5", "in": 1_000_000, "out": 0},
+        {"ts": day(4), "provider": "anthropic", "model": "claude-sonnet-5", "in": 1_000_000, "out": 0,
+         "turn_id": "t_a"},
         {"ts": day(3), "provider": "anthropic", "model": "claude-sonnet-5", "in": 0, "out": 100_000},
-        {"ts": day(1), "provider": "anthropic", "model": "claude-sonnet-5", "in": 500, "out": 0},
+        {"ts": day(1), "provider": "anthropic", "model": "claude-sonnet-5", "in": 500, "out": 0,
+         "turn_id": "t_b"},
     ]) + "\n")
     serp = json.dumps({"status": 200, "endpoint_id": "spyfu.x", "cost_usd": 0.02})
     events = [
@@ -421,8 +423,8 @@ def test_the_summary_strip_and_spend_per_day(tmp_path):
          "output": "MCP call failed: down", "ts": day(4, 9)},
         {"type": "llm", "kind": "loop", "iteration": 2, "stop_reason": "end_turn",
          "usage": {"in": 1, "out": 1}, "ts": day(4, 9)},
-        {"type": "receipt", "total_usd": 0.5, "model": {"estimate": False}, "credits": 1000,
-         "ts": day(4, 9)},
+        {"type": "receipt", "turn_id": "t_a", "total_usd": 0.5, "credits": 1000, "ts": day(4, 9),
+         "model": {"estimate": False, "usd": 0.48}, "tools": [{"tool": "treg_call", "usd": 0.02}]},
         {"type": "turn_end", "turn_id": "t_a", "reply": "", "iterations": 2, "ts": day(4, 9)},
         {"type": "turn_start", "turn_id": "t_b", "user_message": "b", "ts": day(1)},
         {"type": "tool", "tool": "treg_call", "args": {}, "output": serp, "ts": day(1)},
@@ -433,7 +435,8 @@ def test_the_summary_strip_and_spend_per_day(tmp_path):
     tools = obs.tool_stats(events, (), "7d", now)
     m = obs.summary(tmp_path, events, turns, tools, "7d", now)
     sonnet_in, sonnet_out = obs.price_for("anthropic", "claude-sonnet-5")
-    assert m["spend"]["model_usd"] == round(sonnet_in + 0.1 * sonnet_out + 500 / 1e6 * sonnet_in, 6)
+    # t_a was charged: its receipt's exact $0.48 replaces its ledger estimate
+    assert m["spend"]["model_usd"] == round(0.48 + 0.1 * sonnet_out + 500 / 1e6 * sonnet_in, 6)
     assert m["spend"]["treg_usd"] == 0.04 and m["spend"]["memory_usd"] == 0
     assert m["spend"]["charged_usd"] == 0.5 and m["spend"]["credits"] == 1000
     assert m["tokens"] == {"in": 1_000_500, "out": 100_000, "calls": 3}
@@ -443,7 +446,7 @@ def test_the_summary_strip_and_spend_per_day(tmp_path):
 
     days = obs.spend_by_day(tmp_path, events)
     assert [r["date"] for r in days] == ["2026-10-04", "2026-10-03", "2026-10-01"]
-    assert days[0]["model"] == round(sonnet_in, 6) and days[0]["treg"] == 0.02
+    assert days[0]["model"] == 0.48 and days[0]["treg"] == 0.02 and days[0]["charged"] == 0.5
     assert days[2]["treg"] == 0.02 and days[2]["total"] == round(days[2]["model"] + 0.02, 6)
 
 
@@ -555,3 +558,69 @@ def test_the_evals_page_counts_come_from_the_last_gate_run(tmp_path):
     # the static fallback names what it counted and says it is not a run
     assert "test functions in ${det.files} files, counted on disk; no gate run recorded" in evals
     assert "suite files, counted on disk; no gate run recorded" in evals
+
+# ---- the Spend card adds up (Oct 5 rehearsal) ----------------------------------
+# The card read "SPEND · CHARGED $1.81" over "model $8.62 · treg $0.27 · est
+# $8.89": charged covered only the turns with exact receipts while the split
+# covered every turn. Now the headline is the window's best total, and both
+# splits (by source, and charged + estimated) add up to it.
+
+def _mixed_home(tmp_path):
+    ts = datetime(2026, 10, 4, 9, tzinfo=UTC).isoformat()
+    treg = json.dumps({"status": 200, "endpoint_id": "spyfu.x", "cost_usd": 0.27})
+    (tmp_path / "usage.jsonl").write_text("\n".join(json.dumps(r) for r in [
+        # the charged turn's two calls: estimated at list price, replaced by its receipt
+        {"ts": ts, "provider": "anthropic", "model": "claude-sonnet-5", "in": 400_000, "out": 0, "turn_id": "t_paid"},
+        {"ts": ts, "provider": "anthropic", "model": "claude-sonnet-5", "in": 100_000, "out": 0, "turn_id": "t_paid"},
+        # a turn the platform did not price: its estimate stays
+        {"ts": ts, "provider": "anthropic", "model": "claude-sonnet-5", "in": 1_000_000, "out": 0, "turn_id": "t_est"},
+    ]) + "\n")
+    return [
+        {"type": "turn_start", "turn_id": "t_paid", "user_message": "a", "ts": ts},
+        {"type": "tool", "tool": "treg_call", "args": {}, "output": treg, "ts": ts},
+        {"type": "receipt", "turn_id": "t_paid", "total_usd": 1.81, "credits": 300, "ts": ts,
+         "model": {"estimate": False, "usd": 1.54}, "tools": [{"tool": "treg_call", "usd": 0.27}]},
+        {"type": "turn_end", "turn_id": "t_paid", "ts": ts},
+        {"type": "turn_start", "turn_id": "t_est", "user_message": "b", "ts": ts},
+        {"type": "receipt", "turn_id": "t_est", "total_usd": 3.0, "ts": ts,
+         "model": {"estimate": True, "usd": 3.0}, "tools": []},
+        {"type": "turn_end", "turn_id": "t_est", "ts": ts},
+    ]
+
+
+def test_the_spend_split_adds_up_to_the_headline(tmp_path):
+    events = _mixed_home(tmp_path)
+    now = datetime(2026, 10, 4, 12, tzinfo=UTC)
+    turns = [obs.build_turn(t) for t in obs.group_turns(events)]
+    sp = obs.summary(tmp_path, events, turns, obs.tool_stats(events, (), "7d", now), "7d", now)["spend"]
+    sonnet_in, _ = obs.price_for("anthropic", "claude-sonnet-5")
+    assert sp["model_usd"] == round(1.54 + sonnet_in, 6)   # exact for t_paid, list price for t_est
+    assert sp["treg_usd"] == 0.27
+    assert sp["total_usd"] == round(sp["model_usd"] + sp["treg_usd"] + sp["memory_usd"] + sp["other_usd"], 6)
+    assert sp["charged_usd"] == 1.81 and sp["charged_turns"] == 1 and sp["credits"] == 300
+    assert sp["estimated_usd"] == round(sonnet_in, 6)
+    assert round(sp["charged_usd"] + sp["estimated_usd"], 6) == sp["total_usd"]
+
+
+def test_the_spend_tab_and_days_follow_the_same_rule(tmp_path):
+    events = _mixed_home(tmp_path)
+    tab = obs.spend(tmp_path, events)
+    assert round(tab["model_usd"] + tab["treg_usd"] + tab["memory_usd"] + tab["other_usd"], 6) == tab["total_usd"]
+    assert round(tab["charged_usd"] + tab["estimated_usd"], 6) == tab["total_usd"]
+    days = obs.spend_by_day(tmp_path, events)
+    assert round(sum(d["total"] for d in days), 6) == tab["total_usd"]
+    assert round(sum(d["charged"] for d in days), 6) == tab["charged_usd"]
+    # no receipt priced anything: everything is estimated and nothing is called charged
+    plain = obs.spend(tmp_path, [e for e in events if e["type"] != "receipt"])
+    assert plain["charged_usd"] is None and plain["estimated_usd"] == plain["total_usd"] > 0
+
+
+def test_the_spend_card_shows_total_as_charged_plus_estimated():
+    js = _static("js/observe.js")
+    card = js[js.index("const sp = m.spend"):js.index("function obsCards")]
+    assert "sp.total_usd" in card and "sp.charged_usd" in card and "sp.estimated_usd" in card
+    assert "of(\"total\")" in card and "charged + " in card
+    # the card no longer adds its own sum beside a different headline
+    assert "sp.model_usd + sp.treg_usd" not in card
+    tab = js[js.index("function obsSpend"):js.index("// ---------- Evals")]
+    assert "sp.total_usd" in tab and "sp.charged_usd" in tab and "sp.estimated_usd" in tab

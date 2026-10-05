@@ -149,7 +149,7 @@ function timelineBlock(json){
 }
 
 // Numbered, so the report's text can say [2]. Under each title one faint line:
-// the host, the tool that found it, what that call cost.
+// the host, the tool that found it, what that call cost (its treg cost).
 function sourcesBlock(json){
   if (!rbList(json)) return null;
   const money = c => "$" + Number(c.toPrecision(2));
@@ -169,6 +169,8 @@ function sourcesBlock(json){
     return `<li>${title}${facts.length ? `<span class="rb-note">${esc(facts.join(" · "))}</span>` : ""}</li>`;
   });
   if (items.includes(null)) return null;
-  const total = paid ? `<div class="rb-note">Spent ${money(spent)} on ${paid} paid ${paid === 1 ? "call" : "calls"}.</div>` : "";
+  // Labelled "treg cost", never a total: the model's own cost is not in
+  // Sources, and the turn's receipt is the one place a total is shown.
+  const total = paid ? `<div class="rb-note">treg cost ${money(spent)} over ${paid} ${paid === 1 ? "call" : "calls"}.</div>` : "";
   return `<ol class="rb-sources">${items.join("")}</ol>${total}`;
 }

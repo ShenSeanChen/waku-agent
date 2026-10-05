@@ -148,6 +148,12 @@ under it the facts a `consolidation` event says the turn kept (spec 008).
 Without Waku Memory, or when the send fails, the reply keeps the whole
 report and there is no event.
 
+A turn saves at most one report. The model's own `memory_remember` tool
+refuses a body holding the marker line, and if a report was saved by the
+model anyway, `save` sends nothing more and the card points at that memory.
+The skill says to name only the "treg cost" and never a total: the receipt
+is the one place a turn's total is shown.
+
 ### Research reads the company brain first
 
 A turn is research when the `research-report` skill matches its message. With
@@ -157,7 +163,11 @@ words like "research" and "the"), in every scope, and once for earlier
 reports, kind `semantic`. The hits go into the system prompt under "What the
 company brain already knows", each with its date and id, reports first, and
 the skill says to start there, name the earlier report and its date, and
-research only what is missing or older than 30 days. Each search is shown as
+research only what is missing or older than 30 days. Each earlier report
+found is read once with `memory.get` and goes into the prompt as its digest
+(title, Summary, key numbers, at most 1,500 characters), and the loop cuts a
+whole report the model fetched itself to its digest before each later call
+(`reports.shrink_read`, passed to `run_loop` as `trim`). Each search is shown as
 a `waku_memory_memory_search` tool call (waku.one reads its `entries` as
 Used), the `done` payload and the turn's meta carry them as `used`, and the
 dashboard's chat lists them under "Used from memory". The searches are not
