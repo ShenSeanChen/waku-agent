@@ -74,11 +74,13 @@ class SkillLoader:
                     self.skills.append(skill)
         self._sig = self._scan_sig()
 
-    def match(self, message: str, max_skills: int = 2) -> list[Skill]:
+    def match(self, message: str, max_skills: int = 2, *, rescan: bool = True) -> list[Skill]:
         """Transparent trigger: keyword overlap between the message and each
         skill's name+description. No embeddings, no magic — you can compute
-        the score in your head."""
-        if self._scan_sig() != self._sig:   # a skill was added/edited — reload
+        the score in your head. `rescan=False` skips the check for edited
+        skills, for a caller matching many old messages in one go (the
+        Evals page grading every traced turn)."""
+        if rescan and self._scan_sig() != self._sig:   # a skill was added/edited — reload
             self.refresh()
         msg_words = set(re.findall(r"[a-z0-9]{3,}", message.lower()))
         scored = []

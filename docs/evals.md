@@ -28,11 +28,36 @@ for `hosted/`, the deployment that runs waku for other people on a server. With
 no daemon, it skips the whole directory and says why.
 
 **Where the results show:** the terminal, and the dashboard's **Evals** page,
-under Observability in the sidebar: how many deterministic tests and judge
+under Observability in the sidebar: below "Your turns" (the turn checks), how many deterministic tests and judge
 suites exist, what the last `make gate` run passed and failed per suite, the
 release-gate verdict, and an eval-history table with one row
 per `make gate`. On agent.waku.one the page says that evals run in CI and in
 `make gate` before an upgrade, because a tenant container ships no `evals/`.
+
+## Turn checks: evals for your own turns
+
+The suites above grade the Waku Agent code. Five turn checks grade the turns
+you run, from the trace each turn already wrote (spec 015,
+[`waku/ops/turn_evals.py`](../waku/ops/turn_evals.py)). Each one answers pass,
+fail or n/a with a one-line note:
+
+| Check | Passes when |
+|---|---|
+| `spend_claim` | every dollar figure, "free" or "no cost" the reply states for this turn matches the trace's treg dollars, or the named provider's own calls ("LeadsForge's free preview ($0.00)") |
+| `one_report` | a research turn saved exactly one report, or its reply carries the report when no Waku Memory is connected |
+| `grounded_numbers` | 90% of the reply's money amounts, percentages, dates and numbers of two or more digits appear in a tool output, a memory or your message |
+| `errors_handled` | every failed tool call was retried or the reply says it failed |
+| `under_budget` | the turn cost at most `WAKU_TURN_BUDGET_USD` (default $1.00) |
+
+The dashboard runs the checks each time it reads your traces, so an old turn
+is graded the first time the page opens and a fixed check re-grades every
+turn. Nothing is written for a code check. A turn's row on Observability →
+Turns carries one chip, "5 of 5 checks" or the first failure ("spend claim:
+fail"), and its waterfall shows every check with its note. Evals → Your
+turns counts passed, failed and n/a per check for today, 7 days or all, with
+the newest failing turn. In a terminal, `waku evals turns --window 7d` prints
+the same table and every failing turn. A check grades a finished turn: it
+never stops or rewrites a reply, and a failed check is not shown in the chat.
 
 ## Catching bugs
 

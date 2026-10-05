@@ -18,12 +18,14 @@ const OBS_CAPTION = {
   spend: "What the turns cost. Total is charged plus estimated: charged is what the platform billed for the turns it priced exactly, estimated is tokens × list price for the rest.",
   tokens: "Tokens are what model calls are charged by; tools and memory are charged per call.",
   evals: "Evals judge whether a turn or a release was good: tests, an AI judge, a human.",
+  yours: "Five checks grade each of your turns from its trace: whether the reply's spend matches the trace, whether a research turn saved one report, whether the reply's numbers came from a tool, whether a failed tool call was handled, and whether the turn stayed under budget.",
+  release: "The checks below grade the Waku Agent code, not your turns: they decide whether a commit may ship.",
 };
 const OBS_WINDOWS = [["today","Today"],["7d","7 days"],["all","All"]];
 // The page's own state: the window the Tools tab reads, the last answer, and
 // which turns are open. Kept here so the 5s refresh redraws without closing
 // a waterfall someone is reading.
-const OBS = {window: "7d", data: null, at: 0, loading: false, open: new Set(), drawn: new Set()};
+const OBS = {window: "7d", data: null, at: 0, loading: false, open: new Set(), drawn: new Set(), note: ""};
 
 async function loadObservability(background = false){
   if (OBS.loading) return;
@@ -183,9 +185,9 @@ function obsWaterfall(t, key, total){
 }
 // The one slot for a turn's badges, under the story line: today the scores
 // spec 012 reads from `score` events; spec 015's pass/fail chips go here too.
-function obsTurnBadges(t){
-  const scores = (t.scores || []).map(x => uiBadge(`${esc(x.source)}${x.name ? " · " + esc(x.name) : ""} · ${esc(String(x.value))}`, "value", x.note || ""));
-  return scores.length ? `<div class="obs-scores">${scores.join(" ")}</div>` : "";
+// The badges slot under the story line: the turn's checks (spec 015, below).
+function obsTurnBadges(t, key){
+  return obsTurnChecks(t, key);
 }
 // The waterfall's head: the story line (each part opens its row), the badges
 // slot, one notice per failure, and Open all / Close all.
@@ -208,7 +210,7 @@ function obsTurnHead(t, key){
   const where = t.turn_id ? `turn <code>${esc(t.turn_id)}</code> · ` : "older trace: no turn id or tool durations; times are measured between lines · ";
   const tools = t.loops ? `<span class="wf-tools">${uiButton("Open all", {level: "tertiary", size: "sm", onclick: `obsAllLoops('${key}',${t.loops},true)`})}${
     uiButton("Close all", {level: "tertiary", size: "sm", onclick: `obsAllLoops('${key}',${t.loops},false)`})}</span>` : "";
-  return story + obsTurnBadges(t) + errors + `<div class="wf-meta"><span class="meta">${graph}${where}${obsWhen(t.ts)}</span>${tools}</div>`;
+  return story + obsTurnBadges(t, key) + errors + `<div class="wf-meta"><span class="meta">${graph}${where}${obsWhen(t.ts)}</span>${tools}</div>`;
 }
 function obsTurns(d){
   const turns = d.turns || [];
@@ -221,7 +223,7 @@ function obsTurns(d){
   h += turns.map((t, i) => {
     const key = obsTurnKey(t, i);
     const open = OBS.open.has(key);
-    const meta = [secs(t.latency_ms), ...(t.scores||[]).map(x => `${esc(x.source)} score ${esc(String(x.value))}`),
+    const meta = [obsTurnChip(t), secs(t.latency_ms),
                   t.loops ? `${t.loops} loop${t.loops === 1 ? "" : "s"}` : "", `${t.tool_calls} tool${t.tool_calls === 1 ? "" : "s"}`,
                   t.tokens_in || t.tokens_out ? `${obsTok(t.tokens_in)} in / ${obsTok(t.tokens_out)} out` : "",
                   obsUsd(t.usd) + (t.has_receipt ? "" : " est"),
@@ -240,6 +242,73 @@ function obsTurns(d){
     return row + uiCard(obsTurnHead(t, key) + obsWaterfall(t, key, total), {size: "sm", cls: "obs-wf"});
   }).join("");
   return h;
+}
+
+// ---------- Turn checks (spec 015): the five code checks on every turn, and
+// the AI judge when someone asked for it. observability.build_turn() puts
+// them in t.scores: source "code" with value 1 (pass), 0 (fail) or null
+// (n/a), and source "judge" with a 0-1 score. They live in the dashboard
+// only; the chat keeps its one receipt line under each reply.
+const obsCheckName = n => esc(String(n || "").replace(/_/g, " "));
+const obsCodeChecks = t => (t.scores || []).filter(x => x.source === "code");
+// The Turns list's one chip: "5 of 5 checks", or the first failed check.
+function obsTurnChip(t){
+  const scored = obsCodeChecks(t).filter(x => x.value != null);
+  if (!scored.length) return "";
+  const failed = scored.find(x => x.value < 1);
+  return failed ? uiBadge(`${obsCheckName(failed.name)}: fail`, "bad", failed.note || "")
+                : uiBadge(`${scored.length} of ${scored.length} checks`, "ok");
+}
+// The waterfall header: every check as a chip. Its note shows on hover, and
+// a tap on the chip writes it out under the row, for a screen with no hover.
+function obsTurnChecks(t, key){
+  const word = v => v == null ? "n/a" : v >= 1 ? "pass" : "fail";
+  const tone = v => v == null ? "neutral" : v >= 1 ? "ok" : "bad";
+  const chips = obsCodeChecks(t).map(x => uiButton(uiBadge(`${obsCheckName(x.name)}: ${word(x.value)}`, tone(x.value)),
+    {level: "tertiary", size: "sm", cls: "obs-chip", title: x.note || "",
+     onclick: `obsCheckNote('${key}','${esc(x.name)}')`}));
+  const judged = (t.scores || []).filter(x => x.source === "judge").map(x => uiBadge(
+    `judge · ${obsCheckName(x.name)} ${esc(Number(x.value).toFixed(1))}`, x.value >= 0.7 ? "ok" : "bad", x.note || ""));
+  if (!chips.length && !judged.length) return "";
+  const open = obsCodeChecks(t).find(x => OBS.note === `${key}|${x.name}`);
+  const notes = [open ? `<div><b>${obsCheckName(open.name)}</b>: ${esc(open.note || "")}</div>` : "",
+    ...(t.scores || []).filter(x => x.source === "judge").map(x => `<div><b>judge</b>: ${esc(x.note || "")}</div>`)].join("");
+  return `<div class="obs-scores">${chips.join("")}${judged.join("")}</div>${notes ? `<div class="meta obs-notes">${notes}</div>` : ""}`;
+}
+function obsCheckNote(key, name){
+  OBS.note = OBS.note === `${key}|${name}` ? "" : `${key}|${name}`;
+  render();
+}
+// Open one turn's waterfall from the Evals page.
+function obsOpenTurn(key){
+  OBS.open.add(key);
+  location.hash = "#observability/turns";
+}
+// Evals → Your turns: one row per check for the window, newest failure linked.
+function obsYourTurns(e){
+  const all = e.your_turns || {};
+  const yt = all[OBS.window] || all["7d"];
+  const win = (OBS_WINDOWS.find(([k]) => k === OBS.window) || [, "7 days"])[1].toLowerCase();
+  let h = `<h2>Your turns</h2><div class="obs-cap">${esc(OBS_CAPTION.yours)}</div>` + obsWindowBar();
+  if (!yt || !yt.turns) return h + uiCard(`<span class="empty">no turns traced in this window. Send Waku a message and its checks appear here.</span>`);
+  const rate = r => r.pass_rate == null ? "—" : `${Math.floor(r.pass_rate * 1000) / 10}%`;
+  const rows = yt.checks.map(r => {
+    const scored = r.passed + r.failed;
+    const f = r.newest_fail;
+    const fkey = f ? obsTurnKey(f, "") : "";
+    return `<tr><td><code>${obsCheckName(r.name)}</code><div class="meta">${esc(r.what)}</div></td>
+      <td>${scored ? uiBadge(`${r.passed} of ${scored} passed`, r.failed ? "bad" : "ok") : `<span class="meta">—</span>`}</td>
+      <td class="meta">${r.failed}</td><td class="meta">${r.na}</td><td class="meta">${rate(r)}</td>
+      <td class="meta">${f ? uiButton("open the newest failure", {level: "tertiary", size: "sm", title: f.note || "",
+        onclick: `obsOpenTurn('${fkey}')`}) : "—"}</td></tr>`;
+  });
+  const j = yt.judge || {judged: 0};
+  rows.push(`<tr><td><code>judge</code><div class="meta">a model reads the reply and the tool outputs, on demand</div></td>
+    <td>${j.judged ? uiBadge(`${j.passed} of ${j.judged} passed`, j.passed === j.judged ? "ok" : "bad") : `<span class="meta">—</span>`}</td>
+    <td class="meta">${j.judged ? j.judged - j.passed : 0}</td><td class="meta">${yt.turns - j.judged}</td>
+    <td class="meta">${j.average != null ? "avg " + esc(String(j.average)) : "—"}</td><td class="meta">${j.judged} judged</td></tr>`);
+  h += table(["check", win, "failed", "n/a", "pass rate", ""], rows);
+  return h + `<div class="meta obs-foot">${obsNum(yt.turns)} turn(s) in this window. The checks run each time this page reads your traces, so an old turn is graded too.</div>`;
 }
 
 // ---------- Tools: grouped by source, treg endpoints first, then its actions
@@ -339,7 +408,8 @@ function obsSpend(d){
 function obsEvals(d){
   const e = d.evals || {};
   const verdict = v => v === "pass" ? "ok" : v === "fail" ? "bad" : "neutral";
-  let h = "";
+  // spec 015: the person's own turns first, then the release's evals
+  let h = obsYourTurns(e) + `<h2 id="evals-release">This release</h2><div class="obs-cap">${esc(OBS_CAPTION.release)}</div>`;
   const det = e.deterministic, run = e.last_run;
   const gate = run ? run.verdict : e.last;
   const open = !!gate && gate.deterministic === "pass" && gate.judge !== "fail";
@@ -391,7 +461,7 @@ function obsEvals(d){
     const out = href => `<a class="link" href="${esc(href)}" target="_blank" rel="noopener noreferrer">`;
     const tests = t => t ? `${esc(t.label)}: ${obsNum(t.passed)} passed, ${obsNum(t.failed)} failed, ${obsNum(t.skipped)} skipped`
                          : "no count recorded";
-    h += `<h2 id="evals-release">This release</h2>` + uiCard(
+    h += `<h3>The commit</h3>` + uiCard(
       `<div>Commit ${out(rel.commit_url)}<code>${esc(rel.short_sha)}</code></a>, deployed ${obsWhen(rel.deployed_at)}.
          It shipped because every required check below passed on that exact commit.</div>`)
       + table(["required check","result","tests","run"], rel.checks.map(c =>

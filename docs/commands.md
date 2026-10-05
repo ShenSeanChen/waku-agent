@@ -15,6 +15,7 @@ targets are aliases for the same things, plus the eval and tracing tools.
 | `waku whatsapp` | answer WhatsApp messages (needs `WHATSAPP_TOKEN` and a public URL) |
 | `waku brief` | a morning briefing from calendar + mail + memory, run as a loop |
 | `waku gather` | the same job as a graph: four sources fetched together, then one digest |
+| `waku evals turns` | grade your own traced turns with the five turn checks and list the failing ones (`--window today`, `7d` or `all`) |
 | `waku connections` | every integration and its health, including Waku Memory |
 | `waku connect google` | sign in to Google Calendar (opens your browser) |
 | `waku connect waku-memory` | connect Waku Memory, the memory shared with your other agents (opens your browser) |

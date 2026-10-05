@@ -108,10 +108,17 @@ function archObserveTabs(){
     `<tspan class="nlink" data-tab="${k}" onclick="archGo(event,'observability/${k}')">${label}</tspan>`).join(" · ");
 }
 function archGo(e, view){ e.stopPropagation(); location.hash = view; }
-// The Evals box's second line: the last release gate's verdict. Spec 015
-// adds "your turns n/m" here when it is built.
+// The Evals box's second line: the last release gate's verdict, led by
+// "your turns n/m" (spec 015) once the Observability data has loaded: n of
+// the last 7 days' graded turns passed every turn check.
 function archEvalsLine(d){
   const r = d.eval_report;
+  const yt = typeof OBS !== "undefined" && OBS.data && ((OBS.data.evals || {}).your_turns || {})["7d"];
+  if (typeof OBS !== "undefined" && !OBS.data && !OBS.loading) deferBg(loadObservability);
+  if (yt && yt.turns_scored){
+    const gate = r ? `det ${esc(String(r.deterministic))} · judge ${esc(String(r.judge))}` : "run make gate";
+    return `your turns ${yt.turns_passed}/${yt.turns_scored} · ${gate}`;
+  }
   return r ? `release gate: det ${esc(String(r.deterministic))} · judge ${esc(String(r.judge))}` : "release gate: run make gate";
 }
 

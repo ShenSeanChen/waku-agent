@@ -276,7 +276,8 @@ def test_an_old_trace_builds_the_same_turns_with_durations_empty():
     assert consolidation["sent"] == 1 and consolidation["local_only"] == 1
     assert turn["latency_ms"] == 8000 and turn["turn_id"] == "" and turn["kept"] == 2
     assert turn["usd"] == round(turn["steps"][1]["usd"] + 0.0089, 6)
-    assert turn["scores"] == []
+    # spec 015: only the code checks, run on read; nothing was written
+    assert {s["source"] for s in turn["scores"]} == {"code"}
 
 
 def test_a_receipt_sets_the_turns_total_and_memory_counts():
@@ -307,8 +308,8 @@ def test_scores_attach_to_their_turn(tmp_path):
     (tmp_path / "traces").mkdir()
     (tmp_path / "traces" / "2026-09-28.jsonl").write_text("\n".join(json.dumps(e) for e in trace))
     turn = obs.payload(tmp_path, window="all")["turns"][0]
-    assert turn["scores"] == [{"source": "judge", "name": "relevance", "value": 0.8,
-                               "note": "answered the question"}]
+    assert [s for s in turn["scores"] if s["source"] != "code"] == [
+        {"source": "judge", "name": "relevance", "value": 0.8, "note": "answered the question"}]
 
 
 # ---- 7. spend ----------------------------------------------------------------
