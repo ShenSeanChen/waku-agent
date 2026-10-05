@@ -12,11 +12,13 @@ Every agent framework is ultimately this while-loop with more indirection:
 
 End-loop guardrails (the orange box's exit conditions):
   1. the model stops asking for tools  → natural end of turn
-  2. max_iterations reached            → hard stop, never spin forever
+  2. max_iterations reached            → hard stop, never spin forever: one
+     last call with tools off answers from what the turn already gathered
 """
 
 from __future__ import annotations
 
+import logging
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -30,6 +32,15 @@ from waku.tools.registry import ToolRegistry
 # them — without either being wired into the loop's logic.
 LoopEvent = dict[str, Any]
 Observer = Callable[[str, LoopEvent], None]
+
+log = logging.getLogger(__name__)
+
+# Guardrail 2's words. LIMIT_NOTE goes to the model for its one tools-off
+# call; LIMIT_REPLY is what the person reads if that call fails too.
+LIMIT_NOTE = ("You have reached the step limit for this turn and cannot call any more "
+              "tools. Answer now from what you already gathered; say plainly what is "
+              "missing or what failed.")
+LIMIT_REPLY = "(I hit my iteration limit before finishing — try breaking the request into smaller steps.)"
 
 
 def error_text(exc: BaseException) -> str:
@@ -69,6 +80,9 @@ class LoopResult:
     # Spec 011: what the turn did and cost (waku/ops/receipt.py), set by
     # Waku.respond once the turn is over. None for a bare run_loop call.
     receipt: dict | None = None
+    # True when the turn hit max_iterations and the reply came from the one
+    # tools-off call after it (guardrail 2), not from a natural end.
+    limit_reached: bool = False
 
 
 def run_loop(
@@ -160,6 +174,36 @@ def run_loop(
             )
         messages.append({"role": "user", "content": tool_results})
 
-    # ---- guardrail 2: ran out of iterations
-    result.reply = "(I hit my iteration limit before finishing — try breaking the request into smaller steps.)"
+    # ---- guardrail 2: ran out of iterations. Everything gathered so far is
+    # in `messages`, so ask once more with tools off for an answer from it,
+    # rather than throwing it away. If that call fails, say so the old way.
+    result.limit_reached = True
+    result.reply = _final_answer(client, model, system, messages, tools, max_tokens,
+                                 notify, trim, max_iterations + 1) or LIMIT_REPLY
     return result
+
+
+def _final_answer(client, model: str, system: str, messages: list[dict], tools: ToolRegistry,
+                  max_tokens: int, notify: Observer, trim, iteration: int) -> str:
+    """The one tools-off call after max_iterations: its text, or "" when it
+    failed or wrote none. The tool definitions are still sent, because
+    Anthropic refuses a history with tool_use blocks and no tools; tool_choice
+    "none" is what stops the model calling one."""
+    if trim is not None:
+        trim(messages)
+    try:
+        response = client.messages.create(
+            model=model, system=f"{system}\n\n{LIMIT_NOTE}", messages=messages,
+            tools=tools.schemas(), tool_choice={"type": "none"}, max_tokens=max_tokens)
+    except Exception as exc:
+        log.warning("the final answer after the iteration limit failed: %s", error_text(exc))
+        return ""
+    # kind "final", not "loop": the waterfall keeps it in the last loop's row
+    # and the receipt counts it apart; final_answer is the flag to look for
+    notify("llm", {"iteration": iteration, "kind": "final", "final_answer": True,
+                   "stop_reason": response.stop_reason,
+                   "usage": {"in": response.usage.input_tokens, "out": response.usage.output_tokens}})
+    text = [b for b in response.content if b.type == "text"]
+    if text:
+        messages.append({"role": "assistant", "content": text})
+    return "".join(b.text for b in text)
