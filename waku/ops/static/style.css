@@ -1113,3 +1113,12 @@ main h3{font-family:var(--face-mono);font-size:var(--text-xs);color:var(--text-f
   -webkit-mask-image:repeating-linear-gradient(90deg,var(--accent) 0 calc(var(--spacing) * 1.5),transparent calc(var(--spacing) * 1.5) calc(var(--spacing) * 2));
   mask-image:repeating-linear-gradient(90deg,var(--accent) 0 calc(var(--spacing) * 1.5),transparent calc(var(--spacing) * 1.5) calc(var(--spacing) * 2))}
 .wf-track.seg .wf-fill{min-width:calc(var(--spacing) * 2);border-radius:0}
+.wf-group{display:flex;flex-direction:column;gap:var(--space-2);padding-left:var(--space-3);border-left:var(--rule-width) solid var(--rule)}
+.wf-graph{padding:var(--space-2);border:var(--rule-width) dashed var(--rule);border-radius:var(--radius)}
+.wf-ghead{display:flex;flex-wrap:wrap;align-items:baseline;justify-content:space-between;gap:var(--spacing) var(--space-2)}
+.wf-gname{font-family:var(--face-mono);font-size:var(--text-xs);text-transform:uppercase;letter-spacing:var(--tracking-label);color:var(--text-ink)}
+
+/* Turn checks (spec 015): a check's chip in a turn's waterfall is a text-only
+   button around a badge, so a tap writes its note out under the chips. */
+.btn-tertiary.btn-sm.obs-chip{padding:0}
+.obs-notes{margin:0 0 var(--space-2);overflow-wrap:anywhere}
