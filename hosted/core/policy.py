@@ -72,7 +72,9 @@ VOICE_BLOCKED = "Voice is not available on hosted waku."
 REVEAL_BLOCKED = "Opening a file in an editor only works on your own machine."
 PLATFORM_FIELDS_REFUSED = ("The hosted free tier's key and endpoint are set by the "
                            "platform. Pick another provider to use your own key.")
-CONNECTION_REFUSED = "Only Tavily and Notion can be connected on hosted waku."
+CONNECTION_REFUSED = ("Only Tavily, Notion and your own treg key can be connected "
+                      "on hosted waku.")
+CONNECTION_FIELD_REFUSED = "Only the treg API key can be set here."
 
 # Design section 9: a turn is one request to one of these three. The gateway
 # sees turns; the proxy only sees individual model calls.
@@ -90,7 +92,14 @@ STREAMING_ROUTES = frozenset({
 # a host-bound integration (cannot work in a container), a hosted memory
 # backend or telemetry (platform decisions). An allowlist, so a connection
 # added upstream is refused until somebody decides.
-ALLOWED_CONNECTIONS = frozenset({"notion", "tavily"})
+ALLOWED_CONNECTIONS = frozenset({"notion", "tavily", "treg"})
+
+# Spec 014: a connection here may set only these fields, in `values` or
+# `clear`. treg's is the person's own key and nothing else: no field may name
+# a URL or an auth_env, so the dashboard can never point a tenant's treg
+# server at the relay, or anywhere, with a token that is not theirs. The
+# override's address is a constant in waku/tools/treg.py.
+CONNECTION_FIELDS: dict[str, frozenset[str]] = {"treg": frozenset({"TREG_API_KEY"})}
 
 DROPPED_SETTINGS_FIELDS = ("experimental",)
 PLATFORM_REFUSED_FIELDS = ("key", "base_url", "custom_key")
@@ -264,9 +273,17 @@ def _filter_providers(payload: dict) -> FilterResult:
 
 
 def _filter_connections(payload: dict) -> FilterResult:
-    if payload.get("key") in ALLOWED_CONNECTIONS:
-        return FilterResult(True, dict(payload))
-    return FilterResult(False, None, CONNECTION_REFUSED)
+    key = payload.get("key")
+    if key not in ALLOWED_CONNECTIONS:
+        return FilterResult(False, None, CONNECTION_REFUSED)
+    allowed = CONNECTION_FIELDS.get(key)
+    if allowed is not None:
+        values, clear = payload.get("values") or {}, payload.get("clear") or []
+        if not isinstance(values, dict) or not isinstance(clear, list | tuple):
+            return FilterResult(False, None, CONNECTION_FIELD_REFUSED)
+        if not set(values) <= allowed or not set(map(str, clear)) <= allowed:
+            return FilterResult(False, None, CONNECTION_FIELD_REFUSED)
+    return FilterResult(True, dict(payload))
 
 
 FILTERS: dict[str, Callable[[dict], FilterResult]] = {

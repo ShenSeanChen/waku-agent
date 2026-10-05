@@ -611,6 +611,33 @@ the spawner when their env files change, and `--now` restarts every running
 tenant, which provisions the new entry. A tenant who already has a `treg`
 server of their own keeps it.
 
+### A tenant's own treg key
+
+A person who has a treg team of their own can use it instead (spec 014). On
+the Connections page the treg card reads "Through waku.one: paid in your Waku
+credits." and has a Configure button. They paste their org-scoped treg key,
+Test connection asks treg (`GET https://treg.to/tools`, free) whether it is
+good, and Save writes `TREG_API_KEY` to their own `.env`, like a Tavily key.
+The card then reads "Your own treg key: paid by your treg account."
+
+From the next message their agent reaches treg at `https://treg.to/mcp/` with
+that key and never touches the relay, so waku.one charges nothing: the same
+rule as a tenant's own model key. It is treg's team surface, not `/mcp/v2/`:
+the team is theirs, so its connected accounts, its own tools, `balance` and
+`resources_list` are theirs to use, and the prompt stops naming those two as
+unavailable. There is no per-call ceiling on these calls; treg's own team
+budgets apply. The receipt and the Observability page still show each call's
+cost and endpoint, read from treg's answer inside the container.
+
+The switch happens when waku connects its MCP servers
+(`waku/tools/treg.py` `resolve()`), not in provisioning: the relay entry stays
+in `mcp.json`, and clearing the key on the same dialog sends the next call
+through the relay again. The gateway lets `treg` through `/api/connections`
+with the `TREG_API_KEY` field and no other (`hosted/core/policy.py`
+`CONNECTION_FIELDS`), so no save can point the server at another address or
+name another credential. Nothing to do on the VM beyond the upgrade that
+ships it.
+
 Check it:
 
 ```bash

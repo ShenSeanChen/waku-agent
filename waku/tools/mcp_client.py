@@ -168,6 +168,11 @@ class MCPBridge:
         """Connect every configured server and return their tools (as Tools)."""
         self._thread.start()
         servers = json.loads(self.config_path.read_text(encoding="utf-8")).get("servers", [])
+        # A treg key of the person's own wins over mcp.json's treg entry
+        # (spec 014); every other server is connected as written.
+        from waku.tools.treg import resolve
+
+        servers = resolve(servers)
         # Before the coroutine, not as fut.result()'s argument: _deadline is
         # the first import of the `mcp` package in this thread, and
         # _connect_one imports it on the loop thread. Two threads importing it
