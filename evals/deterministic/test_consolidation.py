@@ -462,3 +462,46 @@ def test_a_retried_fact_keeps_the_project_it_was_meant_for(memory):
     run_with(memory, [response([text_block('{"facts": [], "episode": ""}')])], remember)
     assert {scope for _, scope in remember.sent} == {"project:Company brain"}
     assert len(remember.sent) == 2
+
+
+# ---------- the assistant's own operating state is never kept (2026-10-05)
+
+OPS_FACTS = [
+    "User's treg balance is $0.759 USD (759,000 micro), enabling completion of full research passes.",
+    "User's treg balance of $0.00188 is insufficient to complete YouTube research.",
+    "The TikHub search returned a 402 when the balance ran out.",
+    "treg rate-limited the Aviato calls.",
+    "The research turn used 328.5k input tokens.",
+    "Sean is out of treg credits.",
+]
+USER_FACTS = [
+    "User researches competitor funding with treg.",
+    "Sean values work-life balance.",
+    "Sean pays for his tools with a credit card.",
+    "Sean's startup spends about $500 a month on AWS.",
+]
+
+
+@pytest.mark.parametrize("content", OPS_FACTS)
+def test_a_balance_a_402_or_a_token_count_is_not_a_fact(content):
+    from waku.memory.consolidation import is_ops_state
+
+    assert is_ops_state({"subject": "user", "content": content}), content
+
+
+@pytest.mark.parametrize("content", USER_FACTS)
+def test_a_fact_about_the_user_is_not_operating_state(content):
+    from waku.memory.consolidation import is_ops_state
+
+    assert not is_ops_state({"subject": "sean", "content": content}), content
+
+
+def test_consolidation_keeps_the_user_facts_and_drops_the_operating_state(memory):
+    proposed = [{"subject": "user", "content": c} for c in [*OPS_FACTS, *USER_FACTS]]
+    distilled = json.dumps({"facts": proposed, "episode": "Researched Letta's funding with treg."})
+    add_exchanges(memory.conn, 3)
+    memory.client = CountingClient([response([text_block(distilled)])])
+    kept = kept_if_due(memory.conn, memory.client, "small-model", 3, memory.facts, memory.episodes)
+    assert [k["content"] for k in kept] == USER_FACTS
+    # and the summariser is told the same rule
+    assert "account balances, credits" in memory.client.kwargs[0]["messages"][0]["content"]
