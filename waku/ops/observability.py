@@ -586,6 +586,13 @@ def _row(name: str, b: dict) -> dict:
             "avg_results": round(b["results_total"] / b["results_n"], 1) if b["results_n"] else None}
 
 
+def runs_endpoint(name: str) -> bool:
+    """Whether a treg tool runs an endpoint: `treg_call` and every
+    `treg_catalog_call_*` (read, write, media), failed calls included."""
+    short = (name or "")[len(TREG_PREFIX):] if (name or "").startswith(TREG_PREFIX) else ""
+    return short == "call" or short.startswith(("call_", "catalog_call"))
+
+
 def tool_stats(events: list[dict], servers=(), window: str = "all",
                now: datetime | None = None) -> dict:
     """Tool calls in a window, grouped by source: treg (per tool and per
@@ -607,7 +614,7 @@ def tool_stats(events: list[dict], servers=(), window: str = "all",
         if source == "treg":
             _add(treg.setdefault(name, _bucket()), info, ev)
             # only a call runs an endpoint; catalog_get only reads its page
-            if info.get("endpoint_id") and name.startswith(TREG_PREFIX + "call"):
+            if info.get("endpoint_id") and runs_endpoint(name):
                 b = endpoints.setdefault(info["endpoint_id"], {**_bucket(), "provider": info.get("provider") or ""})
                 _add(b, info, ev)
         elif source == "waku_memory":
@@ -625,8 +632,8 @@ def tool_stats(events: list[dict], servers=(), window: str = "all",
     def rows(buckets: dict) -> list[dict]:
         return sorted((_row(n, b) for n, b in buckets.items()), key=lambda r: (-r["calls"], r["tool"]))
 
-    endpoint_rows = sorted(({"endpoint_id": e, "provider": b["provider"], "calls": b["calls"],
-                             "errors": b["errors"], "usd": round(b["usd"], 6) if b["priced"] else None}
+    endpoint_rows = sorted(({"endpoint_id": e, "provider": b["provider"],
+                             **{k: v for k, v in _row(e, b).items() if k not in ("tool", "avg_results")}}
                             for e, b in endpoints.items()),
                            key=lambda r: (-(r["usd"] or 0), -r["calls"], r["endpoint_id"]))
     treg_rows = [{**r, "span": "tool"} for r in rows(treg)]

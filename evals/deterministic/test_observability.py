@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import pytest
 
@@ -183,7 +184,7 @@ def test_tool_calls_group_by_source_tool_and_treg_endpoint():
     assert ends["tomba.companies.similar"]["calls"] == 2
     assert ends["spyfu.google.domain.competitors"] == {
         "endpoint_id": "spyfu.google.domain.competitors", "provider": "spyfu",
-        "calls": 1, "errors": 0, "usd": 0.02}
+        "calls": 1, "errors": 0, "usd": 0.02, "avg_ms": 600}
     mem = {r["tool"]: r for r in out["waku_memory"]["tools"]}
     assert mem["memory_search"]["avg_results"] == 3 and mem["memory_search"]["span"] == "retrieval"
     assert mem["memory_remember"]["span"] == "memory_write"
@@ -193,6 +194,44 @@ def test_tool_calls_group_by_source_tool_and_treg_endpoint():
     assert other["save_note"]["source"] == "local"
     assert other["github_read"]["source"] == "mcp:github" and other["github_read"]["errors"] == 1
     assert obs.tool_stats(events, (), "all", NOW)["treg"]["calls"] == 7
+
+
+def test_endpoint_rows_count_catalog_calls_with_errors_and_avg_time():
+    """The Tools tab leads with the endpoints a turn ran (YouTube search,
+    Reddit...), not the treg verbs: every catalog_call_* counts, a 429 that
+    cost nothing is an error for its endpoint, and each row has an avg time."""
+    yt = "tikhub.youtube.search.videos"
+    ok_out = json.dumps({"status": 200, "endpoint_id": yt, "cost_usd": 0.01})
+    rate_limited = json.dumps({"status": 429, "error": "rate limited", "cost_usd": 0})
+    events = [
+        _tool("treg_catalog_call_read", ok_out, {"endpoint_id": yt}, ms=1000),
+        _tool("treg_catalog_call_read", rate_limited, {"endpoint_id": yt}, ms=200),
+        _tool("treg_catalog_call_write", json.dumps({"status": 200, "cost_usd": 0.03}),
+              {"endpoint_id": "aviato.companies.funding_rounds"}, ms=400),
+        _tool("treg_catalog_call_media", "MCP call treg.catalog_call_media failed: timeout",
+              {"endpoint_id": "scrapecreators.youtube.video.comments"}, ms=300),
+        _tool("treg_catalog_get", json.dumps({"endpoint": {}}), {"endpoint_id": yt}, ms=50),
+        _tool("treg_catalog_search", json.dumps({"results": []}), {"query": "youtube"}, ms=80),
+    ]
+    out = obs.tool_stats(events, (), "7d", NOW)
+    ends = {e["endpoint_id"]: e for e in out["treg"]["endpoints"]}
+    assert set(ends) == {yt, "aviato.companies.funding_rounds",
+                         "scrapecreators.youtube.video.comments"}, "catalog_get only reads docs"
+    assert ends[yt] == {"endpoint_id": yt, "provider": "tikhub", "calls": 2, "errors": 1,
+                        "usd": 0.01, "avg_ms": 600}
+    assert ends["scrapecreators.youtube.video.comments"]["errors"] == 1
+    assert ends["scrapecreators.youtube.video.comments"]["usd"] is None
+    assert ends["aviato.companies.funding_rounds"]["avg_ms"] == 400
+    assert out["treg"]["endpoints"][0]["endpoint_id"] == "aviato.companies.funding_rounds", "most dollars first"
+    # the h2 summary still counts every treg call, actions included
+    assert out["treg"]["calls"] == 6 and out["treg"]["usd"] == 0.04
+    assert obs.runs_endpoint("treg_call") and not obs.runs_endpoint("treg_catalog_request")
+
+
+def test_tools_tab_draws_endpoints_before_treg_actions():
+    js = (Path(obs.__file__).parent / "static" / "js" / "observe.js").read_text(encoding="utf-8")
+    body = js[js.index("function obsTools("):]
+    assert body.index("Endpoints called") < body.index("treg actions") < body.index("t.treg.tools")
 
 
 def test_today_starts_at_local_midnight():
