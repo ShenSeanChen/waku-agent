@@ -42,6 +42,7 @@ from waku.integrations import (
     list_providers,
     test_integration,
 )
+from waku.key_locations import model_key_locations
 from waku.loop.agent import error_text
 from waku.memory import tool_note
 from waku.ops import browser_agent, commands, compare_history
@@ -528,6 +529,9 @@ def collect() -> dict:
         "db": db_info,
         "settings": info,
         "providers": [asdict(view) for view in list_providers()],
+        # Where a model key was looked for, for the setup page (spec 013).
+        # Paths and yes-or-no only: no value ever enters this payload.
+        "key_locations": model_key_locations(),
         "connections": [asdict(view) for view in list_connections()],
         # MCP servers that sign in on their own page rather than through an
         # .env field (spec 007 E). Files only: no browser, no network.

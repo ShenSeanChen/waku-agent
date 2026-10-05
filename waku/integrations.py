@@ -503,6 +503,14 @@ def cli_main() -> int:
     if notice := home_notice():
         console.print(f"  {notice}", markup=False)
 
+    # Where a model key was looked for, in the order the places win (spec 013).
+    # Paths and yes-or-no only: no value is printed.
+    from waku.key_locations import cli_lines, model_key_locations
+
+    console.print("\n[bold]Model key[/bold]")
+    for line in cli_lines(model_key_locations()):
+        console.print(f"  {line}", markup=False)
+
     # Waku Memory is not an .env field like the rows above: it is a server in
     # mcp.json with a sign-in token beside it, so its line comes from there.
     console.print("\n[bold]Shared memory[/bold]")
@@ -518,9 +526,9 @@ def _find_integration(key: str) -> Integration | None:
 
 
 def _env_path() -> Path:
-    from dotenv import find_dotenv
+    from waku.config import env_write_path
 
-    return Path(find_dotenv(usecwd=True) or ".env")
+    return env_write_path()
 
 
 def _safe_error(exc: Exception, values: Mapping[str, str], integration: Integration) -> str:

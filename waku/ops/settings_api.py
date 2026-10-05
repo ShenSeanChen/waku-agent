@@ -107,11 +107,13 @@ def apply_settings(payload: dict) -> dict:
     """
     import os
 
-    from dotenv import find_dotenv, set_key
+    from dotenv import set_key
+
+    from waku.config import env_write_path
 
     if "episodic_store" in payload:
         return {"error": "episodic_store is managed in Connections"}
-    env_path = find_dotenv(usecwd=True) or ".env"
+    env_path = str(env_write_path())
     # NOT `if toggle:` — turning it OFF sends "", which is falsy. Absent (None)
     # means "don't touch"; "" means "switch it off".
     toggles = (("experimental", "WAKU_EXPERIMENTAL"), ("graph_workflows", "WAKU_GRAPH_WORKFLOWS"))

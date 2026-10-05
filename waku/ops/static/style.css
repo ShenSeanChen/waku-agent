@@ -994,6 +994,10 @@ dialog.dialog :focus-visible{outline:var(--focus-ring-width) solid var(--accent)
                    margin-bottom: var(--space-4) }
   .setup-note { color: var(--text-faint); font-size: var(--text-sm);
                 margin: var(--space-2) 0 0 }
+  .setup-places { color: var(--text-muted); font-size: var(--text-sm);
+                  margin: var(--space-2) 0 var(--space-4); padding-left: var(--space-4) }
+  .setup-places code { overflow-wrap: anywhere }
+  .setup-looked { margin-bottom: var(--space-4) }
 
 /* ---- The embedded chat (embed.html, spec 008) ------------------------------
    The chat column alone, filling whatever frame waku.one gives it. Last in the

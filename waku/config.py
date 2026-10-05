@@ -14,6 +14,12 @@ from typing import NamedTuple
 
 from dotenv import find_dotenv, load_dotenv
 
+# The names, never the values, that were set before any .env loaded. Once the
+# files below have loaded, os.environ cannot say where a value came from, and
+# the setup page has to say whether a model key came from the environment or
+# from a file (spec 013).
+STARTUP_ENV_NAMES = frozenset(name for name, value in os.environ.items() if value)
+
 
 def _load_env() -> str:
     """Find the user's .env the way the user expects: from where they ARE.
@@ -30,7 +36,7 @@ def _load_env() -> str:
     running `waku` from a subdirectory of your project still finds the .env at
     its root — the same rule git, npm and pytest already taught everyone.
 
-    Returns the path that was loaded (empty string if none) so `waku doctor`
+    Returns the path that was loaded (empty string if none) so `waku connections`
     and the first-run error can say WHICH file was read, rather than leaving
     people guessing between three .env files.
     """
@@ -124,6 +130,44 @@ def _load_home_env() -> str:
 
 
 HOME_DOTENV_PATH = _load_home_env()
+
+
+def env_write_target(cwd: Path | None = None, env: Mapping[str, str] | None = None,
+                     user_home: Path | None = None) -> tuple[Path, bool]:
+    """The one .env every dashboard save writes to, and whether it is <home>/.env
+    (spec 013). Pure: it creates nothing.
+
+    A save goes where the next start reads it first. When a .env is found from
+    the working directory upward, that file wins over <home>/.env (spec 002),
+    so a value written to the home file would be hidden by any line the
+    project's file already holds. When no such file exists, the save goes to
+    <home>/.env, so Waku finds it from every folder.
+    """
+    cwd = Path.cwd() if cwd is None else cwd
+    if found := find_env_upward(cwd):
+        return Path(found), False
+    return resolve_home(env=env, cwd=cwd, user_home=user_home).path / ".env", True
+
+
+def env_write_path() -> Path:
+    """env_write_target() for a save that is about to happen: the home folder is
+    created if it is missing. The file itself is created by the first save:
+    python-dotenv's set_key writes through a temporary file, so a new .env
+    starts with mode 600."""
+    path, _ = env_write_target()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def find_env_upward(start: Path) -> str:
+    """The nearest .env in `start` or a folder above it, or "". This is the
+    walk find_dotenv(usecwd=True) makes from the working directory, with the
+    starting folder passed in so the evals can point it anywhere."""
+    for folder in (start, *start.parents):
+        candidate = folder / ".env"
+        if candidate.is_file():
+            return str(candidate)
+    return ""
 
 
 @dataclass
