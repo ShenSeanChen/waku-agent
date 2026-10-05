@@ -43,6 +43,14 @@ Rules:
 """
 
 
+# A harness rule, not a SOUL.md one: SOUL.md is written once, so a rule added
+# there never reaches an assistant that already has one. On 2026-10-05 a turn
+# spent nine of its ten steps guessing at a YouTube channel by name.
+LOOKUP_RULE = ("\nWhen a lookup of the same target (a channel, profile, company or page found "
+               "by name) fails twice, stop guessing: use the exact URL, handle or domain the "
+               "user gave, or ask them for it.")
+
+
 def load_soul(settings: Settings) -> str:
     """SOUL.md is the editable persona file, created on first run. Changing it
     changes who your Waku is — that's procedural memory at its simplest."""
@@ -77,7 +85,8 @@ class Session:
                  # is the first question every curious user asks
                  (f"Your model: you are running on '{self.settings.model}' via the "
                  f"'{self.settings.provider}' provider, inside Waku, a local-first "
-                 f"open-source agent harness (github.com/ShenSeanChen/waku-agent).")]
+                 f"open-source agent harness (github.com/ShenSeanChen/waku-agent)."),
+                 LOOKUP_RULE]
         # Spec 009 E: a call the deployment refuses is a wasted step and, on a
         # metered tenant, a wasted turn. Spec 014: with the person's own treg
         # key the relay is not in the path, so treg's tools are all theirs.

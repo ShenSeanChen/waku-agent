@@ -237,7 +237,10 @@ Every turn has a `turn_id`, written on the trace's `turn_start` and
 `turn_end`, on each `usage.jsonl` row and in the chat log's meta. Every model
 call writes a `usage.jsonl` row and an `llm` event: the loop's with `kind`
 `loop`, and the small-model calls around it with `gate`, `consolidation`,
-`report`, `triage` or `quick` (`metered()` in `waku/ops/tracing.py`).
+`report`, `triage` or `quick` (`metered()` in `waku/ops/tracing.py`). When a
+turn hits `max_iterations`, the loop makes one more call with tools off and
+its `llm` event has `kind` `final` and `final_answer: true`; the waterfall's story line shows
+it as "limit reached → final answer".
 
 Model dollars are an estimate from `waku/ops/pricing.py`, marked "est". On
 the hosted free tier, every model call carries `X-Waku-Turn`, and the
