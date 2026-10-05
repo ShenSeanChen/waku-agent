@@ -16,6 +16,12 @@ Spec 009 B: when the exchanges saved a research report, the report holds the
 findings. Consolidation then keeps at most two facts, about the user or their
 decisions, and drops any fact whose subject the report is about.
 
+A fact about the assistant's own operating state is never kept: "User's treg
+balance is $0.759 USD (759,000 micro)" was kept on 2026-10-05, and so was a
+balance "insufficient to complete YouTube research". Balances, credits,
+billing, 402s and 429s, rate limits, tool errors and token counts are
+transient, and `is_ops_state` drops them whatever the summariser proposed.
+
 A turn that answered from memory it read (a recall turn) passes that memory
 as `recalled`. The answer repeats it, so the summariser would extract it
 again and Waku Memory would get a second copy of every finding (2026-10-05:
@@ -49,6 +55,11 @@ From the exchanges below, extract:
    markets, prices, launches. Each is a fact whose subject is the company,
    product or market it is about.
 3. one single-sentence episode summarizing what happened in this conversation.
+
+Never extract the assistant's own operating state: account balances, credits,
+billing or spend, rate limits, tool errors or status codes, token counts, or
+how the assistant or its tools work. It changes by the hour and says nothing
+about the user.
 
 Write each fact's content as one sentence that names its subject, so it reads
 on its own. Set "company_research" to true when these exchanges are research
@@ -206,6 +217,7 @@ def kept_if_due(
                 if isinstance(f, dict) and f.get("subject") and f.get("content")]
     # Spec 005: Jev drops what no later answer would need. Off by default, and
     # it fails open, so without WAKU_SLOT_GATE=jev every proposed fact is kept.
+    proposed = [f for f in proposed if not is_ops_state(f)]
     if report:
         proposed = [f for f in proposed if not _about_report(f, report)]
     if recalled:
@@ -302,3 +314,34 @@ def restates(fact: dict, recalled: str) -> bool:
                           if any(c.isupper() or c.isdigit() for c in w)))
     has_number = any(w[0].isdigit() for w in key)   # "10m", "2023-12-27"; not "mem0"
     return has_number and key <= _words(recalled)
+
+
+# The assistant's own operating state, in a proposed fact. Each pattern is
+# narrow on purpose: "work-life balance" and "pays by credit card" are about
+# the person and are kept; "balance" counts only beside money or an account.
+_MONEYISH = re.compile(r"\$|\busd\b|\bcredits?\b|\bmicro\b|\baccount\b|\bwallet\b|"
+                       r"\btop(?:ped)?[- ]?up\b|\binsufficient\b|\btreg\b|\bapi\b", re.IGNORECASE)
+_OPS_STATE = re.compile(
+    r"\binsufficient\b|"
+    r"\b(?:out of|no|remaining|left in)\s+(?:\w+\s+)?credits?\b|\bcredits?\s+(?:left|remaining|balance)\b|"
+    r"\d[\d,.]*\s*micro(?:-?usd)?\b|"
+    r"\b(?:http|status(?: code)?|error(?: code)?)\s*[45]\d\d\b|"
+    r"\b(?:returned|got|hit|with|at)\s+(?:an?\s+)?(?:http\s+)?(?:402|429)\b|"
+    r"\brate[- ]limit|\btoo many requests\b|\bquota (?:exceeded|hit|reached|used)\b|"
+    r"\b\d[\d,.]*\s*k?\s*(?:input |output |prompt |completion )?tokens\b|"
+    r"\b(?:timed out|returned an error|failed with|tool error)\b|"
+    r"\b(?:billing|billed|charged|spend|spent)\b.*\b(?:treg|api|platform|waku|per call|account)\b|"
+    r"\b(?:treg|api|platform|waku)\b.*\b(?:billing|billed|charged)\b|"
+    r"\b(?:system prompt|context window|tool calls?)\b",
+    re.IGNORECASE)
+
+
+def is_ops_state(fact: dict) -> bool:
+    """True when a proposed fact is about the assistant's own operating state
+    (a balance, credits, billing, a 402 or 429, a rate limit, a tool error, a
+    token count, how the harness works) rather than about the user. Such a
+    fact is stale within the hour, so it is never kept."""
+    text = f"{fact.get('subject', '')} {fact.get('content', '')}"
+    if re.search(r"\bbalance\b", text, re.IGNORECASE) and _MONEYISH.search(text):
+        return True
+    return _OPS_STATE.search(text) is not None

@@ -181,6 +181,12 @@ dashboard's chat lists them under "Used from memory". The searches are not
 folded into the chat log. A failed search is logged and skipped; the turn
 goes on without it.
 
+Consolidation never keeps the assistant's own operating state: a treg balance,
+credits, billing, a 402 or 429, a rate limit, a tool error or a token count
+is stale within the hour and says nothing about the person (2026-10-05:
+"User's treg balance is $0.759 USD" was kept). The summariser is told so,
+and `consolidation.is_ops_state` drops whatever it proposes anyway.
+
 A turn that answered from memory does not keep that memory again. The answer
 repeats what it read, so the summariser proposes it as new facts (2026-10-05:
 one recall turn sent five copies of a report's findings to Waku Memory).
