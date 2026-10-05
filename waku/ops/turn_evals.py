@@ -291,6 +291,13 @@ _SAVE_ASK = re.compile(r"\b(save|saves|saving|store|storing)\b", re.IGNORECASE)
 # A body the model sent to memory_remember that is a report without the
 # marker: a "# " title and "## " sections, filed in the Company brain.
 _REPORT_SHAPE = re.compile(r"(?:^|\\n|\n)# \S.*?(?:\\n|\n)## \S", re.DOTALL)
+# A message that asks for no report: "Just answer, no report", "don't save
+# it", "skip the report". Such a turn is not owed one.
+_NO_REPORT = re.compile(
+    r"\b(?:no|without(?: an?| any)?|skip(?: the)?|(?:don't|do not|dont) (?:need|want)(?: an?| any)?)\s+"
+    r"(?:report|reports|brief|snapshot|saving)\b|"
+    r"\b(?:don't|do not|dont|never)\s+(?:save|store)\b|"
+    r"\bjust (?:answer|tell me|reply)\b", re.IGNORECASE)
 
 
 def _report_saves(v: dict) -> list[str]:
@@ -327,7 +334,9 @@ def check_one_report(v: dict) -> dict:
     is a report, counted once per memory. A turn is research when the
     research-report skill matches its message and the turn did research:
     a tool other than Waku Memory ran, or the message asks to save. A
-    question answered from memory alone is n/a. With no Waku Memory
+    question answered from memory alone is n/a, and so is a turn whose
+    message asks for no report ("Just answer, no report", "don't save");
+    saving one anyway fails. With no Waku Memory
     connected no `report` event is written and the reply keeps the report,
     so a reply carrying the report marker counts as one. An older trace (no
     turn id) did not trace reports: n/a."""
@@ -340,6 +349,10 @@ def check_one_report(v: dict) -> dict:
         return _result("one_report", NA, "not a research turn")
     if not v["v2"]:
         return _result("one_report", NA, "older trace: reports were not traced")
+    if _NO_REPORT.search(v["message"]):
+        if saves:
+            return _result("one_report", FAIL, "the message asked for no report and one was saved")
+        return _result("one_report", NA, "the message asked for no report")
     if len(saves) == 1:
         return _result("one_report", PASS, "one report saved")
     if MARKER in v["reply"]:
@@ -434,14 +447,21 @@ def _reply_numbers(reply: str, today: datetime | None = None) -> list[tuple]:
 _DASHES = re.compile("[\u2010\u2011\u2012\u2013\u2014\u2212]")
 
 
-def _strings(value) -> list[str]:
-    """Every string inside a decoded JSON value."""
+def _strings(value, depth: int = 0) -> list[str]:
+    """Every string inside a decoded JSON value. A string that is itself
+    JSON (an MCP text block, a relayed body kept as text) is decoded too, a
+    few levels deep, and so are numbers kept as numbers."""
     if isinstance(value, str):
+        if depth < 3 and value.lstrip()[:1] in ("{", "["):
+            try:
+                return [value, *_strings(json.loads(value), depth + 1)]
+            except ValueError:
+                pass
         return [value]
     if isinstance(value, dict):
         value = list(value.values())
     if isinstance(value, list):
-        return [s for v in value for s in _strings(v)]
+        return [s for v in value for s in _strings(v, depth)]
     return []
 
 
@@ -482,6 +502,15 @@ def _found(values: list[float], decimals: int, numbers: set[float], scale: float
     return False
 
 
+def _spend_figures(tools: list[dict]) -> set[float]:
+    """What the trace says this turn's treg calls cost, each and in total:
+    "the call cost $0.04" is grounded by the trace even when the call's own
+    output does not repeat its price. A treg tool is `treg_call` (the
+    own-key surface) or a `treg_catalog_call_*` relay; both carry cost_usd."""
+    costs = [t["cost_usd"] for t in _treg(tools)]
+    return {round(c, 6) for c in costs} | ({round(sum(costs), 6)} if costs else set())
+
+
 def check_grounded_numbers(v: dict) -> dict:
     """Every money amount, percentage, date and number of two or more digits
     in the reply appears in a tool output, a Waku Memory result or the user's
@@ -499,6 +528,7 @@ def check_grounded_numbers(v: dict) -> dict:
     if len(wanted) < GROUNDED_MIN_NUMBERS:
         return _result("grounded_numbers", NA, f"{len(wanted)} number(s) in the reply; the check needs 3")
     numbers, dates = _source_index([v["message"], *(t["output"] for t in v["tools"])])
+    numbers |= _spend_figures(v["tools"])
     missing = []
     for item in wanted:
         if isinstance(item[1], str):
@@ -548,8 +578,9 @@ def _tool_names(t: dict) -> set[str]:
         short = short.removeprefix(prefix)
     parts = {p.replace("_", " ") for p in re.split(r"[./:]", t["endpoint_id"])
              if len(p) >= 4 and p.lower() not in _GENERIC_PARTS}
-    return {n.lower() for n in (name, short, short.replace("_", " "), t["provider"], t["endpoint_id"], *parts)
-            if n}
+    # `treg_call` is short for nothing a reply would say: "call" is any call
+    names = (name, short, short.replace("_", " "), t["provider"], t["endpoint_id"], *parts)
+    return {n.lower() for n in names if n and n.lower() not in _GENERIC_PARTS}
 
 
 def check_errors_handled(v: dict) -> dict:
