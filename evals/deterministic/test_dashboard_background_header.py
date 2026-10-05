@@ -368,6 +368,8 @@ DECLARED_TIMERS = {
     # the dock's elapsed counter while waiting for the first token: repaint only
     ("render.js", "sendChat", "setInterval"):
         {"() => { if (pending.pending && !pending.stream) syncChatLogs(); }"},
+    # #evals/release scrolling Evals to "This release" once render is done: no request
+    ("observe.js", "<top level>", "setTimeout"): {"obsJumpRelease"},
     # menu/copy-button chrome
     ("ui.js", "openMenu", "setTimeout"): {'() => document.addEventListener("click", _menuOutside)'},
     ("util.js", "copyCode", "setTimeout"):

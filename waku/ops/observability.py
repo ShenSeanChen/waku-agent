@@ -470,7 +470,8 @@ def build_turn(turn: dict, servers=(), provider: str = "", model: str = "",
     receipt_ev = next((ev for ev in reversed(turn["events"]) if ev.get("type") == "receipt"), None)
     memory = (receipt_ev or {}).get("memory") if isinstance((receipt_ev or {}).get("memory"), dict) else None
     consolidation = next((s for s in steps if s["kind"] == "consolidation"), None)
-    return {
+    hot = hotspots(steps)
+    out = {
         # Spec 012: how good the turn was, from code, an AI judge or a human.
         # Nothing writes a score yet; a `score` trace event joined by turn_id
         # (or inside the turn) lands here.
@@ -492,8 +493,78 @@ def build_turn(turn: dict, servers=(), provider: str = "", model: str = "",
         "tokens_in": sum(s.get("in") or 0 for s in steps if s["kind"] == "llm"),
         "tokens_out": sum(s.get("out") or 0 for s in steps if s["kind"] == "llm"),
         "graph": _graph(turn["events"]),
+        "hotspots": hot,
+        "errors": turn_errors(steps),
         "steps": steps,
     }
+    out["story"] = story(out)
+    return out
+
+
+# Spec 016: what the waterfall reads first. The story line, the failures and
+# the two hotspots are computed here, from fields the turn already has, so the
+# page draws them and a test can pin them.
+LEAF_KINDS = ("llm", "tool", "memory")
+
+
+def story(turn: dict) -> list[dict]:
+    """The turn in one line, in order: question, the gate, memories used,
+    loops, treg endpoint calls and their dollars, a saved report. A part that
+    did not happen (no gate, 0 memories, no treg call) is left out. Each part
+    names the row it opens: `step`, an index into `steps`, or `loop`."""
+    steps = turn["steps"]
+
+    def first(kinds) -> int | None:
+        return next((i for i, s in enumerate(steps) if s.get("span") in kinds or s["kind"] in kinds), None)
+
+    parts: list[dict] = [{"part": "question", "text": "question"}]
+    if turn.get("gate"):
+        parts.append({"part": "gate", "text": f"gate {turn['gate']}", "step": first(("gate",))})
+    used = turn.get("used")
+    if isinstance(used, int) and used > 0:
+        parts.append({"part": "memories", "text": f"{used} memor{'y' if used == 1 else 'ies'}",
+                      "step": first(("retrieval",))})
+    if turn.get("loops"):
+        n = turn["loops"]
+        parts.append({"part": "loops", "text": f"{n} loop{'' if n == 1 else 's'}", "loop": 1})
+    treg = [i for i, s in enumerate(steps) if s.get("source") == "treg" and runs_endpoint(s.get("tool") or "")]
+    if treg:
+        parts.append({"part": "treg", "text": f"{len(treg)} treg call{'' if len(treg) == 1 else 's'}",
+                      "usd": round(sum(steps[i].get("usd") or 0 for i in treg), 6), "step": treg[0]})
+    report = first(("report",))
+    if report is not None:
+        parts.append({"part": "report", "text": "report saved", "step": report})
+    return parts
+
+
+def hotspots(steps: list[dict]) -> dict:
+    """The one slowest and the one most expensive leaf step (a model call, a
+    tool or a memory call; never a loop), as indexes into `steps`, and a `hot`
+    label on each. A tie goes to the earlier step. A turn with fewer than two
+    leaf steps marks nothing: there is nothing to compare."""
+    leaves = [i for i, s in enumerate(steps) if s["kind"] in LEAF_KINDS]
+    out: dict = {"slowest": None, "most_usd": None}
+    if len(leaves) < 2:
+        return out
+    for key, field, label in (("slowest", "span_ms", "slowest"), ("most_usd", "usd", "most $")):
+        best = None
+        for i in leaves:
+            value = steps[i].get(field) or 0
+            if value > 0 and (best is None or value > (steps[best].get(field) or 0)):
+                best = i
+        out[key] = best
+        if best is not None:
+            steps[best].setdefault("hot", []).append(label)
+    return out
+
+
+def turn_errors(steps: list[dict]) -> list[dict]:
+    """Every failed step, with the loop it ran in and the first line of its
+    error, so the page can list failures before the waterfall."""
+    return [{"step": i, "loop": s.get("loop"), "phase": s.get("phase"), "tool": s.get("tool") or "",
+             "endpoint_id": s.get("endpoint_id"),
+             "error": (str(s.get("error") or "failed").strip().split("\n", 1)[0])[:ERROR_CHARS]}
+            for i, s in enumerate(steps) if s.get("ok") is False]
 
 
 def _group_loops(steps: list[dict]) -> int:

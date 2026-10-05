@@ -31,7 +31,7 @@ runs the bootstrap and must load last**.
 | `diagram.js` | `archSVG` (the architecture chart) **and** its live animation (`STAGE`/`hot`/`pollEvents`) |
 | `graph.js`   | graph workflows: data-driven topology chart (`graphSVG` from `d.graph.workflows`), the Overview panel (`graphPanel`), and `animateGraphStage` for `graph_*`/`route` events |
 | `views.js`   | subtab/db helpers, SQL console, Memory/Tools sub-views, the `VIEWS` router object |
-| `observe.js` | the Observability page (spec 012): four cards that match and open its four tabs, Turns (a waterfall per turn), Tools (by source; treg endpoints first, then the actions around them), Memory, Spend; and the Evals page (`#evals`). Both read `GET /api/observability` through `loadObservability`; `#ops` still opens Observability and `#observability/evals` lands on Evals |
+| `observe.js` | the Observability page (spec 012): four cards that match and open its four tabs, Turns (a waterfall per turn: a story line, failures, then one grid on one time axis with a closed row per loop; `obsTurnBadges` is the slot for a turn's badges), Tools (by source; treg endpoints first, then the actions around them), Memory, Spend; and the Evals page (`#evals`). Both read `GET /api/observability` through `loadObservability`; `#ops` still opens Observability and `#observability/evals` lands on Evals |
 | `compare.js` | the Model arena (`Arena` tab; internals keep the `compare` name) — race one message through several models at once |
 | `dock.js`    | chat sessions/history (`loadThreadInto`), model chip, stats toggle |
 | `main.js`    | `render`/`refresh` loop, resizers, voice, and the bootstrap (**loads last**) |
@@ -50,7 +50,11 @@ Data flows one way: `refresh()` (main.js) fetches `/api/data` into the global
 - **`archSVG` is byte-frozen — do not rewrite the architecture chart.** It emits
   `data-node="…"`/`data-edge="…"` ids that the `STAGE` map (same file) drives the
   live animation from. If you ever change a node/edge id, change it in both
-  places. (Both are in `diagram.js` precisely so they stay together.)
+  places. (Both are in `diagram.js` precisely so they stay together.) Spec 016
+  is the one change this rule has allowed: it redrew the LLM Ops panel only
+  (Trace, Observability, Evals, Release, and the `e-release-loop` arrow back to
+  the LOOP box), and `test_observability.py` pins a hash of everything before
+  that panel.
 - **The graph chart is data-driven — never hand-edit a topology.** `graphSVG`
   renders `Graph.describe()` served in `/api/data`, so the picture is provably
   what the engine runs (`test_graph_topology_payload.py` pins it). To change the
