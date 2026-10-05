@@ -12,6 +12,8 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime, timedelta
 
+import pytest
+
 from evals.helpers import ScriptedClient, response, text_block, tool_block
 from waku.config import Settings
 from waku.loop.agent import run_loop
@@ -624,3 +626,68 @@ def test_the_spend_card_shows_total_as_charged_plus_estimated():
     assert "sp.model_usd + sp.treg_usd" not in card
     tab = js[js.index("function obsSpend"):js.index("// ---------- Evals")]
     assert "sp.total_usd" in tab and "sp.charged_usd" in tab and "sp.estimated_usd" in tab
+
+
+# ---- the release a hosted container runs ---------------------------------------
+
+_RELEASE = {
+    "sha": "c0093c70dc788da83aa1559fea4f537c8d8b1ddb",
+    "commit_url": "https://github.com/ShenSeanChen/waku-agent/commit/c0093c70dc788da83aa1559fea4f537c8d8b1ddb",
+    "deployed_at": "2026-10-05T03:20:01Z",
+    "checks": [
+        {"name": "skills-and-evals", "conclusion": "success",
+         "url": "https://github.com/ShenSeanChen/waku-agent/actions/runs/1/job/2",
+         "completed_at": "2026-10-05T03:13:40Z",
+         "tests": {"label": "Deterministic evals", "passed": 3094, "failed": 0, "skipped": 2}},
+        {"name": "hosted-docker", "conclusion": "success",
+         "url": "https://github.com/ShenSeanChen/waku-agent/actions/runs/1/job/3",
+         "completed_at": "2026-10-05T03:17:16Z", "tests": None},
+    ],
+}
+
+
+def test_without_a_release_record_the_evals_page_shows_no_release(tmp_path):
+    """A laptop has no record; the local gate behaviour is unchanged."""
+    info = obs.evals_info(tmp_path, repo=tmp_path)
+    assert info["release"] is None
+    assert obs.evals_info(tmp_path, repo=tmp_path, release_file=tmp_path / "missing.json")["release"] is None
+
+
+def test_a_release_record_shows_the_commit_and_every_check_it_passed(tmp_path):
+    record = tmp_path / "release.json"
+    record.write_text(json.dumps(_RELEASE), encoding="utf-8")
+    info = obs.evals_info(tmp_path, repo=tmp_path, hosted=True, release_file=record)
+    release = info["release"]
+    assert release["short_sha"] == "c0093c7" and release["deployed_at"] == "2026-10-05T03:20:01Z"
+    assert release["commit_url"].startswith("https://github.com/")
+    assert [c["name"] for c in release["checks"]] == ["skills-and-evals", "hosted-docker"]
+    assert release["checks"][0]["tests"] == {"label": "Deterministic evals", "passed": 3094,
+                                             "failed": 0, "skipped": 2}
+    assert release["checks"][1]["tests"] is None    # no count recorded, none invented
+    assert info["last_run"] is None                 # a release is not a local gate run
+
+    js = _static("js/observe.js")
+    evals = js[js.index("function obsEvals"):js.index("function obsCardBody")]
+    assert "This release" in evals and "e.release" in evals
+    assert '"not in CI"' in evals                   # CI never runs the AI judge
+    assert "no count recorded" in evals
+
+
+@pytest.mark.parametrize("change", [
+    {"sha": "abc1234"},
+    {"commit_url": "javascript:alert(1)"},
+    {"checks": []},
+    {"checks": [{"name": "x", "conclusion": "success", "url": "https://evil.example/"}]},
+])
+def test_a_malformed_release_record_is_ignored_not_half_shown(tmp_path, change):
+    record = tmp_path / "release.json"
+    record.write_text(json.dumps({**_RELEASE, **change}), encoding="utf-8")
+    assert obs.release_info(record) is None
+
+
+def test_a_malformed_count_becomes_no_count(tmp_path):
+    record = tmp_path / "release.json"
+    bad = {**_RELEASE["checks"][0], "tests": {"label": "Deterministic evals", "passed": "lots",
+                                               "failed": 0, "skipped": 0}}
+    record.write_text(json.dumps({**_RELEASE, "checks": [bad]}), encoding="utf-8")
+    assert obs.release_info(record)["checks"][0]["tests"] is None

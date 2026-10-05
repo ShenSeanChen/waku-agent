@@ -738,12 +738,15 @@ Each tick, in order:
    force-pushed `main` never deploys on its own.
 4. It waits while either check is still running, and records the commit as
    failed when either check failed or was cancelled.
-5. It runs `upgrade.sh --ref <commit>`, then requires both the gateway on its
+5. It writes a release record, `run/deploy/releases/<commit>.json`: the
+   commit, the time, and each required check's result, link and test counts,
+   all read from GitHub. A record it cannot write never stops the deploy.
+6. It runs `upgrade.sh --ref <commit>`, then requires both the gateway on its
    internal address and `https://<your domain>/login` to answer 200.
-6. If either fails, it runs `upgrade.sh --ref <last good commit>` and records
+7. If either fails, it runs `upgrade.sh --ref <last good commit>` and records
    the new commit as failed, so it is never retried. The next commit on
    `main` is.
-7. **If the rollback fails too, it writes the kill switch itself** and stops.
+8. **If the rollback fails too, it writes the kill switch itself** and stops.
    The site may be down at that point: run `upgrade.sh --ref <last good
    commit>` by hand and read the gateway's logs.
 
@@ -800,6 +803,17 @@ Its state is in `/srv/waku/run/deploy/`: `deployed` holds the last commit
 that passed every check, and `failed` lists the commits it will not retry,
 with the time and the reason. Delete a line from `failed` to let that commit
 be tried again.
+
+**The Evals page shows the release each tenant runs.** `upgrade.sh` bakes the
+record for the commit it checked out into the tenant image, at
+`/etc/waku/release.json`, so every tenant's Evals page names the commit, when
+it was deployed, and each required check with its result, a link to the run
+and its test counts. The counts are real: each CI job prints them as a notice
+(`scripts/ci_test_counts.py`) and `autodeploy.sh` reads that notice back from
+GitHub. The AI judge needs an API key, so it is not in CI and the page says
+so. A manual `upgrade.sh` to a commit the timer never recorded builds an image
+without a record, and the page shows none. A running tenant sees the new
+record when their container next starts, like any other image change.
 
 ### Looking at one person's data
 

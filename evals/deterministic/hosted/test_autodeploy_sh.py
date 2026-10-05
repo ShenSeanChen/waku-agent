@@ -21,6 +21,9 @@ from pathlib import Path
 import pytest
 import shelllib
 
+from scripts.ci_test_counts import notice
+from waku.ops.observability import release_info
+
 AUTODEPLOY = shelllib.DEPLOY / "autodeploy.sh"
 
 OLD = "a" * 40
@@ -60,6 +63,10 @@ for url in "$@"; do :; done
 current=$(cat "$FIX/current" 2>/dev/null || echo none)
 health=$(cat "$FIX/health_$current" 2>/dev/null || echo "200 200")
 case "$url" in
+  *"/check-runs/"*"/annotations"*)
+    [ "${ANNOTATIONS_FAIL:-}" = yes ] && exit 22
+    id=${url#*/check-runs/}; id=${id%%/*}
+    cat "$FIX/annotations_$id.json" 2>/dev/null || echo '[]' ;;
   *"/check-runs"*) [ -f "$FIX/checks.json" ] || exit 22; cat "$FIX/checks.json" ;;
   https://api.github.com/*) [ -f "$FIX/commit.json" ] || exit 22; cat "$FIX/commit.json" ;;
   http://*) printf '%s' "${health%% *}" ;;
@@ -84,7 +91,9 @@ def _checks(**runs):
     names = {"skills_and_evals": "skills-and-evals", "hosted_docker": "hosted-docker"}
     return {"total_count": len(runs),
             "check_runs": [{"id": 100 + i, "name": names.get(key, key),
-                            "status": status, "conclusion": conclusion}
+                            "status": status, "conclusion": conclusion,
+                            "html_url": f"https://github.com/ShenSeanChen/waku-agent/actions/runs/7/job/{100 + i}",
+                            "completed_at": "2026-10-05T03:13:40Z"}
                            for i, (key, (status, conclusion)) in enumerate(runs.items())]}
 
 
@@ -197,6 +206,91 @@ def test_the_target_is_the_sha_main_had_and_never_a_branch_name(tmp_path):
     for line in _upgrades(tmp_path):
         assert "origin/main" not in line
         assert f"--ref {NEW}" in line
+
+
+# --- the release record the Evals page shows -----------------------------------
+
+
+def _release(tmp_path, sha):
+    path = tmp_path / "waku" / "run" / "deploy" / "releases" / f"{sha}.json"
+    return json.loads(path.read_text(encoding="utf-8")) if path.exists() else None
+
+
+def _junit(tmp_path, tests, failures, skipped):
+    report = tmp_path / "junit.xml"
+    report.write_text(f'<testsuites><testsuite tests="{tests}" failures="{failures}" '
+                      f'errors="0" skipped="{skipped}"/></testsuites>', encoding="utf-8")
+    return report
+
+
+def test_a_deploy_records_each_check_its_link_and_the_counts_ci_reported(tmp_path):
+    """The counts come from the notice scripts/ci_test_counts.py prints in CI,
+    so this also pins the message format the two sides share."""
+    env = _setup(tmp_path)
+    line = notice("Deterministic evals", _junit(tmp_path, 3096, 0, 2))
+    title, message = line.removeprefix("::notice title=").split("::", 1)
+    (Path(env["FIX"]) / "annotations_100.json").write_text(json.dumps([
+        {"annotation_level": "warning", "title": "", "message": "Node.js 20 is deprecated."},
+        {"annotation_level": "notice", "title": title, "message": message}]), encoding="utf-8")
+    done = _tick(tmp_path, env)
+    assert done.returncode == 0, done.stderr
+
+    record = _release(tmp_path, NEW)
+    assert record["sha"] == NEW
+    assert record["commit_url"] == f"https://github.com/ShenSeanChen/waku-agent/commit/{NEW}"
+    assert record["deployed_at"].endswith("Z")
+    det, docker = record["checks"]
+    assert det["name"] == "skills-and-evals" and det["conclusion"] == "success"
+    assert det["url"].endswith("/job/100")
+    assert det["tests"] == {"label": "Deterministic evals", "passed": 3094, "failed": 0, "skipped": 2}
+    # hosted-docker wrote no notice here: no count, and nothing made up
+    assert docker["name"] == "hosted-docker" and docker["tests"] is None
+
+    # the page's reader accepts exactly what autodeploy writes
+    shown = release_info(tmp_path / "waku" / "run" / "deploy" / "releases" / f"{NEW}.json")
+    assert shown["short_sha"] == NEW[:7]
+    assert shown["checks"][0]["tests"]["passed"] == 3094
+
+    calls = shelllib.calls(tmp_path)
+    recorded = max(i for i, c in enumerate(calls) if "/annotations" in c)
+    upgraded = next(i for i, c in enumerate(calls) if c.startswith("upgrade.sh"))
+    assert recorded < upgraded, "the record must exist before upgrade.sh builds the image"
+
+
+def test_unreadable_annotations_still_deploy_with_no_counts(tmp_path):
+    done = _tick(tmp_path, _setup(tmp_path, extra_env={"ANNOTATIONS_FAIL": "yes"}))
+    assert done.returncode == 0, done.stderr
+    assert _upgrades(tmp_path) == [f"upgrade.sh --ref {NEW} lock=yes"]
+    assert [c["tests"] for c in _release(tmp_path, NEW)["checks"]] == [None, None]
+
+
+def test_a_rollback_moves_the_old_release_time_to_now(tmp_path):
+    env = _setup(tmp_path, extra_env={"UPGRADE_FAILS": NEW})
+    releases = tmp_path / "waku" / "run" / "deploy" / "releases"
+    releases.mkdir()
+    (releases / f"{OLD}.json").write_text(json.dumps(
+        {"sha": OLD, "deployed_at": "2020-01-01T00:00:00Z", "checks": []}), encoding="utf-8")
+    done = _tick(tmp_path, env)
+    assert done.returncode != 0
+    assert _release(tmp_path, OLD)["deployed_at"] != "2020-01-01T00:00:00Z"
+
+
+def test_build_sh_bakes_the_record_into_the_tenant_image(tmp_path):
+    """upgrade.sh hands the record to build.sh; build.sh passes it as one
+    build argument, and the tenant image names the file it lands in."""
+    record = tmp_path / "release.json"
+    record.write_text('{"sha": "x"}', encoding="utf-8")
+    docker = """#!/bin/sh
+for argument in "$@"; do printf 'ARG %s\\n' "$argument" >> "$WAKU_CALLS"; done
+"""
+    build = shelllib.DEPLOY.parent / "image" / "build.sh"
+    done = shelllib.run(build, ["--tenant-only", "--release-file", str(record)],
+                        tmp_path=tmp_path, stubs=["docker"], bodies={"docker": docker})
+    assert done.returncode == 0, done.stderr
+    assert 'ARG WAKU_RELEASE_JSON={"sha": "x"}' in shelllib.calls(tmp_path)
+    dockerfile = (shelllib.DEPLOY.parent / "image" / "tenant.Dockerfile").read_text(encoding="utf-8")
+    assert "ARG WAKU_RELEASE_JSON" in dockerfile
+    assert "ENV WAKU_RELEASE_FILE=/etc/waku/release.json" in dockerfile
 
 
 # --- each guard that says no ---------------------------------------------------

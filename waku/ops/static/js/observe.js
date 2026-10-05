@@ -274,10 +274,24 @@ function obsEvals(d){
     ? {label, value: `${obsNum(c.passed)} <span class="obs-of">passed</span>`,
        sub: `${obsNum(c.failed)} failed · last gate ${obsWhen(run.ran_at)}`, tone: c.failed ? "" : "ok"}
     : {label, value: "—", sub: `did not run in the last gate, ${obsWhen(run.ran_at)}`};
+  // A hosted container has no gate run of its own, but its image carries the
+  // record of the release it runs: the commit and the CI checks that passed
+  // on it (hosted/deploy/autodeploy.sh). The counts are the ones CI reported.
+  const rel = e.release;
+  const relOk = !!rel && rel.checks.every(c => c.conclusion === "success");
+  const relDet = rel && rel.checks.find(c => c.name === "skills-and-evals");
+  const relTests = relDet && relDet.tests;
   h += uiStatBand(run ? [
     runCard("deterministic", run.deterministic),
     runCard("AI judge", run.judge),
     {label: "last gate", value: open ? "open" : "closed", sub: obsWhen(run.ran_at), tone: open ? "ok" : ""},
+  ] : rel ? [
+    {label: "deterministic", value: relTests ? `${obsNum(relTests.passed)} <span class="obs-of">passed</span>` : esc(relDet ? relDet.conclusion : "—"),
+     sub: relTests ? `${obsNum(relTests.failed)} failed · ${obsNum(relTests.skipped)} skipped · in CI on ${esc(rel.short_sha)}`
+                   : `in CI on ${esc(rel.short_sha)}; CI recorded no count`,
+     tone: relTests && !relTests.failed ? "ok" : ""},
+    {label: "AI judge", value: "not in CI", sub: "it needs an API key, so it runs in make gate on a maintainer's machine"},
+    {label: "release", value: esc(rel.short_sha), sub: `deployed ${obsWhen(rel.deployed_at)}`, tone: relOk ? "ok" : ""},
   ] : [
     {label: "deterministic", value: det ? obsNum(det.tests) : "in CI",
      sub: det ? `test functions in ${det.files} files, counted on disk; no gate run recorded` : "not shipped in this container"},
@@ -297,11 +311,25 @@ function obsEvals(d){
       AI judge. agent.waku.one upgrades only to a commit on <code>main</code> whose <code>skills-and-evals</code> and
       <code>hosted-docker</code> checks passed, so only green commits ship.</span>`);
   }
+  if (rel){
+    const out = href => `<a class="link" href="${esc(href)}" target="_blank" rel="noopener noreferrer">`;
+    const tests = t => t ? `${esc(t.label)}: ${obsNum(t.passed)} passed, ${obsNum(t.failed)} failed, ${obsNum(t.skipped)} skipped`
+                         : "no count recorded";
+    h += `<h2>This release</h2>` + uiCard(
+      `<div>Commit ${out(rel.commit_url)}<code>${esc(rel.short_sha)}</code></a>, deployed ${obsWhen(rel.deployed_at)}.
+         It shipped because every required check below passed on that exact commit.</div>`)
+      + table(["required check","result","tests","run"], rel.checks.map(c =>
+        `<tr><td><code>${esc(c.name)}</code></td>
+          <td>${uiBadge(esc(c.conclusion), c.conclusion === "success" ? "ok" : "bad")}</td>
+          <td class="meta">${tests(c.tests)}</td>
+          <td class="meta">${out(c.url)}view on GitHub</a></td></tr>`));
+  }
   h += `<h2>Release gate</h2>`;
   h += e.last ? uiCard(`${uiBadge(`deterministic · ${esc(e.last.deterministic)}`, verdict(e.last.deterministic))}
         <span class="obs-gap">${uiBadge(`AI judge · ${esc(e.last.judge)}`, verdict(e.last.judge))}</span>
         <div class="meta">last run ${obsWhen(e.last.ran_at)}. Run it again with <code>make gate</code>.</div>`)
-    : uiCard(`<span class="empty">${e.hosted ? "The release gate runs in CI before an upgrade, so this container keeps no record of it."
+    : uiCard(`<span class="empty">${rel ? "make gate, which adds the AI judge, runs on a maintainer's machine, so this container keeps no record of it. The CI checks above are this release's record."
+                                    : e.hosted ? "The release gate runs in CI before an upgrade, so this container keeps no record of it."
                                              : "never run here yet. Run <code>make gate</code> to fill this in."}</span>`);
   if ((e.history||[]).length){
     const cnt = s => s ? `${s.passed||0} pass · ${s.failed||0} fail` : "—";

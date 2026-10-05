@@ -24,9 +24,12 @@
 #      or cancelled -> record it and never look again
 #   7. the commit carries GitHub's own verified signature, which a squash-merge
 #      made in the GitHub UI always does -> otherwise refuse, record it
-#   8. upgrade.sh --ref <sha>, then the gateway directly AND https://<domain>/login
+#   8. write run/deploy/releases/<sha>.json: the commit, the time, and each
+#      required check's result, link and test counts, for the Evals page.
+#      Never a reason to stop: a deploy without a record still deploys
+#   9. upgrade.sh --ref <sha>, then the gateway directly AND https://<domain>/login
 #      must both answer 200
-#   9. on any failure, upgrade.sh --ref <last deployed>, the same two checks,
+#  10. on any failure, upgrade.sh --ref <last deployed>, the same two checks,
 #      and the SHA joins the failed list. If THAT fails too, this script writes
 #      the kill switch itself: a timer that rebuilt a broken VM every five
 #      minutes would make the outage harder to read, not shorter
@@ -117,6 +120,65 @@ healthy() {
   done
   waku_log "health check failed: the gateway answered ${gateway:-nothing} and https://$WAKU_DOMAIN/login answered ${public:-nothing}; both must be 200"
   return 1
+}
+
+# THE RELEASE RECORD the Evals page shows (waku/ops/observability.py,
+# release_info). upgrade.sh finds it by SHA and build.sh bakes it into the
+# tenant image, so every tenant container started from that image can say
+# which commit it runs and what CI passed on it.
+#
+# EVERY FIELD IS READ FROM GITHUB, NONE IS TYPED HERE. Names, conclusions and
+# links come from the check runs this tick already judged. The counts come
+# from a notice each CI job writes -- title "Deterministic evals", message
+# "3094 passed, 0 failed, 2 skipped" -- read back through the public
+# annotations API (.github/workflows/validate-skills.yml); a check
+# with no such notice records "tests": null and the page says no count was
+# recorded. Nothing is ever filled in to look complete.
+#
+# NEVER FATAL. It returns 1 on any failure and the caller logs it and deploys
+# anyway: the record describes a release, it does not gate one.
+record_release() {
+  local sha run id annotations tests checks name dir
+  sha=$1
+  checks='[]'
+  for name in $required_checks; do
+    run=$(printf '%s' "$2" | jq -c --arg name "$name" \
+      '[.check_runs[] | select(.name == $name)] | max_by(.id)') || return 1
+    id=$(printf '%s' "$run" | jq -r '.id') || return 1
+    case "$id" in ''|*[!0-9]*) return 1 ;; esac
+    tests=null
+    if annotations=$(github_api "check-runs/$id/annotations?per_page=100"); then
+      tests=$(printf '%s' "$annotations" | jq -c '
+        if type != "array" then null else
+          [ .[] | select(.annotation_level == "notice")
+            | .title as $label
+            | ((.message // "") | capture("^(?<passed>[0-9]+) passed, (?<failed>[0-9]+) failed, (?<skipped>[0-9]+) skipped$"))
+            | {label: $label, passed: (.passed | tonumber),
+               failed: (.failed | tonumber), skipped: (.skipped | tonumber)} ]
+          | first
+        end') || tests=null
+    fi
+    checks=$(printf '%s' "$checks" | jq -c --argjson run "$run" --argjson tests "${tests:-null}" \
+      '. + [{name: $run.name, conclusion: $run.conclusion, url: $run.html_url,
+             completed_at: $run.completed_at, tests: $tests}]') || return 1
+  done
+  dir="$state/releases"
+  mkdir -p "$dir" || return 1
+  jq -nc --arg sha "$sha" --arg repo "$repo" --argjson checks "$checks" \
+    --arg now "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    '{sha: $sha, commit_url: "https://github.com/\($repo)/commit/\($sha)",
+      deployed_at: $now, checks: $checks}' >"$dir/$sha.json.tmp" || return 1
+  mv -f "$dir/$sha.json.tmp" "$dir/$sha.json"
+}
+
+# A ROLLBACK REDEPLOYS AN OLDER COMMIT, so its record's time moves to now. Its
+# checks are the ones that let it ship the first time and do not change.
+restamp_release() {
+  local file
+  file="$state/releases/$1.json"
+  [ -f "$file" ] || return 0
+  jq -c --arg now "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '.deployed_at = $now' "$file" >"$file.tmp" \
+    && mv -f "$file.tmp" "$file"
 }
 
 upgrade_to() {
@@ -215,6 +277,12 @@ tick() {
     return 0
   fi
 
+  if record_release "$target" "$runs"; then
+    waku_log "recorded the release $target in $state/releases"
+  else
+    waku_log "could not write the release record for $target; deploying anyway, and the Evals page will show no release"
+  fi
+
   waku_log "deploying $target (was $deployed)"
   if upgrade_to "$target" && healthy; then
     printf '%s\n' "$target" >"$state/deployed.tmp"
@@ -224,6 +292,7 @@ tick() {
   fi
 
   waku_log "FAILED: $target did not come up healthy; rolling back to $deployed"
+  restamp_release "$deployed" || true
   if upgrade_to "$deployed" && healthy; then
     record_failed "$target" "unhealthy-rolled-back"
     waku_log "rolled back to $deployed. $target will not be retried; the next commit on main will."

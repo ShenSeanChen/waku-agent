@@ -544,7 +544,9 @@ def collect() -> dict:
 def observability_data(window: str = "7d") -> dict:
     """The Observability page's data (spec 012, `waku/ops/observability.py`).
     A hosted container runs the `waku-platform` provider and ships no
-    `evals/`, so the Evals page explains where evals run instead."""
+    `evals/`, so the Evals page explains where evals run instead, and shows
+    the release record its image was built with when WAKU_RELEASE_FILE names
+    one (hosted/image/tenant.Dockerfile sets it)."""
     from waku.ops import observability
 
     settings = load_settings()
@@ -553,7 +555,9 @@ def observability_data(window: str = "7d") -> dict:
         list_models()  # warm the per-model price cache, as collect() does
     return observability.payload(settings.home, provider=settings.provider,
                                  model=settings.model or "", window=window,
-                                 hosted=settings.provider == "waku-platform")
+                                 hosted=settings.provider == "waku-platform",
+                                 release_file=Path(os.environ["WAKU_RELEASE_FILE"])
+                                 if os.environ.get("WAKU_RELEASE_FILE") else None)
 
 
 def _rel_to_home(path, home) -> str:
