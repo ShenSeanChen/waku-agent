@@ -177,7 +177,10 @@ model has already read to its first 2,000 characters and a note
 keeps every output whole. Each search is shown as
 a `waku_memory_memory_search` tool call (waku.one reads its `entries` as
 Used), the `done` payload and the turn's meta carry them as `used`, and the
-dashboard's chat lists them under "Used from memory". The searches are not
+dashboard's chat lists them under "Used from memory": a report as its title
+and first Summary line, any other memory as its snippet without fenced code
+or JSON (a search snippet of a report often starts inside its Sources
+block). The searches are not
 folded into the chat log. A failed search is logged and skipped; the turn
 goes on without it.
 
