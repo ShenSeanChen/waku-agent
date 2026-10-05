@@ -368,6 +368,7 @@ def group_turns(events: list[dict]) -> list[dict]:
             if kind == "turn_end":
                 current["end_ts"] = ev.get("ts")
                 current["iterations"] = ev.get("iterations")
+                current["reply"] = ev.get("reply") if isinstance(ev.get("reply"), str) else ""
                 turns.append(current)
                 current = None
             elif kind != "text":
@@ -441,13 +442,40 @@ def _score(ev: dict) -> dict | None:
     if isinstance(value, bool) or not isinstance(value, int | float):
         return None
     source = ev.get("source") if ev.get("source") in SCORE_SOURCES else "code"
-    return {"source": source, "name": _trim(str(ev.get("name") or ""), 60),
-            "value": value, "note": _trim(redact(str(ev.get("note") or "")), 200)}
+    out = {"source": source, "name": _trim(str(ev.get("name") or ""), 60),
+           "value": value, "note": _trim(redact(str(ev.get("note") or "")), 200)}
+    # a judge score also says which model judged and what the call cost
+    if isinstance(ev.get("judge"), str) and ev["judge"]:
+        out["judge"] = _trim(ev["judge"], 80)
+    if isinstance(ev.get("cost_usd"), int | float) and not isinstance(ev.get("cost_usd"), bool):
+        out["cost_usd"] = ev["cost_usd"]
+    if isinstance(ev.get("ts"), str):
+        out["ts"] = ev["ts"]
+    return out
+
+
+def _stored_scores(turn: dict, extra: list) -> list[dict]:
+    """The turn's written scores (a judge's, a human's): those inside the
+    turn that name no other turn, and those joined to it by turn_id. When
+    one source scored one name twice, the newest wins."""
+    own = turn.get("turn_id") or ""
+    events = [ev for ev in turn["events"] if ev.get("type") == "score" and (ev.get("turn_id") or own) == own]
+    newest: dict[tuple, dict] = {}
+    for score in (_score(ev) for ev in events + list(extra or [])):
+        if score:
+            key = (score["source"], score["name"])
+            if key not in newest or str(score.get("ts") or "") >= str(newest[key].get("ts") or ""):
+                newest[key] = score
+    return list(newest.values())
 
 
 def build_turn(turn: dict, servers=(), provider: str = "", model: str = "",
-               scores: list | None = None) -> dict:
-    """A turn with its steps in order, its time and its dollars."""
+               scores: list | None = None, skills=None) -> dict:
+    """A turn with its steps in order, its time, its dollars and its scores:
+    the five code checks of `turn_evals.py`, run on every read, then any
+    score written for it (a judge's)."""
+    from waku.ops import turn_evals  # noqa: PLC0415 -- turn_evals imports this module
+
     steps = [s for s in (_step(ev, servers, provider, model) for ev in turn["events"]) if s]
     start = _ts(turn.get("ts"))
     end = _ts(turn.get("end_ts")) or max((t for t in (_ts(s["ts"]) for s in steps) if t), default=None)
@@ -472,11 +500,12 @@ def build_turn(turn: dict, servers=(), provider: str = "", model: str = "",
     consolidation = next((s for s in steps if s["kind"] == "consolidation"), None)
     hot = hotspots(steps)
     out = {
-        # Spec 012: how good the turn was, from code, an AI judge or a human.
-        # Nothing writes a score yet; a `score` trace event joined by turn_id
-        # (or inside the turn) lands here.
-        "scores": [score for score in (_score(ev) for ev in turn["events"] + list(scores or []))
-                   if score],
+        # Spec 012's slot, filled by spec 015: how good the turn was. The five
+        # code checks run here on every read (source "code", value 1, 0, or
+        # None for n/a); a `score` trace event joined by turn_id (or inside
+        # the turn) adds the AI judge's verdict (source "judge").
+        "scores": turn_evals.run_checks(turn, usd=round(float(total), 6), skills=skills, servers=servers)
+                  + _stored_scores(turn, scores or []),
         "turn_id": turn.get("turn_id") or "",
         "ts": turn.get("ts"),
         "user_message": _trim(str(turn.get("user_message") or ""), 200),
@@ -1045,6 +1074,8 @@ def payload(home: Path, *, provider: str = "", model: str = "", window: str = "7
             hosted: bool = False, release_file: Path | None = None,
             now: datetime | None = None) -> dict:
     """Everything the Observability page draws, in one answer."""
+    from waku.ops import turn_evals  # noqa: PLC0415 -- turn_evals imports this module
+
     window = window if window in WINDOWS else "7d"
     servers = mcp_servers(home)
     events, errors, files = read_events(home)
@@ -1053,8 +1084,10 @@ def payload(home: Path, *, provider: str = "", model: str = "", window: str = "7
         if ev.get("type") == "score" and ev.get("turn_id"):
             late.setdefault(ev["turn_id"], []).append(ev)
     grouped = group_turns(events)
+    skills = turn_evals.skill_loader(home)
     all_turns = [build_turn(t, servers, provider, model,
-                            [e for e in late.get(t.get("turn_id") or "", []) if e not in t["events"]])
+                            [e for e in late.get(t.get("turn_id") or "", []) if e not in t["events"]],
+                            skills=skills)
                  for t in grouped]
     tools = tool_stats(events, servers, window, now)
     return {
@@ -1068,5 +1101,7 @@ def payload(home: Path, *, provider: str = "", model: str = "", window: str = "7
         "tools": tools,
         "memory": memory_per_turn(all_turns[::-1][:MAX_TURNS]),
         "spend": spend(home, events, servers),
-        "evals": evals_info(home, hosted=hosted, release_file=release_file),
+        "evals": {**evals_info(home, hosted=hosted, release_file=release_file),
+                  # spec 015: the code checks and the judge over this home's turns, per window
+                  "your_turns": {w: turn_evals.your_turns(all_turns, w, now) for w in WINDOWS}},
     }
