@@ -527,3 +527,31 @@ def test_tokens_sit_with_spend_per_model_and_per_day(tmp_path):
     assert "Tokens are what model calls are charged by; tools and memory are charged per call." in js
     spend_card = js[js.index("const sp = m.spend"):js.index("function obsCards")]
     assert "m.tokens.in" in spend_card and "m.tokens.out" in spend_card
+
+
+def test_the_evals_page_counts_come_from_the_last_gate_run(tmp_path):
+    run = {"deterministic": "pass", "judge": "pass", "ran_at": "2026-10-05T01:42:57+00:00",
+           "suites": {"deterministic": {"passed": 3094, "failed": 0}, "judge": {"passed": 21, "failed": 0}}}
+    older = {**run, "ran_at": "2026-09-22T19:09:09+00:00",
+             "suites": {"deterministic": {"passed": 878, "failed": 0}}}
+    # no gate run: nothing passes for a result, the page falls back to disk counts
+    assert obs.evals_info(tmp_path, repo=tmp_path)["last_run"] is None
+    (tmp_path / "eval_runs.jsonl").write_text(json.dumps(older) + "\n" + json.dumps(run) + "\n")
+    (tmp_path / "eval_report.json").write_text(json.dumps(run))
+    last = obs.evals_info(tmp_path, repo=tmp_path)["last_run"]
+    assert last["ran_at"] == "2026-10-05T01:42:57+00:00"
+    assert last["deterministic"] == {"passed": 3094, "failed": 0}
+    assert last["judge"] == {"passed": 21, "failed": 0}
+    # a report without suite counts falls back to the newest run that has them
+    (tmp_path / "eval_report.json").write_text(json.dumps({"deterministic": "pass", "judge": "pass"}))
+    assert obs.evals_info(tmp_path, repo=tmp_path)["last_run"]["deterministic"]["passed"] == 3094
+    # a run whose judge did not run says so instead of borrowing a count
+    (tmp_path / "eval_report.json").write_text(json.dumps(older))
+    assert obs.evals_info(tmp_path, repo=tmp_path)["last_run"]["judge"] is None
+
+    js = _static("js/observe.js")
+    evals = js[js.index("function obsEvals"):js.index("function obsCardBody")]
+    assert "run.deterministic" in evals and "passed" in evals and "failed" in evals
+    # the static fallback names what it counted and says it is not a run
+    assert "test functions in ${det.files} files, counted on disk; no gate run recorded" in evals
+    assert "suite files, counted on disk; no gate run recorded" in evals
