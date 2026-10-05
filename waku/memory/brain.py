@@ -66,7 +66,8 @@ _FILLER_WORDS = (
     "a an the of for on about and or to in into with vs versus me my our us we i you "
     "please can could would will do does did tell show give find look up research "
     "researching compare comparing who what which whats how is are was "
-    "were be latest new current report write make get some any all")
+    "were be latest new current report write make get some any all "
+    "save brief summary snapshot using")
 _FILLER = frozenset(_FILLER_WORDS.split())
 
 Search = Callable[[dict], str]

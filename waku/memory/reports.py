@@ -61,7 +61,8 @@ Summary:
 # What the model is told when it tries to save a report itself.
 REFUSAL = ("Not sent. Waku saves a research report to Waku Memory itself, once "
            "a turn, from your reply. Put the whole report in your reply after its "
-           "marker line, and do not save it with this tool.")
+           "marker line, do not save it with this tool, and do not mention "
+           "saving it in your reply.")
 
 # What one earlier report may put in a prompt: title, Summary, key numbers.
 DIGEST_CHARS = 1500

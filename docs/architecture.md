@@ -156,7 +156,10 @@ is the one place a turn's total is shown.
 
 ### Research reads the company brain first
 
-A turn is research when the `research-report` skill matches its message. With
+A turn is research when the `research-report` skill matches its message:
+research on companies, competitors or markets, or a request to save a brief,
+summary or snapshot built from tool results ("save an audience brief to the
+Company brain"). With
 Waku Memory connected, `waku/memory/brain.py` runs `memory.search` twice before
 the model's first call (spec 009): once for the subject (the message without
 words like "research" and "the"), in every scope, and once for earlier
@@ -167,7 +170,11 @@ research only what is missing or older than 30 days. Each earlier report
 found is read once with `memory.get` and goes into the prompt as its digest
 (title, Summary, key numbers, at most 1,500 characters), and the loop cuts a
 whole report the model fetched itself to its digest before each later call
-(`reports.shrink_read`, passed to `run_loop` as `trim`). Each search is shown as
+(`reports.shrink_read`, passed to `run_loop` as `trim`). The same `trim`
+step then cuts every other tool result longer than 4,000 characters that the
+model has already read to its first 2,000 characters and a note
+(`waku/loop/trim.py`); the newest results are always sent whole, and the trace
+keeps every output whole. Each search is shown as
 a `waku_memory_memory_search` tool call (waku.one reads its `entries` as
 Used), the `done` payload and the turn's meta carry them as `used`, and the
 dashboard's chat lists them under "Used from memory". The searches are not
