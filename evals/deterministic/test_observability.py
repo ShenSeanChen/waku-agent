@@ -445,3 +445,85 @@ def test_the_summary_strip_and_spend_per_day(tmp_path):
     assert [r["date"] for r in days] == ["2026-10-04", "2026-10-03", "2026-10-01"]
     assert days[0]["model"] == round(sonnet_in, 6) and days[0]["treg"] == 0.02
     assert days[2]["treg"] == 0.02 and days[2]["total"] == round(days[2]["model"] + 0.02, 6)
+
+
+# ---- follow-up: cards = tabs; Evals as its own page ---------------------------
+
+def test_the_memory_card_counts_reads_writes_kept_and_the_gate(tmp_path):
+    ts = datetime(2026, 10, 4, 9, tzinfo=UTC).isoformat()
+    one = json.dumps({"entries": [{"id": "m1"}]})
+    events = [
+        {"type": "turn_start", "turn_id": "t_a", "user_message": "a", "ts": ts},
+        {"type": "gate", "decision": "retrieve", "ts": ts},
+        {"type": "tool", "tool": "waku_memory_memory_search", "args": {"query": "q"},
+         "output": SEARCH_OUT, "ts": ts},
+        {"type": "tool", "tool": "waku_memory_memory_recall", "args": {"query": "r"},
+         "output": one, "ts": ts},
+        {"type": "tool", "tool": "waku_memory_memory_recall", "args": {"query": "s"},
+         "output": one, "ts": ts},
+        {"type": "tool", "tool": "waku_memory_memory_remember", "args": {"body": "x"},
+         "output": json.dumps({"id": "m9"}), "ts": ts},
+        {"type": "receipt", "total_usd": 0, "memory": {"used": 1, "kept": ["f1", "f2"]}, "ts": ts},
+        {"type": "turn_end", "turn_id": "t_a", "reply": "", "ts": ts},
+        {"type": "turn_start", "turn_id": "t_b", "user_message": "b", "ts": ts},
+        {"type": "gate", "decision": "skip", "ts": ts},
+        {"type": "turn_end", "turn_id": "t_b", "reply": "", "ts": ts},
+    ]
+    now = datetime(2026, 10, 4, 12, tzinfo=UTC)
+    turns = [obs.build_turn(t) for t in obs.group_turns(events)]
+    m = obs.summary(tmp_path, events, turns, obs.tool_stats(events, (), "7d", now), "7d", now)
+    # 3 + 1 + 1 results over 3 reads; the weighted average, not the per-tool one
+    assert m["memory"] == {"retrievals": 3, "avg_results": round(5 / 3, 1), "writes": 1,
+                           "kept": 2, "gate_retrieve": 1, "gate_skip": 1}
+
+
+def _static(name):
+    from pathlib import Path
+    return (Path(obs.__file__).parent / "static" / name).read_text(encoding="utf-8")
+
+
+def test_the_cards_are_the_tabs_in_one_order_and_evals_has_its_own_page():
+    import re
+    js = _static("js/observe.js")
+    tabs = re.search(r"const OBS_TABS = (\[.*?\]);\n", js).group(1)
+    assert json.loads(tabs) == [["turns", "Turns"], ["tools", "Tools"],
+                                ["memory", "Memory"], ["spend", "Spend"]]
+    # the cards are drawn from OBS_TABS itself, each opening its own tab,
+    # so their order and names cannot drift from the tabs again
+    cards = js[js.index("function obsCards"):js.index("const obsWindowBar")]
+    assert "OBS_TABS.map(([k, label])" in cards and 'href="#observability/${k}"' in cards
+    assert "${label}" in cards and 'aria-current="page"' in cards
+    assert "VIEWS.evals = function" in js
+    assert "Evals judge whether a turn or a release was good: tests, an AI judge, a human." in js
+
+    nav = _static("index.html")
+    links = re.findall(r'<a href="#([a-z/]+)" data-v=', nav)
+    assert links[links.index("observability") + 1] == "evals"
+
+    main = _static("js/main.js")
+    assert 'hashView === "observability" && subRaw === "evals"' in main
+    assert 'history.replaceState(null, "", "#evals")' in main
+
+    diagram = _static("js/diagram.js")
+    assert '"Trace",s.trace_files+" file(s) · always on","observability/turns"' in diagram
+    assert '"Eval","deterministic + judge","evals"' in diagram
+    assert "observability/evals" not in diagram
+
+
+def test_tokens_sit_with_spend_per_model_and_per_day(tmp_path):
+    day = lambda d: datetime(2026, 10, d, 10, tzinfo=UTC).isoformat()  # noqa: E731
+    (tmp_path / "usage.jsonl").write_text("\n".join(json.dumps(r) for r in [
+        {"ts": day(4), "provider": "anthropic", "model": "claude-sonnet-5", "in": 1000, "out": 10},
+        {"ts": day(4), "provider": "anthropic", "model": "claude-sonnet-5", "in": 2000, "out": 20},
+        {"ts": day(3), "provider": "openai", "model": "gpt-5", "in": 5, "out": 5},
+    ]) + "\n")
+    models = obs.spend(tmp_path, [])["by_model"]
+    sonnet = next(r for r in models if r["model"] == "claude-sonnet-5")
+    assert (sonnet["calls"], sonnet["in"], sonnet["out"]) == (2, 3000, 30)
+    days = obs.spend_by_day(tmp_path, [])
+    assert [(r["date"], r["in"], r["out"]) for r in days] == [("2026-10-04", 3000, 30), ("2026-10-03", 5, 5)]
+    # no Tokens card or tab: the Spend card carries tokens as its second line
+    js = _static("js/observe.js")
+    assert "Tokens are what model calls are charged by; tools and memory are charged per call." in js
+    spend_card = js[js.index("const sp = m.spend"):js.index("function obsCards")]
+    assert "m.tokens.in" in spend_card and "m.tokens.out" in spend_card

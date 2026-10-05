@@ -663,7 +663,24 @@ def spend(home: Path, events: list[dict]) -> dict:
         "charged_turns": len(charged),
         "credits": sum(credits) if credits else None,
         "ledger": ledger,
+        "by_model": by_model(home),
     }
+
+
+def by_model(home: Path) -> list[dict]:
+    """All-time model calls, tokens and estimated dollars per provider and
+    model, from usage.jsonl, most expensive first."""
+    out: dict[tuple[str, str], dict] = {}
+    for row in _ledger_rows(home):
+        provider, model = str(row.get("provider") or "?"), str(row.get("model") or "?")
+        b = out.setdefault((provider, model), {"provider": provider, "model": model,
+                                               "calls": 0, "in": 0, "out": 0, "usd": 0.0})
+        b["calls"] += 1
+        b["in"] += int(row.get("in") or 0)
+        b["out"] += int(row.get("out") or 0)
+        b["usd"] += _row_cost(row)
+    return sorted(({**b, "usd": round(b["usd"], 6)} for b in out.values()),
+                  key=lambda r: (-r["usd"], -r["calls"], r["model"]))
 
 
 def _ledger_rows(home: Path) -> list[dict]:
@@ -700,10 +717,11 @@ def _tool_costs(events: list[dict], start: datetime | None, servers=()) -> list[
 
 def summary(home: Path, events: list[dict], turns: list[dict], tools: dict,
             window: str = "7d", now: datetime | None = None, servers=()) -> dict:
-    """The strip at the top of the page, for one window: spend by source,
-    tokens, tool calls by source with errors, and turns with their average
-    loop iterations. Model dollars and tokens come from usage.jsonl, which
-    counts every model call; tool dollars from the traces."""
+    """The four cards at the top of the page, for one window, in the order of
+    the tabs below them: turns with their average loop iterations, tool calls
+    by source with errors, memory read and written with the gate's split, and
+    spend by source with its tokens. Model dollars and tokens come from
+    usage.jsonl, which counts every model call; tool dollars from the traces."""
     start = window_start(window, now)
     rows = [r for r in _ledger_rows(home) if _in_window(r, start)]
     tool_costs = _tool_costs(events, start, servers)
@@ -713,6 +731,11 @@ def summary(home: Path, events: list[dict], turns: list[dict], tools: dict,
                if isinstance(ev.get("credits"), int) and not isinstance(ev.get("credits"), bool)]
     in_window = [t for t in turns if _in_window(t, start)]
     loops = [t["loops"] for t in in_window if t.get("loops")]
+    reads = [r for r in tools["waku_memory"]["tools"] if r["span"] == "retrieval"]
+    writes = [r for r in tools["waku_memory"]["tools"] if r["span"] == "memory_write"]
+    # avg_results is per tool; weight it back by calls to average the reads
+    weighted = [(r["avg_results"], r["calls"]) for r in reads if r["avg_results"] is not None]
+    returned = sum(n for _, n in weighted)
 
     def calls(group: str) -> dict:
         rows_ = tools[group]["tools"]
@@ -736,21 +759,33 @@ def summary(home: Path, events: list[dict], turns: list[dict], tools: dict,
         "tools": {"treg": calls("treg"), "waku_memory": calls("waku_memory"), "other": calls("other")},
         "turns": {"count": len(in_window),
                   "avg_loops": round(sum(loops) / len(loops), 1) if loops else None},
+        "memory": {
+            "retrievals": sum(r["calls"] for r in reads),
+            "avg_results": round(sum(a * n for a, n in weighted) / returned, 1) if returned else None,
+            "writes": sum(r["calls"] for r in writes),
+            "kept": sum(t["kept"] or 0 for t in in_window),
+            "gate_retrieve": sum(1 for t in in_window if t["gate"] == "retrieve"),
+            "gate_skip": sum(1 for t in in_window if t["gate"] == "skip"),
+        },
     }
 
 
 def spend_by_day(home: Path, events: list[dict], days: int = 14, servers=()) -> list[dict]:
     """Newest first, one row per day (UTC, as the ledger dates them): model
-    dollars from usage.jsonl, treg and Waku Memory dollars from the traces."""
+    dollars and tokens from usage.jsonl, treg and Waku Memory dollars from
+    the traces."""
     out: dict[str, dict] = {}
 
     def day(key: str) -> dict:
-        return out.setdefault(key, {"date": key, "model": 0.0, "treg": 0.0, "memory": 0.0, "other": 0.0})
+        return out.setdefault(key, {"date": key, "model": 0.0, "treg": 0.0, "memory": 0.0, "other": 0.0,
+                                    "in": 0, "out": 0})
 
     for row in _ledger_rows(home):
         key = str(row.get("ts") or "")[:10]
         if key:
             day(key)["model"] += _row_cost(row)
+            day(key)["in"] += int(row.get("in") or 0)
+            day(key)["out"] += int(row.get("out") or 0)
     for ts, source, cost in _tool_costs(events, None, servers):
         if ts[:10]:
             bucket = {"treg": "treg", "waku_memory": "memory"}.get(source, "other")

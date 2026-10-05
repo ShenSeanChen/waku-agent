@@ -1043,12 +1043,15 @@ main h3{font-family:var(--face-mono);font-size:var(--text-xs);color:var(--text-f
 .wf-fill.wf-llm{background:var(--chart-1)}
 .wf-fill.wf-retrieval,.wf-fill.wf-memory_write{background:var(--chart-3)}
 
-/* Observability's visual pass: a summary strip of linked tiles, bars drawn
+/* Observability's visual pass: four cards, one per tab, that open their tab, bars drawn
    with plain spans (no chart library), and the waterfall grouped by loop. */
 .obs-strip{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:var(--space-2);margin-bottom:var(--space-4)}
 .obs-tile{display:flex;flex-direction:column;gap:var(--spacing);padding:var(--space-3);border:var(--rule-width) solid var(--rule);
   border-radius:var(--radius);background:var(--surface-paper);color:var(--text-ink);text-decoration:none;min-width:0}
 .obs-tile:hover{border-color:var(--rule-hard)}
+/* the card whose tab is open, drawn like a selected stage */
+.obs-tile.on{border-color:var(--accent);background:var(--surface-raised)}
+.obs-tile.on .stat-label{color:var(--accent-fg)}
 .obs-tile .stat-value{overflow-wrap:anywhere}
 .obs-of{font-size:var(--text-xs);color:var(--text-muted);font-weight:var(--font-weight-normal)}
 .obs-bar{display:flex;width:100%;height:8px;min-width:48px;background:var(--surface-sunk);border-radius:var(--shape-chip);overflow:hidden}
@@ -1061,8 +1064,6 @@ main h3{font-family:var(--face-mono);font-size:var(--text-xs);color:var(--text-f
 .obs-legend{display:flex;flex-wrap:wrap;gap:var(--space-3);font-size:var(--text-xs);color:var(--text-muted);margin-bottom:var(--space-2)}
 .obs-legend span{display:inline-flex;align-items:center;gap:var(--spacing)}
 .obs-swatch{display:inline-block;width:10px;height:10px;border-radius:var(--shape-chip)}
-.obs-days{display:flex;flex-direction:column;gap:var(--spacing)}
-.obs-day{display:grid;grid-template-columns:48px minmax(0,1fr) 64px;align-items:center;gap:var(--space-2)}
 .wf-group{display:flex;flex-direction:column;gap:var(--space-2);padding-left:var(--space-3);border-left:var(--rule-width) solid var(--rule)}
 .wf-graph{padding:var(--space-2);border:var(--rule-width) dashed var(--rule);border-radius:var(--radius)}
 .wf-ghead{display:flex;flex-wrap:wrap;align-items:baseline;justify-content:space-between;gap:var(--spacing) var(--space-2)}

@@ -27,10 +27,10 @@ it runs in its own `hosted-docker` CI job and not in `make gate`. It is only
 for `hosted/`, the deployment that runs waku for other people on a server. With
 no daemon, it skips the whole directory and says why.
 
-**Where the results show:** the terminal, and the **Evals** tab of the
-dashboard's **Observability** page: how many deterministic tests and judge
+**Where the results show:** the terminal, and the dashboard's **Evals** page,
+under Observability in the sidebar: how many deterministic tests and judge
 suites exist, the release-gate verdict, and an eval-history table with one row
-per `make gate`. On agent.waku.one the tab says that evals run in CI and in
+per `make gate`. On agent.waku.one the page says that evals run in CI and in
 `make gate` before an upgrade, because a tenant container ships no `evals/`.
 
 ## Catching bugs
@@ -46,9 +46,8 @@ it in. Run `make gate` → green → the eval history records the run.
 
 Every LLM call's tokens are appended to `~/.waku/usage.jsonl`, an append-only
 ledger that a demo reset never wipes. The **Spend** tab of the
-**Observability** page shows the all-time cost, tokens, and a per-day and
-per-provider breakdown. That cost is labelled "estimated": tokens × list
-price. On agent.waku.one each turn's receipt also records what the platform
+**Observability** page shows the all-time cost and tokens, broken down per
+model and per day. That cost is labelled "estimated": tokens × list price. On agent.waku.one each turn's receipt also records what the platform
 charged, and the tab shows that total as "charged" beside the estimate.
 
 ## Tracing is always on

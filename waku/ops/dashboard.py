@@ -544,7 +544,7 @@ def collect() -> dict:
 def observability_data(window: str = "7d") -> dict:
     """The Observability page's data (spec 012, `waku/ops/observability.py`).
     A hosted container runs the `waku-platform` provider and ships no
-    `evals/`, so the Evals tab explains where evals run instead."""
+    `evals/`, so the Evals page explains where evals run instead."""
     from waku.ops import observability
 
     settings = load_settings()
