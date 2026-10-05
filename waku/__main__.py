@@ -17,6 +17,7 @@
                              memory fetched together, then one digest
   waku skill install <url>   install a community skill
   waku skill export          copy Waku's skills to Claude Code / Codex (--to claude,codex)
+  waku evals turns           grade your own traced turns with the five turn checks (--window today|7d|all)
 """
 
 from __future__ import annotations
@@ -87,6 +88,10 @@ def main() -> None:
         from waku.memory.procedural.exporter import cli_main as export_main
 
         sys.exit(export_main(args[2:]))
+    elif args[0] == "evals" and len(args) >= 2 and args[1] == "turns":
+        from waku.ops.turn_evals import cli_main as turns_main
+
+        sys.exit(turns_main(args[2:]))
     elif args[0] == "skill" and len(args) >= 3 and args[1] == "install":
         from waku.memory.procedural.installer import install
 
