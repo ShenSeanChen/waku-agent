@@ -369,3 +369,22 @@ def test_views_call_the_primitives():
             continue
         for cls in PRIMITIVE_CLASSES:
             assert not re.search(rf'class="{cls}[ "]', src), f"{name} writes a {cls} by hand — call the ui.js function"
+
+
+SEG_TOKENS = re.compile(r"var\(--(rule|chart-[1-5]|accent|radius|spacing)\)")
+
+
+def test_the_segmented_bar_is_drawn_from_tokens():
+    """Spec 016: the segmented bar is a modifier class (.seg) on the existing
+    bars, not a new primitive. Its rules read only --rule, --chart-*,
+    --accent, --radius and --spacing, and draw no glyph."""
+    rules = [(sel, body) for sel, body in _blocks(_style()) if re.search(r"\.seg\b", sel)]
+    assert rules, "style.css must define the .seg modifier"
+    assert any("mask-image" in body and "repeating-linear-gradient" in body for _, body in rules)
+    for sel, body in rules:
+        for prop, value in _decls(body):
+            assert prop != "content", f"{sel} draws glyph content"
+            for var in re.findall(r"var\([^)]*\)", value):
+                assert SEG_TOKENS.fullmatch(var), f"{sel} {prop} reads {var}"
+    js = _js()["observe.js"]
+    assert 'class="obs-bar seg"' in js and 'class="wf-track seg"' in js

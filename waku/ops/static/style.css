@@ -1093,7 +1093,7 @@ main h3{font-family:var(--face-mono);font-size:var(--text-xs);color:var(--text-f
 .wf-detail{padding:calc(var(--spacing) * 1) 0 var(--space-2);font-size:var(--text-xs);color:var(--text-muted);
   line-height:var(--leading-normal);overflow-wrap:anywhere}
 .wf-detail-body{min-width:0;padding-left:var(--space-8)}
-.wf-detail.wf-child .wf-detail-body{padding-left:calc(var(--space-8) + var(--space-3))}
+.wf-detail.wf-child .wf-detail-body{margin-left:var(--space-3)}
 .wf-detail code{font-size:var(--text-xs);white-space:normal;overflow-wrap:anywhere;border:0;background:none;padding:0}
 .wf-story{display:flex;flex-wrap:wrap;align-items:baseline;gap:calc(var(--spacing) * 1);font-size:var(--text-sm);color:var(--text-ink)}
 .wf-story .btn{padding:0;text-transform:none;letter-spacing:0;font-family:var(--face-sans);font-size:var(--text-sm);color:var(--text-ink);
@@ -1103,3 +1103,11 @@ main h3{font-family:var(--face-mono);font-size:var(--text-xs);color:var(--text-f
 .wf-meta .meta{font-size:var(--text-xs)}
 .wf-tools{display:flex;gap:var(--space-2)}
 .obs-wf .notice{margin-top:var(--space-2)}
+/* The segmented bar: blocks with 2px gaps on a --rule track. A mask on the
+   track cuts the track and its fill into the same blocks, so every bar on
+   the page shares one rhythm; a fill keeps at least one whole block. The
+   mask reads only alpha, so its opaque colour (--accent) never shows. */
+.wf-track.seg,.obs-bar.seg{background:var(--rule);border-radius:var(--radius);
+  -webkit-mask-image:repeating-linear-gradient(90deg,var(--accent) 0 calc(var(--spacing) * 1.5),transparent calc(var(--spacing) * 1.5) calc(var(--spacing) * 2));
+  mask-image:repeating-linear-gradient(90deg,var(--accent) 0 calc(var(--spacing) * 1.5),transparent calc(var(--spacing) * 1.5) calc(var(--spacing) * 2))}
+.wf-track.seg .wf-fill{min-width:calc(var(--spacing) * 2);border-radius:0}

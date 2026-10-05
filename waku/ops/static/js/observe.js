@@ -53,8 +53,8 @@ const obsTok = n => n == null ? "—" : n >= 1e6 ? (n/1e6).toFixed(1) + "M" : n 
 // sized by its share of `max` (default: their own sum).
 function obsBar(segments, max){
   const total = max || segments.reduce((a, [v]) => a + (v || 0), 0);
-  if (!total) return `<span class="obs-bar"></span>`;
-  return `<span class="obs-bar">${segments.filter(([v]) => v > 0).map(([v, c, label]) =>
+  if (!total) return `<span class="obs-bar seg"></span>`;
+  return `<span class="obs-bar seg">${segments.filter(([v]) => v > 0).map(([v, c, label]) =>
     `<i class="obs-seg obs-c${c}" style="width:${(v / total * 100).toFixed(2)}%" title="${esc(label || "")}"></i>`).join("")}</span>`;
 }
 const SOURCE_LABEL = {treg: "treg", waku_memory: "Waku Memory", local: "local"};
@@ -120,7 +120,7 @@ const obsHot = labels => (labels || []).map(l => uiBadge(esc(l), "warn")).join("
 function obsAxisBar(from, ms, total, kind){
   if (!total || from == null || ms == null) return "";
   const left = Math.max(0, from / total * 100), width = Math.max(0.6, ms / total * 100);
-  return `<span class="wf-track"><span class="wf-fill wf-${kind}" style="left:${left.toFixed(2)}%;width:${Math.min(width, 100 - left).toFixed(2)}%"></span></span>`;
+  return `<span class="wf-track seg"><span class="wf-fill wf-${kind}" style="left:${left.toFixed(2)}%;width:${Math.min(width, 100 - left).toFixed(2)}%"></span></span>`;
 }
 // One grid row: kind, name, bar, hotspot labels, time, dollars, and the details toggle.
 const obsGridRow = (cls, id, cells) => `<div class="wf-row ${cls}"${id ? ` id="${id}"` : ""}>${
