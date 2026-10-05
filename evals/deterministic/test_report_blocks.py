@@ -122,7 +122,7 @@ def test_each_block_renders_as_ui_and_keeps_its_json_for_copy():
             'rel="noopener noreferrer">Birchline pricing</a>') in sources
     assert "birchline.example · treg:treg.web.search · $0.002" in sources
     assert "<span>Mem0, Zep, Letta, Supermemory official pages</span>" in sources
-    assert "Spent $0.002 on 1 paid call." in sources
+    assert "treg cost $0.002 over 1 call." in sources and "Spent" not in sources
 
 
 @needs_node
