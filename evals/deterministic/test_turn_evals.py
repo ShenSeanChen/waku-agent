@@ -555,3 +555,51 @@ def test_grounded_numbers_rounds_scaled_figures_both_ways():
     off = "They raised $1.7M, have 275K followers and 12.5K seats."
     check = _check("grounded_numbers", _made("x", off, [_tool("search_web", src)]))
     assert check["value"] == 0 and "$1.7M" in check["note"]
+
+
+NO_REPORT = "2026-10-05-1012-no-report-asked.jsonl"
+
+
+def test_live_1012_a_turn_that_asked_for_no_report_is_not_failed():
+    """"Just answer, no report." with treg_call (the own-key surface) on
+    predictleads.companies.financing_events: one_report is n/a, and the
+    PredictLeads JSON (an "amount" string, amount_normalized, effective_date)
+    grounds the reply's numbers."""
+    scores = _scores(_turn(NO_REPORT))
+    assert scores["one_report"]["value"] is None
+    assert scores["one_report"]["note"] == "the message asked for no report"
+    assert scores["grounded_numbers"]["value"] == 1, scores["grounded_numbers"]["note"]
+    assert scores["spend_claim"]["value"] == 1, scores["spend_claim"]["note"]
+
+
+def test_one_report_reads_each_way_of_asking_for_no_report():
+    treg = _tool("treg_call", TREG)
+    for msg in ("research Letta's funding, just answer", "research mem0's competitors, don't save it",
+                "research mem0 without a report", "research mem0, skip the report"):
+        assert _check("one_report", _made(msg, "Letta raised.", [treg]))["value"] is None, msg
+    assert _check("one_report", _made("research the competitors of mem0", "x", [treg]))["value"] == 0
+    # asking for none and saving one anyway fails
+    saved = {"type": "report", "turn_id": "t_abc123", "memory_id": "m1", "title": "Letta"}
+    check = _check("one_report", _made("research Letta, no report", "x", [treg, saved]))
+    assert check["value"] == 0 and check["note"] == "the message asked for no report and one was saved"
+
+
+def test_grounded_numbers_reads_treg_call_outputs_and_the_traced_spend():
+    """A treg_call answer kept as text inside JSON (an MCP text block) is
+    decoded, and "$0.04" is grounded by the call's traced cost_usd even when
+    the call's output does not repeat its price."""
+    body = json.dumps({"data": [{"attributes": {"amount": "$10 million", "amount_normalized": 10000000,
+                                                "effective_date": "2024-09-23"}}]})
+    wrapped = _tool("treg_call", json.dumps([{"type": "text", "text": body}]), cost_usd=0.04,
+                    endpoint_id="predictleads.companies.financing_events", provider="predictleads")
+    reply = "Letta raised a $10M seed on Sep 23, 2024. The PredictLeads call cost $0.04."
+    check = _check("grounded_numbers", _made("x", reply, [wrapped]))
+    assert check["value"] == 1, check["note"]
+    for name in ("treg_call", "treg_catalog_call_read"):
+        assert te._spend_figures([{"source": "treg", "cost_usd": 0.04, "tool": name}]) == {0.04}
+
+
+def test_errors_handled_does_not_take_the_word_call_for_treg_call():
+    failed = _tool("treg_call", json.dumps({"status": 500, "endpoint_id": "predictleads.companies.financing_events"}))
+    assert _check("errors_handled", _made("x", "Here is the call summary.", [failed]))["value"] == 0
+    assert _check("errors_handled", _made("x", "PredictLeads returned nothing.", [failed]))["value"] == 1
