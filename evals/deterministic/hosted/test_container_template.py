@@ -144,12 +144,15 @@ def test_the_address_is_the_one_the_project_id_derives():
     assert body["HostConfig"]["NetworkMode"] == tenant.TENANT_NETWORK
 
 
-def test_the_environment_is_the_specs_nine_variables():
+def test_the_environment_is_the_specs_nine_variables_and_the_step_limit():
     names = [entry.split("=", 1)[0] for entry in _tenant_body()["Env"]]
     assert names == ["WAKU_HOME", "WAKU_DASHBOARD_HOST", "WAKU_DASHBOARD_PORT",
-                     "TZ", "HOME", "WAKU_PLATFORM_BASE_URL", "WAKU_PLATFORM_TOKEN",
+                     "TZ", "HOME", "WAKU_MAX_ITERATIONS", "WAKU_PLATFORM_BASE_URL", "WAKU_PLATFORM_TOKEN",
                      "WAKU_PLATFORM_MODEL", "WAKU_PLATFORM_SMALL_MODEL"]
     assert "TZ=Asia/Shanghai" in _tenant_body()["Env"]
+    # a hosted turn gets fifteen steps (2026-10-05: ten was not enough for a
+    # research turn whose first lookups failed)
+    assert "WAKU_MAX_ITERATIONS=15" in _tenant_body()["Env"]
     assert _tenant_body()["WorkingDir"] == "/work"
     assert _tenant_body()["User"] == "10001:10001"
 
