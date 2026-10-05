@@ -25,7 +25,8 @@ const OBS_WINDOWS = [["today","Today"],["7d","7 days"],["all","All"]];
 // The page's own state: the window the Tools tab reads, the last answer, and
 // which turns are open. Kept here so the 5s refresh redraws without closing
 // a waterfall someone is reading.
-const OBS = {window: "7d", data: null, at: 0, loading: false, open: new Set(), drawn: new Set(), note: ""};
+const OBS = {window: "7d", data: null, at: 0, loading: false, open: new Set(), drawn: new Set(), note: "",
+             judging: new Set(), judged: {}};
 
 async function loadObservability(background = false){
   if (OBS.loading) return;
@@ -271,9 +272,36 @@ function obsTurnChecks(t, key){
     `judge · ${obsCheckName(x.name)} ${esc(Number(x.value).toFixed(1))}`, x.value >= 0.7 ? "ok" : "bad", x.note || ""));
   if (!chips.length && !judged.length) return "";
   const open = obsCodeChecks(t).find(x => OBS.note === `${key}|${x.name}`);
+  const said = OBS.judged[t.turn_id];
   const notes = [open ? `<div><b>${obsCheckName(open.name)}</b>: ${esc(open.note || "")}</div>` : "",
-    ...(t.scores || []).filter(x => x.source === "judge").map(x => `<div><b>judge</b>: ${esc(x.note || "")}</div>`)].join("");
-  return `<div class="obs-scores">${chips.join("")}${judged.join("")}</div>${notes ? `<div class="meta obs-notes">${notes}</div>` : ""}`;
+    ...(t.scores || []).filter(x => x.source === "judge").map(x => `<div><b>judge</b>: ${esc(x.note || "")}</div>`),
+    said ? `<div>${esc(said)}</div>` : ""].join("");
+  return `<div class="obs-scores">${chips.join("")}${judged.join("")}${obsJudgeButton(t)}</div>${notes ? `<div class="meta obs-notes">${notes}</div>` : ""}`;
+}
+// "Judge this turn": one call to the small model of the provider in use,
+// with its estimated cost on the button before anyone presses it. The
+// result is written to the trace as a score, so the page shows it on reload.
+function obsJudgeButton(t){
+  const offer = t.judge_offer;
+  if (!offer || !t.turn_id) return "";
+  const busy = OBS.judging.has(t.turn_id);
+  const usd = "$" + Number(Number(offer.usd).toPrecision(1));
+  // the model id without its date suffix: claude-haiku-4-5-20251001 reads claude-haiku-4-5
+  const model = String(offer.model).replace(/-\d{8}$/, "");
+  return uiButton(busy ? "judging…" : `Judge this turn · about ${usd} with ${esc(model)}`,
+    {level: "secondary", size: "sm", cls: "obs-judge", title: `One call to ${offer.model}; it is charged like any model call`,
+     onclick: busy ? "" : `obsJudge('${esc(t.turn_id).replace(/'/g, "")}')`});
+}
+async function obsJudge(turnId){
+  if (OBS.judging.has(turnId)) return;
+  OBS.judging.add(turnId); delete OBS.judged[turnId]; render();
+  try {
+    const out = await postJSON("/api/turn-evals/judge", {turn_id: turnId});
+    if (out.error) OBS.judged[turnId] = out.error;
+  } catch(e){ OBS.judged[turnId] = "The judge could not be reached."; }
+  OBS.judging.delete(turnId); OBS.at = 0;
+  await loadObservability(false);
+  render();
 }
 function obsCheckNote(key, name){
   OBS.note = OBS.note === `${key}|${name}` ? "" : `${key}|${name}`;
