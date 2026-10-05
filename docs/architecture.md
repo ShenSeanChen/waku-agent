@@ -171,8 +171,19 @@ whole report the model fetched itself to its digest before each later call
 a `waku_memory_memory_search` tool call (waku.one reads its `entries` as
 Used), the `done` payload and the turn's meta carry them as `used`, and the
 dashboard's chat lists them under "Used from memory". The searches are not
-folded into the chat log, so consolidation never proposes memories already
-kept. A failed search is logged and skipped; the turn goes on without it.
+folded into the chat log. A failed search is logged and skipped; the turn
+goes on without it.
+
+A turn that answered from memory does not keep that memory again. The answer
+repeats what it read, so the summariser proposes it as new facts (2026-10-05:
+one recall turn sent five copies of a report's findings to Waku Memory).
+`app.py` passes consolidation everything the turn read (what the retrieval
+gate found, what research read first, and what the model's own Waku Memory
+searches, gets and recalls returned), the summariser is shown it, and
+`consolidation.restates` drops a proposed fact that has a number or a date
+and whose every name, number and date is already in it. A new fact the person
+adds ("Zep raised again in 2026") has something the memory does not, so it is
+kept; a fact with no number is never dropped by this check.
 
 A turn that saved a report consolidates with it (spec 009 B): the summariser
 is told the findings are in the report, a fact whose subject the report names

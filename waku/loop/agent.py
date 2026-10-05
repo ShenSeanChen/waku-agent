@@ -62,6 +62,10 @@ class LoopResult:
     # be proposed as new facts again.
     read_first: list[LoopEvent] = field(default_factory=list)
     used: list[dict] = field(default_factory=list)
+    # The memory the turn read before the loop, as text: what the retrieval
+    # gate found plus the research block above. Consolidation drops a fact
+    # that only repeats it (and what the model's own memory reads returned).
+    recalled: str = ""
     # Spec 011: what the turn did and cost (waku/ops/receipt.py), set by
     # Waku.respond once the turn is over. None for a bare run_loop call.
     receipt: dict | None = None

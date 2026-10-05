@@ -19,6 +19,10 @@ from waku.runtime.session import Session
 from waku.tools import build_registry
 from waku.tools.waku_memory import get_via, remember_via, search_via, tool_name
 
+# The Waku Memory tools that read memory. What they return this turn is
+# already kept, so consolidation must not keep it again.
+MEMORY_READS = ("memory.search", "memory.get", "memory.recall")
+
 log = logging.getLogger(__name__)
 
 
@@ -153,8 +157,11 @@ class Waku:
             if self.memory is not None:
                 # Spec 009 B: a turn that saved a report keeps at most two
                 # facts, about the person; the findings stay in the report.
+                # A turn that answered from memory does not keep that memory
+                # again (2026-10-05: a recall turn re-saved five findings).
                 self.memory.maybe_consolidate(
-                    notify=notify, report=kept_report if report is not None else "")
+                    notify=notify, report=kept_report if report is not None else "",
+                    recalled=self._recalled(result))
                 self.memory.export_markdown()   # keep MEMORY.md in sync
 
             # Spec 011: the receipt, once consolidation has kept what it keeps.
@@ -168,6 +175,15 @@ class Waku:
 
         self.tracer.end_turn(result.reply, result.iterations)
         return result
+
+    def _recalled(self, result: LoopResult) -> str:
+        """Everything this turn read from memory, as text: what was read
+        before the loop, and what the model's own Waku Memory searches, gets
+        and recalls returned."""
+        reads = {tool_name(self.mcp_bridge, t) for t in MEMORY_READS} - {None}
+        outputs = [c["output"] for c in result.tool_calls
+                   if c.get("tool") in reads and isinstance(c.get("output"), str)]
+        return "\n".join(p for p in (result.recalled, *outputs) if p)
 
     def _receipt(self, result: LoopResult, events: list, meta: dict, row_id: int | None) -> None:
         charges = getattr(self.client, "charges", None)   # waku-platform only
@@ -220,6 +236,7 @@ class Waku:
             trim=reports.shrink_read,
         )
         result.read_first, result.used = known.calls, known.used
+        result.recalled = "\n".join(p for p in (self.session.retrieved, known.context) if p)
         return result
 
     def _respond_via_graph(self, user_message: str, notify, stream: bool) -> LoopResult | None:

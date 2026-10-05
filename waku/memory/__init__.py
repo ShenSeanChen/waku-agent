@@ -250,9 +250,11 @@ class Memory:
             if path.stem.isdigit() and path.name not in current:
                 path.unlink()
 
-    def maybe_consolidate(self, notify=None, report: str = "") -> None:
+    def maybe_consolidate(self, notify=None, report: str = "", recalled: str = "") -> None:
         """`report` is the research report this turn saved, if it saved one
-        (spec 009 B): its findings stay in it, not in loose facts."""
+        (spec 009 B): its findings stay in it, not in loose facts. `recalled`
+        is the memory this turn read: a fact that only repeats it is not kept
+        again."""
         kept = consolidation.kept_if_due(
             self.conn,
             metered(self.client, "consolidation", notify) if notify else self.client,
@@ -262,6 +264,7 @@ class Memory:
             self.episodes,
             remember=self.remember,
             report=report,
+            recalled=recalled,
         )
         # Spec 006: `kept` lists each fact (subject, content, project, its
         # Waku Memory id when the send succeeded, and `sent`), so a chat panel

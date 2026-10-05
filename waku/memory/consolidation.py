@@ -15,6 +15,14 @@ module never sees the transport, so a fake stands in for it in the evals.
 Spec 009 B: when the exchanges saved a research report, the report holds the
 findings. Consolidation then keeps at most two facts, about the user or their
 decisions, and drops any fact whose subject the report is about.
+
+A turn that answered from memory it read (a recall turn) passes that memory
+as `recalled`. The answer repeats it, so the summariser would extract it
+again and Waku Memory would get a second copy of every finding (2026-10-05:
+one "what did we find on Mem0's competitors?" kept five). A proposed fact
+whose every name, number and date already appears in what the turn read is
+dropped (`restates`). Something new the user says has a name or a number
+the memory does not, so it is kept.
 """
 
 from __future__ import annotations
@@ -63,6 +71,20 @@ made, at most {cap}, and set "company_research" to false.
 The report:
 {report}"""
 
+# Added to the prompt when the turn answered from memory it read. The
+# deterministic `restates` check below is what guarantees the drop; this only
+# saves the summariser proposing what would be dropped.
+RECALL_RULE = """
+These exchanges answered from memory that is already kept, quoted below. Do NOT
+extract a fact it already holds, even reworded. Keep only what is new: what
+the user said, decided or asked to note.
+Memory read this turn:
+{recalled}"""
+
+# How much of the recalled memory goes into the prompt. The `restates` check
+# reads all of it.
+RECALL_PROMPT_CHARS = 6000
+
 # The most loose facts a report turn keeps (spec 009 B), whatever the model
 # proposed.
 REPORT_TURN_MAX_FACTS = 2
@@ -88,10 +110,11 @@ def consolidate_if_due(
     episodes: SqliteEpisodeStore,
     remember: Remember | None = None,
     report: str = "",
+    recalled: str = "",
 ) -> int:
     """Returns how many new facts were written (0 = not due or nothing worth keeping)."""
     return len(kept_if_due(conn, client, small_model, every_n, facts, episodes, remember,
-                           report))
+                           report, recalled))
 
 
 def _send(remember: Remember, content: str, scope: str) -> tuple[bool, str | None]:
@@ -114,6 +137,7 @@ def kept_if_due(
     episodes: SqliteEpisodeStore,
     remember: Remember | None = None,
     report: str = "",
+    recalled: str = "",
 ) -> list[dict]:
     """The facts this consolidation kept, each as {subject, content, project,
     memory_id, sent}. [] when it was not due or nothing was worth keeping.
@@ -125,6 +149,10 @@ def kept_if_due(
     `report` is the research report this turn saved. A batch whose rows saved
     one earlier (a laptop consolidates every six exchanges) is a report batch
     too, with that report's title and summary, which the chat log keeps.
+
+    `recalled` is the memory this turn read: what the retrieval gate found,
+    what research read first, and what the model's own Waku Memory searches
+    and gets returned. A proposed fact that only restates it is dropped.
 
     With `remember`, facts an earlier send failed on go first, then each kept
     fact once. Only the SQLite store records which are still unsent; with
@@ -154,6 +182,8 @@ def kept_if_due(
     prompt = SUMMARIZER_PROMPT.format(log=log)
     if report:
         prompt += REPORT_RULE.format(cap=REPORT_TURN_MAX_FACTS, report=report)
+    if recalled:
+        prompt += RECALL_RULE.format(recalled=recalled[:RECALL_PROMPT_CHARS])
     try:
         response = client.messages.create(
             model=small_model,
@@ -178,6 +208,8 @@ def kept_if_due(
     # it fails open, so without WAKU_SLOT_GATE=jev every proposed fact is kept.
     if report:
         proposed = [f for f in proposed if not _about_report(f, report)]
+    if recalled:
+        proposed = [f for f in proposed if not restates(f, recalled)]
     kept = slot_gate.keep(proposed)
     # A model may answer the flag as "true"; anything else, or no flag, is personal.
     research = str(distilled.get("company_research")).lower() == "true"
@@ -237,3 +269,36 @@ def _about_report(fact: dict, report: str) -> bool:
         return False
     whole_word = r"(?<!\w)" + re.escape(subject) + r"(?!\w)"
     return re.search(whole_word, " ".join(report.split()), re.IGNORECASE) is not None
+
+
+def _words(text: str) -> set[str]:
+    """The words of a text, lowercased, as `restates` compares them: "$10M,"
+    is "10m", "Mem0's" is "mem0", and a date like 2026-10-05 stays one word,
+    so it never matches a bare 2026. A tool's answer is often JSON, so its
+    escaped line breaks and apostrophes are read as the characters they are."""
+    text = re.sub(r"\\[nrt]", " ", text).replace("\\u2019", "'").replace("\u2019", "'")
+    found = set()
+    for word in re.findall(r"[\w$'.,%-]+", text):
+        word = word.strip("'.,-").lstrip("$").lower()
+        word = word.removesuffix("'s")
+        if word:
+            found.add(word)
+    return found
+
+
+def restates(fact: dict, recalled: str) -> bool:
+    """True when the fact only repeats memory the turn read: it has a number
+    or a date, and every name, number and date in it (each word with a
+    capital letter or a digit) is already in `recalled`.
+
+    "Zep raised a $2.3M pre-seed round on 2023-12-27." restates a report that
+    has Zep, $2.3M and 2023-12-27. "Zep raised again in 2026" does not: 2026
+    is new. A fact with no number is never dropped here, however familiar its
+    names ("Sean decided to price below Mem0" names two things memory already
+    knows), so something new the user says is never lost; RECALL_RULE asks
+    the summariser to leave those out instead."""
+    content = str(fact.get("content", "")).replace("\u2019", "'")
+    key = _words(" ".join(w for w in content.split()
+                          if any(c.isupper() or c.isdigit() for c in w)))
+    has_number = any(w[0].isdigit() for w in key)   # "10m", "2023-12-27"; not "mem0"
+    return has_number and key <= _words(recalled)
