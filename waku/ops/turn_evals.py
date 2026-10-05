@@ -36,7 +36,7 @@ import re
 import secrets
 import threading
 import time
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from waku.ops import observability as obs
@@ -111,13 +111,15 @@ def view(turn: dict, *, usd: float | None = None, skills=None, servers=()) -> di
             continue
         info = obs.describe(ev, servers)
         tools.append({"tool": ev.get("tool") if isinstance(ev.get("tool"), str) else "",
+                      "args": ev.get("args"),
                       "output": ev.get("output") if isinstance(ev.get("output"), str) else "",
                       "ok": info["ok"], "source": info["source"], "cost_usd": info.get("cost_usd"),
                       "endpoint_id": info.get("endpoint_id") or "", "provider": info.get("provider") or ""})
     message = str(turn.get("user_message") or "")
     return {"message": message, "reply": str(turn.get("reply") or ""), "tools": tools,
-            "reports": sum(1 for ev in turn.get("events") or [] if ev.get("type") == "report"),
-            "usd": usd, "v2": bool(turn.get("turn_id")),
+            "reports": [str(ev.get("memory_id") or "") for ev in turn.get("events") or []
+                        if ev.get("type") == "report"],
+            "usd": usd, "v2": bool(turn.get("turn_id")), "ts": obs._ts(turn.get("ts")),
             "research": is_research(message, skills), "unfinished": bool(turn.get("unfinished"))}
 
 
@@ -162,12 +164,35 @@ def sentences(text: str) -> list[str]:
 # 1. spend_claim
 # ---------------------------------------------------------------------------
 
-_DOLLARS = re.compile(r"\$\s?(\d[\d,]*(?:\.\d+)?)")
-_ZERO = re.compile(r"\b(free|no cost|nothing|zero)\b|\$\s?0(?:\.0+)?\b", re.IGNORECASE)
+# A dollar figure, but not a scaled one: "$10M" is a funding round, never
+# what a few tool calls cost.
+_DOLLARS = re.compile(r"\$\s?(\d+(?:,\d{3})*(?:\.\d+)?)(?!\d|,\d|\.\d)"
+                      r"(?!\s?(?:[kmb]|bn|mn|thousand|million|billion)\b)",
+                      re.IGNORECASE)
+# "free" or "no cost" says what something cost; "nothing" and "zero" only
+# do beside a spend word ("cost nothing"), never alone ("lists nothing
+# dated after 2024-11-20"), and a "free tier" or "free preview" names a
+# product, not this turn's price.
+_ZERO = re.compile(r"(?<!feel )\bfree\b(?![ -](?:tier|plan|trial|version|account|text|form|preview|credits?)\b)|\bno (?:cost|charge)\b|"
+                   r"\b(?:cost|costs|spent|spend|billed|charged|paid)\s+(?:us\s+|me\s+)?(?:nothing|zero)\b|"
+                   r"\$\s?0(?:\.0+)?\b(?!\.\d)", re.IGNORECASE)
 _SPEND_WORD = re.compile(r"\b(cost|costs|spent|spend|billed|charged|total|paid)\b", re.IGNORECASE)
+# Without a spend word, a sentence naming a provider states its price only
+# with one of these ("LeadsForge's free preview ($0.00)").
+_PRICE_WORD = re.compile(r"\b(free|paid|price|priced|fee|charge)\b", re.IGNORECASE)
 # A price offered for later is not a claim about this turn.
 _LATER = re.compile(r"\b(would|will|that'd|that would|each|per row|per call|per result|if)\b|'ll\b",
                     re.IGNORECASE)
+_FUTURE = re.compile(r"\b(would|will|that'd|that would|if)\b|'ll\b", re.IGNORECASE)
+_COUNTS = {w: i for i, w in enumerate(
+    ("zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten",
+     "eleven", "twelve"))}
+# "four Aviato calls at $0.01 each" states $0.04: a count times a unit price
+_TIMES = re.compile(
+    r"\b(\d+|" + "|".join(_COUNTS) + r")\s+(?:[\w.'-]+\s+){0,3}?"
+    r"(?:calls?|requests?|lookups?|queries|searches|pulls?|rows|results|records)\s+"
+    r"(?:at|for)\s+(?:about\s+|~)?\$\s?(\d[\d,]*(?:\.\d+)?)\s*(?:each|apiece|per\s+\w+|a\s+call)\b",
+    re.IGNORECASE)
 
 
 def _treg(tools: list[dict]) -> list[dict]:
@@ -185,25 +210,54 @@ def _named(sentence: str, tools: list[dict]) -> list[dict]:
     return out
 
 
+def _amounts(sentence: str) -> tuple[list[float], list[str]] | None:
+    """(the dollar figures the sentence states for this turn, as written), or
+    None when it only offers a price for later. "N calls at $X each" states
+    N times X; any other "each" or "per call" is a price, not a spend."""
+    times = list(_TIMES.finditer(sentence))
+    if times and not _FUTURE.search(sentence):
+        rest = _TIMES.sub(" ", sentence)
+        out, said = [], []
+        for x in times:
+            count = x.group(1).lower()
+            n = int(count) if count.isdigit() else _COUNTS[count]
+            out.append(round(n * float(x.group(2).replace(",", "")), 6))
+            said.append(money(out[-1]))
+        for m in _DOLLARS.finditer(rest):
+            out.append(float(m.group(1).replace(",", "")))
+            said.append(m.group(0).replace(" ", ""))
+        return out, said
+    if _LATER.search(sentence):
+        return None
+    found = list(_DOLLARS.finditer(sentence))
+    return ([float(m.group(1).replace(",", "")) for m in found],
+            [m.group(0).replace(" ", "") for m in found])
+
+
 def check_spend_claim(v: dict) -> dict:
     """The reply's spend matches the trace. A sentence states this turn's
     spend when it carries a dollar amount, "free" or "no cost" beside a spend
     word ("cost", "spent", "billed", "charged", "total"), or names a treg
-    provider or endpoint of this turn. A price offered for later ("would",
-    "each", "that'd") is skipped. A sentence that names a provider is checked
-    against that provider's own calls; any other is checked against the
-    turn's treg dollars. It fails when the reply claims $0, "free" or "no
-    cost" while the calls cost more, or a figure off by more than $0.01 and
-    20%. n/a when the reply claims nothing."""
+    provider or endpoint of this turn beside a price word ("free", "paid").
+    "N calls at $X each" states N times X; any other price offered for later
+    ("would", "each", "that'd") is skipped, and so is a scaled figure ("$10M")
+    and "nothing" or "zero" away from a spend word. A sentence that names a
+    provider is checked against that provider's own calls; any other is
+    checked against the turn's treg dollars. It fails when the reply claims
+    $0, "free" or "no cost" while the calls cost more, or a figure off by
+    more than $0.01 and 20%. n/a when the reply claims nothing."""
     calls = _treg(v["tools"])
     claims = 0
     for sentence in sentences(prose(v["reply"])):
-        if _LATER.search(sentence):
+        stated = _amounts(sentence)
+        if stated is None:
             continue
-        amounts = [float(a.replace(",", "")) for a in _DOLLARS.findall(sentence)]
+        amounts, written = stated
         zero = bool(_ZERO.search(sentence)) and not any(amounts)
         named = _named(sentence, calls)
-        if not (amounts or zero) or not (_SPEND_WORD.search(sentence) or named):
+        if not (amounts or zero):
+            continue
+        if not (_SPEND_WORD.search(sentence) or (named and _PRICE_WORD.search(sentence))):
             continue
         scope = named or calls
         actual = round(sum(t["cost_usd"] for t in scope), 6)
@@ -215,7 +269,7 @@ def check_spend_claim(v: dict) -> dict:
         if not named and not zero and not re.search(r"\btreg\b", sentence, re.IGNORECASE):
             continue
         claims += 1
-        said = next((m.group(0).replace(" ", "") for m in _DOLLARS.finditer(sentence)), "free")
+        said = written[0] if written else "free"
         if zero or all(a == 0 for a in amounts):
             if actual > 0:
                 return _result("spend_claim", FAIL, f"reply says {said}; {whose} cost {money(actual)}")
@@ -233,23 +287,65 @@ def check_spend_claim(v: dict) -> dict:
 # ---------------------------------------------------------------------------
 
 
+_SAVE_ASK = re.compile(r"\b(save|saves|saving|store|storing)\b", re.IGNORECASE)
+# A body the model sent to memory_remember that is a report without the
+# marker: a "# " title and "## " sections, filed in the Company brain.
+_REPORT_SHAPE = re.compile(r"(?:^|\\n|\n)# \S.*?(?:\\n|\n)## \S", re.DOTALL)
+
+
+def _report_saves(v: dict) -> list[str]:
+    """One entry per report this turn saved, deduplicated by memory id: each
+    `report` event (the harness's save, which names the model's own memory
+    when the model saved it first), and each memory_remember call that
+    Waku Memory took whose body is a report (it holds the marker, or a "# "
+    title with "## " sections filed in the Company brain)."""
+    from waku.memory.consolidation import COMPANY_PROJECT  # noqa: PLC0415
+    from waku.memory.reports import MARKER, REFUSAL  # noqa: PLC0415
+
+    saves = [r or f"report-{i}" for i, r in enumerate(v["reports"])]
+    for i, t in enumerate(v["tools"]):
+        if not t["tool"].endswith("_memory_remember") or not t["ok"] or t["output"].startswith(REFUSAL[:20]):
+            continue
+        args = t["args"]
+        body = args.get("body") if isinstance(args, dict) else args
+        text = body if isinstance(body, str) else ""
+        whole = json.dumps(args, ensure_ascii=False) if isinstance(args, dict) else str(args or "")
+        if not (MARKER in text or (COMPANY_PROJECT in whole and _REPORT_SHAPE.search(text))):
+            continue
+        try:
+            memory_id = str(json.loads(t["output"])["memory"]["id"])
+        except (ValueError, KeyError, TypeError):
+            memory_id = f"remember-{i}"
+        if memory_id not in saves:
+            saves.append(memory_id)
+    return saves
+
+
 def check_one_report(v: dict) -> dict:
     """A research turn saves exactly one report; any turn that saves two
-    fails. With no Waku Memory connected no `report` event is written and the
-    reply keeps the report, so a reply carrying the report marker counts as
-    one. An older trace (no turn id) did not trace reports: n/a."""
+    fails. A save is a `report` event or a memory_remember call whose body
+    is a report, counted once per memory. A turn is research when the
+    research-report skill matches its message and the turn did research:
+    a tool other than Waku Memory ran, or the message asks to save. A
+    question answered from memory alone is n/a. With no Waku Memory
+    connected no `report` event is written and the reply keeps the report,
+    so a reply carrying the report marker counts as one. An older trace (no
+    turn id) did not trace reports: n/a."""
     from waku.memory.reports import MARKER  # noqa: PLC0415
 
-    if v["reports"] > 1:
-        return _result("one_report", FAIL, f"{v['reports']} reports saved in one turn")
+    saves = _report_saves(v)
+    if len(saves) > 1:
+        return _result("one_report", FAIL, f"{len(saves)} reports saved in one turn")
     if not v["research"]:
         return _result("one_report", NA, "not a research turn")
     if not v["v2"]:
         return _result("one_report", NA, "older trace: reports were not traced")
-    if v["reports"] == 1:
+    if len(saves) == 1:
         return _result("one_report", PASS, "one report saved")
     if MARKER in v["reply"]:
         return _result("one_report", PASS, "the report is in the reply; no Waku Memory to save it to")
+    if not _SAVE_ASK.search(v["message"]) and all(t["source"] == "waku_memory" for t in v["tools"]):
+        return _result("one_report", NA, "answered from memory: no research tool ran and no save was asked")
     return _result("one_report", FAIL, "a research turn with no report saved and none in the reply")
 
 
@@ -302,37 +398,67 @@ def _numbers(text: str) -> list[tuple[str, float, int, int, bool]]:
     return out
 
 
-def _reply_numbers(reply: str) -> list[tuple[str, list[float], int] | tuple[str, str]]:
+def _reply_numbers(reply: str, today: datetime | None = None) -> list[tuple]:
     """What grounded_numbers looks for: each money amount, percentage, date
-    and number of two or more digits in the reply's prose. Ordinals, list
-    numbers and code blocks are skipped."""
-    text = _LIST_NUMBER.sub(" ", prose(reply))
+    and number of two or more digits in the reply's prose, as (as written,
+    ISO date) or (as written, values, decimals, scale). Ordinals, list
+    numbers and code blocks are skipped, and so is the turn's own date, a day
+    either side ("the 2026-10-05 snapshot"): it says when, not what was found."""
+    text = _LIST_NUMBER.sub(" ", _DASHES.sub("-", prose(reply)))
+    near = ({(today.date() + timedelta(days=d)).isoformat() for d in (-1, 0, 1)}
+            if today else set())
     wanted: list = []
     taken: list[tuple[int, int]] = []
     for iso, start, end in _dates(text):
-        wanted.append((text[start:end], iso))
         taken.append((start, end))
+        if iso not in near:
+            wanted.append((text[start:end], iso))
     for written, value, decimals, start, marked in _numbers(text):
         if any(a <= start < b for a, b in taken) or _ORDINAL.match(text[start:]):
             continue
         digits = sum(c.isdigit() for c in written)
         if not marked and digits < 2:
             continue
-        mantissa = value
-        scale = re.search(r"(thousand|million|billion|bn|mn|[kmb])$", written, re.IGNORECASE)
-        if scale:
-            mantissa = value / _SCALE[scale.group(1).lower()]
+        mantissa, scale = value, 1.0
+        suffix = re.search(r"(thousand|million|billion|bn|mn|[kmb])$", written, re.IGNORECASE)
+        if suffix:
+            scale = _SCALE[suffix.group(1).lower()]
+            mantissa = value / scale
         values = [value, mantissa]
         if "%" in written:
             values.append(value / 100)
-        wanted.append((written, values, decimals))
+        wanted.append((written, values, decimals, scale))
     return wanted
 
 
+_DASHES = re.compile("[\u2010\u2011\u2012\u2013\u2014\u2212]")
+
+
+def _strings(value) -> list[str]:
+    """Every string inside a decoded JSON value."""
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, dict):
+        value = list(value.values())
+    if isinstance(value, list):
+        return [s for v in value for s in _strings(v)]
+    return []
+
+
 def _source_index(texts: list[str]) -> tuple[set[float], set[str]]:
+    """The numbers and dates in a turn's sources. A JSON source (a Waku
+    Memory answer, a treg result) is read decoded too, so a memory body sent
+    as "2024\\u201108\\u201101" reads as 2024-08-01."""
     numbers: set[float] = set()
     dates: set[str] = set()
+    decoded = []
     for text in texts:
+        try:
+            decoded += _strings(json.loads(text))
+        except (ValueError, TypeError):
+            pass
+    for text in [*texts, *decoded]:
+        text = _DASHES.sub("-", text)
         dates.update(iso for iso, _, _ in _dates(text))
         numbers.update(value for _, value, _, _, _ in _numbers(text))
         # a bare scaled figure in a source ("4.2M") also stands for its mantissa
@@ -340,7 +466,7 @@ def _source_index(texts: list[str]) -> tuple[set[float], set[str]]:
     return numbers, dates
 
 
-def _found(values: list[float], decimals: int, numbers: set[float]) -> bool:
+def _found(values: list[float], decimals: int, numbers: set[float], scale: float = 1.0) -> bool:
     for value in values:
         if value in numbers:
             return True
@@ -348,6 +474,11 @@ def _found(values: list[float], decimals: int, numbers: set[float]) -> bool:
     for n in numbers:
         if any(round(n, decimals) == round(v, decimals) and abs(n - v) < 10 ** -decimals for v in values):
             return True
+    # "$1.58M" is grounded by a source's raw 1575000 or 1580000: the source,
+    # in the reply's unit, rounds to what the reply wrote
+    if scale > 1:
+        half = 0.5 * 10 ** -decimals + 1e-9
+        return any(abs(n / scale - values[1]) <= half for n in numbers if n >= scale / 10)
     return False
 
 
@@ -355,12 +486,16 @@ def check_grounded_numbers(v: dict) -> dict:
     """Every money amount, percentage, date and number of two or more digits
     in the reply appears in a tool output, a Waku Memory result or the user's
     message of this turn, after normalising the format ($0.04 and 0.04, 1,200
-    and 1200, Oct 5, 2026 and 2026-10-05). Passes at 90% found; the note
-    names up to three that were not. n/a below three numbers, and for an
-    older trace (no turn id), whose tool outputs may have been cut."""
+    and 1200, $1.58M and 1580000, 275K and 275,000, Oct 5, 2026 and
+    2026-10-05). The turn's own date is not a claim. Passes at 90% found; the
+    note names up to three that were not. n/a below three numbers, for an
+    older trace (no turn id), whose tool outputs may have been cut, and when
+    a number is missing from a turn that ran no tool but Waku Memory: such a
+    reply may quote the chat's earlier turns or recalled facts, which the
+    trace does not keep."""
     if not v["v2"]:
         return _result("grounded_numbers", NA, "older trace: tool outputs may be cut")
-    wanted = _reply_numbers(v["reply"])
+    wanted = _reply_numbers(v["reply"], v.get("ts"))
     if len(wanted) < GROUNDED_MIN_NUMBERS:
         return _result("grounded_numbers", NA, f"{len(wanted)} number(s) in the reply; the check needs 3")
     numbers, dates = _source_index([v["message"], *(t["output"] for t in v["tools"])])
@@ -369,7 +504,7 @@ def check_grounded_numbers(v: dict) -> dict:
         if isinstance(item[1], str):
             ok = item[1] in dates
         else:
-            ok = _found(item[1], item[2], numbers)
+            ok = _found(item[1], item[2], numbers, item[3])
         if not ok:
             missing.append(item[0])
     found = len(wanted) - len(missing)
@@ -377,6 +512,9 @@ def check_grounded_numbers(v: dict) -> dict:
     note = f"{found} of {len(wanted)} numbers found in the turn's sources"
     if missing:
         note += "; not found: " + ", ".join(missing[:3])
+    if value == FAIL and all(t["source"] == "waku_memory" for t in v["tools"]):
+        return _result("grounded_numbers", NA,
+                       note + "; answered from memory, and the chat history and recalled facts are not traced")
     return _result("grounded_numbers", value, note)
 
 
@@ -385,23 +523,42 @@ def check_grounded_numbers(v: dict) -> dict:
 # ---------------------------------------------------------------------------
 
 _FAILURE_WORDS = re.compile(
-    r"\b(error|errors|failed|fail|failure|couldn't|could not|can't|cannot|didn't work|did not work|"
-    r"unavailable|timed out|time out|unable)\b", re.IGNORECASE)
+    r"\b(error|errors|failed|fail|fails|failure|couldn't|could not|can't|cannot|didn't work|did not work|"
+    r"unavailable|timed out|time out|unable|skipped|skip|insufficient|not enough|blocked|refused|rejected|"
+    r"denied|wasn't able|was not able|weren't able|were not able)\b|"
+    r"\b(?:did not|didn't|does not|doesn't|could not|couldn't|was not|wasn't|were not|weren't|"
+    r"is not|isn't|are not|aren't|not)\s+(?:\w+\s+)?(?:run|ran|load|loaded|pulled|fetched|returned|"
+    r"available|reachable|complete|completed|finish|finished|go through|went through)\b|"
+    r"\bno\s+(?:\w+\s+){0,2}(?:was|were)\s+(?:run|pulled|fetched|returned|loaded|found|available)\b|"
+    r"\bbelow\b.{0,60}\b(?:needed|required|minimum)\b", re.IGNORECASE)
+# Endpoint parts too generic to stand for the failed call ("search", "get").
+_GENERIC_PARTS = {"search", "list", "lookup", "info", "data", "details", "detail", "fetch", "query",
+                  "call", "read", "web", "api", "app", "v1", "v2", "v3", "get", "post", "posts",
+                  "user", "users", "companies", "company", "people", "person", "profile", "profiles",
+                  "preview", "similar", "general", "items", "item", "results"}
 
 
 def _tool_names(t: dict) -> set[str]:
+    """What a reply may call a tool: its name, its short name, its provider,
+    its endpoint, and each specific part of the endpoint ("tikhub.youtube.
+    search_video" is "youtube" and "search video" too)."""
     name = t["tool"]
     short = name
     for prefix in (obs.TREG_PREFIX, obs.WAKU_MEMORY_PREFIX):
         short = short.removeprefix(prefix)
-    return {n.lower() for n in (name, short, short.replace("_", " "), t["provider"], t["endpoint_id"]) if n}
+    parts = {p.replace("_", " ") for p in re.split(r"[./:]", t["endpoint_id"])
+             if len(p) >= 4 and p.lower() not in _GENERIC_PARTS}
+    return {n.lower() for n in (name, short, short.replace("_", " "), t["provider"], t["endpoint_id"], *parts)
+            if n}
 
 
 def check_errors_handled(v: dict) -> dict:
     """Every failed tool call was retried or mentioned: a later call to the
     same tool in the turn succeeded, or the reply names the tool, its
-    provider or endpoint, or says a step failed ("error", "failed",
-    "couldn't"). n/a when no tool failed."""
+    provider, its endpoint or a part of it ("YouTube" for tikhub.youtube.*),
+    or says a step failed or did not happen ("error", "failed", "couldn't",
+    "did not run", "were not pulled", "skipped", "below the ... needed").
+    n/a when no tool failed."""
     tools = v["tools"]
     failed = [i for i, t in enumerate(tools) if not t["ok"]]
     if not failed:
@@ -412,7 +569,7 @@ def check_errors_handled(v: dict) -> dict:
     for i in failed:
         t = tools[i]
         retried = any(later["tool"] == t["tool"] and later["ok"] for later in tools[i + 1:])
-        named = any(n in reply for n in _tool_names(t))
+        named = any(re.search(rf"(?<![a-z0-9]){re.escape(n)}(?![a-z0-9])", reply) for n in _tool_names(t))
         if not (retried or named or said_failure):
             silent.append(t["tool"])
     if silent:

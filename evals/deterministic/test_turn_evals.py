@@ -108,9 +108,12 @@ def test_spend_claim_passes_a_free_claim_when_treg_charged_nothing():
 # ---- 3. one_report ----------------------------------------------------------
 
 def test_one_report_fails_a_research_turn_with_no_report():
-    turn = _made("research the competitors of Letta", "Letta competes with Zep.")
+    turn = _made("research the competitors of Letta", "Letta competes with Zep.",
+                 [_tool("search_web", "Web results: Letta, Zep")])
     check = _check("one_report", turn)
     assert check["value"] == 0
+    asked = _made("research the competitors of Letta and save a report", "Letta competes with Zep.")
+    assert _check("one_report", asked)["value"] == 0
 
 
 def test_one_report_fails_two_reports():
@@ -427,3 +430,128 @@ def test_the_route_is_pinned_and_passes_on_hosted(monkeypatch, tmp_path):
     te._RECENT.clear()
     out = dashboard.judge_turn({"turn_id": "t_0123456789abcdef", "reply": "injected"})
     assert out == {"error": "No turn with that id in this home's traces."}
+
+
+# ---- 12. live turns on agent.waku.one, 2026-10-05 (precision) ----------------
+# Rebuilt from the hosted container's Evals page: each check must only fail
+# when a reader of the trace would agree. Names are the turn's UTC time.
+
+FUNDING = "2026-10-05-0323-funding-research.jsonl"
+RECALL = "2026-10-05-0417-recall.jsonl"
+VISIBILITY = "2026-10-05-0428-ai-visibility.jsonl"
+BRIEF = "2026-10-05-0430-audience-brief.jsonl"
+RERUN = "2026-10-05-0545-audience-rerun.jsonl"
+TWO_SAVES = "2026-10-05-0217-two-saves.jsonl"
+
+
+def test_live_0323_funding_research_passes_spend_and_numbers():
+    """"Aviato lists nothing dated after 2024-11-20" is not a $0 claim, and
+    "four Aviato calls at $0.01 each" is $0.04, what the four calls cost.
+    "$1.58M" is grounded by Aviato's raw 1575000."""
+    scores = _scores(_turn(FUNDING))
+    assert scores["spend_claim"]["value"] == 1, scores["spend_claim"]["note"]
+    assert scores["grounded_numbers"]["value"] == 1, scores["grounded_numbers"]["note"]
+    assert scores["one_report"]["value"] == 1
+
+
+def test_live_0417_a_question_answered_from_memory_is_not_failed():
+    scores = _scores(_turn(RECALL))
+    assert scores["one_report"]["value"] is None
+    assert scores["one_report"]["note"].startswith("answered from memory")
+    grounded = scores["grounded_numbers"]
+    assert grounded["value"] is None and "2024-08-01" in grounded["note"]
+    assert "not traced" in grounded["note"]
+
+
+def test_live_0417_numbers_in_a_memory_answer_are_grounded():
+    """Retrieved memory is a source: the same reply, with the dates in the
+    memory_get answer (as a JSON-escaped non-breaking hyphen too), passes."""
+    turn = _turn(RECALL)
+    body = json.dumps({"memory": {"id": "mem_r0323", "body": (
+        "Letta $10M seed 2024\u201108\u201101; Zep $2.3M 2024-11-20; Cognee $1.58M 2023-12-27; "
+        "Mem0 $24M; together $13.88M, 58%; 2025 not covered; cost_usd 0.04")}})
+    events = [ev for ev in turn["events"] if ev.get("tool") != "waku_memory_memory_get"]
+    events.append(_tool("waku_memory_memory_get", body, turn_id=turn["turn_id"]))
+    check = _check("grounded_numbers", {**turn, "events": events})
+    assert check["value"] == 1, check["note"]
+
+
+def test_live_0428_the_turns_own_date_is_not_a_claim():
+    check = _scores(_turn(VISIBILITY))["grounded_numbers"]
+    assert check["value"] is None and "2026-10-05" not in check["note"]
+    # a day either side is the same day somewhere; two days off is a claim
+    reply = "Snapshot of 2026-10-06: 25 prompts, 12%, and an earlier one on 2026-10-01."
+    turn = _made("x", reply, [_tool("search_web", json.dumps({"prompts": 25, "rate": 0.12}))])
+    check = _check("grounded_numbers", turn)
+    assert check["value"] == 0 and check["note"].endswith("not found: 2026-10-01")
+
+
+def test_live_0430_audience_brief_still_fails_report_and_budget(monkeypatch):
+    monkeypatch.delenv(te.BUDGET_ENV, raising=False)
+    scores = _scores(_turn(BRIEF))
+    assert scores["one_report"]["value"] == 0
+    assert scores["under_budget"]["value"] == 0 and scores["under_budget"]["note"].startswith("$1.34")
+    # "275K" is grounded by a raw subscriber count of 274812
+    assert scores["grounded_numbers"]["value"] == 1, scores["grounded_numbers"]["note"]
+
+
+def test_live_0545_saying_the_youtube_part_did_not_run_is_a_mention():
+    assert _scores(_turn(RERUN))["errors_handled"]["value"] == 1
+    failed = _tool("treg_catalog_call_read",
+                   json.dumps({"status": 402, "endpoint_id": "tikhub.youtube.web.search_video"}))
+    for reply in ("No comments were pulled.", "The balance was below the $0.002 needed.",
+                  "I skipped the video search.", "Comments from YouTube are missing here."):
+        assert _check("errors_handled", _made("x", reply, [failed]))["value"] == 1, reply
+    assert _check("errors_handled", _made("x", "Here is the brief.", [failed]))["value"] == 0
+
+
+def test_live_0217_the_models_own_report_save_counts():
+    """The model's memory_remember of a whole report plus the harness's save
+    is two reports in the Company brain."""
+    check = _scores(_turn(TWO_SAVES))["one_report"]
+    assert check["value"] == 0 and check["note"] == "2 reports saved in one turn"
+
+
+def test_one_report_counts_one_memory_once_and_skips_a_refused_save():
+    from waku.memory.reports import MARKER, REFUSAL
+
+    body = {"body": MARKER + "\n# Letta\n## Summary\n- x", "scope": "project:Company brain"}
+    saved = _tool("waku_memory_memory_remember", json.dumps({"memory": {"id": "m1"}}))
+    saved["args"] = body
+    same = {"type": "report", "turn_id": "t_abc123", "memory_id": "m1", "title": "Letta"}
+    msg = "research the competitors of Letta and save a report"
+    assert _check("one_report", _made(msg, "Letta.", [saved, same]))["value"] == 1
+    refused = _tool("waku_memory_memory_remember", REFUSAL)
+    refused["args"] = body
+    other = {**same, "memory_id": "m2"}
+    assert _check("one_report", _made(msg, "Letta.", [refused, other]))["value"] == 1
+    # a long body is kept in the trace as one trimmed JSON string; the marker survives
+    long = obs.trace_record({"tool": "waku_memory_memory_remember", "args": {**body, "body": body["body"] * 60},
+                             "output": json.dumps({"memory": {"id": "m3"}})}, turn_id="t_abc123")
+    assert isinstance(long["args"], str)
+    assert _check("one_report", _made(msg, "Letta.", [{"type": "tool", **long}, other]))["value"] == 0
+
+
+def test_spend_claim_reads_counts_scaled_figures_and_nothing():
+    calls = [_tool("treg_call", json.dumps({"status": 200, "endpoint_id": "aviato.companies.funding_rounds",
+                                            "cost_usd": 0.01})) for _ in range(4)]
+    for reply, want in [
+            ("The treg cost was four Aviato calls at $0.01 each.", 1),
+            ("The treg cost was 4 calls at $0.01 each.", 1),
+            ("The treg cost was two Aviato calls at $0.01 each.", 0),
+            ("Aviato lists nothing dated after 2024-11-20.", None),
+            ("Aviato says Letta raised a $10M seed, and its free tier lists only seeds.", None),
+            ("Aviato's lookups were free.", 0),
+            ("The Aviato calls cost nothing.", 0),
+            ("Feel free to ask for more; Aviato costs $0.01 per call.", None)]:
+        assert _check("spend_claim", _made("x", reply, calls))["value"] == want, reply
+
+
+def test_grounded_numbers_rounds_scaled_figures_both_ways():
+    src = json.dumps({"raised": 1575000, "followers": 274812, "arr": "$3.4M", "seats": "12,500"})
+    reply = "They raised $1.58M (about $1.6 million), have 275K followers, $3,400,000 in ARR and 12.5K seats."
+    check = _check("grounded_numbers", _made("x", reply, [_tool("search_web", src)]))
+    assert check["value"] == 1, check["note"]
+    off = "They raised $1.7M, have 275K followers and 12.5K seats."
+    check = _check("grounded_numbers", _made("x", off, [_tool("search_web", src)]))
+    assert check["value"] == 0 and "$1.7M" in check["note"]
