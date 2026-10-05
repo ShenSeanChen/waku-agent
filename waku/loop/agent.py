@@ -17,6 +17,7 @@ End-loop guardrails (the orange box's exit conditions):
 
 from __future__ import annotations
 
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
@@ -134,8 +135,11 @@ def run_loop(
         # ---- act: execute each requested tool; observe: feed results back
         tool_results = []
         for call in tool_uses:
+            started = time.perf_counter()
             output = tools.execute(call.name, call.input, notify=notify)
-            event = {"tool": call.name, "args": call.input, "output": output}
+            event = {"tool": call.name, "args": call.input, "output": output, "call_id": call.id,
+                     # spec 012: how long the call took, for the trace
+                     "duration_ms": int((time.perf_counter() - started) * 1000)}
             result.tool_calls.append(event)
             notify("tool", event)
             tool_results.append(

@@ -55,6 +55,8 @@ GET_PATHS = {
     "/static/",
     # spec 008: the chat column alone, for waku.one to frame
     "/embed/chat",
+    # spec 012: the Observability page's turns, tools, memory, spend, evals
+    "/api/observability",
 }
 
 # Streaming endpoints. These are what the dashboard actually uses for chat and

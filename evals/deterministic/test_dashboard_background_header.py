@@ -132,6 +132,9 @@ BACKGROUND_AWARE = {
     },
     "judgment.js": {
         "loadJudgmentArena": r'fetch\("/api/judgment-arena",\s*background\s*\?\s*\{headers:\s*BG\}\s*:\s*undefined\)',
+    },    # spec 012: the Observability page re-reads its data on the 5s refresh
+    "observe.js": {
+        "loadObservability": r'background\s*\?\s*\{headers:\s*BG\}\s*:\s*undefined',
     },
 }
 
@@ -267,6 +270,7 @@ NETWORK_CALLERS = {
     ("judgment.js", "loadJudgmentArena"): "background",
     ("judgment.js", "runJudgmentArena"): "user",
     ("main.js", "refresh"): "background",
+    ("observe.js", "loadObservability"): "background",
     ("main.js", "stopMic"): "user",
     ("memory.js", "saveFact"): "user",
     ("memory.js", "delMem"): "user",

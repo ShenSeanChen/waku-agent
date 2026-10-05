@@ -83,13 +83,13 @@ function archSVG(d){
     <!-- every turn crosses the gap to feed the trace -->
     <path class="flow" data-edge="e-reply-trace" d="M660 104 C700 100 726 100 752 106" marker-end="url(#arr)"/>
     ${flowLbl(688,96,"each turn")}
-    ${box(752,92,250,50,"Trace",s.trace_files+" file(s) · always on","ops","","trace")}
+    ${box(752,92,250,50,"Trace",s.trace_files+" file(s) · always on","observability/turns","","trace")}
     ${flow("M878 142 L878 156")}
-    ${box(752,156,250,50,"Eval","deterministic + judge","ops")}
+    ${box(752,156,250,50,"Eval","deterministic + judge","observability/evals")}
     ${flow("M878 206 L878 220")}
-    ${box(752,220,250,50,"Release gate",d.eval_report?"det "+d.eval_report.deterministic+" · judge "+d.eval_report.judge:"run make gate","ops")}
+    ${box(752,220,250,50,"Release gate",d.eval_report?"det "+d.eval_report.deterministic+" · judge "+d.eval_report.judge:"run make gate","observability/evals")}
     ${flow("M878 270 L878 284")}
-    ${box(752,284,250,50,"Release","new prompt · model · config","ops")}
+    ${box(752,284,250,50,"Release","new prompt · model · config","observability/evals")}
     <!-- feedback: Release improves the Harness — a short arrow across the gap,
          so the outer loop closes without a long wrap crowding the margins -->
     <path class="flow dash" d="M752 312 C712 324 698 352 676 358" marker-end="url(#arr)"/>

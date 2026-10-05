@@ -80,7 +80,7 @@ function memOverview(d){
     <div class="tiles" style="grid-template-columns:repeat(auto-fill,minmax(220px,1fr))">${pillars}</div>
     <h2>Retrieval gate — does this turn even need memory?</h2>${gateSplit(s)}
     <div class="meta" style="margin-top:var(--space-2)">A cheap model decides <b>if</b> a turn needs memory at all, before any lookup —
-      this is memory <i>retrieval</i>, the hero decision. (The Ops tab charts the same skip/retrieve
+      this is memory <i>retrieval</i>, the hero decision. (The Observability page charts the same skip/retrieve
       numbers as an operational metric; the decision itself is memory's.)</div>
     <div class="meta" style="margin-top:var(--space-3)">Files: ${reveal("state.db","state.db")} · ${reveal("MEMORY.md","MEMORY.md")} · ${reveal("SOUL.md","SOUL.md")} · ${reveal("skills","skills/")}</div>`;
 }
@@ -157,7 +157,7 @@ function memConsolidation(d){
   h += table(["subject","fact","when"], distilled.map(f =>
     `<tr><td><code>${esc(f.subject)}</code></td><td>${esc(f.content)}</td><td class="meta">${esc((f.created_at||"").slice(0,10))}</td></tr>`));
   h += `<div class="meta" style="margin-top:var(--space-2)">This is a memory operation, shown here. Each run is also
-    ${uiLink("traced", "#ops")} (Ops) and can be scored by the judge evals.</div>`;
+    ${uiLink("traced", "#observability/turns")} (Observability) and can be scored by the judge evals.</div>`;
   return h;
 }
 
@@ -634,96 +634,6 @@ const VIEWS = {
       <code>*_fts_data</code>/<code>*_fts_idx</code> shadows) make memory searchable by keyword — no embeddings,
       no vector DB. This is the "keyword top-k" the retrieval gate queries.
       <div class="meta" style="margin-top:var(--space-2)">all ${db.all_tables.length} tables: ${db.all_tables.map(t=>`<code>${esc(t)}</code>`).join(" ")}</div>`);
-    return h;
-  },
-  ops(d){
-    const s = d.stats;
-    const u = d.usage || {calls:0,total_in:0,total_out:0,total_cost:0,by_day:[],by_provider:[]};
-    let h = uiStatBand([
-        {label:"spent", value:money(u.total_cost), sub:"all-time", tone:"ok"},
-        {label:"tokens in", value:u.total_in.toLocaleString(), sub:"all-time"},
-        {label:"tokens out", value:u.total_out.toLocaleString(), sub:"all-time"},
-        {label:"LLM calls", value:u.calls.toLocaleString()},
-        {label:"avg turn", value:secs(s.latency_avg)}, {label:"tool errors", value:`${s.tool_errors}`},
-      ]);
-    // Eval verdicts are "pass" / "fail" / anything else (skipped, not run).
-    const verdict = v => v === "pass" ? "ok" : v === "fail" ? "bad" : "neutral";
-
-    h += `<h2>Spend <span class="meta" style="font-weight:400">· permanent ledger — survives a demo reset</span></h2>`;
-    h += uiCard(`<span class="r prose">Every LLM call's tokens are logged to
-      <code>.waku/usage.jsonl</code> (append-only, never wiped). Dollar cost is estimated from tokens
-      × current pricing — the tokens are the ground truth.</span>`,
-      {footer: reveal("usage.jsonl","open usage.jsonl")});
-    if ((u.by_provider||[]).length){
-      h += table(["provider","LLM calls","tokens in","tokens out","cost (est)"], u.by_provider.map(p =>
-        `<tr><td><code>${esc(p.provider)}</code></td><td class="meta">${p.calls}</td>
-          <td class="meta">${p.in.toLocaleString()}</td><td class="meta">${p.out.toLocaleString()}</td>
-          <td class="meta">${money(p.cost)}</td></tr>`));
-    }
-    if ((u.by_day||[]).length){
-      h += `<h2>Spend per day</h2>`;
-      h += table(["day","LLM calls","tokens in","tokens out","cost (est)"], u.by_day.map(r =>
-        `<tr><td class="meta">${esc(r.date)}</td><td class="meta">${r.calls}</td>
-          <td class="meta">${r.in.toLocaleString()}</td><td class="meta">${r.out.toLocaleString()}</td>
-          <td class="meta">${money(r.cost)}</td></tr>`));
-    }
-
-    h += `<h2>Retrieval gate — which turns used memory</h2>${gateSplit(s)}`;
-    const decided = d.turns.filter(t => t.gate);
-    if (decided.length){
-      h += `<div class="meta" style="margin:var(--space-2) 0">The actual decisions (what was skipped vs retrieved), most recent first:</div>`;
-      h += table(["turn","decision","why"], decided.slice(0,10).map(t =>
-        `<tr><td>${esc((t.user_message||"").slice(0,44))}</td>
-          <td>${uiBadge(esc(t.gate.decision), t.gate.decision==="skip" ? "neutral" : "ok")}</td>
-          <td class="meta">${esc(t.gate.reason||"")}</td></tr>`));
-    }
-
-    h += `<h2>Release gate <span class="meta" style="font-weight:400">· the ship/no-ship check</span></h2>`;
-    h += uiCard(`<span class="r prose">Before you ship a change (new prompt, swapped model, tuned
-      retrieval), <code>make gate</code> runs both eval suites: deterministic must pass 100%, the judge must
-      clear its threshold. It's manual — you run it — so there's one record per run. The history below grows
-      each time you run it.</span>`);
-    h += d.eval_report ? uiCard(`
-        ${uiBadge(`deterministic · ${esc(d.eval_report.deterministic)}`, verdict(d.eval_report.deterministic))}
-        <span style="margin-left:var(--space-2)">${uiBadge(`llm-judge · ${esc(d.eval_report.judge)}`, verdict(d.eval_report.judge))}</span>
-        <div class="meta">last run ${esc(d.eval_report.ran_at)} — re-run with <code>make gate</code></div>`)
-      : uiCard(`<span class="empty">never run yet — run <code>make gate</code> to populate this</span>`);
-
-    if ((d.eval_history||[]).length){
-      const cnt = s => s ? `${s.passed||0} pass · ${s.failed||0} fail` : "—";
-      h += `<h2>Eval history</h2>`;
-      h += table(["when","deterministic","llm-judge","counts"], d.eval_history.map(r =>
-        `<tr><td class="meta">${esc((r.ran_at||"").replace("T"," ").slice(0,19))}</td>
-         <td>${uiBadge(esc(r.deterministic), verdict(r.deterministic))}</td>
-         <td>${uiBadge(esc(r.judge), verdict(r.judge))}</td>
-         <td class="meta">det ${cnt(r.suites&&r.suites.deterministic)} · judge ${cnt(r.suites&&r.suites.judge)}</td></tr>`));
-    }
-
-    h += `<h2>Slowest turns</h2>`;
-    const slow = [...d.turns].filter(t=>t.latency_ms!=null).sort((a,b)=>b.latency_ms-a.latency_ms).slice(0,6);
-    h += table(["turn","latency","cost","tools"], slow.map(t =>
-      `<tr><td>${esc((t.user_message||"").slice(0,48))}</td><td class="meta">${secs(t.latency_ms)}</td><td class="meta">${money(t.cost||0)}</td><td class="meta">${(t.tools||[]).map(x=>x.tool).join(", ")||"—"}</td></tr>`));
-
-    h += `<h2>Tracing <span class="meta" style="font-weight:400">· every turn as JSONL, always on</span></h2>`;
-    if ((d.trace_errors||[]).length){
-      h += d.trace_errors.map(e => uiCard(`${uiBadge("trace encoding error", "bad")}
-        <div class="meta" style="margin-top:var(--space-2)"><code>${esc(e.file)}</code> — ${esc(e.error)}</div>`)).join("");
-    }
-    h += uiCard(`<span class="r prose">${s.trace_files} trace file(s) in <code>traces/</code>${
-      d.trace_file?` (newest: <code>${esc(d.trace_file)}</code>)`:""}.
-      A trace is just "what happened, in order" — here are the most recent lines:</span>`,
-      {footer: reveal("traces","open the traces folder")});
-    h += (d.trace_tail||[]).length ? table(["event","detail","when"], d.trace_tail.map(e =>
-        `<tr><td><code>${esc(e.type)}</code></td><td class="meta">${esc(String(e.detail).slice(0,60))}</td>
-          <td class="meta">${esc((e.ts||"").replace("T"," ").slice(0,19))}</td></tr>`))
-      : uiCard(`<span class="empty">no trace lines yet — talk to Waku</span>`);
-    h += `<div class="meta" style="margin-top:var(--space-2)">Span waterfalls: <code>make trace</code> + <code>OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317</code>.</div>`;
-
-    if (d.wake_scans.length){
-      h += `<h2>Voice — wake near-misses</h2>`;
-      h += table(["heard","when"], d.wake_scans.map(w =>
-        `<tr><td>${esc(w.heard)}</td><td class="meta">${esc((w.ts||"").replace("T"," ").slice(0,19))}</td></tr>`));
-    }
     return h;
   },
 };

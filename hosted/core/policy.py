@@ -113,6 +113,9 @@ DECISIONS: dict[str, str] = {
     # spec 008: the chat column alone, for waku.one's iframe. Framing and the
     # embed session's narrower reach are the gateway's (hosted/gateway/embed.py)
     "/embed/chat": PASS,
+    # spec 012: the Observability page reads only this tenant's own traces,
+    # ledger and receipts, so it is per-tenant like /api/data
+    "/api/observability": PASS,
     # filtered: the payload decides
     "/api/providers": FILTER,
     "/api/settings": FILTER,

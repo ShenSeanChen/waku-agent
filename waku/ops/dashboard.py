@@ -541,6 +541,21 @@ def collect() -> dict:
     }
 
 
+def observability_data(window: str = "7d") -> dict:
+    """The Observability page's data (spec 012, `waku/ops/observability.py`).
+    A hosted container runs the `waku-platform` provider and ships no
+    `evals/`, so the Evals tab explains where evals run instead."""
+    from waku.ops import observability
+
+    settings = load_settings()
+    settings.ensure_home()
+    if settings.base_url or settings.provider == "openrouter":
+        list_models()  # warm the per-model price cache, as collect() does
+    return observability.payload(settings.home, provider=settings.provider,
+                                 model=settings.model or "", window=window,
+                                 hosted=settings.provider == "waku-platform")
+
+
 def _rel_to_home(path, home) -> str:
     """Path relative to WAKU_HOME if it lives there, else the repo-relative
     'skills/...' path — either way something reveal_path can open."""
@@ -1042,6 +1057,14 @@ class Handler(BaseHTTPRequestHandler):
                    if action in ("list", "history", "state")
                    else {"error": "GET /api/session reads only: action=list, history or state"})
             self._send(json.dumps(out, default=str).encode(), "application/json")
+        elif self.path == "/api/observability" or self.path.startswith("/api/observability?"):
+            # Spec 012: the Observability page's turns, tools, memory, spend
+            # and evals, read from this home's traces and ledger only.
+            from urllib.parse import parse_qs, urlparse
+
+            window = parse_qs(urlparse(self.path).query).get("window", ["7d"])[0]
+            self._send(json.dumps(observability_data(window), default=str).encode(),
+                       "application/json")
         elif self.path == "/api/judgment-arena":
             from waku.ops import judgment_arena, judgment_cases  # noqa: PLC0415
             self._send(json.dumps({"suites": judgment_cases.suite_list(),
