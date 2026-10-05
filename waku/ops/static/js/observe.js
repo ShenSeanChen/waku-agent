@@ -163,13 +163,13 @@ function obsTurns(d){
   return h;
 }
 
-// ---------- Tools: grouped by source, treg with its endpoints
-function obsToolTable(rows, {results = false, source = false, byUsd = false} = {}){
+// ---------- Tools: grouped by source, treg endpoints first, then its actions
+function obsToolTable(rows, {results = false, source = false, byUsd = false, provider = false, head = "tool"} = {}){
   // the bar is sized by dollars for treg, by calls everywhere else
   const max = Math.max(...rows.map(r => byUsd ? (r.usd || 0) : r.calls), 0);
-  const heads = ["tool", "", ...(source ? ["source"] : []), "calls", "errors", "avg time", ...(results ? ["avg results"] : ["$"])];
+  const heads = [head, "", ...(provider ? ["provider"] : []), ...(source ? ["source"] : []), "calls", "errors", "avg time", ...(results ? ["avg results"] : ["$"])];
   return table(heads, rows.map(r => `<tr><td><code>${esc(r.tool)}</code></td>
-    <td class="obs-barcell">${obsBar([[byUsd ? (r.usd || 0) : r.calls, byUsd ? 2 : 3, byUsd ? obsUsd(r.usd) : r.calls + " calls"]], max)}</td>${source ? `<td class="meta">${obsSource(r.source)}</td>` : ""}
+    <td class="obs-barcell">${obsBar([[byUsd ? (r.usd || 0) : r.calls, byUsd ? 2 : 3, byUsd ? obsUsd(r.usd) : r.calls + " calls"]], max)}</td>${provider ? `<td class="meta">${esc(r.provider || "")}</td>` : ""}${source ? `<td class="meta">${obsSource(r.source)}</td>` : ""}
     <td class="meta">${r.calls}</td><td>${r.errors ? uiBadge(String(r.errors), "bad") : `<span class="meta">0</span>`}</td>
     <td class="meta">${r.avg_ms != null ? secs(r.avg_ms) : "—"}</td>
     <td class="meta">${results ? (r.avg_results ?? "—") : obsUsd(r.usd)}</td></tr>`));
@@ -178,14 +178,11 @@ function obsTools(d){
   const t = d.tools || {treg:{tools:[],endpoints:[]}, waku_memory:{tools:[],recent_queries:[]}, other:{tools:[]}};
   let h = obsCap("tools");
   h += `<h2>treg <span class="meta obs-h-sub">${t.treg.calls} call(s) · ${obsUsd(t.treg.usd)}</span></h2>`;
+  // the endpoints answer "which tools did it use"; the actions are how it got there
+  h += `<h3>Endpoints called</h3>`;
+  h += obsToolTable((t.treg.endpoints||[]).map(e => ({...e, tool: e.endpoint_id})), {byUsd: true, provider: true, head: "endpoint"});
+  h += `<h3>treg actions</h3><div class="obs-cap">The steps around each call: search the catalog, read an endpoint's docs, call it.</div>`;
   h += obsToolTable(t.treg.tools, {byUsd: true});
-  if ((t.treg.endpoints||[]).length){
-    h += `<h3>treg endpoints called</h3>`;
-    const emax = Math.max(...t.treg.endpoints.map(e => e.usd || 0), 0);
-    h += table(["endpoint","","provider","calls","$"], t.treg.endpoints.map(e =>
-      `<tr><td><code>${esc(e.endpoint_id)}</code></td><td class="obs-barcell">${obsBar([[e.usd || 0, 2, obsUsd(e.usd)]], emax)}</td><td class="meta">${esc(e.provider||"")}</td>
-        <td class="meta">${e.calls}${e.errors ? " · " + uiBadge(e.errors + " error", "bad") : ""}</td><td class="meta">${obsUsd(e.usd)}</td></tr>`));
-  }
   h += `<h2>Waku Memory <span class="meta obs-h-sub">${t.waku_memory.calls} call(s)</span></h2>`;
   const reads = t.waku_memory.tools.filter(r => r.span === "retrieval");
   const writes = t.waku_memory.tools.filter(r => r.span !== "retrieval");
