@@ -19,6 +19,7 @@ tenant_tag=waku-tenant:test
 services_tag=waku-services:test
 build_tenant=yes
 build_services=yes
+release_file=""
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -26,8 +27,11 @@ while [ $# -gt 0 ]; do
     --services-tag) services_tag=$2; shift 2 ;;
     --tenant-only)   build_services=no; shift ;;
     --services-only) build_tenant=no; shift ;;
+    # The release record autodeploy.sh wrote for this commit; the tenant image
+    # carries it so the Evals page can show what CI passed (tenant.Dockerfile).
+    --release-file) release_file=$2; shift 2 ;;
     -h|--help)
-      echo "usage: build.sh [--tenant-tag TAG] [--services-tag TAG] [--tenant-only|--services-only]"
+      echo "usage: build.sh [--tenant-tag TAG] [--services-tag TAG] [--tenant-only|--services-only] [--release-file FILE]"
       exit 0 ;;
     *) echo "build.sh: unknown argument: $1" >&2; exit 2 ;;
   esac
@@ -42,11 +46,20 @@ if [ "$build_tenant" = no ] && [ "$build_services" = no ]; then
   exit 2
 fi
 
+release_json=""
+if [ -n "$release_file" ]; then
+  release_json=$(cat "$release_file") || {
+    echo "build.sh: cannot read the release record $release_file" >&2
+    exit 2
+  }
+fi
+
 export DOCKER_BUILDKIT=1
 
 if [ "$build_tenant" = yes ]; then
   echo "building $tenant_tag from $root"
   docker build \
+    --build-arg "WAKU_RELEASE_JSON=$release_json" \
     --file "$here/tenant.Dockerfile" \
     --tag "$tenant_tag" \
     "$root"

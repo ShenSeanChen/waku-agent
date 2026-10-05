@@ -57,6 +57,20 @@ ENV PATH="/app/.venv/bin:$PATH" \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
+# THE RELEASE RECORD, when there is one: the commit this image was built from
+# and the CI checks that passed on it, as hosted/deploy/autodeploy.sh read
+# them from GitHub at deploy time. upgrade.sh hands it to build.sh, which
+# passes it here as one build argument; the Evals page shows it. Empty -- a
+# manual build, the Docker tier in CI -- writes no file, and the page shows no
+# release rather than a guess. Late in the file so a new record rebuilds only
+# this layer. Printed by the shell from a variable, never pasted into the
+# command, so nothing in the JSON can run.
+ARG WAKU_RELEASE_JSON=""
+RUN if [ -n "$WAKU_RELEASE_JSON" ]; then \
+      mkdir -p /etc/waku && printf '%s\n' "$WAKU_RELEASE_JSON" > /etc/waku/release.json \
+      && chmod 0644 /etc/waku/release.json; \
+    fi
+
 # /work is the working directory so waku's find_dotenv(usecwd=True) finds the
 # tenant's own .env and no other (waku/config.py:35). /data and /work are both
 # bind mounts at runtime; the empty directories here only give the mounts
@@ -66,8 +80,11 @@ WORKDIR /work
 USER 10001:10001
 EXPOSE 7777
 
-# No WAKU_* variable is set here on purpose. Every one of them --
-# WAKU_HOME, WAKU_DASHBOARD_HOST, WAKU_DASHBOARD_PORT, TZ, the four
-# WAKU_PLATFORM_* and HOME -- comes from the spawner's fixed template (spec,
-# "The spawner"). Setting any of them in two places is how the two drift.
+# One WAKU_* variable is set here, and only this one: WAKU_RELEASE_FILE names
+# a file this image itself may hold, so the image is the one place that knows
+# the path. Every other one -- WAKU_HOME, WAKU_DASHBOARD_HOST,
+# WAKU_DASHBOARD_PORT, TZ, the four WAKU_PLATFORM_* and HOME -- comes from the
+# spawner's fixed template (spec, "The spawner"). Setting any of them in two
+# places is how the two drift.
+ENV WAKU_RELEASE_FILE=/etc/waku/release.json
 CMD ["python", "-m", "waku.ops.dashboard"]

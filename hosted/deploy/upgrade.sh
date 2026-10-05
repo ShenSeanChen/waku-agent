@@ -84,9 +84,24 @@ git -C "$WAKU_SRC" checkout --detach "${ref:-origin/main}"
 after=$(git -C "$WAKU_SRC" rev-parse HEAD)
 waku_log "checkout $before -> $after"
 
+# THE RELEASE RECORD FOR EXACTLY THIS COMMIT, or none. autodeploy.sh writes
+# run/deploy/releases/<sha>.json before it calls this script: the commit and
+# the CI checks that passed on it, which the tenant image carries to the Evals
+# page. Looked up by the SHA the checkout now holds, so an image can never
+# carry another commit's record. A manual upgrade to a commit autodeploy never
+# recorded builds without one, and the page says it has no release record.
+release_file="$WAKU_ROOT/run/deploy/releases/$after.json"
 waku_log "rebuilding the tenant and services images"
-"$WAKU_SRC/hosted/image/build.sh" \
-  --tenant-tag "$WAKU_TENANT_IMAGE" --services-tag "$WAKU_SERVICES_IMAGE"
+if [ -f "$release_file" ]; then
+  waku_log "the tenant image will carry the release record $release_file"
+  "$WAKU_SRC/hosted/image/build.sh" \
+    --tenant-tag "$WAKU_TENANT_IMAGE" --services-tag "$WAKU_SERVICES_IMAGE" \
+    --release-file "$release_file"
+else
+  waku_log "no release record for $after (autodeploy.sh writes one), so the Evals page will show none"
+  "$WAKU_SRC/hosted/image/build.sh" \
+    --tenant-tag "$WAKU_TENANT_IMAGE" --services-tag "$WAKU_SERVICES_IMAGE"
+fi
 
 # THE MODULE IS THE FIRST WORD, and install.sh says why in capitals at the line
 # that splits it: "--dns-provider is TWO THINGS in one string... The whole

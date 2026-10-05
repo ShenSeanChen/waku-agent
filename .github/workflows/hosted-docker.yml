@@ -194,3 +194,8 @@ jobs:
                   "should skip. These did, and a skipped test is not a passing one:\n  "
                   + "\n  ".join(names))
           PY
+
+      # The counts, as a notice on this job's check run, for the hosted Evals
+      # page (hosted/deploy/autodeploy.sh reads it back at deploy time).
+      - name: Report the Docker tier counts
+        run: python scripts/ci_test_counts.py "Docker tier evals" /tmp/hosted-docker.xml

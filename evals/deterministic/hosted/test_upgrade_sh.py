@@ -518,3 +518,31 @@ def test_the_upgrade_autodeploy_runs_does_not_wait_on_its_own_parents_lock(tmp_p
                                 "flock": _FLOCK_HELD})
     assert done.returncode == 0, done.stderr
     assert not [line for line in shelllib.calls(tmp_path) if line.startswith("flock")]
+
+
+def test_the_release_record_for_the_checked_out_commit_goes_to_build_sh(tmp_path):
+    """autodeploy.sh writes run/deploy/releases/<sha>.json; upgrade.sh looks
+    it up by the SHA the checkout now holds, so an image never carries another
+    commit's record."""
+    releases = tmp_path / "waku" / "run" / "deploy" / "releases"
+    releases.mkdir(parents=True)
+    (releases / ("0" * 40 + ".json")).write_text("{}", encoding="utf-8")
+    (releases / ("f" * 40 + ".json")).write_text("{}", encoding="utf-8")
+    done = shelllib.run(UPGRADE, [], tmp_path=tmp_path, env=_install_env(tmp_path),
+                        stubs=["git", "docker", "curl", "flock", "id"],
+                        bodies={"git": _GIT_CLEAN, "id": _ID_ROOT})
+    assert done.returncode == 0, done.stderr
+    builds = [line for line in shelllib.calls(tmp_path) if line.startswith("build.sh")]
+    expected = ("build.sh --tenant-tag waku-tenant:current --services-tag waku-services:current "
+                f"--release-file {releases / ('0' * 40 + '.json')}")
+    assert builds == [expected]
+
+
+def test_no_release_record_builds_without_one(tmp_path):
+    done = shelllib.run(UPGRADE, [], tmp_path=tmp_path, env=_install_env(tmp_path),
+                        stubs=["git", "docker", "curl", "flock", "id"],
+                        bodies={"git": _GIT_CLEAN, "id": _ID_ROOT})
+    assert done.returncode == 0, done.stderr
+    builds = [line for line in shelllib.calls(tmp_path) if line.startswith("build.sh")]
+    assert builds and "--release-file" not in builds[0]
+    assert "no release record" in done.stdout

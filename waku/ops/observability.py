@@ -851,10 +851,13 @@ def memory_per_turn(turns: list[dict]) -> list[dict]:
 _TEST_DEF = re.compile(r"^(?:async\s+)?def test_", re.MULTILINE)
 
 
-def evals_info(home: Path, repo: Path | None = None, *, hosted: bool = False) -> dict:
+def evals_info(home: Path, repo: Path | None = None, *, hosted: bool = False,
+               release_file: Path | None = None) -> dict:
     """What evals exist and what the release gate said last. Counted from
     `evals/` when the repository is beside the code (a laptop checkout); a
-    hosted container ships no `evals/` and says so."""
+    hosted container ships no `evals/` and says so. `release_file` is the
+    record of the release this container runs, when the deployment baked one
+    in (see `release_info`)."""
     repo = repo or Path(__file__).resolve().parents[2]
     det_dir, judge_dir = repo / "evals" / "deterministic", repo / "evals" / "judge"
     deterministic = None
@@ -881,7 +884,60 @@ def evals_info(home: Path, repo: Path | None = None, *, hosted: bool = False) ->
         pass
     history = history[::-1]
     return {"deterministic": deterministic, "judge_suites": judge, "hosted": hosted,
-            "last": report, "history": history, "last_run": last_run(report, history)}
+            "last": report, "history": history, "last_run": last_run(report, history),
+            "release": release_info(release_file)}
+
+
+_SHA = re.compile(r"^[0-9a-f]{40}$")
+_GITHUB = "https://github.com/"
+
+
+def _count(value) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
+def _check(value) -> dict | None:
+    """One required CI check from a release record, or None if it is malformed."""
+    if not isinstance(value, dict):
+        return None
+    name, conclusion, url = value.get("name"), value.get("conclusion"), value.get("url")
+    if not (isinstance(name, str) and isinstance(conclusion, str) and isinstance(url, str)
+            and url.startswith(_GITHUB)):
+        return None
+    tests = value.get("tests")
+    if not (isinstance(tests, dict) and isinstance(tests.get("label"), str)
+            and all(_count(tests.get(k)) for k in ("passed", "failed", "skipped"))):
+        tests = None   # the check passed but recorded no counts: say so, never guess
+    return {"name": name, "conclusion": conclusion, "url": url,
+            "completed_at": value.get("completed_at") if isinstance(value.get("completed_at"), str) else None,
+            "tests": tests and {k: tests[k] for k in ("label", "passed", "failed", "skipped")}}
+
+
+def release_info(path: Path | None) -> dict | None:
+    """The release this container runs: its commit, when it was deployed, and
+    the CI checks that passed on that commit before it was allowed to ship.
+
+    On agent.waku.one, `hosted/deploy/autodeploy.sh` writes this record from
+    GitHub's public API at deploy time and the tenant image is built with it
+    (`WAKU_RELEASE_FILE` names the path). On a laptop there is no record, and
+    a missing or malformed one is None too: the page then shows no release
+    rather than a guess."""
+    if path is None:
+        return None
+    try:
+        record = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(record, dict) or not _SHA.match(str(record.get("sha", ""))):
+        return None
+    checks = [_check(c) for c in record.get("checks") or []]
+    commit_url = record.get("commit_url")
+    if not checks or None in checks or not (isinstance(commit_url, str) and commit_url.startswith(_GITHUB)):
+        return None
+    deployed_at = record.get("deployed_at")
+    return {"sha": record["sha"], "short_sha": record["sha"][:7], "commit_url": commit_url,
+            "deployed_at": deployed_at if isinstance(deployed_at, str) else None,
+            "checks": checks}
 
 
 def _suite(value) -> dict | None:
@@ -908,7 +964,8 @@ def last_run(report: dict | None, history: list) -> dict | None:
 
 
 def payload(home: Path, *, provider: str = "", model: str = "", window: str = "7d",
-            hosted: bool = False, now: datetime | None = None) -> dict:
+            hosted: bool = False, release_file: Path | None = None,
+            now: datetime | None = None) -> dict:
     """Everything the Observability page draws, in one answer."""
     window = window if window in WINDOWS else "7d"
     servers = mcp_servers(home)
@@ -933,5 +990,5 @@ def payload(home: Path, *, provider: str = "", model: str = "", window: str = "7
         "tools": tools,
         "memory": memory_per_turn(all_turns[::-1][:MAX_TURNS]),
         "spend": spend(home, events, servers),
-        "evals": evals_info(home, hosted=hosted),
+        "evals": evals_info(home, hosted=hosted, release_file=release_file),
     }
