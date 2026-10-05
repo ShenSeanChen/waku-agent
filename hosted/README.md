@@ -792,6 +792,20 @@ keeps chatting keeps the old image until they pause for the window, or until
 an operator runs `upgrade.sh --now`, which restarts every running tenant at
 once and can cut off a turn in progress.
 
+**The first open after a stop starts the container, and waits for it.** The
+request that finds a tenant stopped (after an idle stop or `upgrade.sh --now`)
+waits up to 60 seconds for the spawner to provision and start the container
+(`START_TIMEOUT_SECONDS` in `hosted/core/idle.py`), then up to 30 more for the
+dashboard inside to accept a connection (`READY_TIMEOUT_SECONDS`): the spawner
+answers once Docker has started the container, before the dashboard has bound
+its port. A page navigation that outlasts either wait, the dashboard on the
+tenant host or the chat in waku.one's frame, gets a 503 page saying the
+assistant is starting, which reloads itself every 3 seconds and joins the
+start already under way. A fetch or a stream still gets "Your assistant is
+taking too long to start. Try again." A gateway log line `start of tenant=<id>
+took longer than 60s` or `started but did not listen within 30s` is the sign
+that a start ran long.
+
 **What counts as idle.** In flight is any request the gateway is forwarding to
 the container, from before it reaches the container until the last byte of a
 streamed answer, so a container is never stopped mid-turn. Background requests
