@@ -291,7 +291,11 @@ def test_hosted_carries_the_elastic_licence_and_its_limitation():
 
 
 def test_no_doc_claims_hosted_is_mit():
-    """No prose in the tree tells a reader hosted/ is MIT.
+    """No prose in the tree tells a reader hosted/ is MIT, or Apache-2.0.
+
+    Apache joined MIT here when the rest of the repository moved to
+    Apache-2.0: the sentence to fear is now "the rest of the repo is Apache,
+    and so is this", and it is the same mistake with a new name in it.
 
     Four things this got wrong before it worked, and each is the same lesson
     at a different scale.
@@ -325,7 +329,7 @@ def test_no_doc_claims_hosted_is_mit():
                 continue
             paragraph = " ".join(block)
             block = []
-            if not paragraph or not re.search(r"\bMIT\b", paragraph):
+            if not paragraph or not re.search(r"\b(MIT|Apache)\b", paragraph):
                 continue
             if not inside_hosted and "hosted" not in paragraph.lower():
                 continue
@@ -333,5 +337,48 @@ def test_no_doc_claims_hosted_is_mit():
                 continue
             offenders.append(f"{path.relative_to(ROOT)}:{number}: {paragraph[:90]}")
     assert not offenders, (
-        "these paragraphs read as a claim that hosted/ is MIT, and a reader "
+        "these paragraphs read as a claim that hosted/ is MIT or Apache-2.0, "
+        "and a reader "
         "would rely on them:\n  " + "\n  ".join(offenders))
+
+
+# --- the rest of the repository is Apache-2.0, and the MIT grant before it stays --
+#
+# Written when the core moved from MIT to Apache-2.0. Two things can go quietly
+# wrong. The LICENSE file can be swapped for a summary, or for the short
+# "boilerplate" appendix alone, and still say "Apache" at the top. And NOTICE,
+# which carries the MIT notice that every line merged before the switch still
+# needs, can be tidied away as clutter, or dropped from the wheel, which is
+# where most people get their copy from.
+
+APACHE_PATENT_GRANT = ("each Contributor hereby grants to You a perpetual, "
+                       "worldwide, non-exclusive, no-charge, royalty-free, "
+                       "irrevocable (except as stated in this section) patent "
+                       "license")
+APACHE_PATENT_RETALIATION = ("then any patent licenses granted to You under this "
+                             "License for that Work shall terminate as of the "
+                             "date such litigation is filed")
+MIT_PERMISSION = ("The above copyright notice and this permission notice shall "
+                  "be included in all copies or substantial portions of the "
+                  "Software.")
+
+
+def test_root_licence_is_apache_with_its_patent_clauses():
+    """Pinned on the patent grant and its retaliation clause, the two reasons
+    for the move, rather than on the title."""
+    licence = " ".join((ROOT / "LICENSE").read_text().split())
+    assert licence.startswith("Apache License Version 2.0, January 2004")
+    for clause in (APACHE_PATENT_GRANT, APACHE_PATENT_RETALIATION):
+        assert clause in licence, f"LICENSE is missing: {clause[:60]}..."
+
+
+def test_notice_keeps_the_mit_grant_and_ships_in_the_wheel():
+    notice = " ".join((ROOT / "NOTICE").read_text().split())
+    assert "Copyright (c) 2026 Sean Chen (ShenSeanChen)" in notice
+    assert "remains available under the MIT License" in notice
+    assert MIT_PERMISSION in notice, (
+        "NOTICE must carry the MIT permission notice in full: code merged "
+        "before the switch to Apache-2.0 is still under it.")
+    project = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]
+    assert project["license"].startswith("Apache-2.0 AND ")
+    assert {"LICENSE", "NOTICE", "LICENSE-BRAND"} <= set(project["license-files"])

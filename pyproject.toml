@@ -6,11 +6,13 @@ name = "waku-agent"
 dynamic = ["version"]
 description = "A minimal, transparent, local-first Waku: harness + loop + memory + eval, in code you can read in an afternoon."
 readme = "README.md"
-# Code is MIT; the Waku brand assets are not (LICENSE-BRAND); the bundled fonts
-# are SIL OFL 1.1. PEP 639 lets the package say all three, so PyPI no longer
-# reports the whole wheel as MIT.
-license = "MIT AND OFL-1.1 AND LicenseRef-Waku-Brand"
-license-files = ["LICENSE", "LICENSE-BRAND", "waku/ops/static/fonts/OFL-*.txt"]
+# Code is Apache-2.0; the Waku brand assets are not (LICENSE-BRAND); the bundled
+# fonts are SIL OFL 1.1. PEP 639 lets the package say all three, so PyPI does
+# not report the whole wheel as one license. Releases up to v0.1.8 were MIT and
+# stay MIT; NOTICE says so and carries the MIT notice that the code written
+# before the change still needs, which is why NOTICE ships in every wheel.
+license = "Apache-2.0 AND OFL-1.1 AND LicenseRef-Waku-Brand"
+license-files = ["LICENSE", "NOTICE", "LICENSE-BRAND", "waku/ops/static/fonts/OFL-*.txt"]
 authors = [{ name = "Sean Chen (ShenSeanChen)" }]
 requires-python = ">=3.11"
 keywords = ["ai-agent", "llm", "agent-framework", "local-first", "llmops", "memory", "eval"]
@@ -120,7 +122,7 @@ mcp = [
 # The CODE is not on PyPI -- hosted/ ships in neither the wheel nor the sdist,
 # and comes from a git checkout (hosted/README.md). That is now a LICENSING
 # fact as well as a packaging one: hosted/ is Elastic License 2.0
-# (hosted/LICENSE) and everything this project publishes is MIT, so the
+# (hosted/LICENSE) and everything this project publishes is Apache-2.0, so the
 # `license` expression above stays true precisely because hosted/ never ships.
 # test_hosted_and_lab_never_ship_in_the_wheel_or_sdist is what keeps it true. This extra exists so that
 # a checkout can install the two libraries those services need, and so CI can
