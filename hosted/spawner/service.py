@@ -44,7 +44,8 @@ async def handle(runtime: DockerRuntime, payload: dict) -> dict:
             return {"ok": True}
         if request.op == "start":
             running = await runtime.start(request.tenant_id, request.project_id,
-                                          request.timezone, request.token)
+                                          request.timezone, request.token,
+                                          request.memory_key)
             return {"address": running.address, "port": running.port}
         if request.op == "stop":
             await runtime.stop(request.tenant_id)
@@ -53,6 +54,8 @@ async def handle(runtime: DockerRuntime, payload: dict) -> dict:
             return {"containers": [
                 {"tenant_id": c.tenant_id, "address": c.address, "port": c.port}
                 for c in await runtime.list()]}
+        if request.op == "tenants":
+            return {"tenant_ids": await runtime.tenant_ids()}
         if request.op == "task":
             if request.task == "restore" and not is_project_id(request.project_id):
                 # Per-TASK requirement, so it lives here and not in

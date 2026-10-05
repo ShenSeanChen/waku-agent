@@ -208,9 +208,35 @@ def test_the_providers_filter_lets_an_empty_field_through():
 
 
 @pytest.mark.parametrize("route", ["/api/connections", "/api/connections/test"])
-@pytest.mark.parametrize("key", ["tavily", "notion"])
-def test_the_two_allowed_connections_pass(route, key):
+@pytest.mark.parametrize("key", ["tavily", "notion", "treg"])
+def test_the_three_allowed_connections_pass(route, key):
     assert policy.decide("POST", route, {"key": key}).verdict == "rewrite"
+
+
+@pytest.mark.parametrize("payload", [
+    {"key": "treg", "values": {"TREG_API_KEY": "theirs"}, "clear": [], "force": False},
+    {"key": "treg", "values": {}, "clear": ["TREG_API_KEY"]},
+])
+def test_a_treg_key_save_or_clear_passes_unchanged(payload):
+    """Spec 014: a person's own treg key is saved in their own container."""
+    outcome = policy.decide("POST", "/api/connections", dict(payload))
+    assert outcome.verdict == "rewrite" and outcome.payload == payload
+
+
+@pytest.mark.parametrize("payload", [
+    {"key": "treg", "values": {"TREG_API_KEY": "k", "WAKU_PLATFORM_TOKEN": "someone-elses"}},
+    {"key": "treg", "values": {"TREG_URL": "http://10.88.0.1:8788/treg/mcp/"}},
+    {"key": "treg", "values": {"auth_env": "WAKU_PLATFORM_TOKEN"}},
+    {"key": "treg", "clear": ["WAKU_PLATFORM_TOKEN"]},
+    {"key": "treg", "values": "TREG_API_KEY=k"},
+    {"key": "treg", "clear": "TREG_API_KEY"},
+])
+def test_a_treg_payload_naming_any_other_field_is_refused(payload):
+    """No field may point the treg server anywhere or touch the platform token."""
+    for route in ("/api/connections", "/api/connections/test"):
+        outcome = policy.decide("POST", route, dict(payload))
+        assert outcome.verdict == "refuse" and outcome.status == 403
+        assert outcome.message == policy.CONNECTION_FIELD_REFUSED
 
 
 @pytest.mark.parametrize("route", ["/api/connections", "/api/connections/test"])

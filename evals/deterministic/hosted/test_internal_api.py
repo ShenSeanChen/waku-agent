@@ -599,3 +599,59 @@ def test_a_peer_that_never_sends_a_newline_cannot_grow_the_server(tmp_path, sock
             ledger.close()
 
     asyncio.run(run())
+
+
+def test_the_token_socket_creates_its_own_directory(tmp_path, sock_dir):
+    """G2. admin.serve_admin mkdirs its socket's parent and this did not, so
+    the two socket servers in one package disagreed about whose job it is.
+
+    F1's Compose mounts run/gateway/, so the deployment never needed it -- and
+    the first person to start the gateway by hand got a bare OSError out of
+    asyncio.start_unix_server naming the socket rather than the directory.
+    """
+    store = ControlDb(tmp_path / "control.db")
+    missing = sock_dir / "run" / "gateway"
+    assert not missing.exists()
+
+    async def run():
+        server = await serve_token_lookup(missing / "gateway.sock", store)
+        # And it is a working socket, not just a path that exists: one real
+        # question over the wire, so "the directory was created" cannot pass
+        # on a server that failed to bind.
+        answer = await jsonsock.ask(missing / "gateway.sock",
+                                    {"op": "token", "hash": "0" * 64})
+        server.close()
+        await server.wait_closed()
+        return answer
+
+    try:
+        answer = asyncio.run(run())
+    finally:
+        store.close()
+    assert answer == {"tenant": None}
+
+
+# --- spec 004 D: the lookup also names the person's Waku Memory key ----------
+# The proxy charges each call to that person's credits with their own key.
+
+def test_the_lookup_carries_the_tenants_waku_memory_key(tmp_path, sock_dir):
+    async def run():
+        store = ControlDb(tmp_path / "control.db")
+        tenant = store.create_tenant(sub="sub-mk", email="mia@example.com", timezone="UTC")
+        store.set_memory_key(tenant.id, key="mem_sk_" + "k" * 43, key_id="k-1")
+        other = store.create_tenant(sub="sub-none", email="x@example.com", timezone="UTC")
+        token, bare = store.issue_token(tenant.id), store.issue_token(other.id)
+        sock = sock_dir / "gateway.sock"
+        server = await serve_token_lookup(sock, store)
+        try:
+            cache = TokenCache(sock)
+            assert await cache.resolve(token) == (tenant.id, "active")
+            assert cache.memory_key(token) == "mem_sk_" + "k" * 43
+            await cache.resolve(bare)
+            assert cache.memory_key(bare) == ""
+            assert cache.memory_key("never-resolved") == ""
+        finally:
+            await _closing(server)
+            store.close()
+
+    asyncio.run(run())

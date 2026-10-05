@@ -36,19 +36,48 @@ HTTP+SSE transport is deprecated and is deliberately not supported here.
 
 Each server's tools register as `<server>_<tool>` on the ToolRegistry. A server
 that fails to connect is skipped with a warning — Waku still starts.
+
+A remote server keeps each session in its own memory, so a server that
+restarts (a redeploy) forgets every session it had and answers the next call
+with HTTP 404 "Session not found". The MCP spec says the client must then
+start a new session, and the bridge does: it opens a new session and sends
+the call once more (`_acall`).
 """
 
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import json
+import logging
 import os
 import re
 import threading
 from contextlib import AsyncExitStack
 from pathlib import Path
 
+from waku import __version__
 from waku.tools.registry import Tool
+
+# The name every server sees in `initialize`. Waku Memory labels a write's
+# Origin from it (`waku` for any name containing "waku"); a client that sends
+# no name of its own is filed under the SDK's default and shows up as `web`.
+CLIENT_NAME = "waku-agent"
+
+log = logging.getLogger(__name__)
+
+
+def _session_expired(exc: BaseException) -> bool:
+    """Whether a failed call means the server no longer knows our session.
+
+    A Streamable HTTP server answers a request for a session it does not hold
+    with HTTP 404. The SDK hands that back as an error whose message is the
+    server's own, "Session not found", or, when the 404 carries no JSON-RPC
+    body, its stand-in "Session terminated". Nothing else is a reason to start
+    over: a tool's own error must reach the model as it is.
+    """
+    text = str(exc).lower()
+    return "session not found" in text or "session terminated" in text
 
 
 def _model_safe_name(server: str, tool: str) -> str:
@@ -93,13 +122,28 @@ def _auth_hint(spec: dict, auth_dir: Path) -> str:
 
 
 class MCPBridge:
-    def __init__(self, config_path: Path, timeout: float = 30.0):
+    def __init__(self, config_path: Path, timeout: float = 30.0,
+                 call_timeout: float | None = None):
         self.config_path = config_path
         self.timeout = timeout
+        # How long one tool call may take, apart from how long connecting may
+        # take. 30 seconds was both until 2026-10-02, when two treg product
+        # extractions on agent.waku.one took longer: the agent gave up at 30s
+        # with an empty "failed:", treg finished anyway and charged for both,
+        # and neither the model nor the person saw the result or the cost.
+        self.call_timeout = call_timeout if call_timeout is not None else float(
+            os.environ.get("WAKU_MCP_CALL_TIMEOUT", "120"))
         self._loop = asyncio.new_event_loop()
         self._thread = threading.Thread(target=self._loop.run_forever, daemon=True)
         self._stack: AsyncExitStack | None = None
         self._sessions: dict = {}
+        # Each server's mcp.json entry, kept so an expired session can be
+        # opened again the way the first one was.
+        self._specs: dict[str, dict] = {}
+        # One lock per server, so calls that all find the session expired
+        # open one new session between them, not one each. Every call runs on
+        # the bridge's one event loop, which makes an asyncio.Lock enough.
+        self._reopening: dict[str, asyncio.Lock] = {}
 
     def _deadline(self, servers: list[dict]) -> float:
         """How long to wait for every server to connect.
@@ -124,8 +168,19 @@ class MCPBridge:
         """Connect every configured server and return their tools (as Tools)."""
         self._thread.start()
         servers = json.loads(self.config_path.read_text(encoding="utf-8")).get("servers", [])
+        # A treg key of the person's own wins over mcp.json's treg entry
+        # (spec 014); every other server is connected as written.
+        from waku.tools.treg import resolve
+
+        servers = resolve(servers)
+        # Before the coroutine, not as fut.result()'s argument: _deadline is
+        # the first import of the `mcp` package in this thread, and
+        # _connect_one imports it on the loop thread. Two threads importing it
+        # for the first time at once fail with a circular-import ImportError,
+        # which build_registry reports as "the 'mcp' package is missing".
+        deadline = self._deadline(servers)
         fut = asyncio.run_coroutine_threadsafe(self._connect_all(servers), self._loop)
-        listed = fut.result(self._deadline(servers))  # {server: [tool metas]}
+        listed = fut.result(deadline)  # {server: [tool metas]}
         tools: list[Tool] = []
         for srv, metas in listed.items():
             for meta in metas:
@@ -216,11 +271,14 @@ class MCPBridge:
 
     async def _connect_one(self, spec: dict) -> list[dict]:
         """Open one server's session and return its tool metadata."""
-        from mcp import ClientSession
+        from mcp import ClientSession, types
 
         name = spec["name"]
+        self._specs[name] = spec
         read, write = await self._open_streams(spec)
-        session = await self._stack.enter_async_context(ClientSession(read, write))
+        info = types.Implementation(name=CLIENT_NAME, version=__version__)
+        session = await self._stack.enter_async_context(
+            ClientSession(read, write, client_info=info))
         await session.initialize()
         self._sessions[name] = session
         tools = (await session.list_tools()).tools
@@ -272,10 +330,20 @@ class MCPBridge:
                     print(_auth_hint(spec, self.config_path.parent / "mcp-auth"))
         return listed
 
+    def connected(self, server: str) -> bool:
+        """Whether `server` has a live session (it connected at start)."""
+        return server in self._sessions
+
     def call(self, server: str, tool: str, args: dict) -> str:
         try:
             fut = asyncio.run_coroutine_threadsafe(self._acall(server, tool, args), self._loop)
-            return fut.result(self.timeout)
+            return fut.result(self.call_timeout)
+        except concurrent.futures.TimeoutError:
+            # Said in full, because the bare exception prints as nothing: the
+            # server may still finish the call, and a paid one may be charged.
+            return (f"MCP call {server}_{tool} timed out after "
+                    f"{self.call_timeout:g}s. The server may still finish it, "
+                    "and a paid call may still be charged.")
         except Exception as exc:
             return f"MCP call {server}_{tool} failed: {exc}"
 
@@ -283,11 +351,42 @@ class MCPBridge:
         session = self._sessions.get(server)
         if session is None:
             return f"MCP server '{server}' is not connected."
-        result = await session.call_tool(tool, args)
+        try:
+            result = await session.call_tool(tool, args)
+        except Exception as exc:
+            # 2026-10-04: api.waku.one was redeployed during a research turn,
+            # forgot the agent's session, and answered every later call
+            # "Session not found". The agent kept sending the dead session's
+            # id until its container restarted, so no search ran and no fact
+            # or report reached Waku Memory. The server refused the call
+            # before running it, so sending it again cannot run it twice.
+            if not _session_expired(exc):
+                raise
+            log.info("MCP server '%s' no longer knows this session (%s); "
+                     "opening a new one", server, exc)
+            session = await self._reopen(server, session)
+            result = await session.call_tool(tool, args)
         parts = []
         for block in result.content:
             parts.append(getattr(block, "text", None) or "[non-text content]")
         return "\n".join(parts) or "(no output)"
+
+    async def _reopen(self, server: str, expired):
+        """A new session for `server`, opened once however many calls ask.
+
+        The first call to find `expired` dead opens the new session; a call
+        that was waiting on the lock finds it already replaced and uses it.
+        The expired session's streams stay on the exit stack and close with
+        the bridge: closing them here would exit their task group from a
+        different task than the one that entered it, which anyio refuses.
+        """
+        lock = self._reopening.setdefault(server, asyncio.Lock())
+        async with lock:
+            current = self._sessions.get(server)
+            if current is not None and current is not expired:
+                return current
+            await self._connect_one(self._specs[server])
+            return self._sessions[server]
 
     def close(self) -> None:
         if self._stack is not None:

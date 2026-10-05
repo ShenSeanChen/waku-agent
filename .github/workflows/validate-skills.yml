@@ -58,4 +58,9 @@ jobs:
       - name: .env.example matches the integrations registry
         run: python scripts/generate_env_example.py --check
       - name: Deterministic evals (offline tier — no API key in CI)
-        run: python -m pytest -q evals/deterministic
+        run: python -m pytest -q evals/deterministic --junitxml=/tmp/deterministic.xml
+      # The counts, as a notice on this job's check run. hosted/deploy/
+      # autodeploy.sh reads it back for the commit it deploys, and the hosted
+      # Evals page shows it. The AI judge is not here: it needs an API key.
+      - name: Report the deterministic counts
+        run: python scripts/ci_test_counts.py "Deterministic evals" /tmp/deterministic.xml

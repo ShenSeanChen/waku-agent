@@ -20,8 +20,10 @@ Bound to 127.0.0.1 unless WAKU_DASHBOARD_HOST says otherwise, which warns.
 
 from __future__ import annotations
 
+import html
 import json
 import os
+import re
 import shutil
 import threading
 import time
@@ -40,7 +42,10 @@ from waku.integrations import (
     list_providers,
     test_integration,
 )
+from waku.key_locations import model_key_locations
 from waku.loop.agent import error_text
+from waku.loop.models import models_for
+from waku.memory import tool_note
 from waku.ops import browser_agent, commands, compare_history
 from waku.ops.arena import (
     compare_clear,
@@ -54,6 +59,7 @@ from waku.ops.catalog import list_models
 from waku.ops.pricing import price_for, usage_summary
 from waku.ops.settings_api import apply_settings, pin_action, settings_info
 from waku.ops.tracing import TraceEncodingError, iter_trace_lines
+from waku.tools import treg
 
 PORT = 7777
 # The frontend lives in its own files (static/index.html + style.css + app.js),
@@ -99,7 +105,7 @@ def chat_stream(message: str, emit) -> None:
     events: list[dict] = []
 
     def observer(kind, ev):
-        if kind in ("gate", "consolidation", "route", "triage"):
+        if kind in ("gate", "consolidation", "route", "triage", "slot", "report"):
             events.append({"kind": kind, **ev})
         emit(kind, ev)
 
@@ -114,6 +120,8 @@ def chat_stream(message: str, emit) -> None:
     cons = next((e for e in events if e["kind"] == "consolidation"), None)
     route = next((e for e in events if e["kind"] == "route"), None)
     triage = next((e for e in events if e["kind"] == "triage"), None)
+    slot = next((e for e in events if e["kind"] == "slot"), None)
+    report = next((e for e in events if e["kind"] == "report"), None)
     quick = bool(route) and route.get("target") == "quick_reply"
     emit("done", {
         "reply": result.reply,
@@ -121,14 +129,30 @@ def chat_stream(message: str, emit) -> None:
         "graph": ({"workflow": route.get("workflow", "triage"),
                    "route": "quick" if quick else "full",
                    "reason": (triage or {}).get("reason", "")} if route else None),
+        # Spec 009 A: the Waku Memory searches run before a research turn come
+        # first, as the cards they were while the turn streamed.
         "tools": [{"tool": c["tool"], "args": c["args"], "output": c["output"],
                    "status": _tool_status(c["output"]),
-                   "summary": (c["output"] or "").split(". ")[0][:120]} for c in result.tool_calls],
-        "consolidation": {"new_facts": cons["new_facts"]} if cons else None,
+                   "summary": (c["output"] or "").split(". ")[0][:120],
+                   **({"read_first": True} if c.get("read_first") else {})}
+                  for c in [*getattr(result, "read_first", []), *result.tool_calls]],
+        # ... and what they found: the turn's Used list
+        "used": getattr(result, "used", []),
+        "consolidation": ({"new_facts": cons["new_facts"], "kept": cons.get("kept", [])}
+                          if cons else None),
+        # Spec 005: how many retrieved memories Jev let into the prompt.
+        "slot": ({"kept": sum(1 for v in slot["verdicts"] if v["kept"]),
+                  "total": len(slot["verdicts"])} if slot else None),
+        # Spec 007: the research report this turn saved to Waku Memory, for
+        # the chat's card. Also sent as its own `report` event, before this one.
+        "report": ({k: v for k, v in report.items() if k != "kind"} if report else None),
         "iterations": result.iterations,
         "latency_ms": latency_ms,
         # which brain answered — shown per card; a quick graph turn was the small model
         "model": agent.settings.small_model if quick else agent.settings.model,
+        # Spec 011: the turn's receipt, the same object the chat log keeps in
+        # meta.receipt, so a reopened thread draws the same line
+        "receipt": getattr(result, "receipt", None),
     })
 
 
@@ -506,10 +530,60 @@ def collect() -> dict:
         "db": db_info,
         "settings": info,
         "providers": [asdict(view) for view in list_providers()],
+        # Where a model key was looked for, for the setup page (spec 013).
+        # Paths and yes-or-no only: no value ever enters this payload.
+        "key_locations": model_key_locations(),
         "connections": [asdict(view) for view in list_connections()],
+        # MCP servers that sign in on their own page rather than through an
+        # .env field (spec 007 E). Files only: no browser, no network.
+        "mcp_connections": [treg.card(home)],
         "tools": tools_info(),
         "usage": usage_summary(home),
     }
+
+
+def observability_data(window: str = "7d") -> dict:
+    """The Observability page's data (spec 012, `waku/ops/observability.py`).
+    A hosted container runs the `waku-platform` provider and ships no
+    `evals/`, so the Evals page explains where evals run instead, and shows
+    the release record its image was built with when WAKU_RELEASE_FILE names
+    one (hosted/image/tenant.Dockerfile sets it)."""
+    from waku.ops import observability
+
+    settings = load_settings()
+    settings.ensure_home()
+    if settings.base_url or settings.provider == "openrouter":
+        list_models()  # warm the per-model price cache, as collect() does
+    try:   # the model "Judge this turn" would call: the provider's small model
+        judge_model = models_for(settings.provider, settings.model or "", settings.small_model or "")[1]
+    except Exception:
+        judge_model = ""
+    return observability.payload(settings.home, provider=settings.provider,
+                                 model=settings.model or "", window=window, judge_model=judge_model,
+                                 hosted=settings.provider == "waku-platform",
+                                 release_file=Path(os.environ["WAKU_RELEASE_FILE"])
+                                 if os.environ.get("WAKU_RELEASE_FILE") else None)
+
+
+def judge_turn(payload: dict) -> dict:
+    """POST /api/turn-evals/judge {turn_id} (spec 015): ask the small model of
+    the provider in use whether one stored turn's reply answers its question
+    and stays grounded in its tool outputs. The turn is read from this home's
+    own traces, so a request cannot supply text to judge. On the hosted free
+    tier the call goes through the metering proxy and is charged in credits.
+    Answers {"score": <the score event>} or {"error": <sentence>}."""
+    from waku.ops import turn_evals
+
+    settings = load_settings()
+    settings.ensure_home()
+    turn_id = payload.get("turn_id") if isinstance(payload, dict) else None
+    try:
+        client, model, provider = turn_evals.judge_client(settings)
+        return {"score": turn_evals.judge_turn(settings.home, turn_id, client, model, provider)}
+    except turn_evals.JudgeRefused as exc:
+        return {"error": str(exc)}
+    except SystemExit as exc:   # get_client's "no key" and "unknown provider" sentences
+        return {"error": str(exc)}
 
 
 def _rel_to_home(path, home) -> str:
@@ -543,7 +617,8 @@ def session_list(conn) -> list[dict]:
             "SELECT DISTINCT source FROM chat_log WHERE session_id=?", (sid,)).fetchall()]
         preview = ""
         if last:
-            preview = ("you: " if last["role"] == "user" else "waku: ") + last["content"][:80]
+            preview = ("you: " if last["role"] == "user" else "waku: ") + \
+                tool_note.strip(last["content"])[:80]
         out.append({"id": sid,
                     "title": (first["content"][:60] if first else "(empty)"),
                     "last": preview,
@@ -733,15 +808,58 @@ def _thread_history(conn, sid: str) -> list[dict]:
             "SELECT role, content, meta FROM chat_log WHERE session_id=? ORDER BY id",
             (sid,),
         ).fetchall()
-    return [{"role": r["role"], "content": r["content"],
+    # An assistant row's content is the model's record, which ends in a
+    # "[tools used: ...]" note (waku/memory/tool_note.py). People read the
+    # reply, so the note comes off here, for the dock and for the front door's
+    # GET /v1/conversations/<id> alike; render.js's histItem strips it again.
+    return [{"role": r["role"],
+             "content": tool_note.strip(r["content"]) if r["role"] == "assistant" else r["content"],
              "meta": json.loads(r["meta"]) if r["meta"] else None} for r in rows]
+
+
+def conversation_list(conn) -> list[dict]:
+    """session_list in the shape the front door's GET /v1/conversations
+    answers (spec 007 D): id, title, last_at, count. The title is the first
+    user message with its whitespace folded, so a multi-line opener reads as
+    one line in a list."""
+    return [{"id": s["id"], "title": " ".join(s["title"].split()),
+             "last_at": s["last_at"], "count": s["messages"]}
+            for s in session_list(conn)]
+
+
+def chat_state() -> dict:
+    """What the chat column draws besides the conversation, and nothing else
+    (spec 008). The embedded chat reads this instead of /api/data, which
+    carries the memory, the traces, the spend and the database: the chat's
+    header needs the conversations for History, the current one to restore,
+    and the model and pinned models for the picker."""
+    settings = load_settings()
+    settings.ensure_home()
+    conn = connect(settings.home)
+    live = browser_agent.current()
+    info = settings_info()
+    return {"ok": True, "sessions": session_list(conn),
+            "current_session": live.session.session_id if live is not None else dash_session(),
+            "settings": {k: info.get(k) for k in
+                         ("provider", "model", "small_model", "pinned", "disabled_providers")}}
 
 
 def session_action(payload: dict) -> dict:
     """Chat history control: start a new conversation, switch to a past one, or
     read a conversation's history (read-only, for the live inbox). Sessions live
-    in chat_log."""
+    in chat_log. "list", "history" and "state" never touch the agent, which is
+    why they are also served on GET (the hosted front door's two reads, and
+    the embedded chat's header)."""
     action = payload.get("action")
+    if action == "state":
+        return chat_state()
+    if action == "list":
+        settings = load_settings()
+        settings.ensure_home()
+        conn = connect(settings.home)
+        live = browser_agent.current()
+        return {"ok": True, "conversations": conversation_list(conn),
+                "current": live.session.session_id if live is not None else dash_session()}
     if action == "history":
         # read-only view of a conversation — never touches the agent, so the
         # dashboard can poll it live (e.g. to show new Telegram messages arrive).
@@ -892,6 +1010,50 @@ def events_since(cursor):
     return {"events": out, "cursor": len(lines)}
 
 
+# --- the embedded chat (spec 008) ------------------------------------------
+#
+# GET /embed/chat serves the chat column alone (static/embed.html) for
+# waku.one to put in an iframe. The page posts to the page around it only when
+# that page's origin is on this list. Hosted, the gateway sends the list it
+# lets frame the page (X-Waku-Embed-Origins, set by the gateway alone);
+# locally nothing sends it and the default is waku.one's three hosts, the same
+# three the gateway defaults to (hosted/gateway/config.py -- duplicated, not
+# imported: waku/ never imports hosted/).
+EMBED_ORIGINS = ("https://www.waku.one", "https://waku.one", "https://dev.waku.one")
+EMBED_ORIGINS_HEADER = "X-Waku-Embed-Origins"
+_ORIGIN = re.compile(r"https?://[a-z0-9.-]+(?::[0-9]{1,5})?")
+
+
+def embed_origins(header: str | None) -> tuple[str, ...]:
+    """The header's origins, or the default. Anything that is not exactly an
+    origin is dropped: these land in the page and in postMessage's target."""
+    given = tuple(v for v in (header or "").split() if _ORIGIN.fullmatch(v))
+    return given or EMBED_ORIGINS
+
+
+# The theme of the page around the frame (waku-memory spec 040 T): waku.one
+# adds ?theme=light|dark to the embed address, the gateway carries it to
+# /embed/chat, and the page is served with data-theme already on <html>, so
+# its first paint is the console's and there is no light flash in a dark
+# console. Exactly these two values; anything else is no attribute at all.
+EMBED_THEMES = ("light", "dark")
+
+
+def embed_theme(query: str) -> str | None:
+    """The one `theme` in the request's query string, when it is light or dark."""
+    from urllib.parse import parse_qs
+
+    given = parse_qs(query).get("theme", [])
+    return given[0] if len(given) == 1 and given[0] in EMBED_THEMES else None
+
+
+def embed_page(header: str | None, theme: str | None = None) -> bytes:
+    page = (STATIC / "embed.html").read_text(encoding="utf-8")
+    attr = f' data-theme="{theme}"' if theme in EMBED_THEMES else ""
+    return (page.replace("@@EMBED_ORIGINS@@", html.escape(" ".join(embed_origins(header))))
+                .replace("<html@@THEME@@>", f"<html{attr}>")).encode("utf-8")
+
+
 # Content types for /static/. .woff2 is here because the dashboard serves its
 # own fonts (static/design/fonts.css) instead of fetching them.
 STATIC_TYPES = {".css": "text/css", ".js": "text/javascript", ".svg": "image/svg+xml",
@@ -913,6 +1075,26 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == "/api/data":
             self._send(json.dumps(collect(), default=str).encode(), "application/json")
+        elif self.path == "/api/session" or self.path.startswith("/api/session?"):
+            # The two reads of chat history, for the hosted front door
+            # (spec 007 D): ?action=list, and ?action=history&id=<session>.
+            # The writes (new, switch) stay POST-only.
+            from urllib.parse import parse_qs, urlparse
+
+            q = parse_qs(urlparse(self.path).query)
+            action = (q.get("action", [""])[0] or "").strip()
+            out = (session_action({"action": action, "id": q.get("id", [""])[0]})
+                   if action in ("list", "history", "state")
+                   else {"error": "GET /api/session reads only: action=list, history or state"})
+            self._send(json.dumps(out, default=str).encode(), "application/json")
+        elif self.path == "/api/observability" or self.path.startswith("/api/observability?"):
+            # Spec 012: the Observability page's turns, tools, memory, spend
+            # and evals, read from this home's traces and ledger only.
+            from urllib.parse import parse_qs, urlparse
+
+            window = parse_qs(urlparse(self.path).query).get("window", ["7d"])[0]
+            self._send(json.dumps(observability_data(window), default=str).encode(),
+                       "application/json")
         elif self.path == "/api/judgment-arena":
             from waku.ops import judgment_arena, judgment_cases  # noqa: PLC0415
             self._send(json.dumps({"suites": judgment_cases.suite_list(),
@@ -994,6 +1176,12 @@ class Handler(BaseHTTPRequestHandler):
 
             rel = unquote(parse_qs(urlparse(self.path).query).get("path", [""])[0])
             self._send(json.dumps(reveal_path(rel)).encode(), "application/json")
+        elif self.path == "/embed/chat" or self.path.startswith("/embed/chat?"):
+            from urllib.parse import urlparse
+
+            self._send(embed_page(self.headers.get(EMBED_ORIGINS_HEADER),
+                                  embed_theme(urlparse(self.path).query)),
+                       "text/html; charset=utf-8", no_cache=True)
         elif self.path.startswith("/static/"):
             self._serve_static(self.path)
         else:
@@ -1169,7 +1357,8 @@ class Handler(BaseHTTPRequestHandler):
                   "/api/connections": None, "/api/connections/test": None,
                   "/api/providers": None,
                   "/api/compare/clear": compare_clear,
-                  "/api/compare/regrade": compare_regrade, "/api/compare/delete_run": compare_delete_run}
+                  "/api/compare/regrade": compare_regrade, "/api/compare/delete_run": compare_delete_run,
+                  "/api/turn-evals/judge": judge_turn}
         if self.path not in routes:
             self.send_response(404)
             self.end_headers()
@@ -1232,6 +1421,9 @@ def main() -> None:
     # iterations, and bind_host() prints the off-loopback security warning. Ten
     # busy ports used to print it ten times, which teaches people to skip it.
     host = bind_host()
+    from waku.config import home_notice
+    if notice := home_notice():
+        print(notice)
     for port in range(base, base + 10):  # walk past a busy port instead of crashing
         try:
             server = ThreadingHTTPServer((host, port), Handler)

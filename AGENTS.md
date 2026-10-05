@@ -45,9 +45,12 @@ caps it at 100 lines, so the detail lives in the files it points to.
 5. **Nothing under `waku/` or `evals/` imports from `examples/` or `lab/`,** and
    `lab/` never ships to PyPI.
 6. **No emojis** in the dashboard, CLI output or docs prose.
-7. **The Waku brand is not MIT.** The design system, the Waku mark and the names
-   are listed in `LICENSE-BRAND`. List any new brand file there, and never copy
-   one into `examples/`.
+7. **Two things here are not MIT.** `hosted/` is Elastic License 2.0
+   (`hosted/LICENSE`): runnable by anyone, including commercially, but not
+   offerable to third parties as a service. And the brand — the design system,
+   the Waku mark and the names — is `LICENSE-BRAND`. List any new brand file
+   there, never copy one into `examples/`, and **do not move code between
+   `hosted/` and `waku/` without saying which license it lands under.**
 8. **Don't edit the copied design files** in `waku/ops/static/design/`. They are
    synced from the private master; ask for a new token in an issue.
 9. **Fix the doc your change makes false,** in the same PR.
@@ -78,8 +81,8 @@ Everything else in the rulebook is checked in review. The judge evals in
 `hosted-docker` needs a Docker daemon and an XFS filesystem, so it is a job of
 its own, and its row above says "advisory" because it is: a red run there does
 not block a merge until `hosted-docker` is added to `main`'s required checks.
-It says nothing yet about the bridge rules -- `firewall.sh` and `networks.sh`
-arrive with the rest of spec 001's group C.
+It now checks the two bridges `networks.sh` creates, but nothing yet about the
+rules that make them safe: `firewall.sh` is still spec 001's group C.
 
 ## Commands
 

@@ -1,0 +1,43 @@
+<!doctype html><html@@THEME@@><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Waku chat</title>
+<link rel="icon" type="image/svg+xml" href="/static/waku-mark.svg">
+<link rel="stylesheet" href="/static/design/fonts.css">
+<link rel="stylesheet" href="/static/design/tokens.css">
+<link rel="stylesheet" href="/static/design/type.css">
+<link rel="stylesheet" href="/static/design/controls.css">
+<link rel="stylesheet" href="/static/style.css"></head>
+<!-- The dashboard's chat column alone, for waku.one to frame (spec 008).
+     Served by dashboard.py at /embed/chat, which fills in data-embed-origins:
+     the only origins this page will ever postMessage to (js/embed.js), and
+     the html tag's theme: data-theme="light|dark" when the address
+     carried ?theme=, so the first paint is the console's (spec 040 T). The
+     markup is index.html's #dock with the parts that need the rest of the
+     dashboard left out: no collapse button, no mic (voice is local only), and
+     no inline script, so the page runs only the files below. -->
+<body class="embed" data-embed-origins="@@EMBED_ORIGINS@@">
+<aside id="dock">
+  <div class="sesshead" style="padding:8px 2px 0">
+    <button class="btn btn-secondary btn-sm sessbtn" onclick="newChat()">+ New chat</button>
+    <button class="btn btn-secondary btn-sm sessbtn" onclick="toggleSessMenu(event)">History &#9662;</button>
+    <button class="btn btn-secondary btn-sm sessbtn teletoggle" id="teletoggle" onclick="toggleTele()" title="Show/hide per-turn stats: gate decision, seconds, iterations, tools">stats</button>
+    <button class="btn btn-secondary btn-sm sessbtn" id="opendash" onclick="openDashboard()" title="Open the full dashboard in a new tab, signed in">Dashboard</button>
+    <button class="modelchip" id="modelchip" onclick="toggleModelMenu(event)" title="Switch the model for this chat">&hellip;</button>
+  </div>
+  <div class="chatlog" id="docklog"></div>
+  <div class="chatbar">
+    <textarea id="dmsg" rows="1" placeholder="Message Waku&hellip;" autocomplete="off"></textarea>
+    <div class="chatbar-actions">
+      <button id="dsend" class="btn btn-primary">Send</button>
+    </div>
+  </div>
+</aside>
+<!-- The same classic scripts as the dashboard, minus every view: embed.js
+     stands in for main.js and loads last. -->
+<script src="/static/js/util.js"></script>
+<script src="/static/js/theme.js"></script>
+<script src="/static/js/ui.js"></script>
+<script src="/static/js/blocks.js"></script>
+<script src="/static/js/render.js"></script>
+<script src="/static/js/dock.js"></script>
+<script src="/static/js/embed.js"></script></body></html>

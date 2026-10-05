@@ -170,6 +170,49 @@
   .mdcode pre{margin:0;padding:var(--space-3) var(--space-3);overflow-x:auto;font-family:var(--face-mono);
               font-size:var(--text-xs);line-height:var(--leading-normal);color:var(--text-muted);white-space:pre}
   .mdcode code{font-family:var(--face-mono);background:none;border:none;padding:0;border-radius:0;font-size:var(--text-xs)}
+  /* A research report's fenced blocks, drawn as UI (js/blocks.js). The code
+     block's frame and head, on paper instead of the sunk code ground. */
+  .rblock{background:var(--surface-paper)}
+  .rblock .mdcode-head{justify-content:flex-end}
+  .rblock-body{padding:var(--space-3);white-space:normal;font-size:var(--text-sm);color:var(--text-ink)}
+  .rb-note{display:block;font-family:var(--face-mono);font-size:var(--text-xs);color:var(--text-faint)}
+  .rb-sr{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+  .rb-metrics{display:grid;grid-template-columns:repeat(auto-fill,minmax(8rem,1fr));gap:var(--space-2)}
+  .rb-metric{display:flex;flex-direction:column;gap:calc(var(--spacing) * 0.5);min-width:0;
+    padding:var(--space-2);border:var(--rule-width) solid var(--rule);border-radius:var(--radius)}
+  .rb-label{font-family:var(--face-mono);font-size:var(--text-xs);text-transform:uppercase;
+    letter-spacing:var(--tracking-label);color:var(--text-faint)}
+  .rb-value{font-family:var(--face-mono);font-size:var(--text-base);line-height:var(--leading-tight);
+    font-weight:var(--font-weight-medium);color:var(--text-ink)}
+  .rb-chart-title{font-weight:var(--font-weight-medium);margin-bottom:var(--space-2)}
+  .rb-bars{display:grid;grid-template-columns:minmax(0,max-content) minmax(4rem,1fr) auto;
+    gap:var(--spacing) var(--space-2);align-items:center}
+  .rb-bar-row{display:contents}
+  .rb-bar-label{max-width:12rem;color:var(--text-muted)}
+  .rb-bar{display:block;height:var(--space-2);background:var(--surface-sunk);border-radius:var(--radius);overflow:hidden}
+  .rb-bar-fill{display:block;height:100%;background:var(--chart-1)}
+  .rb-bar-value{font-family:var(--face-mono);font-size:var(--text-xs);color:var(--text-ink);
+    font-variant-numeric:tabular-nums;white-space:nowrap}
+  /* The comparison keeps its columns and scrolls sideways in its own box,
+     the names pinned at the left over an opaque ground. */
+  .rb-compare .tbl-wrap{margin-bottom:0;overflow-wrap:normal}
+  .rb-compare .tbl th,.rb-compare .tbl td{white-space:nowrap}
+  .rb-compare .tbl td{min-width:6rem;max-width:16rem;white-space:normal}
+  .rb-compare .tbl tr>:first-child{position:sticky;left:0;z-index:var(--z-inside);background:var(--surface-paper);
+    border-right:var(--rule-width) solid var(--rule);font-weight:var(--font-weight-medium);color:var(--text-ink)}
+  .rb-compare .tbl tr:hover>:first-child{background:var(--surface-raised)}
+  .rb-yes{color:var(--text-ink)} .rb-no{color:var(--text-muted)} .rb-unknown{color:var(--text-faint)}
+  .rb-yes,.rb-no,.rb-unknown{white-space:nowrap}
+  .rb-timeline,.rb-sources{margin:0;display:flex;flex-direction:column;gap:var(--space-2)}
+  .rb-timeline{list-style:none;padding:0}
+  .rb-timeline li{display:grid;grid-template-columns:7rem minmax(0,1fr);gap:var(--space-2)}
+  .rb-date{font-family:var(--face-mono);font-size:var(--text-xs);color:var(--text-faint);
+    font-variant-numeric:tabular-nums;padding-top:calc(var(--spacing) * 0.5)}
+  .rb-subject{font-weight:var(--font-weight-medium)}
+  .rb-sources{padding-left:var(--space-6)}
+  .rb-sources li::marker{font-family:var(--face-mono);font-size:var(--text-xs);color:var(--text-faint)}
+  .rb-sources a{color:var(--accent-fg);text-decoration:underline}
+  .rblock-body>.rb-note{margin-top:var(--space-3);color:var(--text-muted)}
   /* horizontal rule */
   .mdhr{border:none;border-top:1px solid var(--rule-hard);margin:var(--space-3) 0}
   /* copy-message button — appears on card hover */
@@ -177,11 +220,39 @@
   .btn.msg-copy{display:none;position:absolute;top:var(--space-2);right:var(--space-3);z-index:var(--z-inside)}
   .card:hover .msg-copy{display:block}
   .msg-copy.copied{color:var(--ok)}
+  /* Spec 008 B: what a turn saved to memory, inside its reply card. A quiet
+     inset, not a second card: the reply is the card, the report is its result. */
+  .report-card,.kept{margin-top:var(--space-3);padding:var(--space-2) var(--space-3);
+    border:var(--rule-width) solid var(--rule);border-radius:var(--radius);background:var(--surface-paper)}
+  .report-kicker{font-family:var(--face-mono);font-size:var(--text-xs);text-transform:uppercase;
+    letter-spacing:var(--tracking-label);color:var(--text-muted)}
+  .report-title{font-weight:var(--font-weight-medium);margin-top:calc(var(--spacing) * 0.5)}
+  .report-card .mdlist,.kept .mdlist{margin:var(--spacing) 0 var(--space-2);padding-left:var(--space-4)}
+  .report-open{display:inline-block;text-decoration:none}
+  .kept a{color:inherit}
+  /* Waku Memory did not take some kept facts: the kicker takes the failed
+     colour, as a failed notice's mark does, and a note says what happens next. */
+  .kept-failed .report-kicker{color:var(--bad)}
+  .kept-note{margin:0 0 var(--spacing);font-size:var(--text-sm);color:var(--text-muted)}
+  /* Spec 011: the turn receipt. One quiet mono line under the reply, a
+     tertiary button that opens a table of the same numbers. */
+  .receipt{margin-top:var(--space-2);padding-top:var(--spacing);border-top:var(--rule-width) solid var(--rule)}
+  .btn.receipt-line{display:flex;flex-wrap:wrap;justify-content:flex-start;width:100%;padding:0;
+    text-align:left;white-space:normal;text-transform:none;letter-spacing:normal;
+    font-weight:var(--font-weight-normal);line-height:var(--leading-snug);color:var(--text-muted);
+    font-variant-numeric:tabular-nums}
+  .receipt-gap{padding:0 var(--space-2);color:var(--text-faint)}
+  .receipt-detail{margin-top:var(--space-2);font-size:var(--text-xs)}
+  .receipt-label{font-family:var(--face-mono);text-transform:uppercase;letter-spacing:var(--tracking-label);
+    color:var(--text-faint)}
+  .receipt-detail a{color:inherit}
   .meta{color:var(--text-faint);font-size:var(--text-xs);margin-top:var(--space-2);font-variant-numeric:tabular-nums}
   .tool{border:1px solid var(--rule);border-radius:var(--radius);padding:var(--space-2) var(--space-2);margin-top:var(--space-2);background:var(--surface-bg)}
   .tool.error{border-color:var(--bad);background:var(--surface-raised)}
   .tool.warn{border-color:var(--rule-hard)}
   .tool-head{display:flex;align-items:center;gap:var(--space-2);font-size:var(--text-xs)}
+  /* Spec 009 C: what the call cost and who served it, at the row's end */
+  .tool-cost{margin-left:auto;color:var(--text-muted);font-variant-numeric:tabular-nums;white-space:nowrap}
   .dot{width:7px;height:7px;border-radius:var(--shape-circle);flex-shrink:0;background:var(--ok)}
   .dot.error{background:var(--bad)} .dot.warn{background:var(--warn)}
   .tool code{border:none;background:transparent;padding:0;color:var(--text-ink)}
@@ -223,6 +294,8 @@
   .arch .ns{fill:var(--text-muted);font-size:11.5px}
   .arch .grp{fill:var(--text-faint);font-size:11px;font-weight:var(--font-weight-medium);letter-spacing:.06em}
   .arch .fl{fill:var(--text-faint);font-size:10.5px}
+  .arch .nlink{fill:var(--accent-fg);text-decoration:underline;cursor:pointer}
+  .arch .nlink:hover{fill:var(--text-ink)}
   .arch .flow{fill:none;stroke:var(--text-faint);stroke-width:1.3;marker-end:url(#arr)}
   .arch .flow.dash{stroke-dasharray:4 3;opacity:.75}
   .arch .head{fill:var(--text-faint)}
@@ -904,3 +977,149 @@ dialog.dialog :focus-visible{outline:var(--focus-ring-width) solid var(--accent)
     line-height:var(--leading-snug);pointer-events:none}
   .ja-asks{margin-top:var(--spacing);max-width:52ch}
   .ja-conf{margin-left:var(--spacing);opacity:.55}
+
+  /* First run (setup.js): the screen shown until a provider is usable.
+     The rail and the chat dock are hidden rather than disabled -- a nav you
+     can see and cannot use is a worse answer than a nav that is not there
+     yet, and the dock's input is the exact control that used to look ready
+     and return APIConnectionError. */
+  body.first-run #nav,
+  body.first-run #dock,
+  body.first-run #dock-resizer,
+  body.first-run #dock-reopen,
+  /* The header's status line reads "live - updated 0s ago - <path>", which on
+     this screen is a fact about a loop that has not run and cannot. */
+  body.first-run #sub { display: none }
+  body.first-run main { max-width: calc(var(--spacing) * 160); margin: 0 auto }
+  .setup-lede { color: var(--text-muted); margin: 0 0 var(--space-4) }
+  .setup-choices { display: flex; flex-wrap: wrap; gap: var(--space-2);
+                   margin-bottom: var(--space-4) }
+  .setup-note { color: var(--text-faint); font-size: var(--text-sm);
+                margin: var(--space-2) 0 0 }
+  .setup-places { color: var(--text-muted); font-size: var(--text-sm);
+                  margin: var(--space-2) 0 var(--space-4); padding-left: var(--space-4) }
+  .setup-places code { overflow-wrap: anywhere }
+  .setup-looked { margin-bottom: var(--space-4) }
+
+/* ---- The embedded chat (embed.html, spec 008) ------------------------------
+   The chat column alone, filling whatever frame waku.one gives it. Last in the
+   file so it wins over the dock's width clamp and the narrow-screen rule
+   that pins the dock over the page. */
+body.embed #dock{position:static;width:100%;height:100vh;border-left:none}
+
+/* --- Observability (spec 012): four tabs, each opening with one sentence,
+   and a turn's waterfall (spec 016, at the end of this section). */
+.obs-cap{color:var(--text-muted);font-size:var(--text-sm);line-height:var(--leading-normal);margin:var(--space-3) 0}
+.obs-page-cap{margin-top:0}
+.obs-h-sub{text-transform:none;letter-spacing:0;font-weight:var(--font-weight-normal);margin-left:var(--space-2)}
+main h3{font-family:var(--face-mono);font-size:var(--text-xs);color:var(--text-faint);font-weight:var(--font-weight-normal);
+  margin:var(--space-4) 0 var(--space-2)}
+.obs-windows{display:flex;flex-wrap:wrap;align-items:center;gap:var(--space-2);margin-bottom:var(--space-2)}
+.obs-foot{margin-top:var(--space-3)}
+.obs-gap{margin-left:var(--space-2)}
+.obs-io{font-family:var(--face-mono);font-size:var(--text-xs);text-transform:uppercase;letter-spacing:var(--tracking-label);color:var(--text-faint)}
+@media (max-width:520px){
+  /* two stats a row, so a long label (DETERMINISTIC) never runs into the next */
+  .stat-band{grid-template-columns:repeat(auto-fit,minmax(160px,1fr))}
+  .stat{min-width:0}
+}
+.obs-scores{display:flex;flex-wrap:wrap;gap:var(--space-2);margin-bottom:var(--space-2)}
+
+/* Observability's visual pass: four cards, one per tab, that open their tab, bars drawn
+   with plain spans (no chart library), and the waterfall grouped by loop. */
+.obs-strip{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:var(--space-2);margin-bottom:var(--space-4)}
+.obs-tile{display:flex;flex-direction:column;gap:var(--spacing);padding:var(--space-3);border:var(--rule-width) solid var(--rule);
+  border-radius:var(--radius);background:var(--surface-paper);color:var(--text-ink);text-decoration:none;min-width:0}
+.obs-tile:hover{border-color:var(--rule-hard)}
+/* the card whose tab is open, drawn like a selected stage */
+.obs-tile.on{border-color:var(--accent);background:var(--surface-raised)}
+.obs-tile.on .stat-label{color:var(--accent-fg)}
+.obs-tile .stat-value{overflow-wrap:anywhere}
+.obs-of{font-size:var(--text-xs);color:var(--text-muted);font-weight:var(--font-weight-normal)}
+.obs-bar{display:flex;width:100%;height:8px;min-width:48px;background:var(--surface-sunk);border-radius:var(--shape-chip);overflow:hidden}
+.obs-seg{display:block;height:100%}
+.obs-c1{background:var(--chart-1)}
+.obs-c2{background:var(--chart-2)}
+.obs-c3{background:var(--chart-3)}
+.obs-c4{background:var(--chart-4)}
+.obs-barcell{width:22%;min-width:64px}
+.obs-legend{display:flex;flex-wrap:wrap;gap:var(--space-3);font-size:var(--text-xs);color:var(--text-muted);margin-bottom:var(--space-2)}
+.obs-legend span{display:inline-flex;align-items:center;gap:var(--spacing)}
+.obs-swatch{display:inline-block;width:10px;height:10px;border-radius:var(--shape-chip)}
+
+/* The turn waterfall (spec 016): one grid with one shared time axis. Every
+   row has the same columns, so the bars line up. In a card 760px wide or
+   more a row is one line: kind, name, bar, hotspot, time, dollars, details.
+   Narrower (the chat dock open, or a 420px phone) a row takes two lines:
+   kind, name, hotspot and details on the first, and the bar, time and
+   dollars on the second. The card is the container, so the dock counts. */
+.obs-wf{margin:0 0 var(--space-3);container-type:inline-size}
+.wf{display:flex;flex-direction:column;margin-top:var(--space-2);min-width:0}
+.wf-row{display:grid;grid-template-columns:80px minmax(0,1fr) 56px 56px 64px;
+  grid-template-areas:"kind name name name hot" "bar bar time usd more";align-items:center;
+  gap:calc(var(--spacing) * 0.5) var(--space-2);padding:calc(var(--spacing) * 1.5) 0;border-top:var(--rule-width) solid var(--rule);min-width:0}
+@container (min-width:760px){
+  .wf-row{grid-template-columns:88px minmax(0,1.5fr) minmax(120px,1fr) 160px 64px 64px 72px;
+    grid-template-areas:"kind name bar hot time usd more";padding:calc(var(--spacing) * 1) 0}
+}
+.wf-c-kind{grid-area:kind;font-family:var(--face-mono);font-size:var(--text-xs);text-transform:uppercase;
+  letter-spacing:var(--tracking-label);color:var(--text-muted);white-space:nowrap}
+.wf-c-name{grid-area:name;min-width:0;font-size:var(--text-sm);overflow-wrap:anywhere}
+.wf-c-name code{font-size:var(--text-xs)}
+.wf-c-bar{grid-area:bar;min-width:0}
+.wf-c-hot{grid-area:hot;display:flex;flex-wrap:wrap;justify-content:flex-end;gap:calc(var(--spacing) * 1)}
+.wf-c-time,.wf-c-usd{font-family:var(--face-mono);font-size:var(--text-xs);color:var(--text-muted);text-align:right;white-space:nowrap}
+.wf-c-time{grid-area:time}
+.wf-c-usd{grid-area:usd}
+.wf-c-more{grid-area:more;text-align:right}
+.wf-c-kind .btn{text-transform:uppercase;font-family:var(--face-mono);font-size:var(--text-xs);letter-spacing:var(--tracking-label);
+  color:var(--text-ink);padding:0}
+.wf-axis{border-top:0}
+.wf-axis span{font-family:var(--face-mono);font-size:var(--text-xs);text-transform:uppercase;letter-spacing:var(--tracking-label);color:var(--text-faint)}
+.wf-axis-ends{display:flex;justify-content:space-between;border-bottom:var(--rule-width) solid var(--rule-hard)}
+.wf-axis .wf-axis-ends span{text-transform:none;letter-spacing:0}
+@container (max-width:759px){
+  .wf-axis .wf-c-kind,.wf-axis .wf-c-name,.wf-axis .wf-c-hot,.wf-axis .wf-c-more{display:none}
+}
+.wf-loop.on{background:var(--surface-raised)}
+.wf-child .wf-c-kind,.wf-child .wf-c-name{padding-left:var(--space-3)}
+.wf-failed .wf-c-kind{color:var(--bad)}
+.wf-total{border-top:var(--rule-width) solid var(--rule-hard)}
+.wf-total .wf-c-name,.wf-total .wf-c-time,.wf-total .wf-c-usd{color:var(--text-ink);font-weight:var(--font-weight-medium)}
+.wf-track{display:block;position:relative;height:8px;background:var(--surface-sunk);border-radius:var(--shape-chip);overflow:hidden}
+.wf-fill{position:absolute;top:0;bottom:0;border-radius:var(--shape-chip);background:var(--chart-5)}
+.wf-fill.wf-llm{background:var(--chart-1)}
+.wf-fill.wf-tool{background:var(--chart-2)}
+.wf-fill.wf-retrieval,.wf-fill.wf-memory_write{background:var(--chart-3)}
+.wf-fill.wf-gate,.wf-fill.wf-route{background:var(--chart-4)}
+.wf-detail{padding:calc(var(--spacing) * 1) 0 var(--space-2);font-size:var(--text-xs);color:var(--text-muted);
+  line-height:var(--leading-normal);overflow-wrap:anywhere}
+.wf-detail-body{min-width:0;padding-left:var(--space-8)}
+.wf-detail.wf-child .wf-detail-body{margin-left:var(--space-3)}
+.wf-detail code{font-size:var(--text-xs);white-space:normal;overflow-wrap:anywhere;border:0;background:none;padding:0}
+.wf-story{display:flex;flex-wrap:wrap;align-items:baseline;gap:calc(var(--spacing) * 1);font-size:var(--text-sm);color:var(--text-ink)}
+.wf-story .btn{padding:0;text-transform:none;letter-spacing:0;font-family:var(--face-sans);font-size:var(--text-sm);color:var(--text-ink);
+  text-decoration:underline;text-decoration-color:var(--rule-hard);text-underline-offset:3px}
+.wf-arrow,.wf-tail{color:var(--text-faint);font-family:var(--face-mono);font-size:var(--text-xs)}
+.wf-meta{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:var(--space-2);margin-top:var(--space-2)}
+.wf-meta .meta{font-size:var(--text-xs)}
+.wf-tools{display:flex;gap:var(--space-2)}
+.obs-wf .notice{margin-top:var(--space-2)}
+/* The segmented bar: blocks with 2px gaps on a --rule track. A mask on the
+   track cuts the track and its fill into the same blocks, so every bar on
+   the page shares one rhythm; a fill keeps at least one whole block. The
+   mask reads only alpha, so its opaque colour (--accent) never shows. */
+.wf-track.seg,.obs-bar.seg{background:var(--rule);border-radius:var(--radius);
+  -webkit-mask-image:repeating-linear-gradient(90deg,var(--accent) 0 calc(var(--spacing) * 1.5),transparent calc(var(--spacing) * 1.5) calc(var(--spacing) * 2));
+  mask-image:repeating-linear-gradient(90deg,var(--accent) 0 calc(var(--spacing) * 1.5),transparent calc(var(--spacing) * 1.5) calc(var(--spacing) * 2))}
+.wf-track.seg .wf-fill{min-width:calc(var(--spacing) * 2);border-radius:0}
+.wf-group{display:flex;flex-direction:column;gap:var(--space-2);padding-left:var(--space-3);border-left:var(--rule-width) solid var(--rule)}
+.wf-graph{padding:var(--space-2);border:var(--rule-width) dashed var(--rule);border-radius:var(--radius)}
+.wf-ghead{display:flex;flex-wrap:wrap;align-items:baseline;justify-content:space-between;gap:var(--spacing) var(--space-2)}
+.wf-gname{font-family:var(--face-mono);font-size:var(--text-xs);text-transform:uppercase;letter-spacing:var(--tracking-label);color:var(--text-ink)}
+
+/* Turn checks (spec 015): a check's chip in a turn's waterfall is a text-only
+   button around a badge, so a tap writes its note out under the chips. */
+.btn-tertiary.btn-sm.obs-chip{padding:0}
+.obs-notes{margin:0 0 var(--space-2);overflow-wrap:anywhere}
+.btn.obs-judge{white-space:normal;text-align:left;line-height:var(--leading-snug)}

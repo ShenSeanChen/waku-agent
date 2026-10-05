@@ -15,6 +15,7 @@ there is no way to tell those two apart from here.
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 
@@ -22,21 +23,106 @@ from hosted.core.tenant import TenantDirs
 
 ENV_MODE = 0o600
 
-# The ONLY line provisioning writes. Everything else the tenant's waku needs
+# The ONLY lines provisioning writes. Everything else the tenant's waku needs
 # -- the platform base URL, the platform token and the two model names --
 # comes from the container's environment, which outranks .env and which the
 # tenant cannot change on disk. Writing them here instead would hand the
 # tenant's own dashboard a file it can edit to point the platform token
 # somewhere else.
-TENANT_ENV_LINES = ("WAKU_PROVIDER=waku-platform",)
+#
+# WAKU_CONSOLIDATE_EVERY=1 is spec 006: a hosted turn sends what it learned
+# to the person's Waku Memory at the end of the same turn, not after six.
+TENANT_ENV_LINES = ("WAKU_PROVIDER=waku-platform", "WAKU_CONSOLIDATE_EVERY=1")
+
+
+# The tenant's Waku Memory, reached with their own key (spec 004). The key is
+# never in this file: auth_env names the variable the spawner sets from
+# control.db, so a tenant reading or editing mcp.json sees no credential.
+WAKU_MEMORY_SERVER = {
+    "name": "waku_memory",
+    "url": "https://api.waku.one/mcp",
+    "auth_env": "WAKU_MEMORY_API_KEY",
+}
+
+
+def ensure_waku_memory(home: Path) -> bool:
+    """Add WAKU_MEMORY_SERVER to home/mcp.json when it is missing. True if it wrote.
+
+    The one file provisioning adds to rather than only creates: a tenant's own
+    servers stay exactly as they are, and a waku_memory entry they already
+    have (an earlier browser sign-in, a different URL) is theirs and is left
+    alone. A symlink is never followed, for the same reason as .env's below,
+    and a file that is not the {"servers": [...]} shape is not ours to fix.
+    """
+    return _ensure_server(home, WAKU_MEMORY_SERVER)
+
+
+def _ensure_server(home: Path, server: dict) -> bool:
+    """The rules ensure_waku_memory states, for any one server entry."""
+    path = home / "mcp.json"
+    if path.is_symlink():
+        return False
+    if path.exists():
+        try:
+            config = json.loads(path.read_text(encoding="utf-8"))
+        except (ValueError, OSError):
+            return False
+        servers = config.get("servers") if isinstance(config, dict) else None
+        if not isinstance(servers, list):
+            return False
+        if any(isinstance(s, dict) and s.get("name") == server["name"] for s in servers):
+            return False
+        config["servers"] = [*servers, dict(server)]
+    else:
+        config = {"servers": [dict(server)]}
+    # Written beside the file and renamed over it: rename replaces the name
+    # itself and never writes through a link planted after the check above.
+    staging = home / ".mcp.json.provision"
+    staging.unlink(missing_ok=True)
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+    with os.fdopen(os.open(staging, flags, 0o644), "w", encoding="utf-8") as handle:
+        handle.write(json.dumps(config, indent=2) + "\n")
+    os.replace(staging, path)
+    return True
+
+
+# treg, through the metering proxy (spec 004 E). The proxy holds the platform's
+# treg token and the container never does: this entry authenticates to the
+# PROXY with the container's own platform token, which the proxy resolves to
+# the tenant, tags the call with and charges in their credits.
+TREG_SERVER_NAME = "treg"
+
+
+def treg_server(platform_base_url: str) -> dict:
+    return {
+        "name": TREG_SERVER_NAME,
+        "url": f"{platform_base_url.rstrip('/')}/treg/mcp/",
+        "auth_env": "WAKU_PLATFORM_TOKEN",
+    }
+
+
+def ensure_treg(home: Path, platform_base_url: str) -> bool:
+    """Add the treg server to home/mcp.json when it is missing. True if it wrote.
+
+    ensure_waku_memory's rules exactly: a treg entry the tenant already has
+    (their own treg.to sign-in, with their own team) is theirs and is left
+    alone, and so is a symlink or a file of the wrong shape. An empty base URL
+    means this deployment runs no treg relay, and nothing is written.
+    """
+    if not platform_base_url:
+        return False
+    return _ensure_server(home, treg_server(platform_base_url))
 
 
 def render_env() -> str:
     return "".join(f"{line}\n" for line in TENANT_ENV_LINES)
 
 
-def provision(dirs: TenantDirs, soul_template: Path) -> list[Path]:
-    """Create the two files that are missing. Returns the paths written.
+def provision(dirs: TenantDirs, soul_template: Path, *,
+              treg_base_url: str = "") -> list[Path]:
+    """Create the files that are missing, and add the tenant's Waku Memory
+    server, and treg when `treg_base_url` names the metering proxy, to
+    mcp.json (spec 004). Returns the paths written.
 
     `dirs` is built directly, not through tenant_dirs(): inside the throwaway
     container the only two paths that exist are the mounts, so C2 calls
@@ -99,5 +185,11 @@ def provision(dirs: TenantDirs, soul_template: Path) -> list[Path]:
     elif not soul.exists():
         soul.write_text(soul_template.read_text(encoding="utf-8"), encoding="utf-8")
         written.append(soul)
+
+    mcp_json = dirs.home / "mcp.json"
+    if ensure_waku_memory(dirs.home):
+        written.append(mcp_json)
+    if ensure_treg(dirs.home, treg_base_url) and mcp_json not in written:
+        written.append(mcp_json)
 
     return written

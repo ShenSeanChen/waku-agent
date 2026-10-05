@@ -6,6 +6,9 @@ files to change the UI; edit `dashboard.py` to change the server/API.
 
 - `index.html` — the shell (sidebar nav, `<main>`, chat dock) + the ordered
   `<script>` tags.
+- `embed.html` — the chat column alone, served at `/embed/chat` for waku.one to
+  frame (spec 008). It loads `util`, `theme`, `ui`, `blocks`, `render`, `dock` and
+  `embed.js`, which stands in for `main.js`.
 - `style.css` — one flat file of rules; every value comes from the tokens in
   `design/` (see "Design system" below).
 - `design/`, `fonts/` — the Waku Memory design system and its three fonts.
@@ -23,13 +26,16 @@ runs the bootstrap and must load last**.
 | `theme.js`   | the system / light / dark toggle (`cycleTheme`), stored as `waku-theme` like the Memory console |
 | `memory.js`  | inline Memory / SOUL / skill editing actions |
 | `models.js`  | `applyModel` (the one `/api/settings` writer), model picker / catalog / pins |
-| `render.js`  | formatters + chat card renderers (`stagesRow`/`teleFooter`) + chatlog + streaming + `sendChat` |
+| `blocks.js`  | a research report's five fenced blocks (`waku-metrics`, `-chart`, `-compare`, `-timeline`, `-sources`) drawn as UI, with no label of their own (the report's heading names them) and a Copy for the raw JSON; `renderMarkdown` calls `reportBlock`, and anything it cannot read stays a code block. The bodies are model output: everything through `esc`, links only to http(s) |
+| `render.js`  | formatters + chat card renderers (`stagesRow`/`teleFooter`, the turn receipt `receiptBlock`/`toggleReceipt`) + chatlog + streaming + `sendChat` |
 | `diagram.js` | `archSVG` (the architecture chart) **and** its live animation (`STAGE`/`hot`/`pollEvents`) |
 | `graph.js`   | graph workflows: data-driven topology chart (`graphSVG` from `d.graph.workflows`), the Overview panel (`graphPanel`), and `animateGraphStage` for `graph_*`/`route` events |
 | `views.js`   | subtab/db helpers, SQL console, Memory/Tools sub-views, the `VIEWS` router object |
+| `observe.js` | the Observability page (spec 012): four cards that match and open its four tabs, Turns (a waterfall per turn: a story line, failures, then one grid on one time axis with a closed row per loop; `obsTurnBadges` is the slot for a turn's badges), Tools (by source; treg endpoints first, then the actions around them), Memory, Spend; and the Evals page (`#evals`). Both read `GET /api/observability` through `loadObservability`; `#ops` still opens Observability and `#observability/evals` lands on Evals |
 | `compare.js` | the Model arena (`Arena` tab; internals keep the `compare` name) — race one message through several models at once |
 | `dock.js`    | chat sessions/history (`loadThreadInto`), model chip, stats toggle |
 | `main.js`    | `render`/`refresh` loop, resizers, voice, and the bootstrap (**loads last**) |
+| `embed.js`   | `embed.html`'s bootstrap instead of `main.js`: the header's state from `/api/session?action=state`, the `postMessage` to the page that framed it, and the three messages it accepts back (`new-chat`; `theme`, applied but never stored; `ask`, a prompt id mapped to the frame's own fixed sentence, never free text) (**loads last there**) |
 
 Data flows one way: `refresh()` (main.js) fetches `/api/data` into the global
 `D`, then `render()` writes `VIEWS[hash](D)` into `#view`. Every mutation
@@ -44,7 +50,11 @@ Data flows one way: `refresh()` (main.js) fetches `/api/data` into the global
 - **`archSVG` is byte-frozen — do not rewrite the architecture chart.** It emits
   `data-node="…"`/`data-edge="…"` ids that the `STAGE` map (same file) drives the
   live animation from. If you ever change a node/edge id, change it in both
-  places. (Both are in `diagram.js` precisely so they stay together.)
+  places. (Both are in `diagram.js` precisely so they stay together.) Spec 016
+  is the one change this rule has allowed: it redrew the LLM Ops panel only
+  (Trace, Observability, Evals, Release, and the `e-release-loop` arrow back to
+  the LOOP box), and `test_observability.py` pins a hash of everything before
+  that panel.
 - **The graph chart is data-driven — never hand-edit a topology.** `graphSVG`
   renders `Graph.describe()` served in `/api/data`, so the picture is provably
   what the engine runs (`test_graph_topology_payload.py` pins it). To change the

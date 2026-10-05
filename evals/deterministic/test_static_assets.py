@@ -14,12 +14,16 @@ import re
 from pathlib import Path
 
 from waku.integrations import INTEGRATIONS
+from waku.tools import treg
 
 STATIC = Path(__file__).resolve().parents[2] / "waku" / "ops" / "static"
 INDEX = (STATIC / "index.html").read_text()
 JS_FILES = sorted((STATIC / "js").glob("*.js"))
 JS_SRC = "\n".join(f.read_text() for f in JS_FILES)
-CONNECTION_LOGOS = {f"{integration.key}.svg" for integration in INTEGRATIONS}
+# The registry's cards, plus the MCP sign-in cards (spec 007 E), which are not
+# .env integrations and so are not in the registry.
+CONNECTION_LOGOS = ({f"{integration.key}.svg" for integration in INTEGRATIONS}
+                    | {f"{treg.NAME}.svg"})
 
 # JS keywords / builtins / DOM globals an inline handler may call without a js/
 # definition. Kept small on purpose — anything else must be a real app function.

@@ -12,4 +12,10 @@ a third-party CDN at runtime.
   [Lobe Icons 1.90.0](https://github.com/lobehub/lobe-icons), licensed under MIT.
   Copyright (c) 2023 LobeHub.
 
+- `typesafe.svg` is a neutral glyph drawn for this repository (a list with a
+  check, for "Jev decides what to keep"), MIT like the rest of `waku/`. It is
+  not TypeSafe's mark, which no icon set above carries.
+- `treg.svg` is a neutral glyph drawn for this repository (a globe, for "live
+  data from the web"), MIT like the rest of `waku/`. It is not treg's mark.
+
 Brand names and marks remain the property of their respective owners.

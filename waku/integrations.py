@@ -12,6 +12,7 @@ import json
 import os
 import socket
 import sys
+import urllib.error
 import urllib.request
 from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass
@@ -250,6 +251,25 @@ INTEGRATIONS: tuple[Integration, ...] = (
     Integration("tavily", "Search & Observability", "Tavily", "Lets Waku search the web.",
                 (EnvField("TAVILY_API_KEY", "API key", secret=True),), None, None,
                 "https://tavily.com", ReloadMode.LIVE, lambda env: bool(env.get("TAVILY_API_KEY")), None),
+    # Spec 014: a person's own treg key. Its card is treg's MCP card
+    # (waku/tools/treg.py), which opens this row's dialog; views.js draws no
+    # second card for it. Saving rebuilds the agent, which reconnects treg
+    # with the key (treg.resolve), so the switch is live on the next message.
+    Integration("treg", "Search & Observability", "treg",
+                "Your own treg key. treg then bills your treg account, not your Waku credits.",
+                (EnvField("TREG_API_KEY", "API key", secret=True,
+                          help="An org-scoped key from your treg dashboard. It is sent only to treg."),),
+                None, None, "https://treg.to", ReloadMode.AGENT,
+                lambda env: bool(env.get("TREG_API_KEY")), None),
+    # Spec 005: Jev decides which memories earn a slot. Both fields, or it
+    # stays off: WAKU_SLOT_GATE=jev is the switch, the key is the credential.
+    Integration("typesafe", "Memory & Storage", "TypeSafe Jev",
+                "Lets Jev decide which memories earn a place in each answer.",
+                (EnvField("TYPESAFE_API_KEY", "API key", secret=True),
+                 EnvField("WAKU_SLOT_GATE", "Set to jev to turn it on")), None, None,
+                "https://typesafe.ai", ReloadMode.LIVE,
+                lambda env: env.get("WAKU_SLOT_GATE") == "jev" and bool(env.get("TYPESAFE_API_KEY")),
+                None),
     Integration("otel", "Search & Observability", "OpenTelemetry", "Exports traces to an OTLP collector.",
                 (EnvField("OTEL_EXPORTER_OTLP_ENDPOINT", "OTLP endpoint"),), "tracing", "opentelemetry",
                 "", ReloadMode.AGENT, lambda env: bool(env.get("OTEL_EXPORTER_OTLP_ENDPOINT")), None),
@@ -475,13 +495,40 @@ def cli_main() -> int:
         if status.state is IntegrationState.ERROR and any(field.configured for field in view.fields):
             failed = True
 
-    # Waku Memory is not an .env field like the rows above: it is a server in
-    # mcp.json with a sign-in token beside it, so its line comes from there.
-    from waku.config import load_settings
+    from waku.config import (
+        DOTENV_PATH,
+        HOME_DOTENV_PATH,
+        describe_home,
+        home_notice,
+        load_settings,
+        resolve_home,
+    )
+    from waku.tools.treg import status as treg_status
     from waku.tools.waku_memory import status as waku_memory_status
 
+    # Where this run keeps its memory, and which .env files supplied the keys.
+    console.print("\n[bold]Home[/bold]")
+    console.print(f"  {'Memory folder':<20} {describe_home(resolve_home())}", markup=False)
+    env_files = ", ".join(path for path in (DOTENV_PATH, HOME_DOTENV_PATH) if path) or "none found"
+    console.print(f"  {'.env read':<20} {env_files}", markup=False)
+    if notice := home_notice():
+        console.print(f"  {notice}", markup=False)
+
+    # Where a model key was looked for, in the order the places win (spec 013).
+    # Paths and yes-or-no only: no value is printed.
+    from waku.key_locations import cli_lines, model_key_locations
+
+    console.print("\n[bold]Model key[/bold]")
+    for line in cli_lines(model_key_locations()):
+        console.print(f"  {line}", markup=False)
+
+    # Waku Memory is not an .env field like the rows above: it is a server in
+    # mcp.json with a sign-in token beside it, so its line comes from there.
     console.print("\n[bold]Shared memory[/bold]")
     console.print(f"  {'Waku Memory':<20} {waku_memory_status(load_settings().home)}", markup=False)
+    # treg the same way: an MCP server with a sign-in, not an .env field.
+    console.print("\n[bold]Live data[/bold]")
+    console.print(f"  {'treg':<20} {treg_status(load_settings().home)}", markup=False)
     return int(failed)
 
 
@@ -490,9 +537,9 @@ def _find_integration(key: str) -> Integration | None:
 
 
 def _env_path() -> Path:
-    from dotenv import find_dotenv
+    from waku.config import env_write_path
 
-    return Path(find_dotenv(usecwd=True) or ".env")
+    return env_write_path()
 
 
 def _safe_error(exc: Exception, values: Mapping[str, str], integration: Integration) -> str:
@@ -539,6 +586,23 @@ def _tavily_probe(values: Mapping[str, str]) -> None:
             raise ValueError(f"Tavily returned HTTP {response.status}")
 
 
+def _treg_probe(values: Mapping[str, str]) -> None:
+    """Ask treg whether the key is good: GET /tools lists the team's own tools,
+    is free, writes nothing and answers 401 on a bad key. Straight to treg.to,
+    never through a relay, and never `balance`."""
+    request = urllib.request.Request("https://treg.to/tools",
+                                     headers={"X-Treg-Token": values.get("TREG_API_KEY", ""),
+                                              "Accept": "application/json"})
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:  # noqa: S310 - fixed provider endpoint
+            if response.status >= 300:
+                raise ValueError(f"treg returned HTTP {response.status}")
+    except urllib.error.HTTPError as exc:
+        if exc.code in (401, 403):
+            raise ValueError("treg did not accept this key") from None
+        raise ValueError(f"treg returned HTTP {exc.code}") from None
+
+
 def _otel_probe(values: Mapping[str, str]) -> None:
     """Check that the configured OTLP/gRPC collector accepts TCP connections."""
     endpoint = values.get("OTEL_EXPORTER_OTLP_ENDPOINT", "").strip()
@@ -580,6 +644,8 @@ def _probed(integration: Integration) -> Integration:
         return Integration(**{**integration.__dict__, "probe": _notion_probe})
     if integration.key == "tavily":
         return Integration(**{**integration.__dict__, "probe": _tavily_probe})
+    if integration.key == "treg":
+        return Integration(**{**integration.__dict__, "probe": _treg_probe})
     if integration.key == "otel":
         return Integration(**{**integration.__dict__, "probe": _otel_probe})
     return integration
@@ -731,6 +797,38 @@ def test_integration(key: str) -> IntegrationView:
     return view
 
 
+def _provider_can_serve(name: str) -> bool:
+    """Whether `name` could answer a turn right now: it exists, and it has a
+    key. `bool(env.get(key_env))` is the same test the Models grid colours a
+    card with, so the two cannot disagree about what "configured" means."""
+    selected = PROVIDERS.get(name)
+    if selected is None:
+        # Names a provider this build does not have. A stored setting outlives
+        # the code that gave it meaning: a row removed from a release leaves
+        # every user who had selected it pointing at nothing.
+        return False
+    return bool(os.environ.get(selected.key_env, ""))
+
+
+def _adoptable(selected: Provider, key: str | None) -> bool:
+    """True when saving `selected` should also make it current.
+
+    IT TAKES A KEY IN THIS CALL, not merely a key on file. The rule is "the
+    first key you enter becomes your provider", and an adoption that fired on
+    any save of an already-keyed provider is a wider rule than that sentence:
+    test_saving_noncurrent_provider_does_not_activate_or_rebuild edits a base
+    URL on a provider that happens to hold a key, while the current provider
+    holds none, and that must stay a base-URL edit rather than a switch. The
+    person is editing settings, not choosing a provider.
+
+    Somebody already stranded on an unusable provider, who is not entering a
+    key, is recovered by the dashboard's first-run gate instead
+    (waku/ops/static/js/setup.js, needsSetup), which can ask rather than guess.
+    """
+    return bool(key) and not _provider_can_serve(
+        os.environ.get("WAKU_PROVIDER", ""))
+
+
 def apply_provider(provider: str, *, key: str | None = None, model: str | None = None,
                    small_model: str | None = None, base_url: str | None = None,
                    custom_key: str | None = None, force: bool = False,
@@ -742,6 +840,28 @@ def apply_provider(provider: str, *, key: str | None = None, model: str | None =
 
     previous = os.environ.get("WAKU_PROVIDER", "")
     selected = PROVIDERS[provider]
+    # THE FIRST WORKING KEY BECOMES THE CURRENT PROVIDER, whatever the caller
+    # asked for.
+    #
+    # The Models modal's save button sends activate=False on purpose: once you
+    # have a provider that works, adding a second one should not silently move
+    # your turns onto it. But that default is wrong in the one case where the
+    # user has nothing -- they paste their first key, the save does not
+    # activate, WAKU_PROVIDER still names whatever it named before, and the
+    # next message fails with no visible reason.
+    #
+    # It is not hypothetical. On 2026-09-28 a hosted tenant's WAKU_PROVIDER
+    # said `waku-platform` -- the free tier, whose row had just been removed
+    # from the build -- so the setting named a provider that no longer
+    # existed. They pasted a valid Anthropic key, the dashboard showed it
+    # configured, and every turn went nowhere, quietly.
+    #
+    # So: adopt when the CURRENT provider cannot serve a turn and the one
+    # being saved can. Both halves matter. Without the first, adding a second
+    # provider hijacks a working setup; without the second, a save that
+    # carries no key moves the user from one dead provider to another.
+    if not activate and _adoptable(selected, key):
+        activate = True
     switching = activate and provider != previous
     updates: dict[str, str] = {"WAKU_PROVIDER": provider} if activate else {}
     if model is not None:

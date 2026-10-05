@@ -37,9 +37,19 @@ cp .env.example .env
 
 Set `WAKU_PROVIDER=` and paste that provider's key. Anthropic is the default;
 OpenAI, Gemini, DeepSeek, MiniMax, Kimi, GLM, OpenRouter, OpenCode Zen,
-OpenCode Go and Opper work the same way. You can also paste a key in the dashboard's
-Settings later. Either way it stays in your local `.env` and is never sent to
-the browser.
+OpenCode Go and Opper work the same way. You can also paste a key in the
+dashboard later. Either way the key stays in a `.env` on your machine and is
+never sent to the browser.
+
+Waku reads a model key from three places, and the first one that has it wins:
+environment variables set before Waku starts, the `.env` in the folder you run
+Waku from (or the nearest folder above it), and `~/.waku/.env`. A key you paste
+in the dashboard goes to the folder's `.env` when there is one, and to
+`~/.waku/.env` when there is not, so Waku finds it from any folder. When Waku
+finds no key, the dashboard's "Set up Waku" page lists the paths it checked,
+and `waku connections` prints the same list under "Model key". A git worktree
+does not see the main checkout's `.env`: start Waku in the main checkout, or
+copy the key's line into `~/.waku/.env`.
 
 **Check:** run `waku` and say hi. It answers in the terminal.
 
@@ -63,7 +73,10 @@ Say *"Remember that Alex prefers morning meetings."* Quit, and restart. Then
 say *"Book a catch-up with Alex on Friday."*
 
 **Check:** it books 9am, and **Memory ▸ Semantic** lists the fact. Your memory
-is one file: `.waku/state.db`.
+is one file: `~/.waku/state.db`, the same from every folder. Set `WAKU_HOME`
+to keep it somewhere else. If you ran Waku before v0.2, your memory is in the
+`.waku/` folder you ran it from, and Waku keeps using it there until you copy
+it: `mkdir -p ~/.waku && cp -R ./.waku/. ~/.waku/`.
 
 ## 5. Share memory with your other agents (optional)
 
@@ -85,6 +98,17 @@ tools.
 
 To connect Claude Code, Codex, Hermes or Grok Bot to the same memory, see
 [integrations](integrations.md#share-one-memory-with-your-other-agents-waku-memory).
+
+Beside it, [treg](https://treg.to) gives Waku live data when it researches,
+on your own treg account:
+
+```bash
+waku connect treg                       # or /connect treg in the dashboard chat
+```
+
+**Check:** `waku connections` lists treg as connected, and so does the
+**Connections** page. More in
+[integrations](integrations.md#live-data-for-research-treg).
 
 ## Next
 

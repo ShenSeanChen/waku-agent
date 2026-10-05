@@ -6,13 +6,25 @@ session → loop. If you want to understand the repo in one place, start here.
 
 from __future__ import annotations
 
+import logging
+
 from waku.config import Settings, load_settings
 from waku.db import connect
+from waku.loop import trim
 from waku.loop.agent import LoopResult, Observer, run_loop
 from waku.loop.models import get_client
-from waku.ops.tracing import Tracer, compose
+from waku.memory import brain, reports
+from waku.ops import receipt as receipts
+from waku.ops.tracing import Tracer, compose, metered
 from waku.runtime.session import Session
 from waku.tools import build_registry
+from waku.tools.waku_memory import get_via, remember_via, search_via, tool_name
+
+# The Waku Memory tools that read memory. What they return this turn is
+# already kept, so consolidation must not keep it again.
+MEMORY_READS = ("memory.search", "memory.get", "memory.recall")
+
+log = logging.getLogger(__name__)
 
 
 class Waku:
@@ -30,6 +42,19 @@ class Waku:
         self.memory = Memory(self.conn, self.settings, self.client)
         self.tools = build_registry(self.conn, self.settings, self.memory)
         self.mcp_bridge = getattr(self.tools, "mcp_bridge", None)
+        # Spec 006: with Waku Memory connected, every fact consolidation keeps
+        # is sent there too. Without it this is None and nothing is sent.
+        self.memory.remember = remember_via(self.mcp_bridge)
+        # Spec 009 A: a research turn searches Waku Memory before the model
+        # starts. None without Waku Memory, and then nothing is searched.
+        self.brain_search = search_via(self.mcp_bridge)
+        self.brain_get = get_via(self.mcp_bridge)
+        # A research report reaches Waku Memory one way, once a turn: from
+        # the reply, through reports.save. The model's own remember tool
+        # refuses a report body (2026-10-05: one turn saved two).
+        remember_tool = self.tools.get(tool_name(self.mcp_bridge, "memory.remember") or "")
+        if remember_tool is not None:
+            remember_tool.fn = reports.guard_remember(remember_tool.fn)
         self.session = Session(self.settings, memory=self.memory)
         self.tracer = Tracer(self.settings)
 
@@ -50,8 +75,12 @@ class Waku:
         # them with the turn (the reopened-thread telemetry the dashboard shows)
         import time
         captured: dict = {}
+        # Spec 011: the events a receipt is built from, in the order they came
+        turn_events: list[tuple[str, dict]] = []
 
         def _capture(kind, ev):
+            if kind in ("llm", "tool", "consolidation", "report"):
+                turn_events.append((kind, ev))
             if kind == "gate":
                 captured["gate"] = {"decision": ev.get("decision"), "reason": ev.get("reason")}
             if kind == "route":
@@ -64,6 +93,8 @@ class Waku:
         t0 = time.perf_counter()
 
         with self.tracer.turn(user_message):
+            if hasattr(self.client, "turn_id"):   # waku-platform: spec 011 B1
+                self.client.turn_id = self.tracer.turn_id
             # The graph front door is optional and can NEVER make Waku worse:
             # flag off → this is exactly the old code path; flag on → the triage
             # graph decides quick vs full, and any failure anywhere falls open
@@ -78,6 +109,21 @@ class Waku:
                     result = None
             if result is None:
                 result = self._run_full_turn(user_message, notify, stream)
+
+            # Spec 007: a reply holding a research report sends the report to
+            # Waku Memory and keeps only its first sentences in the chat. No
+            # Waku Memory, or a failed send, leaves the reply whole.
+            # One report a turn: when the model saved one itself, save()
+            # sends nothing more and the card points at that memory.
+            kept_report = reports.kept_body(result.reply, result.tool_calls)
+            reply, report = reports.save(
+                result.reply, self.memory.remember,
+                lambda r: reports.is_company_research(
+                    metered(self.client, "report", notify), self.settings.small_model, r),
+                tool_calls=result.tool_calls)
+            if report is not None:
+                result.reply = reply
+                notify("report", report)
 
             quick = captured.get("graph_route", {}).get("target") == "quick_reply"
 
@@ -95,21 +141,63 @@ class Waku:
                 "iterations": result.iterations,
                 "latency_ms": int((time.perf_counter() - t0) * 1000),
                 "tools": [{"tool": c["tool"], "status": _status(c["output"])}
-                          for c in result.tool_calls],
+                          for c in result.read_first + result.tool_calls],
+                # Spec 009 A: what the brain already knew, read before the turn
+                "used": result.used,
                 # which brain answered this turn — so a reopened thread (or a
                 # thread you switched models mid-way) shows it per card. A quick
                 # graph turn was answered by the small model; say so honestly.
                 "model": self.settings.small_model if quick else self.settings.model,
                 "provider": self.settings.provider,
+                # the card a reopened thread draws in place of the report
+                "report": report,
             }
-            self.session.add_exchange(user_message, result.reply, tool_calls=result.tool_calls,
-                                      source=source, meta=meta)
+            row_id = self.session.add_exchange(user_message, result.reply,
+                                               tool_calls=result.tool_calls,
+                                               source=source, meta=meta)
             if self.memory is not None:
-                self.memory.maybe_consolidate(notify=notify)
+                # Spec 009 B: a turn that saved a report keeps at most two
+                # facts, about the person; the findings stay in the report.
+                # A turn that answered from memory does not keep that memory
+                # again (2026-10-05: a recall turn re-saved five findings).
+                self.memory.maybe_consolidate(
+                    notify=notify, report=kept_report if report is not None else "",
+                    recalled=self._recalled(result))
                 self.memory.export_markdown()   # keep MEMORY.md in sync
+
+            # Spec 011: the receipt, once consolidation has kept what it keeps.
+            # It goes on the result (the `done` payload), into the stored
+            # row's meta, and into the trace as one `receipt` event. The reply
+            # is already stored, so a receipt that fails is logged and skipped.
+            try:
+                self._receipt(result, turn_events, meta, row_id)
+            except Exception:
+                log.exception("the turn's receipt could not be built")
 
         self.tracer.end_turn(result.reply, result.iterations)
         return result
+
+    def _recalled(self, result: LoopResult) -> str:
+        """Everything this turn read from memory, as text: what was read
+        before the loop, and what the model's own Waku Memory searches, gets
+        and recalls returned."""
+        reads = {tool_name(self.mcp_bridge, t) for t in MEMORY_READS} - {None}
+        outputs = [c["output"] for c in result.tool_calls
+                   if c.get("tool") in reads and isinstance(c.get("output"), str)]
+        return "\n".join(p for p in (result.recalled, *outputs) if p)
+
+    def _receipt(self, result: LoopResult, events: list, meta: dict, row_id: int | None) -> None:
+        charges = getattr(self.client, "charges", None)   # waku-platform only
+        turn_id = self.tracer.turn_id
+        result.receipt = receipts.build(
+            events, turn_id=turn_id, model=meta["model"] or "",
+            provider=self.settings.provider, default_model=self.settings.model or "",
+            used=len(result.used),
+            charges=charges(turn_id) if callable(charges) else None)
+        meta.update(turn_id=turn_id, receipt=result.receipt)
+        if row_id is not None:
+            self.memory.update_meta(row_id, meta)
+        self.tracer.event("receipt", result.receipt)
 
     def _run_full_turn(self, user_message: str, notify, stream: bool) -> LoopResult:
         """The classic turn: assemble working memory, run THE loop. Extracted
@@ -123,7 +211,18 @@ class Waku:
         window = self.settings.history_turns * 2
         messages = self.session.history[-window:] + [{"role": "user", "content": user_message}]
 
-        return run_loop(
+        # Spec 009 A: research starts from what the company brain already
+        # knows. The searches run here, before the model's first call, and
+        # are shown as tool calls; a failed search is skipped, never fatal.
+        known = brain.ReadFirst()
+        if self.brain_search is not None and brain.is_research(
+                self.memory.skills.match(user_message)):
+            known = brain.read_first(user_message, self.brain_search, self.brain_get)
+            for call in known.calls:
+                notify("tool", call)
+            system += known.context
+
+        result = run_loop(
             client=self.client,
             model=self.settings.model,
             system=system,
@@ -133,7 +232,14 @@ class Waku:
             max_tokens=self.settings.max_tokens,
             observer=notify,
             stream=stream,
+            # before each later call, a whole earlier report the model read
+            # is cut to its digest (spec 009 A), and any other long result it
+            # read is cut to its opening (waku/loop/trim.py)
+            trim=trim.chain(reports.shrink_read, trim.shrink_seen),
         )
+        result.read_first, result.used = known.calls, known.used
+        result.recalled = "\n".join(p for p in (self.session.retrieved, known.context) if p)
+        return result
 
     def _respond_via_graph(self, user_message: str, notify, stream: bool) -> LoopResult | None:
         """One turn through the triage graph workflow. Returns None whenever
@@ -150,13 +256,14 @@ class Waku:
         def quick_reply(state: dict) -> str:
             prompt = QUICK_REPLY_PROMPT.format(calendar=state.get("calendar", ""),
                                                message=state["message"])
-            response = self.client.messages.create(
+            response = metered(self.client, "quick", notify).messages.create(
                 model=self.settings.small_model, max_tokens=600,
                 messages=[{"role": "user", "content": prompt}])
             return "".join(b.text for b in response.content if b.type == "text")
 
         graph = build_triage_graph(
-            classify_fn=lambda m: classify_message(self.client, self.settings.small_model, m),
+            classify_fn=lambda m: classify_message(
+                metered(self.client, "triage", notify), self.settings.small_model, m),
             calendar_fn=lambda: todays_events(self.settings.home),
             quick_fn=quick_reply,
             # the full path is the SAME method the flag-off default runs; the

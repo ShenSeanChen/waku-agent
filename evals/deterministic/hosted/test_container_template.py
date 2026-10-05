@@ -204,15 +204,69 @@ def test_a_tenant_container_refuses_a_zone_or_a_token_it_should_not_carry():
                                       timezone="UTC", token=TOKEN)
 
 
-def test_the_eleven_variable_names_are_pinned_for_group_f():
-    """Both directions. A name in the example file that ENV_NAMES does not read
-    is a value the operator set and the spawner ignored, which looks configured
-    and is not."""
+def test_the_variable_names_are_pinned_for_group_f():
+    """Both directions. A name in the example file that the spawner does not
+    read is a value the operator set and the spawner ignored, which looks
+    configured and is not.
+
+    PLATFORM_ENV_NAMES joined this on 2026-09-27, when the free tier became
+    optional. They belong on the LEFT of this comparison, commented out in the
+    example the way OPTIONAL_ENV_NAMES already is, because an operator who
+    finds them uncommented in a file called .example is an operator who
+    switches on a metering proxy this deployment does not run.
+    """
     example = (Path(__file__).resolve().parents[3]
                / "hosted" / "deploy" / "spawner.env.example").read_text(encoding="utf-8")
-    in_file = {line.split("=", 1)[0] for line in example.splitlines()
-               if line.strip() and not line.startswith("#")}
-    assert in_file == set(template.ENV_NAMES)
+    live = {line.split("=", 1)[0] for line in example.splitlines()
+            if line.strip() and not line.startswith("#")}
+    assert live == set(template.ENV_NAMES)
+    # Named in the file, and named as not-on: a reader has to be able to find
+    # out that a free tier is a thing this file configures.
+    mentioned = {line.lstrip("# ").split("=", 1)[0] for line in example.splitlines()
+                 if line.startswith("#") and "=" in line}
+    assert set(template.PLATFORM_ENV_NAMES) <= mentioned, (
+        "spawner.env.example does not mention the free tier's three names, so "
+        "nothing tells an operator the option exists")
+
+
+def test_a_tenant_gets_no_free_tier_variables_when_there_is_no_free_tier():
+    """The whole point. Stock waku decides whether to offer the "Hosted free
+    tier" row by whether these are set, so a deployment with no metering proxy
+    must not set them -- that combination is what put "enabled, current" on a
+    tenant's Models page above an endpoint that refuses every connection."""
+    env = {name: "x" for name in template.ENV_NAMES}
+    env["WAKU_TENANT_DISK_BYTES"] = "1000000"
+    env["WAKU_SECCOMP_PROFILE"] = str(
+        Path(__file__).resolve().parents[3] / "hosted" / "image" / "seccomp.json")
+    config = template.config_from_env(env)
+    assert template.platform_env(config, TOKEN) == []
+    body = template.tenant_container(config, tenant_id="aaaaaaaaaaaa", project_id=5,
+                                     timezone="UTC", token=TOKEN)
+    assert not [line for line in body["Env"] if "WAKU_PLATFORM" in line]
+    # And the token does not leak in on its own. It is a credential for a
+    # service this deployment does not run, in an environment the tenant reads.
+    assert not [line for line in body["Env"] if line.endswith("=" + TOKEN)]
+
+    with_tier = dict(env, WAKU_PLATFORM_BASE_URL="http://10.88.0.1:8788",
+                     WAKU_PLATFORM_MODEL="m", WAKU_PLATFORM_SMALL_MODEL="m")
+    full = template.tenant_container(template.config_from_env(with_tier),
+                                     tenant_id="aaaaaaaaaaaa", project_id=5,
+                                     timezone="UTC", token=TOKEN)
+    assert len([line for line in full["Env"] if "WAKU_PLATFORM" in line]) == 4
+
+
+def test_half_a_free_tier_is_refused():
+    """A base URL with no model is a provider that cannot name a model; a
+    model with no base URL has nowhere to send it. Either half produces the
+    same lie in a smaller size, so config_from_env refuses to start rather
+    than letting a fleet fail one turn at a time."""
+    env = {name: "x" for name in template.ENV_NAMES}
+    env["WAKU_TENANT_DISK_BYTES"] = "1000000"
+    env["WAKU_SECCOMP_PROFILE"] = str(
+        Path(__file__).resolve().parents[3] / "hosted" / "image" / "seccomp.json")
+    for name in template.PLATFORM_ENV_NAMES:
+        with pytest.raises(ValueError, match="all three or none"):
+            template.config_from_env(dict(env, **{name: "set"}))
 
 
 def test_config_from_env_refuses_an_empty_value_and_accepts_the_typed_escape(tmp_path):
@@ -566,3 +620,145 @@ def test_each_bridges_interface_name_matches_its_network_name():
             ["com.docker.network.bridge.name"]) == tenant.INSPECT_BRIDGE
     for name in (tenant.TENANT_BRIDGE, tenant.INSPECT_BRIDGE):
         assert len(name) < 16, f"{name} is past Linux's IFNAMSIZ of 15"
+
+
+# --- spec 004 A3: the Waku Memory key reaches the container --------------------
+
+MEMORY_KEY = "mem_sk_" + "m" * 43
+
+
+def test_a_waku_memory_key_becomes_one_more_variable():
+    body = template.tenant_container(CONFIG, tenant_id=TENANT, project_id=2,
+                                     timezone="UTC", token=TOKEN, memory_key=MEMORY_KEY)
+    assert f"WAKU_MEMORY_API_KEY={MEMORY_KEY}" in body["Env"]
+    assert len(body["Env"]) == len(_tenant_body()["Env"]) + 1
+
+
+def test_no_waku_memory_key_means_no_variable():
+    assert not any(e.startswith("WAKU_MEMORY_API_KEY=") for e in _tenant_body()["Env"])
+
+
+def test_the_template_refuses_a_malformed_waku_memory_key():
+    with pytest.raises(ValueError):
+        template.tenant_container(CONFIG, tenant_id=TENANT, project_id=2,
+                                  timezone="UTC", token=TOKEN, memory_key="mem_sk_x\nEVIL=1")
+
+
+# --- spec 004 E: treg in every container -----------------------------------------
+
+
+def _spawner_env(**extra) -> dict:
+    env = {name: "x" for name in template.ENV_NAMES}
+    env["WAKU_TENANT_DISK_BYTES"] = "1000000"
+    env["WAKU_SECCOMP_PROFILE"] = str(
+        Path(__file__).resolve().parents[3] / "hosted" / "image" / "seccomp.json")
+    return env | extra
+
+
+FREE_TIER = {"WAKU_PLATFORM_BASE_URL": "http://10.88.0.1:8788",
+             "WAKU_PLATFORM_MODEL": "m", "WAKU_PLATFORM_SMALL_MODEL": "m"}
+
+
+def test_the_treg_relay_is_off_unless_spawner_env_says_on():
+    assert template.config_from_env(_spawner_env(**FREE_TIER)).treg_relay is False
+    on = template.config_from_env(_spawner_env(**FREE_TIER, WAKU_TREG_RELAY="on"))
+    assert on.treg_relay is True
+    assert template.provision_env(on) == ["WAKU_TREG_BASE_URL=http://10.88.0.1:8788"]
+    assert template.provision_env(CONFIG) == []
+
+
+def test_treg_without_the_free_tier_or_with_a_misspelt_value_is_refused():
+    """The relay is a route on the metering proxy, reached with the free
+    tier's platform token: without the free tier there is nothing to point at.
+    And a value other than `on` is a setting the operator believes they made."""
+    with pytest.raises(ValueError, match="needs the free tier"):
+        template.config_from_env(_spawner_env(WAKU_TREG_RELAY="on"))
+    for value in ("yes", "true", "1", "ON"):
+        with pytest.raises(ValueError, match="WAKU_TREG_RELAY"):
+            template.config_from_env(_spawner_env(**FREE_TIER, WAKU_TREG_RELAY=value))
+
+
+def test_spawner_env_example_names_the_treg_switch_commented_out():
+    example = (Path(__file__).resolve().parents[3]
+               / "hosted" / "deploy" / "spawner.env.example").read_text(encoding="utf-8")
+    assert f"#{template.TREG_ENV_NAME}=on" in example
+
+
+def test_only_the_provision_container_is_told_where_treg_is(monkeypatch, tmp_path):
+    """The env reaches the throwaway provision container and nothing else: a
+    tenant container never gets WAKU_TREG_BASE_URL, and the treg token is in
+    no container at all (it is not in spawner.env to begin with)."""
+    import dataclasses
+
+    config = dataclasses.replace(CONFIG, tenant_root=tmp_path / "tenants", treg_relay=True)
+    created: list[dict] = []
+
+    class Engine:
+        async def create(self, name, body):
+            created.append(body)
+            return "id"
+
+        async def start(self, container):
+            return None
+
+        async def wait(self, container):
+            return 0
+
+        async def logs(self, container):
+            return ""
+
+        async def remove(self, container, *, force=True):
+            return None
+
+    async def no_quota(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(docker_mod.xfsquota, "claim", no_quota)
+    monkeypatch.setattr(docker_mod.xfsquota, "set_limit", no_quota)
+    monkeypatch.setattr(docker_mod.os, "chown", lambda *a, **k: None)
+    asyncio.run(docker_mod.DockerRuntime(config, Engine()).provision(TENANT, 2))
+    assert created[0]["Labels"][template.LABEL_KIND] == template.KIND_PROVISION
+    assert "WAKU_TREG_BASE_URL=http://10.88.0.1:8788" in created[0]["Env"]
+    tenant_env = template.tenant_container(config, tenant_id=TENANT, project_id=2,
+                                           timezone="UTC", token=TOKEN)["Env"]
+    assert not [line for line in tenant_env if "TREG" in line]
+
+
+# --- spec 009 E: no refused calls -------------------------------------------------
+
+
+def test_a_tenant_with_the_treg_relay_is_told_balance_and_resources_list_are_unavailable(
+        tmp_path):
+    """The relay refuses treg's balance and resources_list (hosted/proxy/treg.py
+    ALLOWED_TOOLS), so a hosted container's instructions say so. The line is
+    in the container's environment, which every start sets, so a tenant
+    provisioned before this spec gets it too; their SOUL.md is never rewritten."""
+    import dataclasses
+
+    from hosted.proxy.treg import ALLOWED_TOOLS
+    from waku.config import Settings
+    from waku.runtime.session import Session
+
+    on = dataclasses.replace(CONFIG, treg_relay=True)
+    env = template.tenant_container(on, tenant_id=TENANT, project_id=2,
+                                    timezone="UTC", token=TOKEN)["Env"]
+    line = next(e for e in env if e.startswith("WAKU_UNAVAILABLE_TOOLS="))
+    tools = tuple(line.split("=", 1)[1].split(","))
+    assert tools == ("treg_balance", "treg_resources_list")
+    # what is named unavailable is exactly what the relay refuses
+    assert not {t.removeprefix("treg_") for t in tools} & ALLOWED_TOOLS
+
+    settings = Settings(home=tmp_path, unavailable_tools=tools)
+    settings.ensure_home()
+    system = Session(settings).build_system("research mem0")
+    assert "Not available here, so never call them: treg_balance, treg_resources_list." in system
+
+
+def test_without_the_relay_nothing_is_named_unavailable(tmp_path):
+    from waku.config import Settings
+    from waku.runtime.session import Session
+
+    assert not [e for e in _tenant_body()["Env"] if e.startswith("WAKU_UNAVAILABLE_TOOLS=")]
+    settings = Settings(home=tmp_path)
+    settings.ensure_home()
+    assert "Not available here" not in Session(settings).build_system("hello")

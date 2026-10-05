@@ -15,17 +15,32 @@ Two outputs from the same events:
 
    Langfuse cloud speaks OTel too — point the endpoint + auth headers there
    instead. The instrumentation below doesn't know or care which.
+
+What a line holds (spec 012, schema `v: 2`). A `tool` line carries the
+turn's `turn_id`, the tool's `source` (`treg`, `waku_memory`, `local` or
+`mcp:<server>`), `duration_ms`, `ok` and on a failure `error`, `cost_usd`,
+`endpoint_id` and `provider` when the result names them, and for a Waku
+Memory call its `query`, `results`, `memory_ids` and `retrieval_trace_id`;
+its `span` kind (`tool`, `retrieval` or `memory_write`); and the OTel GenAI
+names `gen_ai.operation.name`, `gen_ai.tool.type` and `gen_ai.tool.call.id`.
+Its `args` are redacted and trimmed to 500 characters
+(`waku/ops/observability.py`); its `output` is kept whole. An `llm` line
+carries `turn_id`, `cost_usd` (the `pricing.py` estimate for its tokens),
+`span: "llm"` and `gen_ai.operation.name: "chat"`. The OTel export uses the
+GenAI semantic-convention names (`observability.GENAI`, the one mapping).
 """
 
 from __future__ import annotations
 
 import json
+import secrets
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 
 from waku.config import Settings
+from waku.ops import observability
 
 
 def _now() -> str:
@@ -64,6 +79,12 @@ class Tracer:
         self._otel_tracer = self._init_otel(settings)
         self._span_ctx = None
         self._trace_encoding_checked = False
+        # Spec 011 A1: the turn in progress, so a ledger row and a trace event
+        # can be joined to it. Empty between turns.
+        self.turn_id = ""
+        # Spec 012: the MCP server names, so a tool line can say which server
+        # answered it. Read once; a server added later reads as "local".
+        self._mcp_servers = observability.mcp_servers(settings.home)
 
     def _init_otel(self, settings: Settings):
         if not settings.otel_endpoint:
@@ -105,10 +126,16 @@ class Tracer:
         Unlike traces (which can be reset for a clean demo), this is the running
         record of what you've actually spent — never wiped, summarized per day on
         the dashboard. Tokens are the ground truth; dollar cost is derived from
-        them (pricing can change), so we store tokens + provider/model."""
+        them (pricing can change), so we store tokens + provider/model.
+
+        Every model call a turn makes lands here (spec 011 A2): the loop's
+        own (`kind` "loop"), and the side calls `metered()` reports with
+        their own `kind` and model: "gate", "consolidation", "report",
+        "triage" and "quick". Each row carries the turn's `turn_id`."""
         usage = event.get("usage", {})
         record = {"ts": _now(), "provider": self.settings.provider,
-                  "model": self.settings.model or "", "kind": "loop",
+                  "model": event.get("model") or self.settings.model or "",
+                  "kind": event.get("kind", "loop"), "turn_id": self.turn_id,
                   "in": usage.get("in", 0), "out": usage.get("out", 0)}
         with (self.settings.home / "usage.jsonl").open("a", encoding="utf-8") as f:
             f.write(json.dumps(record) + "\n")
@@ -123,13 +150,27 @@ class Tracer:
             # live model switching) a trace without the model is half a trace
             event = {"provider": self.settings.provider,
                      "model": self.settings.model or "", **event}
+            # Spec 012: join the call to its turn and say what it cost
+            event["turn_id"] = self.turn_id
+            event["cost_usd"] = observability.llm_cost(
+                event["provider"], event.get("model") or "", event.get("usage") or {})
+            event["span"] = "llm"
+            event["gen_ai.operation.name"] = observability.OPERATION["llm"]
+        elif kind == "tool":
+            # Spec 012: what the call did, where it went and what it cost;
+            # its arguments redacted and trimmed
+            event = observability.trace_record(event, turn_id=self.turn_id,
+                                               servers=self._mcp_servers)
         self._write({"type": kind, **event})
         if self._otel_tracer and self._span_ctx is not None:
             with self._otel_tracer.start_as_current_span(
                 f"{kind}.{event.get('tool', event.get('decision', ''))}".rstrip("."),
                 attributes={
                     "openinference.span.kind": {"llm": "LLM", "tool": "TOOL"}.get(kind, "CHAIN"),
-                    **{f"waku.{k}": json.dumps(v, default=str) for k, v in event.items()},
+                    **{f"waku.{k}": json.dumps(v, default=str) for k, v in event.items()
+                       if not k.startswith("gen_ai.") and k != "cost_usd"},
+                    # spec 012: the OTel GenAI names, mapped in one place
+                    **observability.genai_attributes(kind, event),
                 },
             ):
                 pass
@@ -137,7 +178,9 @@ class Tracer:
     # ---- one run = one root span + turn_start/turn_end JSONL markers
     @contextmanager
     def turn(self, user_message: str):
-        self._write({"type": "turn_start", "user_message": user_message})
+        self.turn_id = "t_" + secrets.token_hex(8)
+        self._write({"type": "turn_start", "turn_id": self.turn_id,
+                     "user_message": user_message})
         if self._otel_tracer:
             with self._otel_tracer.start_as_current_span(
                 "agent_run",
@@ -152,7 +195,9 @@ class Tracer:
             yield self
 
     def end_turn(self, reply: str, iterations: int) -> None:
-        self._write({"type": "turn_end", "reply": reply, "iterations": iterations})
+        self._write({"type": "turn_end", "turn_id": self.turn_id, "reply": reply,
+                     "iterations": iterations})
+        self.turn_id = ""
         if getattr(self, "_otel_provider", None):
             # flush per turn: the trace should survive even a killed process
             self._otel_provider.force_flush(timeout_millis=2000)
@@ -165,3 +210,30 @@ def compose(*observers) -> callable:
         for obs in active:
             obs(kind, event)
     return fanout
+
+
+class _MeteredMessages:
+    def __init__(self, client, kind: str, notify) -> None:
+        self._client, self._kind, self._notify = client, kind, notify
+
+    def create(self, **kwargs):
+        response = self._client.messages.create(**kwargs)
+        usage = getattr(response, "usage", None)
+        self._notify("llm", {"kind": self._kind, "model": kwargs.get("model", ""),
+                             "usage": {"in": getattr(usage, "input_tokens", 0) or 0,
+                                       "out": getattr(usage, "output_tokens", 0) or 0}})
+        return response
+
+
+class metered:  # noqa: N801 -- used like a function: metered(client, "gate", notify)
+    """A model client whose `messages.create` also reports the call as an
+    `llm` event with its `kind` and model (spec 011 A2).
+
+    The loop reports its own calls. The small-model calls around it (the
+    retrieval gate, consolidation, the report classifier, triage and the
+    quick reply) reached no ledger before, while a metered provider still
+    charged for them. A call that raises reports nothing and raises as before.
+    """
+
+    def __init__(self, client, kind: str, notify) -> None:
+        self.messages = _MeteredMessages(client, kind, notify)

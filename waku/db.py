@@ -1,7 +1,7 @@
 """One SQLite file (state.db) holds everything Waku remembers and does.
 
 This mirrors the Hermes approach on the whiteboard: SQLite + FTS5, no server.
-Open it yourself anytime:  sqlite3 .waku/state.db '.tables'
+Open it yourself anytime:  sqlite3 ~/.waku/state.db '.tables'
 """
 
 from __future__ import annotations
@@ -28,7 +28,11 @@ CREATE TABLE IF NOT EXISTS facts (
     subject TEXT NOT NULL,         -- who/what the fact is about, e.g. 'alex'
     content TEXT NOT NULL,         -- the fact itself
     source TEXT DEFAULT 'user',    -- 'user' (told directly) or 'consolidation'
-    created_at TEXT DEFAULT (datetime('now'))
+    created_at TEXT DEFAULT (datetime('now')),
+    -- Spec 006: 0 while a kept fact still has to reach Waku Memory, and the
+    -- scope it goes to there. Every other fact is 1: nothing to send.
+    synced INTEGER DEFAULT 1,
+    scope TEXT DEFAULT 'global'
 );
 CREATE VIRTUAL TABLE IF NOT EXISTS facts_fts USING fts5(
     subject, content, content=facts, content_rowid=id
@@ -92,6 +96,15 @@ def _migrate(conn: sqlite3.Connection) -> None:
         # latency, iterations, tools) — so reopening a thread still shows how
         # each answer was produced, not just the plain text.
         conn.execute("ALTER TABLE chat_log ADD COLUMN meta TEXT")
+        conn.commit()
+    facts_cols = {r[1] for r in conn.execute("PRAGMA table_info(facts)").fetchall()}
+    if "synced" not in facts_cols:
+        # Spec 006. Existing rows default to 1, so the backlog is not re-sent
+        # to Waku Memory: the capture shim imports that from memory/<id>.md.
+        conn.execute("ALTER TABLE facts ADD COLUMN synced INTEGER DEFAULT 1")
+        conn.commit()
+    if "scope" not in facts_cols:
+        conn.execute("ALTER TABLE facts ADD COLUMN scope TEXT DEFAULT 'global'")
         conn.commit()
 
 

@@ -1,18 +1,27 @@
 """The Docker Engine API over its Unix socket, with aiohttp.
 
 No Docker SDK (spec, "The spawner"). The API surface the spawner needs is nine
-calls, and a library for nine calls is a dependency, a version to track and a
-second way to express the container template.
+calls, `GET /version` included, and a library for nine calls is a dependency, a
+version to track and a second way to express the container template.
 
 aiohttp appears here and nowhere else in hosted/spawner/: the spec keeps it in
 "the outermost HTTP layer", and for the spawner this is that layer -- the
 service's own front door is a Unix socket speaking one JSON object per line
 (hosted/jsonsock.py), not HTTP.
+
+THE API VERSION IS NEGOTIATED, NOT PINNED. Every versioned path carries a
+version the daemon has to accept, and a pinned one is wrong in one direction or
+the other for every daemon but the ones it was written beside: Docker 29 refuses
+1.43 as "too old" (minimum 1.44) and a daemon from two years ago refuses 1.52 as
+too new. `GET /version` is served UNVERSIONED, so it can be asked before a
+version is chosen, and it reports the daemon's own range. __aenter__ asks, then
+picks -- see choose_api_version.
 """
 
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Self
 
@@ -20,14 +29,72 @@ import aiohttp
 
 from hosted import log
 
-API_VERSION = "v1.43"
+# The version this code is WRITTEN AGAINST: the one whose request and response
+# shapes hosted/spawner/ was built from. It is a preference, not a pin --
+# choose_api_version moves off it when the daemon's range does not contain it.
+API_VERSION = "1.43"
 DOCKER_SOCKET = Path("/var/run/docker.sock")
 
 _LOG = log.get(__name__)
 
+# Docker API versions are dotted decimals ("1.43", "1.52"). A closed set: this
+# is the only shape read as a version, and anything else is refused rather than
+# guessed at, because a version this cannot compare is one it cannot choose by.
+_VERSION = re.compile(r"[0-9]+(\.[0-9]+)*\Z")
+
 
 class EngineError(RuntimeError):
     """Docker answered, and the answer was not what was asked for."""
+
+
+def _components(version: str) -> tuple[int, ...]:
+    """A version as the numbers it is made of, for comparing.
+
+    NOT comparable as strings: "1.9" sorts after "1.10", and "1.43" after
+    "1.5". Both pairs are real Docker API versions, and either one compared the
+    string way sends the daemon a version it rejects.
+    """
+    if not _VERSION.match(version):
+        raise ValueError(f"not a Docker API version: {version!r}")
+    return tuple(int(part) for part in version.split("."))
+
+
+def choose_api_version(ours: str, daemon_max: object, daemon_min: object) -> str:
+    """The version to put in every path: ours if the daemon takes it, else the
+    nearest end of the daemon's own range.
+
+    `daemon_max` is ApiVersion, the newest the daemon speaks; `daemon_min` is
+    MinAPIVersion, the oldest. Both arrive from a JSON body, so both are
+    `object` here and are checked rather than trusted.
+
+    When the two cannot be read, or describe an empty range, this REFUSES.
+    Falling back to a guess would move the failure to the first real call,
+    where the message is a 400 about a version nobody chose on purpose.
+    """
+    if not isinstance(daemon_max, str) or not isinstance(daemon_min, str):
+        raise EngineError(
+            f"Docker /version did not report both of its API versions: "
+            f"ApiVersion={daemon_max!r}, MinAPIVersion={daemon_min!r}; "
+            f"this code is written against {ours}")
+    try:
+        mine = _components(ours)
+        newest = _components(daemon_max)
+        oldest = _components(daemon_min)
+    except ValueError as exc:
+        raise EngineError(
+            f"Docker /version reported an API version this cannot read: "
+            f"ApiVersion={daemon_max!r}, MinAPIVersion={daemon_min!r}; "
+            f"this code is written against {ours} ({exc})") from exc
+    if oldest > newest:
+        raise EngineError(
+            f"Docker reports MinAPIVersion={daemon_min} above ApiVersion="
+            f"{daemon_max}, which is not a range to choose a version from; "
+            f"this code is written against {ours}")
+    if oldest > mine:
+        return daemon_min
+    if newest < mine:
+        return daemon_max
+    return ours
 
 
 # One stream byte, three zero bytes, a big-endian uint32 length.
@@ -72,25 +139,69 @@ class Engine:
         self._socket_path = socket_path
         self._timeout = aiohttp.ClientTimeout(total=timeout)
         self._session: aiohttp.ClientSession | None = None
+        self._api_version: str | None = None
+
+    @property
+    def api_version(self) -> str | None:
+        """The version negotiated at connect time; None before __aenter__."""
+        return self._api_version
 
     async def __aenter__(self) -> Self:
         self._session = aiohttp.ClientSession(
             connector=aiohttp.UnixConnector(path=str(self._socket_path)),
             timeout=self._timeout)
+        try:
+            self._api_version = await self._negotiate_api_version()
+        except BaseException:
+            # __aexit__ does not run when __aenter__ raises, and an unclosed
+            # ClientSession is a warning on a path that is already failing.
+            await self._session.close()
+            self._session = None
+            raise
         return self
 
+    async def _negotiate_api_version(self) -> str:
+        """Ask the daemon its range, then choose. Logged once, with both ends.
+
+        The operator who meets the next version problem reads this line: what
+        was chosen, what the daemon offered, and what this code was written
+        against are the three numbers that turn a 400 into a diagnosis.
+        """
+        answer = await self._request("GET", "/version", expect=(200,))
+        if not isinstance(answer, dict):
+            raise EngineError(
+                "Docker GET /version did not answer a JSON object: "
+                f"{repr(answer)[:200]}")
+        daemon_max = answer.get("ApiVersion")
+        daemon_min = answer.get("MinAPIVersion")
+        chosen = choose_api_version(API_VERSION, daemon_max, daemon_min)
+        _LOG.info("docker api version %s: the daemon speaks %s..%s and this code "
+                  "is written against %s", chosen, daemon_min, daemon_max, API_VERSION)
+        return chosen
+
     async def __aexit__(self, *exc) -> None:
+        self._api_version = None
         if self._session is not None:
             await self._session.close()
             self._session = None
 
-    async def _call(self, method: str, path: str, *, body: dict | None = None,
-                    params: dict | None = None, expect: tuple[int, ...] = (200, 201, 204),
-                    raw: bool = False):
+    async def _call(self, method: str, path: str, **kwargs):
+        """One request under the NEGOTIATED version, which every path but
+        /version needs in front of it."""
+        assert self._api_version is not None, (
+            "use Engine as an async context manager: no API version negotiated")
+        return await self._request(method, f"/v{self._api_version}{path}", **kwargs)
+
+    async def _request(self, method: str, path: str, *, body: dict | None = None,
+                       params: dict | None = None,
+                       expect: tuple[int, ...] = (200, 201, 204),
+                       raw: bool = False):
+        """One request at `path` EXACTLY as given -- no version is added here,
+        because /version is asked before there is a version to add."""
         assert self._session is not None, "use Engine as an async context manager"
         # The host is ignored for a Unix socket and must still be syntactically
         # valid; "docker" is the convention and appears in no request.
-        url = f"http://docker/{API_VERSION}{path}"
+        url = f"http://docker{path}"
         async with self._session.request(method, url, json=body, params=params) as response:
             payload = await response.read()
             if response.status not in expect:

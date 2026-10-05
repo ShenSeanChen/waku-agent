@@ -42,16 +42,23 @@ POST_ROUTES = {
     "/api/compare/clear",
     "/api/compare/regrade",
     "/api/compare/delete_run",
+    # spec 015: judge one stored turn, on demand
+    "/api/turn-evals/judge",
 }
 
 # Paths served on GET, either exactly or as a prefix.
 GET_PATHS = {
     "/api/data",
+    "/api/session",
     "/api/models",
     "/api/events",
     "/api/reveal",
     "/api/compare/history",
     "/static/",
+    # spec 008: the chat column alone, for waku.one to frame
+    "/embed/chat",
+    # spec 012: the Observability page's turns, tools, memory, spend, evals
+    "/api/observability",
 }
 
 # Streaming endpoints. These are what the dashboard actually uses for chat and

@@ -132,6 +132,9 @@ BACKGROUND_AWARE = {
     },
     "judgment.js": {
         "loadJudgmentArena": r'fetch\("/api/judgment-arena",\s*background\s*\?\s*\{headers:\s*BG\}\s*:\s*undefined\)',
+    },    # spec 012: the Observability page re-reads its data on the 5s refresh
+    "observe.js": {
+        "loadObservability": r'background\s*\?\s*\{headers:\s*BG\}\s*:\s*undefined',
     },
 }
 
@@ -258,10 +261,17 @@ NETWORK_CALLERS = {
     ("dock.js", "newChat"): "user",
     ("dock.js", "loadThreadInto"): "background",
     ("dock.js", "switchTo"): "user",
+    # spec 008: the embedded chat never polls; it reads its header's state when
+    # the page opens and after a turn or a model switch the person made
+    ("embed.js", "refresh"): "user",
+    # the header's "Dashboard" button: one click, one sign-in hand-off code
+    ("embed.js", "openDashboard"): "user",
     ("graph.js", "runGraph"): "user",
     ("judgment.js", "loadJudgmentArena"): "background",
     ("judgment.js", "runJudgmentArena"): "user",
     ("main.js", "refresh"): "background",
+    ("observe.js", "loadObservability"): "background",
+    ("observe.js", "obsJudge"): "user",   # spec 015: the "Judge this turn" click
     ("main.js", "stopMic"): "user",
     ("memory.js", "saveFact"): "user",
     ("memory.js", "delMem"): "user",
@@ -359,6 +369,8 @@ DECLARED_TIMERS = {
     # the dock's elapsed counter while waiting for the first token: repaint only
     ("render.js", "sendChat", "setInterval"):
         {"() => { if (pending.pending && !pending.stream) syncChatLogs(); }"},
+    # #evals/release scrolling Evals to "This release" once render is done: no request
+    ("observe.js", "<top level>", "setTimeout"): {"obsJumpRelease"},
     # menu/copy-button chrome
     ("ui.js", "openMenu", "setTimeout"): {'() => document.addEventListener("click", _menuOutside)'},
     ("util.js", "copyCode", "setTimeout"):

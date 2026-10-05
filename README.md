@@ -55,7 +55,7 @@ uv run waku dashboard                   # …or the browser cockpit → localhos
 
 **Now try it.** *"Remember that Alex prefers morning meetings."* Quit. Restart.
 *"Book a catch-up with Alex on Friday."* → it remembers, and books 9am. Your memory is one
-file: `.waku/state.db`.
+file: `~/.waku/state.db`, the same from every folder.
 
 **Use the model you already pay for.** Anthropic (default), OpenAI, Gemini, DeepSeek, MiniMax,
 Kimi, GLM, OpenRouter (one key, hundreds of hosted models), OpenCode Zen, OpenCode Go, or
@@ -78,6 +78,8 @@ waku skill export --to claude,codex     # carry Waku's skills to Claude Code and
 
 Your browser opens once to sign in. To connect Claude Code, Codex, Hermes or Grok Bot to the
 same memory, see [integrations](docs/integrations.md#share-one-memory-with-your-other-agents-waku-memory).
+For live data when it researches, `waku connect treg` (or `/connect treg`) signs in to your own
+[treg](https://treg.to) account the same way; see [integrations](docs/integrations.md#live-data-for-research-treg).
 
 ## What's inside
 
@@ -124,6 +126,9 @@ never build the same thing.
 - **[launch-mvp-stripe-nextjs-supabase](https://github.com/ShenSeanChen/launch-mvp-stripe-nextjs-supabase)** — NextJS + Supabase + Stripe, everything you need to ship a SaaS.
 - **[AutoManus.io](https://automanus.io)** — my AI startup: a sales lead manager for made-to-order products. It embeds where conversations already happen (WhatsApp, email, web chat) to capture inbound, automate follow-ups and kill CRM busywork. Pre-seed backed by Character VC. ([AutoManus Discord](https://discord.gg/SxXATg9rSK))
 
-Code is MIT — see [LICENSE](LICENSE). The Waku name, mark and design system belong to
+Code is MIT — see [LICENSE](LICENSE) — **except `hosted/`, which is Elastic
+License 2.0**: run it yourself, including commercially, but not as a service for
+others. See [hosted/LICENSE](hosted/LICENSE). `waku/`, the harness itself and
+everything PyPI ships, is MIT. The Waku name, mark and design system belong to
 AutoManus Technologies, Inc. and are not MIT — see [LICENSE-BRAND](LICENSE-BRAND). Built by [@ShenSeanChen](https://github.com/ShenSeanChen)
 ([YouTube](https://www.youtube.com/@SeanAIStories) · [X](https://x.com/ShenSeanChen)).

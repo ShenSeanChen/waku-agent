@@ -41,8 +41,12 @@ BODY = {"id": "msg_test", "type": "message", "role": "assistant",
 class H(http.server.BaseHTTPRequestHandler):
     def do_POST(self):
         raw = self.rfile.read(int(self.headers.get("content-length") or 0))
-        with open("/record/last.json", "wb") as handle:
-            handle.write(raw)
+        # Only a call with a system prompt is the turn. A hosted tenant
+        # consolidates after every turn (WAKU_CONSOLIDATE_EVERY=1, spec 006),
+        # and that summariser call, which has no system prompt, comes last.
+        if json.loads(raw or b"{}").get("system"):
+            with open("/record/last.json", "wb") as handle:
+                handle.write(raw)
         out = json.dumps(BODY).encode()
         self.send_response(200)
         self.send_header("content-type", "application/json")

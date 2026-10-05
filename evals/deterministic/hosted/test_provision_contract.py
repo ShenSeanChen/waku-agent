@@ -78,12 +78,15 @@ def container(provisioned, monkeypatch):
     return provisioned
 
 
-def test_the_rendered_env_holds_only_the_provider_line(provisioned):
+RENDERED_ENV = "WAKU_PROVIDER=waku-platform\nWAKU_CONSOLIDATE_EVERY=1\n"
+
+
+def test_the_rendered_env_holds_only_the_provider_and_consolidation_lines(provisioned):
     """Everything else comes from the container environment, which outranks
     .env and which the tenant cannot edit. Writing the platform token here
     would hand the tenant's own dashboard a file that can redirect it."""
     text = (provisioned.env / ".env").read_text(encoding="utf-8")
-    assert text == "WAKU_PROVIDER=waku-platform\n"
+    assert text == RENDERED_ENV
     assert "WAKU_PLATFORM_TOKEN" not in text
 
 
@@ -106,6 +109,13 @@ def test_wakus_own_loader_selects_the_free_tier(container):
     from waku.config import Settings
 
     assert Settings().provider == "waku-platform"
+
+
+def test_wakus_own_loader_consolidates_every_turn(container):
+    """Spec 006 D, read the way the tenant's waku reads it."""
+    from waku.config import Settings
+
+    assert Settings().consolidate_every == 1
 
 
 def test_the_platform_model_is_both_defaults(container):
@@ -159,5 +169,5 @@ def test_provisioning_repairs_only_what_is_missing(provisioned):
     written = provision.provision(provisioned, SOUL_TEMPLATE)
 
     assert (provisioned.home / "SOUL.md").read_text(encoding="utf-8") == "mine now\n"
-    assert (provisioned.env / ".env").read_text(encoding="utf-8") == "WAKU_PROVIDER=waku-platform\n"
+    assert (provisioned.env / ".env").read_text(encoding="utf-8") == RENDERED_ENV
     assert written == [provisioned.env / ".env"]

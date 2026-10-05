@@ -17,6 +17,7 @@ End-loop guardrails (the orange box's exit conditions):
 
 from __future__ import annotations
 
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
@@ -54,6 +55,20 @@ class LoopResult:
     reply: str
     tool_calls: list[LoopEvent] = field(default_factory=list)
     iterations: int = 0
+    # Spec 009 A: the Waku Memory searches the harness ran before the loop, on
+    # a research turn, and the memories they found (the turn's Used list).
+    # Kept apart from tool_calls on purpose: tool_calls are folded into the
+    # chat log, which consolidation reads, and memories already kept must not
+    # be proposed as new facts again.
+    read_first: list[LoopEvent] = field(default_factory=list)
+    used: list[dict] = field(default_factory=list)
+    # The memory the turn read before the loop, as text: what the retrieval
+    # gate found plus the research block above. Consolidation drops a fact
+    # that only repeats it (and what the model's own memory reads returned).
+    recalled: str = ""
+    # Spec 011: what the turn did and cost (waku/ops/receipt.py), set by
+    # Waku.respond once the turn is over. None for a bare run_loop call.
+    receipt: dict | None = None
 
 
 def run_loop(
@@ -66,6 +81,7 @@ def run_loop(
     max_tokens: int = 2048,
     observer: Observer | None = None,
     stream: bool = False,
+    trim: Callable[[list[dict]], None] | None = None,
 ) -> LoopResult:
     """Run one agent turn. `messages` is mutated in place — after the call it
     contains the full working memory of the turn (assistant thoughts, tool
@@ -73,13 +89,21 @@ def run_loop(
 
     stream=True emits the assistant's text as it's generated (notify("text",
     {"delta": ...})) so a gateway can show it appear token by token — used by
-    the dashboard. Falls back to a single call for clients without streaming."""
+    the dashboard. Falls back to a single call for clients without streaming.
+
+    `trim`, when given, may shorten tool results the model has already read
+    before each later call, so one large result is not re-sent on every
+    iteration after it. app.py chains reports.shrink_read, which cuts a whole
+    earlier research report to its digest, and trim.shrink_seen, which cuts
+    any other long result to its opening; None leaves `messages` as they are."""
     notify = observer or (lambda kind, ev: None)
     result = LoopResult(reply="")
     can_stream = stream and hasattr(client.messages, "stream")
 
     for iteration in range(1, max_iterations + 1):
         result.iterations = iteration
+        if trim is not None and iteration > 1:
+            trim(messages)
 
         # ---- reason: one LLM call with the current working memory
         response = None
@@ -124,8 +148,11 @@ def run_loop(
         # ---- act: execute each requested tool; observe: feed results back
         tool_results = []
         for call in tool_uses:
+            started = time.perf_counter()
             output = tools.execute(call.name, call.input, notify=notify)
-            event = {"tool": call.name, "args": call.input, "output": output}
+            event = {"tool": call.name, "args": call.input, "output": output, "call_id": call.id,
+                     # spec 012: how long the call took, for the trace
+                     "duration_ms": int((time.perf_counter() - started) * 1000)}
             result.tool_calls.append(event)
             notify("tool", event)
             tool_results.append(

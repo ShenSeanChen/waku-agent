@@ -12,6 +12,7 @@ away. What persists lives in waku/memory. Working memory =
 from __future__ import annotations
 
 from waku.config import Settings
+from waku.memory import tool_note
 
 DEFAULT_SOUL = """\
 You are Waku, a personal assistant running locally on your user's laptop.
@@ -33,8 +34,9 @@ Rules:
   from that record instead.
 - Be honest about where things live. Every tool's output states exactly where
   its artifact landed (local calendar file, Apple Calendar, memory database at
-  .waku/state.db) — relay that truthfully, and never claim something synced
-  anywhere the tool output doesn't say.
+  ~/.waku/state.db, with each fact also a file in ~/.waku/memory/) — relay
+  that truthfully, and never claim something synced anywhere the tool output
+  doesn't say.
 - You can manage your own memory: use manage_memory to correct or forget facts,
   update_soul to save a standing preference the user gives you, and create_skill
   to save a repeatable workflow the user teaches you (only after they say yes).
@@ -59,6 +61,9 @@ class Session:
         self.memory = memory  # waku.memory.Memory (None until Phase-2 wiring)
         self.session_id = session_id
         self.history: list[dict] = []
+        # what the retrieval gate found for the latest build_system, so
+        # consolidation can tell a fact the turn read from one it learned
+        self.retrieved = ""
 
     def build_system(self, user_message: str, notify=None) -> str:
         from datetime import datetime
@@ -73,12 +78,21 @@ class Session:
                  (f"Your model: you are running on '{self.settings.model}' via the "
                  f"'{self.settings.provider}' provider, inside Waku, a local-first "
                  f"open-source agent harness (github.com/ShenSeanChen/waku-agent).")]
+        # Spec 009 E: a call the deployment refuses is a wasted step and, on a
+        # metered tenant, a wasted turn. Spec 014: with the person's own treg
+        # key the relay is not in the path, so treg's tools are all theirs.
+        from waku.tools.treg import unavailable
+
+        if unavailable_tools := unavailable(self.settings.unavailable_tools):
+            parts.append("\nNot available here, so never call them: "
+                         + ", ".join(unavailable_tools) + ".")
 
         if self.memory is not None:
             # Hero moment #1: a cheap judge decides IF we retrieve at all —
             # default-on retrieval is slow and biases answers (see
             # memory/retrieval_gate.py for the why).
             retrieved = self.memory.gated_retrieve(user_message, notify=notify)
+            self.retrieved = retrieved
             if retrieved:
                 parts.append("\nRelevant memory:\n" + retrieved)
             skills = self.memory.matching_skills(user_message)
@@ -88,23 +102,28 @@ class Session:
         return "\n".join(parts)
 
     def add_exchange(self, user_message: str, reply: str, tool_calls: list | None = None,
-                     source: str = "cli", meta: dict | None = None) -> None:
+                     source: str = "cli", meta: dict | None = None) -> int | None:
         """Record the turn in history (working memory) and, if memory is wired,
-        in the chat log (so consolidation can distill it later).
+        in the chat log (so consolidation can distill it later). Returns the
+        chat log's assistant row id, or None without memory.
 
         Tool activity is folded into the assistant's history entry as a compact
         [tools used: ...] line. Without it, the model forgets it already acted
         and happily re-runs the same tool next turn (the triple-booked-meeting
-        bug from the first live test)."""
+        bug from the first live test). Compact means name, short args and the
+        output cut to ~300 characters, never the full output: this record is
+        re-sent to the model on every later turn and kept in chat_log, so a
+        full search result here cost tokens on every turn after it and drew a
+        block thousands of lines tall in a reopened thread (waku/memory/tool_note.py)."""
         record = reply
         if tool_calls:
-            summary = "; ".join(f"{c['tool']}({c['args']}) -> {c['output']}" for c in tool_calls)
-            record = f"{reply}\n[tools used: {summary}]"
+            record = f"{reply}\n{tool_note.note(tool_calls)}"
         self.history.append({"role": "user", "content": user_message})
         self.history.append({"role": "assistant", "content": record})
-        if self.memory is not None:
-            self.memory.log_chat(user_message, record, session_id=self.session_id,
-                                 source=source, meta=meta)
+        if self.memory is None:
+            return None
+        return self.memory.log_chat(user_message, record, session_id=self.session_id,
+                                    source=source, meta=meta)
 
     # ---- session lifecycle (the "New chat" / history feature)
     # A session is just a tag on chat_log rows. Starting a new one clears working
@@ -124,4 +143,5 @@ class Session:
         turns = self.settings.history_turns
         for user_msg, reply in list(self.memory.session_history(session_id))[-turns:]:
             self.history.append({"role": "user", "content": user_msg})
-            self.history.append({"role": "assistant", "content": reply})
+            # rows from before notes were compact may carry a full tool output
+            self.history.append({"role": "assistant", "content": tool_note.clip(reply)})

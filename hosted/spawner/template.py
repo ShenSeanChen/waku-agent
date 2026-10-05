@@ -27,6 +27,7 @@ from hosted.core.tenant import (
     TENANT_NETWORK,
     address_for_project,
     is_known_timezone,
+    is_memory_key,
     is_project_id,
     is_proxy_token,
     is_tenant_id,
@@ -103,13 +104,54 @@ ENV_NAMES = (
     "WAKU_STAGING_ROOT",
     "WAKU_TENANT_IMAGE",
     "WAKU_SERVICES_IMAGE",
-    "WAKU_PLATFORM_BASE_URL",
-    "WAKU_PLATFORM_MODEL",
-    "WAKU_PLATFORM_SMALL_MODEL",
     "WAKU_TENANT_DISK_BYTES",
     "WAKU_DATA_DEVICE",
     "WAKU_SECCOMP_PROFILE",
 )
+
+# THE FREE TIER, WHICH A DEPLOYMENT MAY NOT HAVE.
+#
+# These three used to be in ENV_NAMES, so install.sh had to write a value for
+# them whether or not a metering proxy existed. It always wrote one, group D
+# was never built, the proxy runs at zero replicas -- and every tenant
+# container therefore started pointed at an address nothing listens on. Stock
+# waku read the variables, showed "Hosted free tier: enabled, current" on its
+# Models page, and answered the first message with APIConnectionError. The
+# product asserted a working provider and then refused the connection.
+#
+# So they are optional, and ALL THREE OR NONE. A base URL with no model is a
+# provider that cannot name a model; a model with no base URL is a model with
+# nowhere to send it. Half a free tier is the same lie in a smaller size, and
+# config_from_env refuses it rather than starting a fleet that will fail one
+# turn at a time.
+PLATFORM_ENV_NAMES = (
+    "WAKU_PLATFORM_BASE_URL",
+    "WAKU_PLATFORM_MODEL",
+    "WAKU_PLATFORM_SMALL_MODEL",
+)
+
+# TREG IN EVERY CONTAINER (spec 004 E), WHICH A DEPLOYMENT MAY NOT HAVE.
+#
+# The treg token lives in config/proxy.env, which the spawner cannot read and
+# must not: it also holds the platform's model key. So the spawner is told
+# separately, by this one line in spawner.env, that the proxy's treg relay is
+# on, and only then does provisioning add a treg entry to a tenant's mcp.json.
+# Without it a fleet would carry a server that answers 404 on every start.
+# The value is the word `on` or nothing, and `on` needs the free tier: the
+# relay is a route on the metering proxy and authenticates with the free
+# tier's platform token.
+TREG_ENV_NAME = "WAKU_TREG_RELAY"
+
+# treg's tools the relay refuses (hosted/proxy/treg.py ALLOWED_TOOLS leaves
+# them out: they read the PLATFORM team's balance and resources). Named to the
+# tenant's waku as the model sees them, so its prompt says not to call them
+# (spec 009 E). In the container's environment, not in .env or SOUL.md, so an
+# existing tenant gets it on its next start too.
+TREG_UNAVAILABLE_TOOLS = ("treg_balance", "treg_resources_list")
+
+# What the provision container is told, and the only variable
+# provision_main.py reads: where the treg entry in mcp.json points.
+TREG_BASE_URL_ENV = "WAKU_TREG_BASE_URL"
 
 # ONE literal for this path. provision_main.py imports it rather than
 # hardcoding the same string, because a plan that says "setting any of them in
@@ -130,6 +172,7 @@ class SpawnerConfig:
     tenant_disk_bytes: int
     data_device: str
     seccomp_profile: str        # the JSON TEXT, read once at startup
+    treg_relay: bool = False    # spec 004 E: add treg to each tenant's mcp.json
 
 
 def config_from_env(env: Mapping[str, str]) -> SpawnerConfig:
@@ -138,18 +181,33 @@ def config_from_env(env: Mapping[str, str]) -> SpawnerConfig:
         raise ValueError(
             f"config/spawner.env is missing {missing}. install.sh writes this "
             "file; every name in template.ENV_NAMES must be in it.")
+    platform = [name for name in PLATFORM_ENV_NAMES if env.get(name)]
+    if platform and len(platform) != len(PLATFORM_ENV_NAMES):
+        raise ValueError(
+            f"config/spawner.env sets {platform} but not "
+            f"{[n for n in PLATFORM_ENV_NAMES if n not in platform]}. The free "
+            "tier is all three or none: anything less is a provider a tenant's "
+            "Models page will call enabled and that cannot answer a turn.")
+    treg = env.get(TREG_ENV_NAME, "")
+    if treg not in ("", "on"):
+        raise ValueError(f"{TREG_ENV_NAME} is {treg!r}; it is `on` or absent.")
+    if treg and not env.get("WAKU_PLATFORM_BASE_URL"):
+        raise ValueError(
+            f"{TREG_ENV_NAME}=on needs the free tier: the treg relay is a route on "
+            "the metering proxy, reached with the free tier's platform token.")
     return SpawnerConfig(
         tenant_root=Path(env["WAKU_TENANT_ROOT"]),
         archive_root=Path(env["WAKU_ARCHIVE_ROOT"]),
         staging_root=Path(env["WAKU_STAGING_ROOT"]),
         tenant_image=env["WAKU_TENANT_IMAGE"],
         services_image=env["WAKU_SERVICES_IMAGE"],
-        platform_base_url=env["WAKU_PLATFORM_BASE_URL"],
-        platform_model=env["WAKU_PLATFORM_MODEL"],
-        platform_small_model=env["WAKU_PLATFORM_SMALL_MODEL"],
+        platform_base_url=env.get("WAKU_PLATFORM_BASE_URL", ""),
+        platform_model=env.get("WAKU_PLATFORM_MODEL", ""),
+        platform_small_model=env.get("WAKU_PLATFORM_SMALL_MODEL", ""),
         tenant_disk_bytes=int(env["WAKU_TENANT_DISK_BYTES"]),
         data_device=env["WAKU_DATA_DEVICE"],
         seccomp_profile=Path(env["WAKU_SECCOMP_PROFILE"]).read_text(encoding="utf-8"),
+        treg_relay=treg == "on",
     )
 
 
@@ -193,8 +251,39 @@ def _isolation(config: SpawnerConfig) -> dict:
 # does the cleanup instead, where nothing is racing it.
 
 
+def platform_env(config: SpawnerConfig, token: str) -> list[str]:
+    """The free tier's environment, or nothing at all.
+
+    One writer for the four, and one condition. `config_from_env` has already
+    refused a partial set, so the base URL alone answers "is there a free
+    tier" for the whole of this module.
+    """
+    if not config.platform_base_url:
+        return []
+    return [
+        f"WAKU_PLATFORM_BASE_URL={config.platform_base_url}",
+        f"WAKU_PLATFORM_TOKEN={token}",
+        f"WAKU_PLATFORM_MODEL={config.platform_model}",
+        f"WAKU_PLATFORM_SMALL_MODEL={config.platform_small_model}",
+    ]
+
+
+def provision_env(config: SpawnerConfig) -> list[str]:
+    """What the provision container is told: the treg relay's base, or nothing."""
+    if not config.treg_relay:
+        return []
+    return [f"{TREG_BASE_URL_ENV}={config.platform_base_url}"]
+
+
+def unavailable_tools_env(config: SpawnerConfig) -> list[str]:
+    """WAKU_UNAVAILABLE_TOOLS for a tenant with the treg relay, or nothing."""
+    if not config.treg_relay:
+        return []
+    return [f"WAKU_UNAVAILABLE_TOOLS={','.join(TREG_UNAVAILABLE_TOOLS)}"]
+
+
 def tenant_container(config: SpawnerConfig, *, tenant_id: str, project_id: int,
-                     timezone: str, token: str) -> dict:
+                     timezone: str, token: str, memory_key: str = "") -> dict:
     """The create body for one tenant's dashboard.
 
     The four checks at the top are not belt and braces over core/requests.py:
@@ -217,6 +306,8 @@ def tenant_container(config: SpawnerConfig, *, tenant_id: str, project_id: int,
         raise ValueError(f"not a zone Python knows: {timezone!r}")
     if not is_proxy_token(token):
         raise ValueError("not a proxy token")
+    if memory_key and not is_memory_key(memory_key):
+        raise ValueError("not a Waku Memory key")
     dirs = tenant_dirs(config.tenant_root, tenant_id)
     address = address_for_project(project_id)
     host = _isolation(config)
@@ -238,10 +329,21 @@ def tenant_container(config: SpawnerConfig, *, tenant_id: str, project_id: int,
             f"WAKU_DASHBOARD_PORT={DASHBOARD_PORT}",
             f"TZ={timezone}",
             "HOME=/tmp",
-            f"WAKU_PLATFORM_BASE_URL={config.platform_base_url}",
-            f"WAKU_PLATFORM_TOKEN={token}",
-            f"WAKU_PLATFORM_MODEL={config.platform_model}",
-            f"WAKU_PLATFORM_SMALL_MODEL={config.platform_small_model}",
+            # The free tier's four, present only when there IS one. Stock
+            # waku decides whether to offer the row by whether these are set
+            # (waku/integrations.py, the hidden_unless_env row), so omitting
+            # them is how a deployment without a metering proxy stops
+            # advertising one. The TOKEN goes with them: a credential for a
+            # service this deployment does not run has no reason to be in a
+            # tenant's environment, where the tenant can read it.
+            *platform_env(config, token),
+            # The person's own Waku Memory key (spec 004), read by mcp.json's
+            # waku_memory server through auth_env. Theirs, revocable on
+            # waku.one, and present only once the gateway has minted it.
+            *([f"WAKU_MEMORY_API_KEY={memory_key}"] if memory_key else []),
+            # treg's tools the relay refuses, so the model is told not to
+            # call them (spec 009 E). Only where the relay runs.
+            *unavailable_tools_env(config),
         ],
         "Labels": {LABEL_TENANT: tenant_id, LABEL_KIND: KIND_TENANT},
         "ExposedPorts": {f"{DASHBOARD_PORT}/tcp": {}},
@@ -257,6 +359,7 @@ def tenant_container(config: SpawnerConfig, *, tenant_id: str, project_id: int,
 
 def task_container(config: SpawnerConfig, *, tenant_id: str, command: list[str],
                    extra_binds: tuple[str, ...] = (),
+                   extra_env: tuple[str, ...] = (),
                    kind: str = KIND_TASK) -> dict:
     """A throwaway container for one operation on one tenant's files.
 
@@ -292,7 +395,7 @@ def task_container(config: SpawnerConfig, *, tenant_id: str, command: list[str],
         "Image": config.services_image,
         "User": f"{TENANT_UID}:{TENANT_UID}",
         "WorkingDir": "/work",
-        "Env": ["HOME=/tmp", "PYTHONPATH=/app"],
+        "Env": ["HOME=/tmp", "PYTHONPATH=/app", *extra_env],
         "Labels": {LABEL_TENANT: tenant_id, LABEL_KIND: kind},
         "Cmd": command,
         "HostConfig": host,

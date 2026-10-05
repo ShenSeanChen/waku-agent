@@ -38,7 +38,7 @@ Nothing here is a surprise. If you hit one of these, the issue exists.
 | The model picker offers OpenAI models that 404 on use | #137 | #178 |
 | GPT-5.6 tool calls fail on Chat Completions | — | #146 |
 | OpenCode Zen fails with a rate-limit error | #112 | #113 |
-| Google Calendar sign-in has no bundled OAuth client, so `waku connect google` needs your own `.waku/credentials.json` | — | — |
+| Google Calendar sign-in has no bundled OAuth client, so `waku connect google` needs your own `~/.waku/credentials.json` | — | — |
 
 **Providers are the recurring theme.** Three of the items above are one
 provider or another, and there is no single place that says which providers

@@ -5,6 +5,7 @@
   waku connections           list configured integrations and their health
   waku connect google        sign in to Google Calendar (opens your browser)
   waku connect waku-memory   one memory shared with your other agents (opens your browser)
+  waku connect treg          live data for research, on your own treg account (opens your browser)
   waku mcp                   MCP servers, and which account each knows you as
   waku mcp login <name>      sign in again — as someone else, or after expiry
   waku voice                 talk to it (needs the [voice] extra)
@@ -16,6 +17,7 @@
                              memory fetched together, then one digest
   waku skill install <url>   install a community skill
   waku skill export          copy Waku's skills to Claude Code / Codex (--to claude,codex)
+  waku evals turns           grade your own traced turns with the five turn checks (--window today|7d|all)
 """
 
 from __future__ import annotations
@@ -86,6 +88,10 @@ def main() -> None:
         from waku.memory.procedural.exporter import cli_main as export_main
 
         sys.exit(export_main(args[2:]))
+    elif args[0] == "evals" and len(args) >= 2 and args[1] == "turns":
+        from waku.ops.turn_evals import cli_main as turns_main
+
+        sys.exit(turns_main(args[2:]))
     elif args[0] == "skill" and len(args) >= 3 and args[1] == "install":
         from waku.memory.procedural.installer import install
 

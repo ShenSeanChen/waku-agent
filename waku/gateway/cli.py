@@ -49,7 +49,9 @@ def _observer(kind: str, event: dict) -> None:
     elif kind == "gate":
         console.print(f"  [dim]gate · {event['decision']} — {event.get('reason','')}[/dim]")
     elif kind == "consolidation":
-        console.print(f"  [dim]memory · consolidated {event['new_facts']} fact(s) from recent chats[/dim]")
+        missed = sum(1 for k in event.get("kept") or [] if k.get("sent") is False)
+        note = f"; Waku Memory did not answer, {missed} kept here only" if missed else ""
+        console.print(f"  [dim]memory · consolidated {event['new_facts']} fact(s) from recent chats{note}[/dim]")
 
 
 def main() -> None:
@@ -61,6 +63,9 @@ def main() -> None:
         "Commands: /memory · /quit",
         border_style="cyan",
     ))
+    from waku.config import home_notice
+    if notice := home_notice():
+        console.print(f"[yellow]{notice}[/yellow]", markup=True)
     while True:
         try:
             user_message = console.input("[bold cyan]you ›[/bold cyan] ").strip()

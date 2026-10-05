@@ -6,7 +6,7 @@ that test cannot see, because they are about the file rather than the text:
 the mode `.env` is created at, and what a second provision does to a file that
 is already there.
 
-`.env` holds one non-secret line today. It is also where a BYOK key lands the
+`.env` holds two non-secret lines today. It is also where a BYOK key lands the
 day the free tier stops being the only tier, which is why the mode is pinned
 against the literal 0o600 rather than against provision.ENV_MODE.
 """
@@ -52,11 +52,21 @@ def _mode(path):
     return stat.S_IMODE(path.lstat().st_mode)
 
 
-def test_the_two_files_are_written_on_a_first_provision(dirs, template):
+def test_the_three_files_are_written_on_a_first_provision(dirs, template):
     written = provision(dirs, template)
-    assert written == [dirs.env / ".env", dirs.home / "SOUL.md"]
+    # mcp.json is spec 004: the tenant's Waku Memory server.
+    assert written == [dirs.env / ".env", dirs.home / "SOUL.md", dirs.home / "mcp.json"]
     assert (dirs.env / ".env").read_text(encoding="utf-8") == render_env()
     assert (dirs.home / "SOUL.md").read_text(encoding="utf-8") == SOUL_TEMPLATE_TEXT
+
+
+def test_a_hosted_agent_consolidates_every_turn(dirs, template):
+    """Spec 006 D. Laptops keep the default of 6; a one-question demo on the
+    hosted agent would never consolidate, so nothing would reach Waku Memory."""
+    provision(dirs, template)
+    lines = (dirs.env / ".env").read_text(encoding="utf-8").splitlines()
+    assert "WAKU_CONSOLIDATE_EVERY=1" in lines
+    assert "WAKU_PROVIDER=waku-platform" in lines
 
 
 def test_the_env_file_ends_at_0600_under_any_umask(dirs, template, permissive_umask):
@@ -124,6 +134,7 @@ def test_a_deleted_file_comes_back(dirs, template):
 def test_a_deleted_directory_comes_back(dirs, template):
     provision(dirs, template)
     (dirs.home / "SOUL.md").unlink()
+    (dirs.home / "mcp.json").unlink()
     dirs.home.rmdir()
     provision(dirs, template)
     assert (dirs.home / "SOUL.md").is_file()
@@ -142,7 +153,7 @@ def test_an_env_symlink_is_left_alone_rather_than_followed(dirs, template, tmp_p
     os.chmod(outside, 0o644)
     (dirs.env / ".env").symlink_to(outside)
 
-    assert provision(dirs, template) == [dirs.home / "SOUL.md"]
+    assert provision(dirs, template) == [dirs.home / "SOUL.md", dirs.home / "mcp.json"]
     assert _mode(outside) == 0o644, "the mode repair followed a symlink"
     assert outside.read_text(encoding="utf-8") == "not mine\n"
 
@@ -184,3 +195,144 @@ def test_a_soul_symlink_to_an_existing_file_is_left_alone(dirs, template, tmp_pa
     (dirs.home / "SOUL.md").symlink_to(target)
     provision(dirs, template)
     assert target.read_text(encoding="utf-8") == "UNTOUCHED\n"
+
+
+# --- spec 004 A4: every tenant's mcp.json names their Waku Memory -------------
+# The container reaches Waku Memory through a waku_memory server whose
+# credential is the person's own key, passed in as WAKU_MEMORY_API_KEY.
+
+import json  # noqa: E402
+
+from hosted.core.provision import WAKU_MEMORY_SERVER  # noqa: E402
+
+
+def _servers(dirs):
+    return json.loads((dirs.home / "mcp.json").read_text())["servers"]
+
+
+def test_a_new_tenant_gets_an_mcp_json_with_waku_memory(dirs, template):
+    written = provision(dirs, template)
+    assert dirs.home / "mcp.json" in written
+    assert _servers(dirs) == [WAKU_MEMORY_SERVER]
+    assert WAKU_MEMORY_SERVER == {"name": "waku_memory", "url": "https://api.waku.one/mcp",
+                                  "auth_env": "WAKU_MEMORY_API_KEY"}
+
+
+def test_a_tenants_own_servers_are_kept_and_waku_memory_is_added(dirs, template):
+    dirs.home.mkdir(parents=True)
+    treg = {"name": "treg", "url": "https://treg.to/mcp/", "oauth": True}
+    (dirs.home / "mcp.json").write_text(json.dumps({"servers": [treg]}))
+    provision(dirs, template)
+    assert _servers(dirs) == [treg, WAKU_MEMORY_SERVER]
+
+
+def test_a_waku_memory_entry_the_tenant_already_has_is_left_alone(dirs, template):
+    dirs.home.mkdir(parents=True)
+    theirs = {"name": "waku_memory", "url": "https://api.waku.one/mcp", "oauth": True}
+    (dirs.home / "mcp.json").write_text(json.dumps({"servers": [theirs]}))
+    written = provision(dirs, template)
+    assert dirs.home / "mcp.json" not in written
+    assert _servers(dirs) == [theirs]
+
+
+def test_an_mcp_json_that_is_not_json_is_left_alone(dirs, template):
+    dirs.home.mkdir(parents=True)
+    (dirs.home / "mcp.json").write_text("{not json")
+    provision(dirs, template)
+    assert (dirs.home / "mcp.json").read_text() == "{not json"
+
+
+def test_a_symlinked_mcp_json_is_never_followed(dirs, template, tmp_path):
+    dirs.home.mkdir(parents=True)
+    target = tmp_path / "elsewhere.json"
+    target.write_text(json.dumps({"servers": []}))
+    (dirs.home / "mcp.json").symlink_to(target)
+    provision(dirs, template)
+    assert json.loads(target.read_text()) == {"servers": []}
+
+
+def test_provisioning_twice_adds_waku_memory_once(dirs, template):
+    provision(dirs, template)
+    provision(dirs, template)
+    assert _servers(dirs) == [WAKU_MEMORY_SERVER]
+
+
+# --- spec 004 E: treg, through the metering proxy --------------------------------
+
+from hosted.core.provision import ensure_treg, treg_server  # noqa: E402
+
+PROXY = "http://10.88.0.1:8788"
+TREG = {"name": "treg", "url": "http://10.88.0.1:8788/treg/mcp/",
+        "auth_env": "WAKU_PLATFORM_TOKEN"}
+
+
+def test_with_the_relay_on_a_new_tenant_gets_treg_beside_waku_memory(dirs, template):
+    written = provision(dirs, template, treg_base_url=PROXY)
+    assert written.count(dirs.home / "mcp.json") == 1
+    assert _servers(dirs) == [WAKU_MEMORY_SERVER, TREG]
+    assert treg_server(PROXY + "/") == TREG
+
+
+def test_without_the_relay_there_is_no_treg_entry(dirs, template):
+    provision(dirs, template)
+    assert [s["name"] for s in _servers(dirs)] == ["waku_memory"]
+    assert ensure_treg(dirs.home, "") is False
+
+
+def test_an_existing_tenant_gets_treg_on_the_next_start_and_keeps_their_servers(dirs, template):
+    provision(dirs, template)
+    written = provision(dirs, template, treg_base_url=PROXY)
+    assert written == [dirs.home / "mcp.json"]
+    assert _servers(dirs) == [WAKU_MEMORY_SERVER, TREG]
+    provision(dirs, template, treg_base_url=PROXY)
+    assert _servers(dirs) == [WAKU_MEMORY_SERVER, TREG]
+
+
+def test_a_treg_entry_the_tenant_already_has_is_left_alone(dirs, template):
+    dirs.home.mkdir(parents=True)
+    theirs = {"name": "treg", "url": "https://treg.to/mcp/", "oauth": True}
+    (dirs.home / "mcp.json").write_text(json.dumps({"servers": [theirs, WAKU_MEMORY_SERVER]}))
+    written = provision(dirs, template, treg_base_url=PROXY)
+    assert dirs.home / "mcp.json" not in written
+    assert _servers(dirs) == [theirs, WAKU_MEMORY_SERVER]
+
+
+def test_treg_never_follows_a_symlinked_mcp_json(dirs, template, tmp_path):
+    dirs.home.mkdir(parents=True)
+    target = tmp_path / "elsewhere.json"
+    target.write_text(json.dumps({"servers": []}))
+    (dirs.home / "mcp.json").symlink_to(target)
+    assert ensure_treg(dirs.home, PROXY) is False
+    assert json.loads(target.read_text()) == {"servers": []}
+
+
+# --- spec 014: a tenant's own treg key --------------------------------------------
+# Provisioning never reads the key and never rewrites the treg entry; waku's
+# treg.resolve() decides at connect time. Evals may import both sides.
+
+def test_a_saved_key_leaves_the_relay_entry_on_disk_and_clearing_it_switches_back(
+        dirs, template, monkeypatch):
+    from waku.tools.treg import KEY_ENV, URL, resolve
+
+    provision(dirs, template, treg_base_url=PROXY)
+    (dirs.env / ".env").write_text(f"{KEY_ENV}=theirs\n", encoding="utf-8")
+    monkeypatch.setenv(KEY_ENV, "theirs")
+    provision(dirs, template, treg_base_url=PROXY)
+    assert _servers(dirs) == [WAKU_MEMORY_SERVER, TREG], "provisioning only adds"
+    resolved = resolve(_servers(dirs))
+    assert resolved[1] == {"name": "treg", "url": URL, "auth_env": KEY_ENV}
+    monkeypatch.delenv(KEY_ENV)
+    assert resolve(_servers(dirs)) == [WAKU_MEMORY_SERVER, TREG], "back through the relay"
+
+
+def test_a_tenant_s_own_treg_entry_survives_a_key_and_a_reprovision(dirs, template, monkeypatch):
+    from waku.tools.treg import KEY_ENV, resolve
+
+    dirs.home.mkdir(parents=True)
+    theirs = {"name": "treg", "url": "https://treg.to/mcp/", "oauth": True}
+    (dirs.home / "mcp.json").write_text(json.dumps({"servers": [theirs, WAKU_MEMORY_SERVER]}))
+    monkeypatch.setenv(KEY_ENV, "theirs")
+    provision(dirs, template, treg_base_url=PROXY)
+    assert _servers(dirs) == [theirs, WAKU_MEMORY_SERVER]
+    monkeypatch.delenv(KEY_ENV)
+    assert resolve(_servers(dirs)) == [theirs, WAKU_MEMORY_SERVER]

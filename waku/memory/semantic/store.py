@@ -75,6 +75,28 @@ class SqliteFactStore:
         )
         self.conn.commit()
 
+    # --- spec 006: kept facts on their way to Waku Memory. Stored unsynced
+    # first and marked once the send succeeds, so a send that fails, or a
+    # process that dies mid-send, leaves the fact waiting for the next try.
+    def add_unsynced(self, subject: str, content: str, scope: str,
+                     source: str = "consolidation") -> int:
+        cur = self.conn.execute(
+            "INSERT INTO facts (subject, content, source, synced, scope) VALUES (?,?,?,0,?)",
+            (subject.lower().strip(), content, source, scope),
+        )
+        self.conn.commit()
+        return cur.lastrowid
+
+    def unsynced(self) -> list[dict]:
+        rows = self.conn.execute(
+            "SELECT id, subject, content, scope FROM facts WHERE synced = 0 ORDER BY id"
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def mark_synced(self, fact_id: int) -> None:
+        self.conn.execute("UPDATE facts SET synced = 1 WHERE id = ?", (fact_id,))
+        self.conn.commit()
+
     def search(self, query: str, top_k: int = 4) -> list[str]:
         fts = _fts_query(query)
         if not fts:
