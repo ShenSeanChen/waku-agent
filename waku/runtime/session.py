@@ -61,6 +61,9 @@ class Session:
         self.memory = memory  # waku.memory.Memory (None until Phase-2 wiring)
         self.session_id = session_id
         self.history: list[dict] = []
+        # what the retrieval gate found for the latest build_system, so
+        # consolidation can tell a fact the turn read from one it learned
+        self.retrieved = ""
 
     def build_system(self, user_message: str, notify=None) -> str:
         from datetime import datetime
@@ -86,6 +89,7 @@ class Session:
             # default-on retrieval is slow and biases answers (see
             # memory/retrieval_gate.py for the why).
             retrieved = self.memory.gated_retrieve(user_message, notify=notify)
+            self.retrieved = retrieved
             if retrieved:
                 parts.append("\nRelevant memory:\n" + retrieved)
             skills = self.memory.matching_skills(user_message)
