@@ -77,6 +77,7 @@ def run_loop(
     max_tokens: int = 2048,
     observer: Observer | None = None,
     stream: bool = False,
+    trim: Callable[[list[dict]], None] | None = None,
 ) -> LoopResult:
     """Run one agent turn. `messages` is mutated in place — after the call it
     contains the full working memory of the turn (assistant thoughts, tool
@@ -84,13 +85,20 @@ def run_loop(
 
     stream=True emits the assistant's text as it's generated (notify("text",
     {"delta": ...})) so a gateway can show it appear token by token — used by
-    the dashboard. Falls back to a single call for clients without streaming."""
+    the dashboard. Falls back to a single call for clients without streaming.
+
+    `trim`, when given, may shorten tool results the model has already read
+    before each later call, so one large result is not re-sent on every
+    iteration after it. app.py passes reports.shrink_read, which cuts a whole
+    earlier research report to its digest; None leaves `messages` as they are."""
     notify = observer or (lambda kind, ev: None)
     result = LoopResult(reply="")
     can_stream = stream and hasattr(client.messages, "stream")
 
     for iteration in range(1, max_iterations + 1):
         result.iterations = iteration
+        if trim is not None and iteration > 1:
+            trim(messages)
 
         # ---- reason: one LLM call with the current working memory
         response = None

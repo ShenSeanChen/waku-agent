@@ -17,7 +17,7 @@ from waku.ops import receipt as receipts
 from waku.ops.tracing import Tracer, compose, metered
 from waku.runtime.session import Session
 from waku.tools import build_registry
-from waku.tools.waku_memory import remember_via, search_via
+from waku.tools.waku_memory import get_via, remember_via, search_via, tool_name
 
 log = logging.getLogger(__name__)
 
@@ -43,6 +43,13 @@ class Waku:
         # Spec 009 A: a research turn searches Waku Memory before the model
         # starts. None without Waku Memory, and then nothing is searched.
         self.brain_search = search_via(self.mcp_bridge)
+        self.brain_get = get_via(self.mcp_bridge)
+        # A research report reaches Waku Memory one way, once a turn: from
+        # the reply, through reports.save. The model's own remember tool
+        # refuses a report body (2026-10-05: one turn saved two).
+        remember_tool = self.tools.get(tool_name(self.mcp_bridge, "memory.remember") or "")
+        if remember_tool is not None:
+            remember_tool.fn = reports.guard_remember(remember_tool.fn)
         self.session = Session(self.settings, memory=self.memory)
         self.tracer = Tracer(self.settings)
 
@@ -101,11 +108,14 @@ class Waku:
             # Spec 007: a reply holding a research report sends the report to
             # Waku Memory and keeps only its first sentences in the chat. No
             # Waku Memory, or a failed send, leaves the reply whole.
-            found = reports.find(result.reply)
+            # One report a turn: when the model saved one itself, save()
+            # sends nothing more and the card points at that memory.
+            kept_report = reports.kept_body(result.reply, result.tool_calls)
             reply, report = reports.save(
                 result.reply, self.memory.remember,
                 lambda r: reports.is_company_research(
-                    metered(self.client, "report", notify), self.settings.small_model, r))
+                    metered(self.client, "report", notify), self.settings.small_model, r),
+                tool_calls=result.tool_calls)
             if report is not None:
                 result.reply = reply
                 notify("report", report)
@@ -144,7 +154,7 @@ class Waku:
                 # Spec 009 B: a turn that saved a report keeps at most two
                 # facts, about the person; the findings stay in the report.
                 self.memory.maybe_consolidate(
-                    notify=notify, report=found.body if report is not None else "")
+                    notify=notify, report=kept_report if report is not None else "")
                 self.memory.export_markdown()   # keep MEMORY.md in sync
 
             # Spec 011: the receipt, once consolidation has kept what it keeps.
@@ -190,7 +200,7 @@ class Waku:
         known = brain.ReadFirst()
         if self.brain_search is not None and brain.is_research(
                 self.memory.skills.match(user_message)):
-            known = brain.read_first(user_message, self.brain_search)
+            known = brain.read_first(user_message, self.brain_search, self.brain_get)
             for call in known.calls:
                 notify("tool", call)
             system += known.context
@@ -205,6 +215,9 @@ class Waku:
             max_tokens=self.settings.max_tokens,
             observer=notify,
             stream=stream,
+            # a whole earlier report the model read is cut to its digest
+            # before each later call (spec 009 A)
+            trim=reports.shrink_read,
         )
         result.read_first, result.used = known.calls, known.used
         return result

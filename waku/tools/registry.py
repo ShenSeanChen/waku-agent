@@ -41,6 +41,9 @@ class ToolRegistry:
     def register(self, tool: Tool) -> None:
         self._tools[tool.name] = tool
 
+    def get(self, name: str) -> Tool | None:
+        return self._tools.get(name)
+
     def schemas(self) -> list[dict[str, Any]]:
         return [t.to_api() for t in self._tools.values()]
 
