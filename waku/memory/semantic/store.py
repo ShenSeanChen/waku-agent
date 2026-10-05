@@ -69,9 +69,17 @@ class SqliteFactStore:
         self.conn = conn
 
     def add(self, subject: str, content: str, source: str = "user") -> None:
+        sub = subject.lower().strip()
+        cnt = content.strip()
+        existing = self.conn.execute(
+            "SELECT id FROM facts WHERE subject = ? AND lower(trim(content)) = ?",
+            (sub, cnt.lower()),
+        ).fetchone()
+        if existing:
+            return
         self.conn.execute(
             "INSERT INTO facts (subject, content, source) VALUES (?,?,?)",
-            (subject.lower().strip(), content, source),
+            (sub, cnt, source),
         )
         self.conn.commit()
 
@@ -80,9 +88,17 @@ class SqliteFactStore:
     # process that dies mid-send, leaves the fact waiting for the next try.
     def add_unsynced(self, subject: str, content: str, scope: str,
                      source: str = "consolidation") -> int:
+        sub = subject.lower().strip()
+        cnt = content.strip()
+        existing = self.conn.execute(
+            "SELECT id FROM facts WHERE subject = ? AND lower(trim(content)) = ?",
+            (sub, cnt.lower()),
+        ).fetchone()
+        if existing:
+            return int(existing[0])
         cur = self.conn.execute(
             "INSERT INTO facts (subject, content, source, synced, scope) VALUES (?,?,?,0,?)",
-            (subject.lower().strip(), content, source, scope),
+            (sub, cnt, source, scope),
         )
         self.conn.commit()
         return cur.lastrowid

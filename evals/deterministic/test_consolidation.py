@@ -572,3 +572,48 @@ def test_a_real_fact_in_the_same_turn_is_still_kept(memory):
 def test_the_summariser_is_told_to_extract_only_what_the_person_said():
     assert "Extract only what the person said" in SUMMARIZER_PROMPT
     assert "what the assistant's memory holds or lacks" in SUMMARIZER_PROMPT
+
+
+# ---------- deduplication and noise prevention (Issue #109)
+
+
+def test_consolidation_drops_facts_already_in_semantic_memory(memory):
+    """When a fact is already known in semantic memory (e.g. saved live by the
+    agent during conversation), consolidation must not duplicate it or send it again."""
+    remember = FakeRemember()
+    memory.facts.add("Alex", "Alex prefers morning meetings.", source="user")
+
+    add_exchanges(memory.conn, 3)
+    kept = run_with(memory, [response([text_block(DISTILLED)])], remember)
+
+    # Only the new Acme demo fact should be kept and sent
+    assert len(kept) == 1
+    assert kept[0]["content"] == "The Acme demo is on Friday."
+    assert remember.sent == [("The Acme demo is on Friday.", "global")]
+
+    # Semantic memory should hold only one row for Alex
+    alex_rows = memory.conn.execute(
+        "SELECT id, source FROM facts WHERE subject = 'alex'"
+    ).fetchall()
+    assert len(alex_rows) == 1
+    assert alex_rows[0]["source"] == "user"
+
+
+def test_sqlite_fact_store_does_not_insert_duplicate_fact(memory):
+    """SqliteFactStore add and add_unsynced must be idempotent for identical content."""
+    memory.facts.add("Vedansh", "Prefers working late nights.", source="user")
+    memory.facts.add("vedansh", "prefers working late nights.", source="consolidation")
+    second_id = memory.facts.add_unsynced("vedansh", "  Prefers working late nights.  ", "global")
+
+    rows = memory.conn.execute("SELECT id, content FROM facts WHERE subject = 'vedansh'").fetchall()
+    assert len(rows) == 1
+    assert rows[0]["id"] == second_id
+
+
+def test_the_prompt_instructs_empty_list_and_negative_guidance():
+    """Prompt must explicitly guide against math, syntax questions, and trivial noise."""
+    filled = SUMMARIZER_PROMPT.format(log="user: how to center a div\nassistant: display flex")
+    assert '"facts": []' in filled
+    assert "General knowledge, math" in filled
+    assert "never extract things like" in filled
+    assert "omit transient Q&A and chit-chat" in filled
