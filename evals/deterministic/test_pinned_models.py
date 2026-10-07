@@ -16,12 +16,16 @@ import os
 
 import pytest
 
+from waku.loop.models import PROVIDERS
 from waku.ops import catalog
 from waku.ops import settings_api as d
 
-PROVIDER_KEYS = ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "DEEPSEEK_API_KEY",
-                 "MINIMAX_API_KEY", "MOONSHOT_API_KEY", "ZHIPU_API_KEY", "OPENROUTER_API_KEY",
-                 "XAI_API_KEY", "OPENCODE_ZEN_API_KEY", "OPENCODE_GO_API_KEY")
+# Derived from the registry, never hand-listed: a hardcoded copy silently goes
+# stale the moment providers.toml gains a row, and then a contributor's own key
+# for the new provider leaks into `home` and fails these tests for nobody's
+# fault but the list's. CONTRIBUTING promises a provider needs "no test to
+# edit" -- this keeps that true.
+PROVIDER_KEYS = tuple(sorted({p.key_env for p in PROVIDERS.values() if p.key_env}))
 
 
 @pytest.fixture
