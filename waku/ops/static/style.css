@@ -669,8 +669,9 @@ details.subterm > summary.subterm-h::-webkit-details-marker{ display:none; }
 .model-picker-toggle{ border-radius:0 var(--radius) var(--radius) 0; }
 .model-picker-list{ display:none; position:absolute; top:100%; left:0; right:0; margin-top:var(--spacing); background:var(--surface-paper); border:1px solid var(--rule-hard); border-radius:var(--radius); z-index:10; max-height:240px; overflow:auto; }
 .model-picker-list.open{ display:block; }
-.model-picker-search{ position:sticky; top:0; padding:var(--space-2) var(--space-2); border:none; border-bottom:1px solid var(--rule-hard); background:var(--surface-paper); width:100%; outline:none; }
-.model-picker-search:focus{ border-bottom-color:var(--accent); }
+/* Override .fld input so the sticky filter stays opaque over scrolling models. */
+.fld .model-picker-search{ position:sticky; top:0; z-index:var(--z-inside); padding:var(--space-2) var(--space-2); border:none; border-bottom:1px solid var(--rule-hard); background:var(--surface-paper); width:100%; outline:none; }
+.fld .model-picker-search:focus{ border-bottom-color:var(--accent); }
 .model-picker-items{ padding:var(--spacing) 0; }
 .model-picker-item{ padding:calc(var(--spacing) * 1.5) var(--space-3); cursor:pointer; font-size:var(--text-xs); }
 .model-picker-item:hover,.model-picker-item.active{ background:var(--surface-raised); color:var(--text-ink); }
