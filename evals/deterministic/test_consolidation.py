@@ -505,3 +505,70 @@ def test_consolidation_keeps_the_user_facts_and_drops_the_operating_state(memory
     assert [k["content"] for k in kept] == USER_FACTS
     # and the summariser is told the same rule
     assert "account balances, credits" in memory.client.kwargs[0]["messages"][0]["content"]
+
+
+# --- spec 018: a fact about what memory holds or lacks is the assistant's own
+# state, not a fact about the person ---
+
+from waku.memory.consolidation import is_memory_state  # noqa: E402
+
+# The sentence kept and sent to Waku Memory on 2026-10-07 after Sean asked
+# "What is our company's legal entity name and business address?" and the agent
+# answered that it had no address.
+JUNK = ("The user does not have the company's business address stored in memory and "
+        "requested it be provided for future use on legal pages and footers.")
+
+
+@pytest.mark.parametrize("content", [
+    JUNK,
+    "No record of Sean's passport number exists in memory.",
+    "The assistant could not find the user's address in memory.",
+    "Waku Memory has no business address for the company.",
+])
+def test_a_fact_about_what_memory_lacks_is_memory_state(content):
+    assert is_memory_state({"subject": "company", "content": content})
+
+
+@pytest.mark.parametrize("content", [
+    "Sean has no passport.",
+    "Alex prefers morning meetings.",
+    "Sean does not keep his passwords in a notes app.",
+    "The user connected Claude Code to Waku Memory.",
+])
+def test_a_fact_about_the_person_is_not_memory_state(content):
+    assert not is_memory_state({"subject": "sean", "content": content})
+
+
+def _question_only_exchange(memory):
+    memory.conn.execute("INSERT INTO chat_log (role, content) VALUES ('user', ?)",
+                        ("What is our company's legal entity name and business address?",))
+    memory.conn.execute("INSERT INTO chat_log (role, content) VALUES ('assistant', ?)",
+                        ("The legal entity is AutoManus Technologies, Inc. I don't have a business address.",))
+    memory.conn.commit()
+
+
+def test_a_question_only_turn_keeps_no_fact_and_sends_nothing(memory):
+    _question_only_exchange(memory)
+    sent = []
+    client = ScriptedClient([response([text_block(json.dumps({
+        "facts": [{"subject": "company", "content": JUNK}], "episode": "Asked about the address."}))])])
+    kept = kept_if_due(memory.conn, client, "small", 1, memory.facts, memory.episodes,
+                       remember=lambda body, scope: sent.append(body) or "m1")
+    assert kept == []
+    assert sent == []
+    assert memory.facts.list() == []
+
+
+def test_a_real_fact_in_the_same_turn_is_still_kept(memory):
+    _question_only_exchange(memory)
+    client = ScriptedClient([response([text_block(json.dumps({
+        "facts": [{"subject": "company", "content": JUNK},
+                  {"subject": "sean", "content": "Sean registered the company in Delaware."}],
+        "episode": "Asked about the address."}))])])
+    kept = kept_if_due(memory.conn, client, "small", 1, memory.facts, memory.episodes)
+    assert [k["content"] for k in kept] == ["Sean registered the company in Delaware."]
+
+
+def test_the_summariser_is_told_to_extract_only_what_the_person_said():
+    assert "Extract only what the person said" in SUMMARIZER_PROMPT
+    assert "what the assistant's memory holds or lacks" in SUMMARIZER_PROMPT

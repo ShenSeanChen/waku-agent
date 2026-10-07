@@ -20,7 +20,8 @@ A fact about the assistant's own operating state is never kept: "User's treg
 balance is $0.759 USD (759,000 micro)" was kept on 2026-10-05, and so was a
 balance "insufficient to complete YouTube research". Balances, credits,
 billing, 402s and 429s, rate limits, tool errors and token counts are
-transient, and `is_ops_state` drops them whatever the summariser proposed.
+transient, and `is_ops_state` drops them whatever the summariser proposed. A fact
+about what memory holds or lacks is dropped the same way (`is_memory_state`).
 
 A turn that answered from memory it read (a recall turn) passes that memory
 as `recalled`. The answer repeats it, so the summariser would extract it
@@ -60,6 +61,11 @@ Never extract the assistant's own operating state: account balances, credits,
 billing or spend, rate limits, tool errors or status codes, token counts, or
 how the assistant or its tools work. It changes by the hour and says nothing
 about the user.
+
+Extract only what the person said. Never extract from the assistant's replies,
+and never extract what the assistant's memory holds or lacks, such as "no
+address is stored" or "it could not find X". An answer the assistant gave is
+not a fact about the person.
 
 Write each fact's content as one sentence that names its subject, so it reads
 on its own. Set "company_research" to true when these exchanges are research
@@ -217,7 +223,7 @@ def kept_if_due(
                 if isinstance(f, dict) and f.get("subject") and f.get("content")]
     # Spec 005: Jev drops what no later answer would need. Off by default, and
     # it fails open, so without WAKU_SLOT_GATE=jev every proposed fact is kept.
-    proposed = [f for f in proposed if not is_ops_state(f)]
+    proposed = [f for f in proposed if not is_ops_state(f) and not is_memory_state(f)]
     if report:
         proposed = [f for f in proposed if not _about_report(f, report)]
     if recalled:
@@ -345,3 +351,26 @@ def is_ops_state(fact: dict) -> bool:
     if re.search(r"\bbalance\b", text, re.IGNORECASE) and _MONEYISH.search(text):
         return True
     return _OPS_STATE.search(text) is not None
+
+
+# Spec 018: what memory holds or lacks is the assistant's own knowledge state, the
+# same kind of sentence as a balance or an error. 2026-10-07: asked for the
+# company's address, the agent said it had none, and the summariser kept "The user
+# does not have the company's business address stored in memory ...". Each pattern
+# needs the word memory beside the storing verb, so "Sean has no passport" and "Sean
+# keeps passwords in a notes app" are about the person and stay.
+_MEMORY_STATE = re.compile(
+    r"\b(?:stored|saved|recorded|kept|held|found|listed)\s+in\s+(?:the\s+)?(?:waku\s+)?memory\b|"
+    r"\b(?:find|locate|located)\b.*\bin\s+(?:the\s+)?(?:waku\s+)?memory\b|"
+    r"\bno\s+(?:record|trace|mention)\s+of\b.*\bmemory\b|"
+    r"\bmemory\b.*\bno\s+(?:record|trace|mention)\s+of\b|"
+    r"\b(?:waku\s+)?memory\s+(?:has|holds|contains|lacks)\s+(?:no|nothing)\b",
+    re.IGNORECASE)
+
+
+def is_memory_state(fact: dict) -> bool:
+    """True when a proposed fact only describes what memory holds or lacks, such
+    as "no address is stored in memory". The assistant said it, not the person,
+    and it is stale as soon as the thing is saved."""
+    text = f"{fact.get('subject', '')} {fact.get('content', '')}"
+    return _MEMORY_STATE.search(text) is not None
