@@ -66,3 +66,51 @@ def test_empty_reply_is_not_judged(monkeypatch):
 def test_bad_json_degrades_to_none(monkeypatch):
     _stub(monkeypatch, "the model rambled without any json")
     assert J.judge_reply("q", "a") is None
+
+
+def test_missing_judge_key_returns_none_without_retry(monkeypatch):
+    calls = []
+
+    def missing_key(settings):
+        calls.append(settings)
+        raise SystemExit("No API key for provider 'openai'")
+
+    monkeypatch.setattr(J, "get_client", missing_key)
+    assert J.judge_reply("q", "a", "openai", "gpt-5.6-sol") is None
+    assert len(calls) == 1
+
+
+def test_missing_judge_key_still_persists_race(monkeypatch, tmp_path):
+    import tempfile
+    from types import SimpleNamespace
+
+    from waku import app
+    from waku.ops import arena, compare_history
+
+    class Contestant:
+        def __init__(self, settings):
+            self.settings = settings
+
+        def respond(self, *args, **kwargs):
+            return SimpleNamespace(reply="Offline answer", tool_calls=[], iterations=1)
+
+    def missing_key(settings):
+        raise SystemExit("No API key for provider 'openai'")
+
+    monkeypatch.setattr(app, "Waku", Contestant)
+    monkeypatch.setattr(tempfile, "mkdtemp", lambda **kwargs: str(tmp_path / "contestant"))
+    monkeypatch.setattr(arena, "load_settings", lambda: SimpleNamespace(home=tmp_path))
+    monkeypatch.setattr(J, "get_client", missing_key)
+    events = []
+    arena.compare_stream("hello", ["deepseek:deepseek-v4-pro"],
+                         lambda kind, event: events.append(kind), judge=True,
+                         judge_spec="openai:gpt-5.6-sol")
+
+    runs = compare_history.load_runs(tmp_path)
+    assert len(runs) == 1
+    result = runs[0]["results"][0]
+    assert result["reply"] == "Offline answer"
+    assert result["error"] is None
+    assert result["quality"] is None
+    assert compare_history.aggregate(runs)[0]["ok"] == 1
+    assert events[-1] == "done"
