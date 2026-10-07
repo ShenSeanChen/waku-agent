@@ -79,3 +79,17 @@ def test_with_no_memory_object_at_all_the_answer_is_the_same(tmp_path):
 def test_a_server_that_names_no_id_still_counts_as_taken(tmp_path):
     _, tool = _tool(tmp_path, lambda body, scope: None)
     assert tool.fn("Alex", "A fact.") == "Saved here and in Waku Memory."
+
+
+from waku.app import Waku
+
+
+def test_a_fact_save_note_saved_counts_as_read_so_consolidation_leaves_it_out():
+    result = SimpleNamespace(
+        recalled="",
+        tool_calls=[{"tool": "save_note",
+                     "args": {"subject": "Alex", "content": "Alex prefers morning meetings."},
+                     "output": "Saved here and in Waku Memory (id mem-1)."}],
+    )
+    text = Waku._recalled(SimpleNamespace(mcp_bridge=None), result)
+    assert "Alex prefers morning meetings." in text
