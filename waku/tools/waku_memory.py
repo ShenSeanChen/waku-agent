@@ -8,7 +8,8 @@ is the shape the Waku Memory importer reads.
 
 Spec 006: once the server is connected, remember_via() gives consolidation a
 callable that sends each fact it keeps with memory.remember. Spec 007 sends a
-turn's research report through the same callable. Those are the only uploads,
+turn's research report through the same callable, and spec 018 sends the fact `save_note`
+saves the same way. Those are the only uploads,
 and they go to the server the person connected, with their sign-in. Spec 009:
 search_via() gives a research turn one read of memory.search before the model
 starts, so research begins from what the person's brain already holds.

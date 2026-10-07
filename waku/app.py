@@ -178,13 +178,18 @@ class Waku:
         return result
 
     def _recalled(self, result: LoopResult) -> str:
-        """Everything this turn read from memory, as text: what was read
-        before the loop, and what the model's own Waku Memory searches, gets
-        and recalls returned."""
+        """Everything this turn read from memory or saved to it, as text: what
+        was read before the loop, what the model's own Waku Memory searches,
+        gets and recalls returned, and what save_note saved."""
         reads = {tool_name(self.mcp_bridge, t) for t in MEMORY_READS} - {None}
         outputs = [c["output"] for c in result.tool_calls
                    if c.get("tool") in reads and isinstance(c.get("output"), str)]
-        return "\n".join(p for p in (result.recalled, *outputs) if p)
+        # Spec 018: a fact save_note already saved is memory this turn handled, so
+        # consolidation must not extract the same sentence from the chat row again.
+        saved = [f"{c['args'].get('subject', '')}: {c['args'].get('content', '')}"
+                 for c in result.tool_calls
+                 if c.get("tool") == "save_note" and isinstance(c.get("args"), dict)]
+        return "\n".join(p for p in (result.recalled, *outputs, *saved) if p)
 
     def _receipt(self, result: LoopResult, events: list, meta: dict, row_id: int | None) -> None:
         charges = getattr(self.client, "charges", None)   # waku-platform only

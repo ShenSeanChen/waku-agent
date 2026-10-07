@@ -26,7 +26,7 @@ def build_registry(conn: sqlite3.Connection, settings: Settings, memory=None) ->
     # source (Google when signed in, plus waku's own), so the model never has
     # to guess which calendar the user meant.
     registry.register(calendar.make_list_tool(conn, settings.home))
-    registry.register(notes.make_tool(conn))
+    registry.register(notes.make_tool(conn, memory))
     registry.register(messages.make_tool(settings.home))
     # Web search — pairs with create_event for the multi-tool loop demo
     # ("find the World Cup games left and add them to my calendar").
