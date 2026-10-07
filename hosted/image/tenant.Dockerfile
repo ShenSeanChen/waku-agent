@@ -31,12 +31,12 @@ RUN groupadd --gid 10001 waku \
  && useradd --uid 10001 --gid 10001 --no-create-home --shell /usr/sbin/nologin waku
 
 WORKDIR /app
-# README.md and the two license files are not documentation here: pyproject.toml
-# declares readme = "README.md" and license-files = ["LICENSE", "LICENSE-BRAND",
-# "waku/ops/static/fonts/OFL-*.txt"], so hatchling cannot build the project
-# without them and `uv sync` below would fail. The font licenses live under
-# waku/ and arrive with it.
-COPY pyproject.toml uv.lock README.md LICENSE LICENSE-BRAND ./
+# README.md and the three license files are not documentation here: pyproject.toml
+# declares readme = "README.md" and license-files = ["LICENSE", "NOTICE",
+# "LICENSE-BRAND", "waku/ops/static/fonts/OFL-*.txt"], so hatchling cannot build
+# the project without them and `uv sync` below would fail. The font licenses
+# live under waku/ and arrive with it.
+COPY pyproject.toml uv.lock README.md LICENSE NOTICE LICENSE-BRAND ./
 COPY waku ./waku
 COPY skills ./skills
 

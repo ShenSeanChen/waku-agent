@@ -71,7 +71,7 @@ def _config_for_tests(tenant_image: str, *, upstream_url: str) -> template.Spawn
 # a pass.
 ADMITTED_IN_APP = {
     ".", "..",
-    "pyproject.toml", "uv.lock", "README.md", "LICENSE", "LICENSE-BRAND",
+    "pyproject.toml", "uv.lock", "README.md", "LICENSE", "NOTICE", "LICENSE-BRAND",
     "waku", "skills",
     ".venv",          # created by `uv sync`
     "uv.lock.lock",   # uv's own lock file, if the version in use writes one.
@@ -80,17 +80,17 @@ ADMITTED_IN_APP = {
                       # the leak set, never a missing presence assertion).
 }
 MUST_BE_IN_APP = {
-    "pyproject.toml", "uv.lock", "README.md", "LICENSE", "LICENSE-BRAND",
+    "pyproject.toml", "uv.lock", "README.md", "LICENSE", "NOTICE", "LICENSE-BRAND",
     "waku", "skills", ".venv",
 }
 
 ADMITTED_IN_SERVICES_APP = {
     ".", "..",
-    "pyproject.toml", "uv.lock", "LICENSE", "LICENSE-BRAND",
+    "pyproject.toml", "uv.lock", "LICENSE", "NOTICE", "LICENSE-BRAND",
     "hosted", ".venv", "uv.lock.lock",
 }
 MUST_BE_IN_SERVICES_APP = {
-    "pyproject.toml", "uv.lock", "LICENSE", "LICENSE-BRAND", "hosted", ".venv",
+    "pyproject.toml", "uv.lock", "LICENSE", "NOTICE", "LICENSE-BRAND", "hosted", ".venv",
 }
 
 # The context probe. A directory planted INSIDE an admitted tree, holding one

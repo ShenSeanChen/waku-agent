@@ -33,16 +33,16 @@ ROOT = Path(__file__).resolve().parents[3]
 IMAGE = ROOT / "hosted" / "image"
 
 # Spec, "Images": "The tenant image admits only waku/, skills/, pyproject.toml,
-# uv.lock, README.md and the license files" -- the two license files being the
+# uv.lock, README.md and the license files" -- the three license files being the
 # ones pyproject.toml's license-files names at the repo root. "The services
 # image admits hosted/, pyproject.toml, uv.lock and the license files".
 ADMITTED = {
     "tenant.Dockerfile.dockerignore": {
         "waku/", "skills/", "pyproject.toml", "uv.lock", "README.md",
-        "LICENSE", "LICENSE-BRAND",
+        "LICENSE", "NOTICE", "LICENSE-BRAND",
     },
     "services.Dockerfile.dockerignore": {
-        "hosted/", "pyproject.toml", "uv.lock", "LICENSE", "LICENSE-BRAND",
+        "hosted/", "pyproject.toml", "uv.lock", "LICENSE", "NOTICE", "LICENSE-BRAND",
     },
 }
 

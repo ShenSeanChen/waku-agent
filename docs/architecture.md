@@ -76,7 +76,7 @@ flowchart LR
 ```
 
 > _Architecture of **waku-agent** — built on the series
-> ([@ShenSeanChen](https://github.com/ShenSeanChen)). Code is MIT; **this diagram is licensed CC BY-NC-SA 4.0** —
+> ([@ShenSeanChen](https://github.com/ShenSeanChen)). Code is Apache-2.0; **this diagram is licensed CC BY-NC-SA 4.0** —
 > reuse it with credit to the channel, not for commercial resale._
 
 ### Which memories earn a slot

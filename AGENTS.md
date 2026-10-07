@@ -45,11 +45,12 @@ caps it at 100 lines, so the detail lives in the files it points to.
 5. **Nothing under `waku/` or `evals/` imports from `examples/` or `lab/`,** and
    `lab/` never ships to PyPI.
 6. **No emojis** in the dashboard, CLI output or docs prose.
-7. **Two things here are not MIT.** `hosted/` is Elastic License 2.0
-   (`hosted/LICENSE`): runnable by anyone, including commercially, but not
-   offerable to third parties as a service. And the brand — the design system,
-   the Waku mark and the names — is `LICENSE-BRAND`. List any new brand file
-   there, never copy one into `examples/`, and **do not move code between
+7. **Code is Apache-2.0, and two things here are not.** `hosted/` is Elastic
+   License 2.0 (`hosted/LICENSE`): runnable by anyone, including commercially,
+   but not offerable to third parties as a service. And the brand — the design
+   system, the Waku mark and the names — is `LICENSE-BRAND`. List any new brand
+   file there, never copy one into `examples/`, keep `NOTICE` (it carries the
+   MIT notice for code merged before the switch), and **do not move code between
    `hosted/` and `waku/` without saying which license it lands under.**
 8. **Don't edit the copied design files** in `waku/ops/static/design/`. They are
    synced from the private master; ask for a new token in an issue.
