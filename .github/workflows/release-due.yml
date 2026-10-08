@@ -1,0 +1,93 @@
+# Twice a week, ask the question the maintainers file asks every session: is a
+# release due? If it is, open the version-bump PR so the only thing left for a
+# person is to read it and press merge. Nothing here tags or publishes: that is
+# release-tag, and only after a person merges.
+#
+# After v0.1.8 on 2026-09-13, main ran 115 commits (25 days) with no release,
+# although the rule to release in the same session already existed. A rule
+# nobody checks does not fire, so a schedule checks it.
+name: release-due
+
+on:
+  schedule:
+    - cron: "0 15 * * 2,5"  # Tuesday and Friday, 15:00 UTC
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "Open the bump PR even when no release is due (to test this workflow)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: write
+
+jobs:
+  propose:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      FORCE: ${{ inputs.force }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # the tags and the commits since the last one
+
+      # Due means 14 or more days since the last tag with at least 3 commits
+      # on top of it, or 10 or more commits whatever the age. Three commits
+      # stands in for "a user-visible change": a script cannot judge that, and
+      # the person merging the PR can.
+      - name: Is a release due?
+        id: due
+        run: |
+          last=$(git describe --tags --abbrev=0)
+          days=$(( ( $(date +%s) - $(git log -1 --format=%ct "$last") ) / 86400 ))
+          commits=$(git rev-list --count "$last"..HEAD)
+          major_minor="${last#v}"; patch="${major_minor##*.}"; prefix="${major_minor%.*}"
+          next="$prefix.$((patch + 1))"
+          echo "last=$last  days=$days  commits=$commits  next=v$next"
+          due=false
+          if [ "$commits" -ge 10 ] || { [ "$days" -ge 14 ] && [ "$commits" -ge 3 ]; }; then due=true; fi
+          if [ "$FORCE" = "true" ]; then due=true; fi
+          if [ -n "$(gh pr list --state open --search 'head:release/' --json number --jq '.[].number')" ]; then
+            echo "A release PR is already open: nothing to do."; due=false
+          fi
+          if git rev-parse -q --verify "refs/tags/v$next" >/dev/null; then
+            echo "Tag v$next already exists: nothing to do."; due=false
+          fi
+          {
+            echo "due=$due"; echo "last=$last"; echo "days=$days"
+            echo "commits=$commits"; echo "next=$next"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Open the bump PR
+        if: steps.due.outputs.due == 'true'
+        env:
+          LAST: ${{ steps.due.outputs.last }}
+          DAYS: ${{ steps.due.outputs.days }}
+          COMMITS: ${{ steps.due.outputs.commits }}
+          NEXT: ${{ steps.due.outputs.next }}
+        run: |
+          branch="release/v$NEXT"
+          sed -i "s/^__version__ = .*/__version__ = \"$NEXT\"/" waku/__init__.py
+          grep -q "^__version__ = \"$NEXT\"$" waku/__init__.py
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$branch"
+          git commit -am "Bump to $NEXT"
+          git push -u origin "$branch"
+          {
+            echo "main is $COMMITS commits and $DAYS days past $LAST. This PR changes \`__version__\` to $NEXT and nothing else."
+            echo
+            echo "**Merging it tags v$NEXT, and the release workflow publishes to PyPI and creates the GitHub Release.** PyPI never accepts a version twice, so read the list below first."
+            echo
+            echo "Since $LAST:"
+            git log --no-merges --format='- %s' "$LAST"..origin/main
+          } > body.md
+          gh label create release --color 0e8a16 --description "Version bump that publishes on merge" 2>/dev/null || true
+          gh pr create --base main --head "$branch" --title "Bump to $NEXT" --body-file body.md --label release
+          # A PR opened with the default token gets no pull_request checks, and
+          # main requires both, so start them by hand on the branch.
+          gh workflow run validate-skills.yml --ref "$branch"
+          gh workflow run hosted-docker.yml --ref "$branch"

@@ -1,0 +1,49 @@
+# The second half of release-due: when a person merges a release/v* PR, tag the
+# merge commit and start the release workflow on that tag. Pushing a tag by hand
+# still works and still publishes: this only saves remembering to.
+#
+# Guards, because a tag publishes to PyPI and PyPI never accepts a version twice:
+#   - the PR came from a branch in this repo, not a fork
+#   - the PR changed waku/__init__.py and nothing else
+#   - the branch name, the new __version__ and the tag all name one version
+name: release-tag
+
+on:
+  pull_request:
+    types: [closed]
+    branches: [main]
+
+permissions:
+  contents: write
+  actions: write
+  pull-requests: read  # gh pr diff, to check the PR changed one file
+
+jobs:
+  tag:
+    if: >
+      github.event.pull_request.merged == true &&
+      startsWith(github.event.pull_request.head.ref, 'release/v') &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      HEAD_REF: ${{ github.event.pull_request.head.ref }}
+      PR: ${{ github.event.pull_request.number }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
+      - name: Tag the merge commit and start the release
+        run: |
+          want="${HEAD_REF#release/v}"
+          have=$(sed -n 's/^__version__ = "\(.*\)"$/\1/p' waku/__init__.py)
+          files=$(gh pr diff "$PR" --name-only)
+          echo "branch=$want  __version__=$have  files=$files"
+          [ "$have" = "$want" ] || { echo "::error::branch says $want but __version__ is $have: nothing tagged."; exit 1; }
+          [ "$files" = "waku/__init__.py" ] || { echo "::error::a release PR may change waku/__init__.py only: nothing tagged."; exit 1; }
+          if git ls-remote --exit-code --tags origin "refs/tags/v$have" >/dev/null 2>&1; then
+            echo "Tag v$have already exists, so someone pushed it by hand: nothing to do."; exit 0
+          fi
+          git tag "v$have"
+          git push origin "v$have"
+          gh workflow run release.yml --ref "v$have"
