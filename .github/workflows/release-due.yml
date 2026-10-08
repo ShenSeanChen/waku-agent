@@ -3,6 +3,11 @@
 # person is to read it and press merge. Nothing here tags or publishes: that is
 # release-tag, and only after a person merges.
 #
+# GitHub holds the checks on a PR the default token opened until a person
+# presses "Approve and run workflows" on it. Checks started by hand on the
+# branch post under the same names but do not count toward main's required
+# checks (tested 2026-10-08), so there is no workaround to add here.
+#
 # After v0.1.8 on 2026-09-13, main ran 115 commits (25 days) with no release,
 # although the rule to release in the same session already existed. A rule
 # nobody checks does not fire, so a schedule checks it.
@@ -87,7 +92,3 @@ jobs:
           } > body.md
           gh label create release --color 0e8a16 --description "Version bump that publishes on merge" 2>/dev/null || true
           gh pr create --base main --head "$branch" --title "Bump to $NEXT" --body-file body.md --label release
-          # A PR opened with the default token gets no pull_request checks, and
-          # main requires both, so start them by hand on the branch.
-          gh workflow run validate-skills.yml --ref "$branch"
-          gh workflow run hosted-docker.yml --ref "$branch"

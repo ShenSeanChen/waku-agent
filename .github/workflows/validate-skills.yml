@@ -4,10 +4,6 @@ on:
   pull_request:
   push:
     branches: [main]
-  # The release-due workflow opens a PR with the default token, and GitHub does
-  # not run pull_request workflows for a PR that token opened. It starts this
-  # workflow by hand on the PR's branch instead, which posts the same check.
-  workflow_dispatch:
 
 jobs:
   skills-and-evals:
