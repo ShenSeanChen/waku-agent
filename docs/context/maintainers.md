@@ -71,6 +71,16 @@ because a tag is not a release. So:
   if a second one is ever added.
 - When a user-visible change lands on `main`, **cut the release in the same
   session**. Don't let releasable work sit behind an unpublished tag.
+- **Check the gap at the start of every session**, right after the community
+  queue. If the last release is 14 or more days old and a user-visible change
+  has landed since, or 10 or more commits have landed regardless of age, add one
+  line to the queue report and propose the next version with the `release`
+  skill in `.claude/skills/release/`. Then stop: Sean says go before anything is
+  bumped or tagged. A rule nobody checks failed twice, once at `v0.1.3` and
+  `v0.1.4` and again when `main` ran 115 commits past `v0.1.8` in 25 days.
+- **A star is not a subscription.** GitHub notifies only people who watch the
+  repo with Releases selected, so each release also gets an X post and a
+  Discussions announcement, drafted by the agent and posted by Sean.
 - **The release step is `git tag vX.Y.Z && git push origin vX.Y.Z`.**
   `.github/workflows/release.yml` then runs the gate, builds, publishes to PyPI
   over Trusted Publishing (no stored token), and creates the GitHub Release for
