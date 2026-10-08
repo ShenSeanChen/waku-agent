@@ -20,8 +20,6 @@ on:
   pull_request:
   push:
     branches: [main]
-  # Started by hand on a release PR the default token opened; see validate.
-  workflow_dispatch:
 
 # A second push to the same PR cancels the first: this job builds two images
 # and mounts a filesystem, and two of them racing for /srv/waku on one runner

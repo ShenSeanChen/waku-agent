@@ -81,7 +81,9 @@ because a tag is not a release. So:
 - **A schedule backs the session check.** `.github/workflows/release-due.yml`
   runs Tuesday and Friday and opens a `release/vX.Y.Z` PR that changes only
   `__version__` when a release is due (14 or more days and 3 or more commits
-  past the last tag, or 10 or more commits). Merging that PR is the approval:
+  past the last tag, or 10 or more commits). Open the PR and press "Approve and
+  run workflows": GitHub holds a bot PR's checks until a person does. Merging
+  that PR is the approval:
   `release-tag.yml` then tags the merge commit and starts `release.yml`. If the
   tag step fails, push the tag by hand as above. To test the schedule, run
   `release-due` from the Actions tab with `force` set, then close the PR.
