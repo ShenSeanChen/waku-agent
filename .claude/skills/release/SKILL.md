@@ -15,7 +15,9 @@ description: Cut a waku-agent release when main is ahead of the last tag. Check 
 
    Release when the last release is 14 or more days old and a user-visible change
    has landed since, or when 10 or more commits have landed regardless of age.
-   Otherwise report the gap in one line and stop.
+   Otherwise report the gap in one line and stop. `release-due.yml` runs this
+   check on Tuesday and Friday and opens the bump PR itself, so look for an open
+   `release/v*` PR before opening another.
 
 2. **Propose the version and the notes, then wait.** Propose the next patch
    version (`0.1.N` to `0.1.N+1`) unless Sean names another. List the 3 to 5
@@ -27,7 +29,8 @@ description: Cut a waku-agent release when main is ahead of the last tag. Check 
    home appears. Ship it as its own PR with the `ship` skill: branch, `make lint`,
    `make gate`, `gh pr create --fill`, `gh pr checks --watch`, squash-merge.
 
-4. **Tag the merged commit.** Pull `main`, then push the tag. The tag is the
+4. **Tag the merged commit.** Merging a `release/v*` PR does this through
+   `release-tag.yml`. For a PR you opened yourself, or when that workflow fails: Pull `main`, then push the tag. The tag is the
    release: `.github/workflows/release.yml` runs the gate, publishes to PyPI over
    Trusted Publishing and creates the GitHub Release. An agent pushes the tag only
    with Sean's yes for that exact version, and never handles a PyPI token.
