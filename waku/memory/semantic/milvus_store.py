@@ -170,7 +170,7 @@ class MilvusFactStore:
         min_score = float(env_or("MILVUS_MIN_SCORE", "0.35"))
         out = []
         for hit in rows:
-            score = hit.get("distance") if hasattr(hit, "get") else hit.get("distance")
+            score = hit.get("distance") if hasattr(hit, "get") else hit["distance"]
             if score is None and hasattr(hit, "get"):
                 score = hit.get("score")
             if score is not None and float(score) < min_score:
