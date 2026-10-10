@@ -60,7 +60,21 @@ class MilvusFactStore:
         self._ensure_collection()
 
     def _embed(self, text: str) -> list[float]:
-        return self.openai.embeddings.create(model=self.embed_model, input=[text]).data[0].embedding
+        # OpenAI embeddings occasionally flake with SSL EOF behind some proxies;
+        # a short retry keeps FactStore methods from blowing up a whole turn.
+        import time
+        last = None
+        for attempt in range(4):
+            try:
+                return self.openai.embeddings.create(
+                    model=self.embed_model, input=[text]
+                ).data[0].embedding
+            except Exception as err:  # openai.APIConnectionError and transport noise
+                last = err
+                if attempt == 3:
+                    break
+                time.sleep(0.4 * (2 ** attempt))
+        raise last
 
     def _ensure_collection(self) -> None:
         """Create the collection if missing; refuse to alter an existing one.
@@ -150,8 +164,17 @@ class MilvusFactStore:
             consistency_level="Strong",
         )
         rows = raw[0] if raw else []
+        # COSINE returns a similarity score in [0, 1] on MilvusClient — ANN always
+        # yields *someone* as nearest neighbour, so without a floor a miss query
+        # still returns leftovers from earlier writes in a shared collection.
+        min_score = float(env_or("MILVUS_MIN_SCORE", "0.35"))
         out = []
         for hit in rows:
+            score = hit.get("distance") if hasattr(hit, "get") else hit.get("distance")
+            if score is None and hasattr(hit, "get"):
+                score = hit.get("score")
+            if score is not None and float(score) < min_score:
+                continue
             entity = hit.get("entity") if hasattr(hit, "get") else hit["entity"]
             entity = entity or {}
             out.append({
@@ -172,9 +195,10 @@ class MilvusFactStore:
         # MilvusClient 2.4+. Sort in Python: query does not ORDER BY.
         rows = self.client.query(
             collection_name=self.collection,
-            filter="",
+            filter='id != ""',
             output_fields=["id", "subject", "content", "source", "created_at"],
             limit=max(limit, 1),
+            consistency_level="Strong",
         )
         rows = sorted(rows, key=lambda r: r.get("created_at") or 0, reverse=True)
         return [
