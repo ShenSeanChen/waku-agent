@@ -153,6 +153,39 @@ def test_catalog_url_is_used_with_both_auth_styles(monkeypatch):
     catalog._models_cache.clear()
 
 
+def test_openai_wire_catalog_gets_no_anthropic_headers(monkeypatch):
+    """OpenRouter answers a request carrying anthropic-version with its
+    Anthropic-compatible listing: 20 ids prefixed "anthropic/", which 400 when
+    used. An OpenAI-wire provider's catalog request must be Bearer only."""
+    import io
+    import json
+    import urllib.request
+
+    from waku.ops import catalog
+
+    captured = {}
+
+    def fake_urlopen(req, timeout=10):
+        captured["headers"] = {k.lower(): v for k, v in req.header_items()}
+        body = io.BytesIO(json.dumps({"data": [{"id": "stepfun/step-5-preview"}]}).encode())
+        body.__enter__ = lambda *a: body
+        body.__exit__ = lambda *a: None
+        return body
+
+    monkeypatch.setenv("WAKU_PROVIDER", "openrouter")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "fake-key-for-tests")
+    monkeypatch.delenv("WAKU_BASE_URL", raising=False)
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    catalog._models_cache.clear()
+
+    result = catalog.list_models("openrouter")
+    assert captured["headers"]["authorization"] == "Bearer fake-key-for-tests"
+    assert "x-api-key" not in captured["headers"]
+    assert "anthropic-version" not in captured["headers"]
+    assert [m["id"] for m in result["models"]] == ["stepfun/step-5-preview"]
+    catalog._models_cache.clear()
+
+
 def test_price_for_layers_model_over_provider():
     """Receipts correctness: a kimi-k3 run must be priced at K3's $3/$15, not
     the kimi provider's K2.7 rate — and unknown models still fall back to the
