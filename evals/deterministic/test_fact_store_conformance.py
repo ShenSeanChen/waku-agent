@@ -89,8 +89,22 @@ def _langmem_store(tmp_path):
     return LangMemFactStore(Settings(home=tmp_path))
 
 
+def _milvus_store(tmp_path):
+    """Opt-in only. Needs a reachable Milvus (often LAN-only) AND an OpenAI key
+    for embeddings, so it is gated on WAKU_TEST_MILVUS=1 rather than on
+    MILVUS_URI happening to be set — a maintainer with a populated .env should
+    not start paying for embeddings, or writing into a shared collection, by
+    running the suite."""
+    if os.getenv("WAKU_TEST_MILVUS") != "1":
+        pytest.skip("set WAKU_TEST_MILVUS=1 (plus MILVUS_URI and OPENAI_API_KEY) to include it")
+    from waku.config import Settings
+    from waku.memory.semantic.milvus_store import MilvusFactStore
+
+    return MilvusFactStore(Settings(home=tmp_path))
+
+
 BACKENDS = {"sqlite": _sqlite_store, "supabase": _supabase_store, "mem0": _mem0_store,
-            "zep": _zep_store, "langmem": _langmem_store}
+            "zep": _zep_store, "langmem": _langmem_store, "milvus": _milvus_store}
 
 
 @pytest.fixture(params=list(BACKENDS), ids=list(BACKENDS))
