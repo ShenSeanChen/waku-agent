@@ -82,6 +82,10 @@ class Memory:
             from waku.memory.semantic.supabase_store import SupabaseFactStore
 
             return SupabaseFactStore(settings)
+        if settings.semantic_store == "milvus":
+            from waku.memory.semantic.milvus_store import MilvusFactStore
+
+            return MilvusFactStore(settings)
         if settings.semantic_store == "mem0":
             from waku.memory.semantic.mem0_store import Mem0FactStore
 
