@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 5
 requires-python = ">=3.11"
 resolution-markers = [
     "python_full_version >= '3.14' and sys_platform == 'win32'",
@@ -4309,6 +4309,24 @@ crypto = [
 ]
 
 [[package]]
+name = "pymilvus"
+version = "3.0.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "cachetools" },
+    { name = "grpcio" },
+    { name = "orjson" },
+    { name = "pandas" },
+    { name = "protobuf" },
+    { name = "python-dotenv" },
+    { name = "requests" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/bb/27/2707d1dba764495f3d54ae75a28e07f9e6090da224598df3551153ce07f2/pymilvus-3.0.2.tar.gz", hash = "sha256:607ac1bcc96719c1716e0027d4a59c6411ad783fb934cbe0618b6d6c0831550d", size = 376724, upload-time = "2026-09-18T08:54:14.014Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/88/76/7155ce419d3a4525571b27e317c80b2f69b874ce75bdecfb9ffe3fe3b6ab/pymilvus-3.0.2-py3-none-any.whl", hash = "sha256:0ec7ca3a7d24d2ce13b2610c577f0978b08f461176222ea4dc1440375efc1cea", size = 417694, upload-time = "2026-09-18T08:54:12.848Z" },
+]
+
+[[package]]
 name = "pyparsing"
 version = "3.3.2"
 source = { registry = "https://pypi.org/simple" }
@@ -6132,6 +6150,9 @@ hosted = [
 mcp = [
     { name = "mcp" },
 ]
+milvus = [
+    { name = "pymilvus" },
+]
 notion = [
     { name = "notion-client" },
 ]
@@ -6186,6 +6207,7 @@ requires-dist = [
     { name = "opentelemetry-exporter-otlp", marker = "extra == 'tracing'", specifier = ">=1.27" },
     { name = "opentelemetry-sdk", marker = "extra == 'tracing'", specifier = ">=1.27" },
     { name = "pyjwt", extras = ["crypto"], marker = "extra == 'hosted'", specifier = ">=2.8" },
+    { name = "pymilvus", marker = "extra == 'milvus'", specifier = ">=2.4" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
     { name = "pytest", marker = "extra == 'eval'", specifier = ">=8.0" },
     { name = "python-dotenv", specifier = ">=1.0" },
@@ -6197,7 +6219,7 @@ requires-dist = [
     { name = "supabase", marker = "extra == 'supabase'", specifier = ">=2.0" },
     { name = "zep-cloud", marker = "extra == 'arena'", specifier = ">=2.0" },
 ]
-provides-extras = ["arena", "dev", "discord", "eval", "gcal", "hosted", "mcp", "notion", "supabase", "telegram", "tracing", "voice", "voice-neural", "whatsapp"]
+provides-extras = ["arena", "dev", "discord", "eval", "gcal", "hosted", "mcp", "milvus", "notion", "supabase", "telegram", "tracing", "voice", "voice-neural", "whatsapp"]
 
 [[package]]
 name = "wasabi"
