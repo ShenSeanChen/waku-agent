@@ -369,6 +369,17 @@
   .modelchip{margin-left:auto;display:inline-flex;align-items:center;gap:calc(var(--spacing) * 1.5);max-width:150px;min-width:0;
              background:var(--surface-raised);border:1px solid var(--rule-hard);border-radius:var(--radius);
              color:var(--text-ink);padding:var(--spacing) var(--space-2);font-size:var(--text-xs);cursor:pointer;line-height:var(--leading-snug)}
+  /* The embedded chat's toolbar never wraps: New chat, History, the model chip and
+     the "..." menu are one row at any dock width, 360px to 720px. The chip is the
+     one part that shrinks (its name truncates, down to the dot and caret); the
+     buttons keep their size. A wrapped toolbar cost two or three rows of the
+     dock (112px at 531px wide, 152px at 400px). */
+  body.embed .sesshead{flex-wrap:nowrap}
+  body.embed .sesshead .sessbtn,body.embed .sesshead .moremenu{flex:0 0 auto}
+  body.embed .modelchip{flex:0 1 auto;min-width:calc(var(--spacing) * 9)}
+  /* In a dock under ~400px the three buttons give back a little side padding, so
+     the row still fits at 360px (a phone) with the chip down to its dot. */
+  @media (max-width:400px){ body.embed .sesshead .btn{padding-inline:var(--space-3)} }
   .modelchip:hover{border-color:var(--accent)}
   .modelchip .mc-dot{width:6px;height:6px;border-radius:var(--shape-circle);background:var(--ok);flex-shrink:0}
   .modelchip .mc-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
