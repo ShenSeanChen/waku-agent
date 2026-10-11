@@ -110,6 +110,13 @@ MESSAGES = {
         "save a report",
         "group what people ask for and save an audience brief to the Company brain",
     ],
+    "knowledge-drill": [
+        "drill my knowledge of Python GIL",
+        "test my knowledge of database indexing",
+        "assess my understanding of Kafka partition offsets",
+        "quiz my proficiency in Docker networking",
+        "diagnose my concept mastery of distributed consensus",
+    ],
 }
 
 
