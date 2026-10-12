@@ -132,15 +132,16 @@ def list_models(provider: str | None = None, *, use_cache: bool = True) -> dict:
                f"(no spaces, line breaks, or arrows).")
         return {**out, "listed": False,
                 "models": _known_default_ids(prov, out, name == s.provider), "error": msg}
-    # send both auth styles — Bearer for OpenAI-compatible catalogs, x-api-key +
-    # version for Anthropic's; each server reads the header it knows.
+    # Bearer for every catalog; an anthropic-wire provider also gets x-api-key +
+    # version. An OpenAI-wire provider must NOT: OpenRouter sees anthropic-version
+    # and answers with a 20-id "anthropic/..." page that 400s when used.
     # Set a browser-like User-Agent: some OpenAI-compatible proxies (e.g.
     # opencode.ai) block Python-urllib/3.x with a 403 / error code 1010.
-    req = urllib.request.Request(url, headers={
-        "Authorization": f"Bearer {key}",
-        "x-api-key": key, "anthropic-version": "2023-06-01",
-        "User-Agent": "Mozilla/5.0 (compatible; Waku)",
-    })
+    headers = {"Authorization": f"Bearer {key}",
+               "User-Agent": "Mozilla/5.0 (compatible; Waku)"}
+    if prov.kind != "openai":
+        headers.update({"x-api-key": key, "anthropic-version": "2023-06-01"})
+    req = urllib.request.Request(url, headers=headers)
     try:
         with urllib.request.urlopen(req, timeout=10) as resp:
             data = json.loads(resp.read())
