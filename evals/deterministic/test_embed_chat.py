@@ -59,12 +59,77 @@ DONE = {"kind": "done", "reply": "Three findings. Report saved.", "tools": [],
 
 def test_the_page_is_the_chat_column_and_nothing_else():
     for needed in ('id="dock"', 'id="docklog"', 'id="dmsg"', 'id="dsend"',
-                   'id="modelchip"', 'id="teletoggle"', "newChat()",
-                   "toggleSessMenu(event)", "toggleTele()", "toggleModelMenu(event)"):
+                   'id="modelchip"', 'id="moremenu"', "newChat()",
+                   "toggleSessMenu(event)", "toggleMoreMenu(event)", "toggleModelMenu(event)"):
         assert needed in EMBED, needed
     for absent in ('id="nav"', "<main", 'id="view"', "#compare", "#judgment",
                    "#settings", "#database", 'id="mic"', 'id="dock-close"'):
         assert absent not in EMBED, f"{absent} is the dashboard's, not the chat's"
+
+
+def test_stats_and_dashboard_are_menu_items_not_toolbar_buttons():
+    """The toolbar wrapped to two or three rows (112px at 531px wide, 152px at
+    400px) because four wide buttons and the model chip did not fit. "stats" and
+    "Dashboard" are the "..." menu's items now, so neither is a button here."""
+    for gone in ('id="teletoggle"', 'id="opendash"', "toggleTele()", "openDashboard()"):
+        assert gone not in EMBED, f"{gone} is a menu item now, not a toolbar button"
+
+
+def test_the_embedded_toolbar_never_wraps_and_only_the_chip_shrinks():
+    css = (STATIC / "style.css").read_text(encoding="utf-8")
+    assert "body.embed .sesshead{flex-wrap:nowrap}" in css
+    assert "body.embed .sesshead .sessbtn,body.embed .sesshead .moremenu{flex:0 0 auto}" in css
+    assert "body.embed .modelchip{flex:0 1 auto;" in css, "the chip is the part that shrinks"
+    assert "@media (max-width:400px){ body.embed .sesshead .btn{padding-inline:var(--space-3)} }" in css, \
+        "under 400px the buttons give back padding so the row still fits at 360px"
+
+
+def _more_menu(stored: str | None, *, current: bool = False) -> dict:
+    """Run toggleMoreMenu() from dock.js: what it opens, and what choosing each
+    item calls. openMenu is replaced by a recorder, because the stub DOM draws
+    nothing; the real ui.js still builds the items."""
+    src = (JS / "dock.js").read_text(encoding="utf-8")
+    start = src.index("function toggleMoreMenu(ev)")
+    fn = src[start:src.index("function toggleModelMenu(ev)")]
+    return _node({"files": _files("util.js", "ui.js"), "referrer": "", "origins": DEFAULT,
+                  "framed": False, "events": [], "state": 200}, f"""
+    ctx.localStorage = {{getItem: k => k === "waku_tele" ? {json.dumps(stored)} : null,
+                         setItem(){{}}}};
+    vm.runInContext(`
+      var opened = null, closed = 0, toggled = 0, dashboards = 0;
+      function openMenu(trigger, html, opts){{ opened = {{html, opts}}; }}
+      function closeMenu(){{ closed += 1; }}
+      function toggleTele(){{ toggled += 1; }}
+      function openDashboard(){{ dashboards += 1; }}
+      ` + {json.dumps(fn)}, ctx);
+    vm.runInContext("toggleMoreMenu({{stopPropagation(){{}}, currentTarget: {{}}}})", ctx);
+    const html = vm.runInContext("opened.html", ctx);
+    // choose each item the way its onclick would
+    for (const m of html.matchAll(/onclick="([^"]+)"/g)) vm.runInContext(m[1], ctx);
+    console.log(JSON.stringify({{html,
+      width: vm.runInContext("opened.opts.width", ctx),
+      closed: vm.runInContext("closed", ctx), toggled: vm.runInContext("toggled", ctx),
+      dashboards: vm.runInContext("dashboards", ctx)}}));""")
+
+
+@needs_node
+def test_the_more_menu_says_what_each_item_does_and_whether_stats_are_on():
+    on = _more_menu(None)
+    assert "Show how it answered" in on["html"] and "Open full dashboard" in on["html"]
+    assert ">on<" in on["html"], "stats are on by default, and the menu says so"
+    assert ">new tab<" in on["html"], "the dashboard item says it leaves the dock"
+    off = _more_menu("0")
+    assert ">off<" in off["html"] and ">on<" not in off["html"]
+    assert "stats" not in on["html"].lower().replace("under each reply", ""), \
+        "the old one-word label is gone from the visible text"
+
+
+@needs_node
+def test_choosing_a_more_menu_item_closes_it_then_runs_the_old_button_function():
+    got = _more_menu(None)
+    assert (got["toggled"], got["dashboards"]) == (1, 1), "each item runs its old button's function"
+    assert got["closed"] == 2, "both close the menu first"
+    assert got["width"] == "min(300px, 92vw)", "never wider than a 360px phone dock"
 
 
 def test_the_page_loads_the_chat_scripts_and_no_view():
@@ -917,5 +982,8 @@ def test_an_ended_session_on_the_dashboard_button_tells_the_parent():
     assert [p["message"]["type"] for p in got["posts"]] == ["session-expired"]
 
 
-def test_the_header_has_the_dashboard_button():
-    assert 'onclick="openDashboard()"' in EMBED
+def test_the_dashboard_is_reached_from_the_more_menu():
+    """Was a toolbar button; it is the "..." menu's "Open full dashboard" item
+    since 2026-10-11, and still runs openDashboard()."""
+    assert 'onclick="toggleMoreMenu(event)"' in EMBED
+    assert 'onclick: "closeMenu();openDashboard()"' in (JS / "dock.js").read_text(encoding="utf-8")
