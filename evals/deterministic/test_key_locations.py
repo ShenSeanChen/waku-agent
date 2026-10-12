@@ -177,7 +177,7 @@ def test_a_save_with_no_folder_env_goes_to_the_home_env(save_env):
     result = integrations.apply_provider("anthropic", key="sk-test-home", activate=False)
     assert result.ok, result.error
     target = save_env.home / ".env"
-    assert "ANTHROPIC_API_KEY" in target.read_text()
+    assert "ANTHROPIC_API_KEY" in target.read_text(encoding="utf-8")
     assert stat.S_IMODE(target.stat().st_mode) == 0o600
     assert not (save_env.folder / ".env").exists()
 
@@ -188,7 +188,7 @@ def test_a_save_with_a_folder_env_goes_to_that_file(save_env):
     (save_env.folder / ".env").write_text("WAKU_PROVIDER=anthropic\n")
     result = integrations.apply_provider("anthropic", key="sk-test-folder", activate=False)
     assert result.ok, result.error
-    assert "ANTHROPIC_API_KEY" in (save_env.folder / ".env").read_text()
+    assert "ANTHROPIC_API_KEY" in (save_env.folder / ".env").read_text(encoding="utf-8")
     assert not (save_env.home / ".env").exists()
 
 

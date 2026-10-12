@@ -67,7 +67,7 @@ def test_delegate_task_invokes_pi_print_mode(tmp_path, monkeypatch):
     assert "Done. Created hello.py." in output and "saved to" in output.lower()
     # the run landed in the dated workspace with a manifest + transcript
     manifests = list((tmp_path / "ws").rglob("MANIFEST.md"))
-    assert len(manifests) == 1 and "create hello.py" in manifests[0].read_text()
+    assert len(manifests) == 1 and "create hello.py" in manifests[0].read_text(encoding="utf-8")
     assert list((tmp_path / "ws").rglob("pi-transcript.log"))
 
 
@@ -192,7 +192,7 @@ def test_delegate_streams_pi_events_and_ledgers_cost(tmp_path, monkeypatch):
         ev.get("tool") == "bash" for _, ev in seen if ev.get("type") == "tool")
     assert ("subagent", "turn_end") in kinds
     # the cost fix: pi's tokens are on the SAME ledger the arena prices from
-    ledger = (home / "usage.jsonl").read_text().strip().splitlines()
+    ledger = (home / "usage.jsonl").read_text(encoding="utf-8").strip().splitlines()
     rec = __import__("json").loads(ledger[-1])
     assert rec["kind"] == "subagent" and rec["in"] == 250 and rec["out"] == 50
     assert rec["model"] == "kimi-k3"

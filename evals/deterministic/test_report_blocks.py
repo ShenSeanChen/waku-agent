@@ -50,7 +50,7 @@ console.log(JSON.stringify(INPUTS.map(t => md(t))));
 def _render(*texts: str) -> list[str]:
     files = [str(JS / n) for n in ("util.js", "ui.js", "blocks.js")]
     program = f"const FILES = {json.dumps(files)}; const INPUTS = {json.dumps(texts)};\n{_PROGRAM}"
-    out = subprocess.run([NODE, "-e", program], capture_output=True, text=True,  # noqa: S603
+    out = subprocess.run([NODE, "-e", program], capture_output=True, text=True, encoding="utf-8",  # noqa: S603
                          timeout=30, check=False)
     assert out.returncode == 0, out.stderr
     return json.loads(out.stdout.strip().splitlines()[-1])

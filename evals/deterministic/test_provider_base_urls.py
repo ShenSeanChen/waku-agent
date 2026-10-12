@@ -158,12 +158,12 @@ def test_apply_provider_persists_scoped_base_url_and_clears_legacy_override(
     assert result.ok
     assert os.environ["MINIMAX_BASE_URL"] == "https://api.minimax.io/anthropic"
     assert os.environ.get("WAKU_BASE_URL", "") == ""
-    contents = Path(".env").read_text()
+    contents = Path(".env").read_text(encoding="utf-8")
     assert "MINIMAX_BASE_URL='https://api.minimax.io/anthropic'" in contents
 
 
 def test_models_edit_modal_posts_selected_base_url():
-    source = Path("waku/ops/static/js/models.js").read_text()
+    source = Path("waku/ops/static/js/models.js").read_text(encoding="utf-8")
 
     assert 'id="pm-base-url"' in source
     assert "payload.base_url = baseUrl" in source

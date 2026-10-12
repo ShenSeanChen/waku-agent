@@ -44,7 +44,7 @@ def _ledger_totals(home: Path) -> tuple[int, int]:
     total_in = total_out = 0
     path = home / "usage.jsonl"
     if path.exists():
-        for line in path.read_text().splitlines():
+        for line in path.read_text(encoding="utf-8").splitlines():
             try:
                 r = json.loads(line)
                 total_in, total_out = total_in + r.get("in", 0), total_out + r.get("out", 0)

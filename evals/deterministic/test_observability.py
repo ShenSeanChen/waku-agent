@@ -114,7 +114,7 @@ def test_secrets_never_reach_the_trace_file_or_the_page(tmp_path):
     with tracer.turn("t"):
         tracer.event("tool", {"tool": "treg_call", "args": args, "output": "{}"})
     tracer.end_turn("", 1)
-    raw = "".join(p.read_text() for p in (tmp_path / "traces").glob("*.jsonl"))
+    raw = "".join(p.read_text(encoding="utf-8") for p in (tmp_path / "traces").glob("*.jsonl"))
     for secret in ("abcdefghijklmnop", "k-12345678", "plain-secret-value", SECRET):
         assert secret not in raw
     line = next(e for e in _lines(tmp_path) if e["type"] == "tool")
@@ -853,7 +853,7 @@ def _arch_svg() -> str:
 const esc = s => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;");
 process.stdout.write(archSVG({stats: {gate_skips: 1, gate_retrieves: 2, trace_files: 214}, skills: [], facts: [],
   episodes: [], consolidate_every: 5, chat_pending: 0, eval_report: {deterministic: "pass", judge: "skipped"}}));""")
-    return subprocess.run(["node", "-e", script], capture_output=True, text=True, check=True).stdout
+    return subprocess.run(["node", "-e", script], capture_output=True, text=True, encoding="utf-8", check=True).stdout
 
 
 def test_the_llm_ops_panel_names_observability_and_evals_and_closes_the_loop():

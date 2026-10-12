@@ -24,11 +24,11 @@ def _geometry(svg: str) -> str:
 
 
 def test_every_variant_draws_the_same_bird():
-    master = _geometry(MASTER.read_text())
+    master = _geometry(MASTER.read_text(encoding="utf-8"))
     for name in VARIANTS:
         variant = ROOT / "docs" / "brand" / name
         assert variant.is_file(), f"missing {variant}"
-        assert _geometry(variant.read_text()) == master, (
+        assert _geometry(variant.read_text(encoding="utf-8")) == master, (
             f"{name} has drifted from waku-mark.svg — regenerate it rather than "
             "editing it by hand"
         )
@@ -37,7 +37,7 @@ def test_every_variant_draws_the_same_bird():
 def test_each_variant_states_its_ink_outright():
     """A README SVG that inherits its colour renders as nothing on one theme."""
     for name, ink in VARIANTS.items():
-        svg = (ROOT / "docs" / "brand" / name).read_text()
+        svg = (ROOT / "docs" / "brand" / name).read_text(encoding="utf-8")
         assert f'fill="{ink}"' in svg, f"{name} should paint itself {ink}"
         assert "prefers-color-scheme" not in svg, (
             f"{name} must not rely on a media query — GitHub strips styling from "
@@ -46,7 +46,7 @@ def test_each_variant_states_its_ink_outright():
 
 
 def test_the_readme_offers_both_inks():
-    readme = (ROOT / "README.md").read_text()
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
     assert 'media="(prefers-color-scheme: dark)"' in readme
     for name in VARIANTS:
         assert f"docs/brand/{name}" in readme, f"README never references {name}"

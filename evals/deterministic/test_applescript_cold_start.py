@@ -88,7 +88,7 @@ def test_no_module_still_asks_applescript_to_launch():
     for path in TOOLS.glob("*.py"):
         # Only real string literals count — the explanation of why this idiom
         # fails necessarily contains the idiom.
-        for node in ast.walk(ast.parse(path.read_text())):
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
             if not isinstance(node, ast.Constant) or not isinstance(node.value, str):
                 continue
             if node.value.strip().startswith(("AppleScript cannot", "Start `app`")):
@@ -102,7 +102,7 @@ def test_every_osa_call_names_the_app_it_needs():
     """_osa launches whatever `app=` names, so a call that omits it is a call
     that will fail the moment that app is closed — exactly the Mail, Reminders
     and Notes bug."""
-    tree = ast.parse((TOOLS / "apple.py").read_text())
+    tree = ast.parse((TOOLS / "apple.py").read_text(encoding="utf-8"))
     missing = [
         node.lineno
         for node in ast.walk(tree)
