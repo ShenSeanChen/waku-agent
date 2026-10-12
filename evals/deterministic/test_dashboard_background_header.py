@@ -139,7 +139,7 @@ BACKGROUND_AWARE = {
 }
 
 def _read(name: str) -> str:
-    return (JS_DIR / name).read_text()
+    return (JS_DIR / name).read_text(encoding="utf-8")
 
 
 def _body_from(src: str, start: int) -> str:
@@ -176,7 +176,7 @@ def _all_function_bodies() -> dict[str, str]:
     all the others"), so first-definition-wins is safe here."""
     bodies: dict[str, str] = {}
     for path in sorted(JS_DIR.glob("*.js")):
-        src = path.read_text()
+        src = path.read_text(encoding="utf-8")
         for m in FUNC_DEF_RE.finditer(src):
             bodies.setdefault(m.group(1), _body_from(src, m.end()))
     return bodies
@@ -387,7 +387,7 @@ def _network_sites() -> dict[tuple[str, str], set[str]]:
     site, and is skipped."""
     sites: dict[tuple[str, str], set[str]] = {}
     for path in sorted(JS_DIR.glob("*.js")):
-        src = path.read_text()
+        src = path.read_text(encoding="utf-8")
         ranges = _function_ranges(src)
         defs = {m.start(1) for m in FUNC_DEF_RE.finditer(src)}
         for m in re.finditer(rf"\b({'|'.join(NETWORK_TOKENS)})\s*\(", src):
@@ -430,7 +430,7 @@ def test_no_other_transport_appears_in_the_dashboards_js():
     ordinary thing for someone to reach for."""
     failures = []
     for path in sorted(JS_DIR.glob("*.js")):
-        src = path.read_text()
+        src = path.read_text(encoding="utf-8")
         for name, why in FORBIDDEN_TRANSPORTS.items():
             for m in re.finditer(rf"\b{re.escape(name)}\b", src):
                 failures.append(
@@ -452,7 +452,7 @@ def test_a_network_function_is_always_called_never_passed_around():
     walk's view of the file honest."""
     failures = []
     for path in sorted(JS_DIR.glob("*.js")):
-        src = path.read_text()
+        src = path.read_text(encoding="utf-8")
         for pattern, why in FETCH_ALIAS_SHAPES.items():
             for m in re.finditer(pattern, src):
                 failures.append(
@@ -504,7 +504,7 @@ def test_every_timer_in_the_dashboard_is_declared():
     here until declared."""
     found: dict[tuple[str, str, str], set[str]] = {}
     for path in sorted(JS_DIR.glob("*.js")):
-        src = path.read_text()
+        src = path.read_text(encoding="utf-8")
         ranges = _function_ranges(src)
         for m in re.finditer(r"\b(setInterval|setTimeout)\s*\(", src):
             # the callback is everything up to the LAST top-level comma of
@@ -577,7 +577,7 @@ def test_no_user_action_call_site_carries_the_header():
     click, a send, or a tab's first open is real engagement and must reach
     the gateway with no X-Waku-Background header at all."""
     for path in sorted(JS_DIR.glob("*.js")):
-        src = path.read_text()
+        src = path.read_text(encoding="utf-8")
         stripped = src
         for fn_name in BACKGROUND_AWARE.get(path.name, {}):
             body = _function_body(src, fn_name)
@@ -654,7 +654,7 @@ def test_paused_is_only_ever_written_by_plain_assignment():
     otherwise, keeps the walk's answer complete."""
     failures = []
     for path in sorted(JS_DIR.glob("*.js")):
-        src = path.read_text()
+        src = path.read_text(encoding="utf-8")
         for m in PAUSED_WRITE_RE.finditer(src):
             if m.group("op") == "=":
                 continue
@@ -687,7 +687,7 @@ def test_only_declared_sites_write_the_paused_flag():
     function, not about every call site in the dashboard."""
     found: dict[tuple[str, str], set[str]] = {}
     for path in sorted(JS_DIR.glob("*.js")):
-        src = path.read_text()
+        src = path.read_text(encoding="utf-8")
         ranges = _function_ranges(src)
         for m in PAUSED_WRITE_RE.finditer(src):
             if m.group("decl"):                     # the declaration itself
@@ -712,7 +712,7 @@ def test_only_declared_sites_start_or_stop_the_timers():
     leaves the dashboard in a state its own status line lies about."""
     found: dict[tuple[str, str], set[str]] = {}
     for path in sorted(JS_DIR.glob("*.js")):
-        src = path.read_text()
+        src = path.read_text(encoding="utf-8")
         ranges = _function_ranges(src)
         for m in re.finditer(r"\b(startTimers|stopTimers)\(\)", src):
             enclosing = _enclosing(ranges, m.start())

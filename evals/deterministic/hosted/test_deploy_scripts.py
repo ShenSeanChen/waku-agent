@@ -1262,7 +1262,7 @@ def test_the_tls_block_waits_for_dns_propagation_and_uses_a_public_resolver():
     happened when this Caddyfile was written from the hand-built one that had
     `resolvers 1.1.1.1` and lost it.
     """
-    caddyfile = (shelllib.DEPLOY / "Caddyfile").read_text()
+    caddyfile = (shelllib.DEPLOY / "Caddyfile").read_text(encoding="utf-8")
     # Brace matching, not split("}"): the block's first line is
     # `dns {$WAKU_DNS_PROVIDER}`, so splitting on the first close brace ends
     # the block before any of the settings below it. The first version of this
@@ -1335,7 +1335,7 @@ def test_the_edge_compresses_text_but_never_a_stream():
     type nobody named is uncompressed, including whatever a later streaming
     route invents.
     """
-    caddyfile = (shelllib.DEPLOY / "Caddyfile").read_text()
+    caddyfile = (shelllib.DEPLOY / "Caddyfile").read_text(encoding="utf-8")
     assert "encode " in caddyfile, "the edge compresses nothing"
     match = _caddy_block(caddyfile, "match {")
     types = re.findall(r"header\s+Content-Type\s+(\S+)", match)
@@ -1365,7 +1365,7 @@ def test_every_compressible_thing_the_gateway_serves_is_compressed():
 
     already_compressed = {"font/woff2"}
     served = {content_type for _name, (_file, content_type) in STATIC_FILES.items()}
-    match = _caddy_block((shelllib.DEPLOY / "Caddyfile").read_text(), "match {")
+    match = _caddy_block((shelllib.DEPLOY / "Caddyfile").read_text(encoding="utf-8"), "match {")
     patterns = re.findall(r"header\s+Content-Type\s+(\S+)", match)
     for content_type in sorted(served - already_compressed):
         covered = any(content_type.startswith(pattern.rstrip("*"))

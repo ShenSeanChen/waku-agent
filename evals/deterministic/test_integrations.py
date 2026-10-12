@@ -111,7 +111,7 @@ def test_apply_rejects_unknown_and_secret_clear(monkeypatch, tmp_path):
     result = integrations.apply_integration("tavily", {}, ("TAVILY_API_KEY",), force=True)
     assert result.ok
     assert "TAVILY_API_KEY" not in os.environ
-    assert "TAVILY_API_KEY" not in (tmp_path / ".env").read_text()
+    assert "TAVILY_API_KEY" not in (tmp_path / ".env").read_text(encoding="utf-8")
 
 
 def _configure_google(monkeypatch, tmp_path):

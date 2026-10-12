@@ -18,10 +18,10 @@ import re
 from pathlib import Path
 
 STATIC = Path(__file__).resolve().parents[2] / "waku" / "ops" / "static"
-INDEX = (STATIC / "index.html").read_text()
-CSS = (STATIC / "style.css").read_text()
-RENDER_JS = (STATIC / "js" / "render.js").read_text()
-MAIN_JS = (STATIC / "js" / "main.js").read_text()
+INDEX = (STATIC / "index.html").read_text(encoding="utf-8")
+CSS = (STATIC / "style.css").read_text(encoding="utf-8")
+RENDER_JS = (STATIC / "js" / "render.js").read_text(encoding="utf-8")
+MAIN_JS = (STATIC / "js" / "main.js").read_text(encoding="utf-8")
 
 
 def test_the_composer_is_a_textarea():

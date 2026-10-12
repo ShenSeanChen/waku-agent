@@ -35,7 +35,7 @@ def test_each_fact_becomes_one_file(tmp_path):
     acme_file = (tmp_path / "memory" / f"{acme}.md").read_text(encoding="utf-8")
     assert acme_file.startswith("---\nsubject: acme\nsource: user\ncreated_at: ")
     assert acme_file.endswith("---\nAcme cut its price to $19.\n")
-    assert "Alex prefers morning meetings." in (tmp_path / "memory" / f"{alex}.md").read_text()
+    assert "Alex prefers morning meetings." in (tmp_path / "memory" / f"{alex}.md").read_text(encoding="utf-8")
     assert sorted(p.name for p in (tmp_path / "memory").iterdir()) == sorted([f"{acme}.md", f"{alex}.md"])
 
 
@@ -57,7 +57,7 @@ def test_an_edited_fact_rewrites_its_file(tmp_path):
     memory.conn.execute("UPDATE facts SET content = ? WHERE id = ?", ("Acme cut its price to $15.", acme))
     memory.conn.commit()
     memory.export_markdown()
-    assert (tmp_path / "memory" / f"{acme}.md").read_text().endswith("Acme cut its price to $15.\n")
+    assert (tmp_path / "memory" / f"{acme}.md").read_text(encoding="utf-8").endswith("Acme cut its price to $15.\n")
 
 
 def test_a_deleted_fact_loses_its_file_and_nothing_else_is_touched(tmp_path):
@@ -81,14 +81,14 @@ def test_no_episode_is_written_as_a_fact_file(tmp_path):
     _add_fact(memory, "acme", "Acme cut its price to $19.")
     memory.export_markdown()
     for path in (tmp_path / "memory").iterdir():
-        assert "treg video" not in path.read_text()
+        assert "treg video" not in path.read_text(encoding="utf-8")
 
 
 def test_a_subject_with_a_line_break_stays_one_line_of_front_matter(tmp_path):
     memory = _memory(tmp_path)
     fact = _add_fact(memory, "acme\ncorp", "Acme cut its price to $19.")
     memory.export_markdown()
-    assert "subject: acme corp\n" in (tmp_path / "memory" / f"{fact}.md").read_text()
+    assert "subject: acme corp\n" in (tmp_path / "memory" / f"{fact}.md").read_text(encoding="utf-8")
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -96,8 +96,8 @@ ROOT = Path(__file__).resolve().parents[2]
 
 def test_nothing_promises_that_local_memory_never_leaves():
     """Spec 003 reversed the rule. These sentences said the opposite."""
-    tool = (ROOT / "waku" / "tools" / "waku_memory.py").read_text()
-    skill = (ROOT / "skills" / "waku-memory" / "SKILL.md").read_text()
+    tool = (ROOT / "waku" / "tools" / "waku_memory.py").read_text(encoding="utf-8")
+    skill = (ROOT / "skills" / "waku-memory" / "SKILL.md").read_text(encoding="utf-8")
     assert "nothing here copies local memory up" not in tool
     assert "never leaves it" not in skill
     assert "never tell the user that\nlocal memory syncs" not in skill

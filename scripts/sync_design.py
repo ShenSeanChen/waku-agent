@@ -75,7 +75,7 @@ def main(argv: list[str]) -> int:
     for name in FILES:
         shutil.copyfile(root / "public" / "design" / name, DEST / name)
         hashes.append(f"{hashlib.sha256((DEST / name).read_bytes()).hexdigest()}  {name}")
-    (DEST / "SOURCE.md").write_text(SOURCE.format(commit=commit, hashes="\n".join(hashes)))
+    (DEST / "SOURCE.md").write_text(SOURCE.format(commit=commit, hashes="\n".join(hashes)), encoding="utf-8")
     print(f"copied {', '.join(FILES)} from {commit}")
     return 0
 
