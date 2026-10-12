@@ -10,6 +10,8 @@
       If you fixed a bug, add the case that catches it.
 - [ ] `make gate` and `make lint` pass locally.
 - [ ] Any doc sentence this change makes false is fixed in this PR too.
+- [ ] Every commit is signed off (`git commit -s`): see
+      [CONTRIBUTING.md](../CONTRIBUTING.md#license-and-sign-off).
 
 **How you tested it** — commands, and what you saw:
 

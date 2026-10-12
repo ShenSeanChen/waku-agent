@@ -126,9 +126,10 @@ never build the same thing.
 - **[launch-mvp-stripe-nextjs-supabase](https://github.com/ShenSeanChen/launch-mvp-stripe-nextjs-supabase)** — NextJS + Supabase + Stripe, everything you need to ship a SaaS.
 - **[AutoManus.io](https://automanus.io)** — my AI startup: a sales lead manager for made-to-order products. It embeds where conversations already happen (WhatsApp, email, web chat) to capture inbound, automate follow-ups and kill CRM busywork. Pre-seed backed by Character VC. ([AutoManus Discord](https://discord.gg/SxXATg9rSK))
 
-Code is MIT — see [LICENSE](LICENSE) — **except `hosted/`, which is Elastic
-License 2.0**: run it yourself, including commercially, but not as a service for
-others. See [hosted/LICENSE](hosted/LICENSE). `waku/`, the harness itself and
-everything PyPI ships, is MIT. The Waku name, mark and design system belong to
-AutoManus Technologies, Inc. and are not MIT — see [LICENSE-BRAND](LICENSE-BRAND). Built by [@ShenSeanChen](https://github.com/ShenSeanChen)
+Code is Apache License 2.0 — see [LICENSE](LICENSE) and [NOTICE](NOTICE) —
+**except `hosted/`, which is Elastic License 2.0**: run it yourself, including
+commercially, but not as a service for others. See [hosted/LICENSE](hosted/LICENSE).
+`waku/`, the harness itself and everything PyPI ships, is Apache-2.0. Releases
+up to v0.1.8 were MIT and stay MIT. The Waku name, mark and design system belong to
+AutoManus Technologies, Inc. and are not Apache-2.0 — see [LICENSE-BRAND](LICENSE-BRAND). Built by [@ShenSeanChen](https://github.com/ShenSeanChen)
 ([YouTube](https://www.youtube.com/@SeanAIStories) · [X](https://x.com/ShenSeanChen)).

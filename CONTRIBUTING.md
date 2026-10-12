@@ -65,7 +65,7 @@ Before you write code, find two things:
 We welcome growth; we decline **complexity that muddies the core**: frameworks that hide the
 loop, changes that bloat the default path for everyone, or features that can't be read and
 tested on their own. When we say no, we'll explain why — and forking is always fair game
-(that's what MIT is for).
+(that's what Apache-2.0 is for).
 
 Concretely, these get declined **even when the code is good**:
 
@@ -78,8 +78,8 @@ Concretely, these get declined **even when the code is good**:
 - **A "fix" that removes the thing it secures** — e.g. sandboxing a tool by
   making it not work.
 - **A rename.** The name is tied to the videos, the PyPI package and the
-  assistant's own identity. Fork it and rename freely — MIT only asks that you
-  keep the attribution line.
+  assistant's own identity. Fork it and rename freely — Apache-2.0 asks that you
+  keep the LICENSE and NOTICE files and say what you changed.
 - **Material about another project in `docs/` or the product** — whiteboards, write-ups or
   demos made for a video belong in `lab/`; see [conventions §6](docs/context/conventions.md#6-examples-and-video-material).
 
@@ -99,7 +99,28 @@ installs waku has to carry.
 
 ## Community
 
-Questions, show-and-tell, pair-debugging: [Discord](https://discord.gg/ebbdvSCXqu). By
-contributing you agree your work is licensed under the repo's MIT license. The brand assets
-listed in [LICENSE-BRAND](LICENSE-BRAND) — the design system and the Waku mark — are not
-MIT and are not open for reuse outside waku-agent.
+Questions, show-and-tell, pair-debugging: [Discord](https://discord.gg/ebbdvSCXqu).
+
+## License and sign-off
+
+Code is licensed under the [Apache License 2.0](LICENSE), except `hosted/`,
+which is Elastic License 2.0 ([hosted/LICENSE](hosted/LICENSE)). What you
+contribute goes in under the same license it comes out under: a change to
+`hosted/` under the Elastic License 2.0, and everything else under Apache-2.0.
+Section 5 of the Apache License already says this; this paragraph says it out
+loud.
+
+**Sign off every commit** with `git commit -s`. It adds a line like
+
+    Signed-off-by: Your Name <you@example.com>
+
+and that line means you agree to the [Developer Certificate of
+Origin](https://developercertificate.org/): you wrote the change, or have the
+right to submit it under this project's license. That is the whole
+agreement. There is no form to sign and nothing to send. Forgot? `git commit
+--amend -s` fixes the last commit, and `git rebase --signoff main` fixes them all.
+
+Contributions merged before the move to Apache-2.0 stay under the MIT terms
+they were made under; [NOTICE](NOTICE) keeps their notice. The brand assets
+listed in [LICENSE-BRAND](LICENSE-BRAND) — the design system and the Waku mark — are
+under neither license and are not open for reuse outside waku-agent.

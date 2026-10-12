@@ -14,7 +14,7 @@ answer them.
   SQLite connection is bound to the thread that opened it" teaches something.
 - **A rejected PR is not a rejected person.** If we decline a change, we say
   what would have made it land — and forking is always fair game, that's what
-  MIT is for.
+  Apache-2.0 is for.
 - **No harassment, personal attacks, or demeaning comments** about anyone's
   experience level, background, identity, or English. Plenty of contributors
   here aren't writing in their first language.
