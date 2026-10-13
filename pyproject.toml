@@ -94,6 +94,10 @@ voice-neural = [
 supabase = [
     "supabase>=2.0",
 ]
+# Optional semantic-memory upgrade path: Milvus (MilvusClient only — not milvus-lite)
+milvus = [
+    "pymilvus>=2.4",
+]
 # The Memory arena: hosted memory backends raced against waku's own FTS5 store.
 # Never installed by default — the core is stdlib + anthropic/openai, and these
 # only exist so `make arena` can benchmark them.
