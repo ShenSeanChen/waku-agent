@@ -238,7 +238,7 @@ for (const f of SETUP.files) vm.runInContext(fs.readFileSync(f, "utf8"), ctx, {f
 
 def _node(setup: dict, body: str) -> dict:
     program = f"const SETUP = {json.dumps(setup)};\n{_STUB}\n(async () => {{\n{body}\n}})();"
-    out = subprocess.run([NODE, "-e", program], capture_output=True, text=True,  # noqa: S603
+    out = subprocess.run([NODE, "-e", program], capture_output=True, text=True, encoding="utf-8",  # noqa: S603
                          timeout=30, check=False)
     assert out.returncode == 0, out.stderr
     return json.loads(out.stdout.strip().splitlines()[-1])

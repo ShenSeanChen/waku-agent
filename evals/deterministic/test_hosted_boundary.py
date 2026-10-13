@@ -282,7 +282,7 @@ def _distribution_paths(builder_cls: type) -> list[str]:
     plugin_manager = PluginManager()
     metadata = ProjectMetadata(str(ROOT), plugin_manager)
     builder = builder_cls(str(ROOT), plugin_manager=plugin_manager, metadata=metadata)
-    return sorted(f.distribution_path for f in builder.recurse_included_files())
+    return sorted(f.distribution_path.replace("\\", "/") for f in builder.recurse_included_files())
 
 
 def test_hosted_and_lab_never_ship_in_the_wheel_or_sdist():

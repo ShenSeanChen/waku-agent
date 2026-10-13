@@ -21,6 +21,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -111,9 +112,12 @@ def run_coding_stream(provider: str, model: str, task: str, files: dict | None,
     if not verify:
         on_line("[done — no test to score]")
         return (None, "ran (no test)", secs)
+    cmd = verify
+    if os.name == "nt" and cmd.startswith("python3"):
+        cmd = f'"{sys.executable}"' + cmd[len("python3"):]
     try:
-        v = subprocess.run(verify, shell=True, cwd=workdir, capture_output=True,
-                           text=True, timeout=120, check=False, env=delegate_env())
+        v = subprocess.run(cmd, shell=True, cwd=workdir, capture_output=True,
+                           text=True, encoding="utf-8", timeout=120, check=False, env=delegate_env())
     except subprocess.TimeoutExpired:
         on_line("[verify timed out]")
         return (False, "verify timed out", secs)
@@ -172,9 +176,12 @@ def run_coding_case(provider: str, model: str, case: dict,
     verify = case.get("verify")
     if not verify:
         return (True, "no verify (ran clean)", round(time.perf_counter() - t0, 1))
+    cmd = verify
+    if os.name == "nt" and cmd.startswith("python3"):
+        cmd = f'"{sys.executable}"' + cmd[len("python3"):]
     try:
-        v = subprocess.run(verify, shell=True, cwd=workdir, capture_output=True,
-                           text=True, timeout=120, check=False, env=delegate_env())
+        v = subprocess.run(cmd, shell=True, cwd=workdir, capture_output=True,
+                           text=True, encoding="utf-8", timeout=120, check=False, env=delegate_env())
     except subprocess.TimeoutExpired:
         return (False, "verify timed out", round(time.perf_counter() - t0, 1))
     secs = round(time.perf_counter() - t0, 1)

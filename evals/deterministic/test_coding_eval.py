@@ -8,11 +8,21 @@ code, not pi's prose."""
 
 from __future__ import annotations
 
+import os
 import shutil
+import tempfile
+from pathlib import Path
 
 from waku.ops import coding_eval as ce
 
-_TRUE = shutil.which("true") or "/usr/bin/true"   # a real no-op binary, exits 0
+_TRUE = shutil.which("true")
+if not _TRUE:
+    if os.name == "nt":
+        _STUB = Path(tempfile.gettempdir()) / "waku_true_stub.cmd"
+        _STUB.write_text("@exit /b 0\n", encoding="utf-8")
+        _TRUE = str(_STUB)
+    else:
+        _TRUE = "/usr/bin/true"
 
 
 def _stub_pi(monkeypatch):

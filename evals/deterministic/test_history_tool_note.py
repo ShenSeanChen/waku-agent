@@ -202,7 +202,7 @@ def test_a_loaded_thread_with_a_huge_note_renders_only_the_reply():
     }
     files = [str(JS / f) for f in ("util.js", "ui.js", "render.js")]
     program = f"const FILES = {json.dumps(files)};\nconst ROWS = {json.dumps(rows)};\n{_PROGRAM}"
-    out = subprocess.run([NODE, "-e", program], capture_output=True, text=True,  # noqa: S603
+    out = subprocess.run([NODE], input=program, capture_output=True, text=True, encoding="utf-8",  # noqa: S603
                          timeout=30, check=False)
     assert out.returncode == 0, out.stderr
     rendered = json.loads(out.stdout.strip().splitlines()[-1])
