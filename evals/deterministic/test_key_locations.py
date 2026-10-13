@@ -177,8 +177,9 @@ def test_a_save_with_no_folder_env_goes_to_the_home_env(save_env):
     result = integrations.apply_provider("anthropic", key="sk-test-home", activate=False)
     assert result.ok, result.error
     target = save_env.home / ".env"
-    assert "ANTHROPIC_API_KEY" in target.read_text()
-    assert stat.S_IMODE(target.stat().st_mode) == 0o600
+    assert "ANTHROPIC_API_KEY" in target.read_text(encoding="utf-8")
+    if os.name != "nt":
+        assert stat.S_IMODE(target.stat().st_mode) == 0o600
     assert not (save_env.folder / ".env").exists()
 
 

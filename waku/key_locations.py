@@ -43,11 +43,15 @@ def _names_with_values(path: Path) -> frozenset[str]:
 
 def tilde(path: Path | str, user_home: Path | None = None) -> str:
     """A path as a person reads it: their home folder shown as ~."""
-    user_home = Path.home() if user_home is None else user_home
+    if user_home is None:
+        user_home = Path(os.environ["HOME"]) if "HOME" in os.environ else Path.home()
     text, home = str(path), str(user_home)
     if text == home:
         return "~"
-    return "~" + text[len(home):] if text.startswith(home + os.sep) else text
+    if text.startswith(home + os.sep):
+        rel = text[len(home):].replace(os.sep, "/")
+        return "~" + rel
+    return text
 
 
 def _worktree_main(cwd: Path) -> Path | None:
@@ -88,7 +92,8 @@ def model_key_locations(cwd: Path | None = None, env: Mapping[str, str] | None =
     """
     cwd = Path.cwd() if cwd is None else cwd
     env = os.environ if env is None else env
-    user_home = Path.home() if user_home is None else user_home
+    if user_home is None:
+        user_home = Path(env["HOME"]) if "HOME" in env else Path.home()
     startup_names = config.STARTUP_ENV_NAMES if startup_names is None else startup_names
     keys = _model_key_names()
     home = config.resolve_home(env=env, cwd=cwd, user_home=user_home)

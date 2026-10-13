@@ -72,7 +72,8 @@ def test_copied_files_match_source():
     recorded = {name: digest for digest, name in re.findall(r"^([0-9a-f]{64})  (\S+)$", source, re.MULTILINE)}
     assert set(recorded) == set(COPIED)
     for name in COPIED:
-        assert hashlib.sha256((DESIGN / name).read_bytes()).hexdigest() == recorded[name], (
+        data = (DESIGN / name).read_bytes().replace(b"\r\n", b"\n")
+        assert hashlib.sha256(data).hexdigest() == recorded[name], (
             f"design/{name} differs from the copy recorded in SOURCE.md")
 
 
