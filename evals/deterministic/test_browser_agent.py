@@ -69,3 +69,51 @@ def test_a_failed_rebuild_keeps_the_working_agent(isolated, monkeypatch):
     assert error and "no API key" in error
     assert browser_agent.current() is first, "a failed swap must not orphan the user"
     assert first.session.session_id, "and the surviving agent keeps its thread"
+
+
+@pytest.mark.parametrize("reload", ["settings", "restart", "settings_before_chat"])
+def test_restored_history_reaches_the_model(isolated, monkeypatch, reload):
+    from evals.helpers import ScriptedClient, response, text_block
+
+    monkeypatch.setenv("WAKU_SESSION_IDLE_MINUTES", "0")
+    monkeypatch.setenv("WAKU_HISTORY_TURNS", "2")
+    first = browser_agent.get_agent()
+    # The selected thread need not be the most recently written thread.
+    first.session.start_new("s-food-festival")
+    first.session.add_exchange("old turn", "old reply", source="dashboard")
+    first.session.add_exchange("another turn", "another reply", source="dashboard")
+    first.session.add_exchange(
+        "Create Food festival", "Saved locally, not synced to Apple Calendar.",
+        tool_calls=[{"tool": "create_event", "args": {
+            "title": "Food festival", "start": "2026-10-01T14:00:00",
+            "end": "2026-10-01T15:00:00"}, "output": "Saved to local calendar. "}],
+        source="dashboard")
+    expected = first.session.history[-4:]
+    if reload == "settings":
+        first.memory.log_chat("unrelated thread", "unrelated reply",
+                              session_id="other", source="cli")
+    else:
+        monkeypatch.setattr(browser_agent, "_agent", None)
+        monkeypatch.setattr(browser_agent, "_dashboard_session", None)
+
+    if reload == "restart":
+        restored = browser_agent.get_agent()
+    else:
+        assert browser_agent.rebuild() is None
+        restored = browser_agent.current()
+    assert restored.session.session_id == "s-food-festival"
+    assert restored.session.history == expected
+
+    sent = []
+
+    class Recorder(ScriptedClient):
+        def _create(self, **kwargs):
+            sent.append(list(kwargs["messages"]))
+            return super()._create(**kwargs)
+
+    restored.client = Recorder([response([text_block("I have the event details.")])])
+    monkeypatch.setattr(restored.memory, "gated_retrieve", lambda *a, **k: "")
+    monkeypatch.setattr(restored.memory, "maybe_consolidate", lambda **k: None)
+    followup = "can u add the food festival event to my apple calender now"
+    restored.respond(followup, source="dashboard")
+    assert sent[0] == expected + [{"role": "user", "content": followup}]

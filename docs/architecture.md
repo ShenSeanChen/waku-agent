@@ -264,6 +264,8 @@ shows those instead. A proxy that does not know the turn leaves the estimate.
   `supervisor.py`. Gateways only move text.
 - `waku/runtime/session.py` — working memory for one turn: SOUL.md, memory
   context and chat history.
+  The browser gateway reloads the current thread's recent exchanges from
+  `state.db` after a Settings save or a server restart that resumes that thread.
 - `waku/loop/agent.py` — the loop. `loop/models.py` — pluggable providers over
   two wire formats.
 - `waku/graph/` — the engine, node factories and `workflows/` (triage): opt-in
