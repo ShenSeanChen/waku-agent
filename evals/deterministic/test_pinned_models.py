@@ -21,7 +21,8 @@ from waku.ops import settings_api as d
 
 PROVIDER_KEYS = ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "DEEPSEEK_API_KEY",
                  "MINIMAX_API_KEY", "MOONSHOT_API_KEY", "ZHIPU_API_KEY", "OPENROUTER_API_KEY",
-                 "XAI_API_KEY", "OPENCODE_ZEN_API_KEY", "OPENCODE_GO_API_KEY")
+                 "CHEAPER_INFERENCE_API_KEY", "XAI_API_KEY", "OPENCODE_ZEN_API_KEY",
+                 "OPENCODE_GO_API_KEY")
 
 
 @pytest.fixture
@@ -168,8 +169,8 @@ def test_known_catalog_providers_can_list(home):
     intentionally shows its curated defaults until we wire and verify one."""
     from waku.loop.models import PROVIDERS
 
-    CAN_LIST = {"anthropic", "openai", "openrouter", "gemini", "deepseek", "minimax",
-                "kimi", "xai", "opencode_zen", "opencode_go"}
+    CAN_LIST = {"anthropic", "openai", "openrouter", "cheaperinference", "gemini", "deepseek",
+                "minimax", "kimi", "xai", "opencode_zen", "opencode_go"}
     for name in CAN_LIST:
         prov = PROVIDERS[name]
         can_list = bool(prov.catalog_url) or (prov.kind == "openai" and bool(prov.base_url))
