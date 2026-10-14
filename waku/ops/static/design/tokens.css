@@ -298,11 +298,20 @@
      eighty-six exceptions on the day it is written is not a rule. That is what
      happened to line length before §20, and it is why the lint below exists.
 
-       tight    2   inside one thing: an icon and its label, a value and its unit
-       inside   3   parts of one block: a label above the thing it names
-       between  4   two blocks that belong together: two fields, two rows
-       group    6   two groups on one screen
+       tight    2   inside one thing: an icon and its label, a value and its
+                    unit, a label above the thing it names
+       inside   3   parts of one block that are not a label and its thing
+       between  4   two rows in one list
+       group    6   two fields, two labelled blocks, two groups on one screen
        section  8   two sections, and a screen's own outer padding
+
+     The ratio, decided 2026-09-15: the gap between two labelled blocks is at
+     least three times the gap inside one. A label sits 8 above its field and
+     the next label sits 24 below it, so the ratio is 1:3. The table used to
+     say 12 and 16, a ratio of 1:1.33. At that ratio a label floats halfway
+     between two inputs, and the reader cannot see which input it names.
+     Field already drew 8 inside, so the code was right and the table was
+     wrong.
 
      1, 5 and 7 are not merely unnamed, they are DELETED. A retired step left
      declared is a step someone reaches for, and check-tokens-wired caught them

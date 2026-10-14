@@ -7,11 +7,11 @@ files here. Change them in Waku Memory, then run
 ## Copied unchanged
 
 From `ShenSeanChen/waku-memory-frontend`, `public/design/`, as of commit
-`03ab1d7` (the last commit that changed them).
+`52576fa` (the last commit that changed them).
 `evals/deterministic/test_design_system.py` checks these hashes.
 
 ```
-89f2150e9e54292fc1d8a6c190a57124a051b9c4f81bd33cd8c9b22be5686963  tokens.css
+8008d35a25825029e701c1df76c5e895e61dac7875b6f22f8e33840460639542  tokens.css
 6dc594e673120f16d0d284e01e722e2f856c529520a3c6cc7d9c4fff99d596f0  controls.css
 ```
 

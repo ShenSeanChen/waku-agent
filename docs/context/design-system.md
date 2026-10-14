@@ -46,7 +46,10 @@ These apply to `style.css` and to any inline style written in `js/`:
 - **Use the token names.** The old short names (`--ink2`, `--line` and so on)
   are gone, and a test fails if one comes back.
 - **Spacing** is `--space-2|3|4|6|8` (8–32px) between things, and
-  `calc(var(--spacing) * 0.5|1|1.5)` (2–6px) inside one control.
+  `calc(var(--spacing) * 0.5|1|1.5)` (2–6px) inside one control. A label sits
+  `--space-2` above its field and the next field `--space-6` below it (1:3, as
+  in Waku Memory), and a dialog's header, fields and footer sit `--space-6`
+  apart. `.fld` already does this.
 
 `test_design_system.py` enforces all of this except which button level you pick.
 
