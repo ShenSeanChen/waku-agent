@@ -392,8 +392,8 @@ class TurnTagged:
 
 class OpenAICompatClient:
     """Speaks the Anthropic Messages shape the loop expects, backed by an
-    OpenAI-style chat.completions API. ~60 lines is the entire difference
-    between the two wire formats — worth reading once.
+    OpenAI-style chat.completions API. The adapter preserves reasoning and
+    provider metadata that subsequent tool requests need to echo back.
     """
 
     def __init__(self, api_key: str, base_url: str | None = None, timeout: float = 120.0):
@@ -401,6 +401,20 @@ class OpenAICompatClient:
 
         self._client = openai.OpenAI(api_key=api_key, base_url=base_url, timeout=timeout)
         self.messages = SimpleNamespace(create=self._create, stream=self._stream)
+
+    def _remember_reasoning(self, model: str) -> None:
+        # One endpoint can serve several models (for example OpenRouter).
+        # Learn this requirement per model, never for every model on the client.
+        if not hasattr(self, "_reasoning_models"):
+            self._reasoning_models: set[str] = set()
+        self._reasoning_models.add(model)
+
+    @staticmethod
+    def _with_reasoning(kwargs: dict) -> dict:
+        """Old text-only history has no reasoning to recover. Fill only gaps."""
+        return {**kwargs, "messages": [
+            {"reasoning_content": "", **m} if m["role"] == "assistant" else m
+            for m in kwargs["messages"]]}
 
     def _to_openai(self, *, model, messages, max_tokens, system=None, tools=None,
                    tool_choice=None) -> dict:
@@ -425,6 +439,9 @@ class OpenAICompatClient:
                         call["extra_content"] = extra
                     calls.append(call)
                 entry: dict = {"role": "assistant", "content": text or None}
+                thinking = [b.thinking for b in content if getattr(b, "type", "") == "thinking"]
+                if thinking:
+                    entry["reasoning_content"] = "".join(thinking)
                 if calls:
                     entry["tool_calls"] = calls
                 oai_messages.append(entry)
@@ -451,12 +468,15 @@ class OpenAICompatClient:
             # described but may not be called (the loop's final answer).
             if tool_choice and tool_choice.get("type") == "none":
                 kwargs["tool_choice"] = "none"
+        if tools and model in getattr(self, "_reasoning_models", set()):
+            kwargs = self._with_reasoning(kwargs)
         return kwargs
 
     def _call(self, kwargs: dict, **extra):
-        """Run chat.completions.create with the max_tokens key-name fallback
-        (older OpenAI-compatible endpoints only know max_tokens, not the newer
-        max_completion_tokens). Only retry when the error is ABOUT that param —
+        """Run chat.completions.create with bounded compatibility fallbacks.
+
+        Older OpenAI-compatible endpoints only know max_tokens, not the newer
+        max_completion_tokens. Only retry when the error is ABOUT that param —
         retrying on any error masked the real failure (e.g. a gpt-5.x call would
         fail for some other reason, then the max_tokens retry buried it under a
         confusing 'use max_completion_tokens' message)."""
@@ -464,11 +484,21 @@ class OpenAICompatClient:
             return self._client.chat.completions.create(**kwargs, **extra)
         except Exception as exc:
             m = str(exc).lower()
-            if "max_completion_tokens" not in m and "max_tokens" not in m:
-                raise
-            k = dict(kwargs)
-            k["max_tokens"] = k.pop("max_completion_tokens", None)
-            return self._client.chat.completions.create(**k, **extra)
+            # A fresh client may first see restored text-only history. Repair
+            # only a 400 naming this field, once: filled messages cannot match
+            # again. Preserve existing reasoning and all streaming options.
+            if (getattr(exc, "status_code", None) == 400 and "reasoning_content" in m
+                    and kwargs.get("tools") and any(
+                        msg["role"] == "assistant" and "reasoning_content" not in msg
+                        for msg in kwargs["messages"])):
+                self._remember_reasoning(kwargs["model"])
+                return self._call(self._with_reasoning(kwargs), **extra)
+            if ("max_completion_tokens" in kwargs
+                    and ("max_completion_tokens" in m or "max_tokens" in m)):
+                k = dict(kwargs)
+                k["max_tokens"] = k.pop("max_completion_tokens")
+                return self._call(k, **extra)
+            raise
 
     def _create(self, *, model, messages, max_tokens, system=None, tools=None, tool_choice=None):
         response = self._call(self._to_openai(
@@ -482,6 +512,10 @@ class OpenAICompatClient:
             raise RuntimeError(f"{model}: {err}")
         choice = response.choices[0].message
         blocks = []
+        reasoning = getattr(choice, "reasoning_content", None)
+        if isinstance(reasoning, str):
+            self._remember_reasoning(model)
+            blocks.append(SimpleNamespace(type="thinking", thinking=reasoning))
         if choice.content:
             blocks.append(SimpleNamespace(type="text", text=choice.content))
         for call in choice.tool_calls or []:
@@ -522,6 +556,7 @@ class _OpenAIStream:
         self._client = client
         self._kwargs = kwargs
         self._text: list[str] = []
+        self._reasoning: list[str] = []
         self._tools: dict[int, dict] = {}   # index → {id, name, args}
         self._usage = None
 
@@ -541,6 +576,10 @@ class _OpenAIStream:
             if not chunk.choices:
                 continue
             delta = chunk.choices[0].delta
+            reasoning = getattr(delta, "reasoning_content", None)
+            if isinstance(reasoning, str):
+                self._client._remember_reasoning(self._kwargs["model"])
+                self._reasoning.append(reasoning)
             if getattr(delta, "content", None):
                 self._text.append(delta.content)
                 yield delta.content
@@ -555,6 +594,8 @@ class _OpenAIStream:
 
     def get_final_message(self):
         blocks = []
+        if self._reasoning:
+            blocks.append(SimpleNamespace(type="thinking", thinking="".join(self._reasoning)))
         text = "".join(self._text)
         if text:
             blocks.append(SimpleNamespace(type="text", text=text))
