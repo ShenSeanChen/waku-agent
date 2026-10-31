@@ -6,9 +6,14 @@ Only the HTTP transport is faked. No provider credentials or network are used.
 import json
 from types import SimpleNamespace
 
-import httpx
 import openai
 import pytest
+
+try:
+    import httpx
+except ModuleNotFoundError:
+    # Newer SDK installations use httpx2 without installing legacy httpx.
+    import httpx2 as httpx
 
 from waku.loop.agent import run_loop
 from waku.loop.models import OpenAICompatClient
