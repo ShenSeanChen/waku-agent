@@ -23,7 +23,7 @@ classifiers = [
 ]
 dependencies = [
     "anthropic>=0.40",   # anthropic wire format: Anthropic, Kimi, GLM, MiniMax
-    "openai>=1.50",      # openai wire format: OpenAI, Gemini, DeepSeek (and embeddings)
+    "openai>=2.45.0,<3", # Responses uses the SDK 2.x HTTPX transport
     "python-dotenv>=1.0",
     "rich>=13.0",
 ]

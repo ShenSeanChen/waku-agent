@@ -89,6 +89,13 @@ fields — `label`, `hidden_unless_env`, `claims_families`,
 `scoped_credentials` — each one defaulting to what every other row already
 does, and used only by the hosted `waku-platform` row.
 
-A provider that speaks neither wire format still needs code, and still needs a
-proposal. This lowers the cost of the common case; it does not remove the
-review from the uncommon one.
+OpenAI-compatible providers use Chat Completions by default. Setting
+`WAKU_OPENAI_API=responses` selects `waku/loop/responses.py` instead, while the
+provider's `kind` remains `openai`. The endpoint and both selected models must
+support that API. The adapters preserve the loop's Messages interface; see
+[getting started](getting-started.md#use-an-openai-compatible-responses-endpoint)
+for configuration.
+
+A provider that speaks none of these formats still needs code. A change to
+the loop or its tool-call contract still needs a proposal under conventions
+section 2.
