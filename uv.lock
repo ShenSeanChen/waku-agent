@@ -6182,7 +6182,7 @@ requires-dist = [
     { name = "mem0ai", marker = "extra == 'arena'", specifier = ">=2.0" },
     { name = "notion-client", marker = "extra == 'notion'", specifier = ">=2.5" },
     { name = "numpy", marker = "extra == 'voice'", specifier = ">=1.24" },
-    { name = "openai", specifier = ">=2.45.0" },
+    { name = "openai", specifier = ">=2.45.0,<3" },
     { name = "opentelemetry-exporter-otlp", marker = "extra == 'tracing'", specifier = ">=1.27" },
     { name = "opentelemetry-sdk", marker = "extra == 'tracing'", specifier = ">=1.27" },
     { name = "pyjwt", extras = ["crypto"], marker = "extra == 'hosted'", specifier = ">=2.8" },

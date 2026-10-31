@@ -70,8 +70,9 @@ Set `WAKU_API_KEY` to your endpoint's key, then restart Waku. The endpoint must
 support `/responses`, function calling, streaming, and encrypted reasoning
 items. Both models use the selected API; check that your account can use both
 model IDs. The configuration above shows a custom endpoint, not a live-tested
-provider guarantee. The OpenAI SDK must be version 2.45.0 or newer; earlier
-versions tested here failed to decode Responses streams on Python 3.14.
+provider guarantee. Waku supports OpenAI SDK 2.x starting at 2.45.0. Earlier
+versions tested here failed to decode Responses streams on Python 3.14; SDK 3
+uses a different HTTP transport that this adapter's tests do not support.
 
 The adapter keeps history in Waku and sends `store=false`; it replays Responses
 output items, including encrypted reasoning, with each tool result. It never
