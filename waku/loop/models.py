@@ -522,7 +522,7 @@ class _OpenAIStream:
         self._client = client
         self._kwargs = kwargs
         self._text: list[str] = []
-        self._tools: dict[int, dict] = {}   # index → {id, name, args}
+        self._tools: dict[int, dict] = {}   # index → {id, name, args, extra?}
         self._usage = None
 
     def __enter__(self):
@@ -552,6 +552,10 @@ class _OpenAIStream:
                     slot["name"] = tc.function.name
                 if tc.function and tc.function.arguments:
                     slot["args"] += tc.function.arguments
+                # Gemini requires this metadata on the follow-up request.
+                # Later argument chunks may omit it; keep what we received.
+                if getattr(tc, "extra_content", None):
+                    slot["extra"] = tc.extra_content
 
     def get_final_message(self):
         blocks = []
@@ -561,7 +565,7 @@ class _OpenAIStream:
         for slot in self._tools.values():
             blocks.append(SimpleNamespace(
                 type="tool_use", id=slot["id"], name=slot["name"],
-                input=json.loads(slot["args"] or "{}")))
+                input=json.loads(slot["args"] or "{}"), extra=slot.get("extra")))
         usage = self._usage
         return SimpleNamespace(
             stop_reason="tool_use" if self._tools else "end_turn",
