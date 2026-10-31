@@ -3,7 +3,6 @@
 import json
 from types import SimpleNamespace
 
-import httpx
 import openai
 import pytest
 
@@ -11,6 +10,12 @@ from waku.config import Settings
 from waku.loop.agent import run_loop
 from waku.loop.models import OpenAICompatClient
 from waku.runtime.session import Session
+
+try:
+    import httpx
+except ImportError:
+    # New SDK releases depend on httpx2; neither transport is a Waku extra.
+    import httpx2 as httpx
 
 MODEL = "deepseek-v4-pro"
 REASONING = "Save the preference."
