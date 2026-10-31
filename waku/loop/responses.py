@@ -61,7 +61,11 @@ class OpenAIResponsesClient:
         return kwargs
 
     def _create(self, **kwargs):
-        return _message(self._client.responses.create(**self._request(**kwargs)))
+        # Collect one streamed request.
+        with self._stream(**kwargs) as stream:
+            for _ in stream.text_stream:
+                pass
+            return stream.get_final_message()
 
     def _stream(self, **kwargs):
         return _ResponsesStream(self._client, self._request(**kwargs))
@@ -108,6 +112,7 @@ class _ResponsesStream:
     def __init__(self, client, kwargs):
         self._client, self._kwargs = client, kwargs
         self._response = None
+        self._items = {}
 
     def __enter__(self):
         self._events = self._client.responses.create(**self._kwargs, stream=True)
@@ -122,8 +127,12 @@ class _ResponsesStream:
         for event in self._events:
             if event.type in ("response.output_text.delta", "response.refusal.delta"):
                 yield event.delta
+            elif event.type == "response.output_item.done":
+                # Keep completed output items.
+                self._items[event.output_index] = event.item
             elif event.type == "response.completed":
                 self._response = event.response
+                self._items.update(enumerate(event.response.output))
             elif event.type in ("response.failed", "response.incomplete"):
                 _message(event.response)
             elif event.type == "error":
@@ -134,4 +143,8 @@ class _ResponsesStream:
     def get_final_message(self):
         if self._response is None:
             raise RuntimeError("Responses stream has no completed response")
+        if sorted(self._items) != list(range(len(self._items))):
+            raise RuntimeError("Responses stream is missing completed output items")
+        # Assemble ordered stream output.
+        self._response.output = [self._items[i] for i in range(len(self._items))]
         return _message(self._response)

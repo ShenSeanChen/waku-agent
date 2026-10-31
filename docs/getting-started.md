@@ -75,7 +75,10 @@ versions tested here failed to decode Responses streams on Python 3.14; SDK 3
 uses a different HTTP transport that this adapter's tests do not support.
 
 The adapter keeps history in Waku and sends `store=false`; it replays Responses
-output items, including encrypted reasoning, with each tool result. It never
+output items, including encrypted reasoning, with each tool result. It collects
+completed output items from the stream for both message creation and streaming.
+Some compatible endpoints omit these items from the final response snapshot.
+The adapter still rejects empty output and incomplete responses. It never
 switches to Chat Completions after a refusal. Set
 `WAKU_OPENAI_API=chat_completions` to select the original adapter. Anthropic-wire
 providers reject the Responses setting.

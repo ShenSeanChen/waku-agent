@@ -10,6 +10,60 @@ ARGS = {"model": "gpt-6.1-sol", "messages": [{"role": "user", "content": "Hello"
         "max_tokens": 128}
 
 
+@pytest.mark.parametrize("streaming", [True, False])
+def test_done_items_survive_an_empty_completion_snapshot(streaming):
+    reasoning = {"id": "rs_1", "type": "reasoning", "summary": [],
+                 "encrypted_content": "opaque"}
+    output = [reasoning, text_item("Hello"), function_item()]
+    adapter, calls = offline_adapter(sse(
+        {"type": "response.output_text.delta", "delta": "Hello"},
+        *({"type": "response.output_item.done", "output_index": i, "item": item}
+          for i, item in enumerate(output)),
+        {"type": "response.completed", "response": response_payload([])},
+    ))
+    if streaming:
+        with adapter.messages.stream(**ARGS) as stream:
+            assert list(stream.text_stream) == ["Hello"]
+            result = stream.get_final_message()
+    else:
+        result = adapter.messages.create(**ARGS)
+    assert result.content[0].text == "Hello"
+    assert result.content[0].responses_output == output
+    assert result.content[1].input == {"city": "Shanghai"}
+    assert result.stop_reason == "tool_use"
+    assert result.usage.output_tokens == 7
+    assert len(calls) == 1 and calls[0][1]["stream"] is True
+
+
+@pytest.mark.parametrize("events,match", [
+    (sse({"type": "response.output_text.delta", "delta": "Unfinished"},
+         {"type": "response.completed", "response": response_payload([])}),
+     "no text or function calls"),
+    (sse({"type": "response.output_item.done", "output_index": 1, "item": text_item()},
+         {"type": "response.completed", "response": response_payload([])}),
+     "missing completed output items"),
+    (sse({"type": "response.output_item.done", "output_index": 0, "item": text_item()},
+         {"type": "response.incomplete", "response": response_payload(
+             [], status="incomplete", incomplete_details={"reason": "max_output_tokens"})}),
+     "max_output_tokens"),
+])
+def test_stream_does_not_accept_unfinished_output(events, match):
+    adapter, calls = offline_adapter(events)
+    with pytest.raises(RuntimeError, match=match):
+        adapter.messages.create(**ARGS)
+    assert len(calls) == 1
+
+
+def test_completion_snapshot_does_not_duplicate_done_items():
+    output = [text_item()]
+    adapter, _ = offline_adapter(sse(
+        {"type": "response.output_item.done", "output_index": 0, "item": output[0]},
+        {"type": "response.completed", "response": response_payload(output)}))
+    result = adapter.messages.create(**ARGS)
+    assert len(result.content) == 1
+    assert result.content[0].responses_output == output
+
+
 def test_stream_yields_text_and_keeps_reasoning_calls_and_usage():
     output = [{"id": "rs_1", "type": "reasoning", "summary": [],
                "encrypted_content": "opaque"}, text_item("Hello world"), function_item()]

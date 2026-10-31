@@ -66,6 +66,7 @@ def test_create_uses_responses_wire_format_and_counts_tokens():
     assert payload["model"] == "gpt-6.1-sol" and payload["instructions"] == "Be brief"
     assert payload["max_output_tokens"] == 128
     assert payload["store"] is False
+    assert payload["stream"] is True
     assert payload["include"] == ["reasoning.encrypted_content"]
     assert payload["tools"] == [{"type": "function", "name": "lookup",
                                  "description": "Look up a city", "strict": False,

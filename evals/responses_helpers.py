@@ -39,9 +39,12 @@ def offline_adapter(*replies):
     def handle(request):
         requests.append((str(request.url), json.loads(request.content)))
         reply = next(pending)
+        if isinstance(reply, dict):
+            assert requests[-1][1]["stream"] is True
+            reply = sse({"type": f"response.{reply['status']}", "response": reply})
         if isinstance(reply, str):
             return httpx.Response(200, text=reply, headers={"content-type": "text/event-stream"})
-        return httpx.Response(200, json=reply)
+        raise TypeError("Responses fixtures must contain payloads or SSE events")
 
     adapter = OpenAIResponsesClient.__new__(OpenAIResponsesClient)
     adapter._client = openai.OpenAI(
