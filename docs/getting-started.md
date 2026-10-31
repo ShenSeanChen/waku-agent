@@ -53,6 +53,32 @@ copy the key's line into `~/.waku/.env`.
 
 **Check:** run `waku` and say hi. It answers in the terminal.
 
+### Use an OpenAI-compatible Responses endpoint
+
+Waku uses Chat Completions for OpenAI-compatible providers by default. If your
+model requires the Responses API, set `WAKU_OPENAI_API=responses` in your `.env`:
+
+```dotenv
+WAKU_PROVIDER=openai
+WAKU_BASE_URL=https://www.packyapi.com/v1
+WAKU_OPENAI_API=responses
+WAKU_MODEL=gpt-6.1-sol
+WAKU_SMALL_MODEL=gpt-6.1-sol
+```
+
+Set `WAKU_API_KEY` to your endpoint's key, then restart Waku. The endpoint must
+support `/responses`, function calling, streaming, and encrypted reasoning
+items. Both models use the selected API; check that your account can use both
+model IDs. The configuration above shows a custom endpoint, not a live-tested
+provider guarantee. The OpenAI SDK must be version 2.45.0 or newer; earlier
+versions tested here failed to decode Responses streams on Python 3.14.
+
+The adapter keeps history in Waku and sends `store=false`; it replays Responses
+output items, including encrypted reasoning, with each tool result. It never
+switches to Chat Completions after a refusal. Set
+`WAKU_OPENAI_API=chat_completions` to select the original adapter. Anthropic-wire
+providers reject the Responses setting.
+
 ## 3. Open the dashboard
 
 ```bash

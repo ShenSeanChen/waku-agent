@@ -4,7 +4,7 @@ The loop speaks one dialect: Anthropic's Messages shape (system/messages/tools
 in, content blocks out). Providers plug in two ways:
 
   anthropic wire format (native)     → Anthropic, Kimi/Moonshot, GLM/Z.ai, MiniMax
-  openai wire format (thin adapter)  → OpenAI, Google Gemini, DeepSeek, OpenRouter
+  openai wire formats (adapters)     → Chat Completions or opt-in Responses
 
 Pick with WAKU_PROVIDER=anthropic|openai|gemini|deepseek|minimax|kimi|glm|openrouter
 and set that provider's API key in .env. Override the model ids with WAKU_MODEL /
@@ -284,6 +284,11 @@ def get_client(settings: Settings):
         raise SystemExit(f"Unknown WAKU_PROVIDER '{settings.provider}'. "
                          f"Pick one of: {', '.join(_visible_names())}")
 
+    if settings.openai_api not in ("chat_completions", "responses"):
+        raise ValueError("WAKU_OPENAI_API must be chat_completions or responses")
+    if settings.openai_api == "responses" and provider.kind != "openai":
+        raise ValueError("WAKU_OPENAI_API=responses requires an OpenAI-compatible provider")
+
     # A hidden row that isn't configured yet must never build a client — it has
     # no endpoint to talk to, and the message needs to name the variable that
     # would turn it on, not "no API key", which would be misleading here.
@@ -333,6 +338,10 @@ def get_client(settings: Settings):
         # Spec 011 B1: the hosted free tier's proxy is told which turn each
         # call belongs to, and answers what the turn was charged.
         return TurnTagged(client) if settings.provider == PLATFORM else client
+    if settings.openai_api == "responses":
+        from waku.loop.responses import OpenAIResponsesClient
+
+        return OpenAIResponsesClient(api_key=api_key, base_url=base_url, timeout=timeout)
     return OpenAICompatClient(api_key=api_key, base_url=base_url, timeout=timeout)
 
 

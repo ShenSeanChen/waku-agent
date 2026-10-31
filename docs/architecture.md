@@ -264,8 +264,10 @@ shows those instead. A proxy that does not know the turn leaves the estimate.
   `supervisor.py`. Gateways only move text.
 - `waku/runtime/session.py` — working memory for one turn: SOUL.md, memory
   context and chat history.
-- `waku/loop/agent.py` — the loop. `loop/models.py` — pluggable providers over
-  two wire formats.
+- `waku/loop/agent.py` runs the loop through one Messages interface.
+  `loop/models.py` selects the provider and adapts Chat Completions;
+  `loop/responses.py` adapts Responses when `WAKU_OPENAI_API=responses`.
+  Both adapters return text, tool calls, and token usage in the same shape.
 - `waku/graph/` — the engine, node factories and `workflows/` (triage): opt-in
   structure around the loop. The loop never changes, a graph node can be a loop
   turn, and every failure fails open to the plain loop.

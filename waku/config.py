@@ -178,6 +178,8 @@ class Settings:
     # the provider's own key env var and default models are used.
     api_key: str = field(default_factory=lambda: os.getenv("WAKU_API_KEY", ""))
     base_url: str | None = field(default_factory=lambda: os.getenv("WAKU_BASE_URL") or None)
+    openai_api: str = field(
+        default_factory=lambda: os.getenv("WAKU_OPENAI_API", "chat_completions"))
     model: str = field(default_factory=lambda: os.getenv("WAKU_MODEL", ""))
     # Cheap model used by the retrieval gate and the consolidation summarizer.
     small_model: str = field(default_factory=lambda: os.getenv("WAKU_SMALL_MODEL", ""))
