@@ -113,7 +113,11 @@ def _argv(command: str, number: int, repo: str, limit: int) -> tuple[bool, list[
     if repo:
         argv += ["--repo", repo]
     if command in _IS_LIST:
-        argv += ["--limit", str(max(1, min(int(limit or 10), 50)))]
+        try:
+            row_limit = int(limit or 10)
+        except (TypeError, ValueError, OverflowError):
+            return False, f"'{command}' needs an integer limit."
+        argv += ["--limit", str(max(1, min(row_limit, 50)))]
         argv += ["--json", _JSON_FIELDS]
     return True, argv
 
@@ -129,9 +133,12 @@ def _rows(command: str, repo: str, limit: int) -> tuple[bool, list[dict] | str]:
     if not ok:
         return False, out
     try:
-        return True, json.loads(out or "[]")
+        rows = json.loads(out or "[]")
     except json.JSONDecodeError:
         return False, f"gh returned something that was not JSON: {out[:200]}"
+    if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
+        return False, "gh did not return a JSON list of objects."
+    return True, rows
 
 
 def _format(rows: list[dict]) -> str:
