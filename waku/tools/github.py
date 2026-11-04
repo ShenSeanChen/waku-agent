@@ -113,7 +113,11 @@ def _argv(command: str, number: int, repo: str, limit: int) -> tuple[bool, list[
     if repo:
         argv += ["--repo", repo]
     if command in _IS_LIST:
-        argv += ["--limit", str(max(1, min(int(limit or 10), 50)))]
+        try:
+            row_limit = int(limit or 10)
+        except (TypeError, ValueError, OverflowError):
+            return False, f"'{command}' needs an integer limit."
+        argv += ["--limit", str(max(1, min(row_limit, 50)))]
         argv += ["--json", _JSON_FIELDS]
     return True, argv
 

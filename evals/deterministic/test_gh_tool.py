@@ -122,6 +122,14 @@ def test_list_commands_ask_for_json_and_clamp_the_limit(capture):
     assert capture["argv"][capture["argv"].index("--limit") + 1] == "10"
 
 
+@pytest.mark.parametrize("limit", ["many", [5], float("inf")])
+def test_invalid_list_limits_return_an_error_without_running_gh(limit, no_subprocess):
+    assert "integer limit" in github.gh_read("pr list", limit=limit)
+    ok, error = github.list_issues(limit=limit)
+    assert not ok
+    assert "integer limit" in error
+
+
 def _code_lines(module) -> list[str]:
     """Source with docstrings and comments removed.
 
