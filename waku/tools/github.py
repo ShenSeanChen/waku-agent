@@ -133,9 +133,12 @@ def _rows(command: str, repo: str, limit: int) -> tuple[bool, list[dict] | str]:
     if not ok:
         return False, out
     try:
-        return True, json.loads(out or "[]")
+        rows = json.loads(out or "[]")
     except json.JSONDecodeError:
         return False, f"gh returned something that was not JSON: {out[:200]}"
+    if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
+        return False, "gh did not return a JSON list of objects."
+    return True, rows
 
 
 def _format(rows: list[dict]) -> str:

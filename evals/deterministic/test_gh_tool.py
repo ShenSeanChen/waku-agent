@@ -221,6 +221,16 @@ def test_malformed_json_does_not_raise(monkeypatch):
     assert "not JSON" in str(res)
 
 
+@pytest.mark.parametrize("payload", ['{"error": "unavailable"}', "null", "[1]"])
+def test_list_results_require_a_list_of_objects(payload, capture):
+    capture["stdout"] = payload
+
+    ok, error = github.list_prs()
+    assert not ok
+    assert "JSON list of objects" in error
+    assert github.gh_read("issue list") == error
+
+
 # --- registration -----------------------------------------------------------
 
 def test_the_tool_is_off_unless_asked_for(tmp_path):
