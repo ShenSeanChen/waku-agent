@@ -6,9 +6,31 @@ REAL auto-run (a tiny script we control), the manifest, and the disable switch."
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 
 from waku.tools import workspace as ws
+
+
+def test_same_second_delegations_keep_separate_files(tmp_path, monkeypatch):
+    monkeypatch.setenv("WAKU_WORKSPACE", str(tmp_path))
+    now = datetime(2026, 7, 19, 1, 2, 3)
+    first = ws.new_run_folder("same-model", "write a tiny calculator", now=now)
+    (first / "pi-transcript.log").write_text("first run", encoding="utf-8")
+    second = ws.new_run_folder("same-model", "write a tiny calculator with history", now=now)
+    assert first != second
+    assert not (second / "pi-transcript.log").exists()
+    (second / "pi-transcript.log").write_text("second run", encoding="utf-8")
+    assert (first / "pi-transcript.log").read_text(encoding="utf-8") == "first run"
+
+
+def test_concurrent_delegations_get_unique_directories(tmp_path, monkeypatch):
+    monkeypatch.setenv("WAKU_WORKSPACE", str(tmp_path))
+    now = datetime(2026, 7, 19, 1, 2, 3)
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        folders = list(pool.map(lambda _: ws.new_run_folder("model", "same task", now=now), range(32)))
+    assert len(set(folders)) == 32
+    assert all(folder.is_dir() for folder in folders)
 
 
 def test_run_folder_is_dated_and_named(tmp_path, monkeypatch):
