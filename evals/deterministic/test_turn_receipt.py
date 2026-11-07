@@ -380,6 +380,40 @@ class _Proxy(BaseHTTPRequestHandler):
     def log_message(self, *args):
         pass
 
+    def do_POST(self):  # noqa: N802 -- the http.server name
+        self.rfile.read(int(self.headers.get("Content-Length", "0")))
+        type(self).seen.append(self.headers.get("x-api-key"))
+        body = json.dumps({
+            "id": "msg_local", "type": "message", "role": "assistant", "model": "test-model",
+            "content": [{"type": "text", "text": "ok"}], "stop_reason": "end_turn", "stop_sequence": None,
+            "usage": {"input_tokens": 1, "output_tokens": 1},
+        }).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+
+def test_platform_messages_keep_the_required_auth_header():
+    import anthropic
+
+    _Proxy.seen = []
+    server = HTTPServer(("127.0.0.1", 0), _Proxy)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    inner = anthropic.Anthropic(api_key="platform-token", base_url=f"http://127.0.0.1:{server.server_port}")
+    try:
+        client = TurnTagged(inner)
+        result = client.messages.create(model="test-model", max_tokens=8, messages=[{"role": "user", "content": "hi"}])
+        assert result.content[0].text == "ok"
+        assert _Proxy.seen == ["platform-token"]
+    finally:
+        inner.close()
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
 
 def test_charges_reads_the_proxy_and_a_404_keeps_the_estimate():
     import anthropic
