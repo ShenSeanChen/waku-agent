@@ -556,15 +556,17 @@ def make_list_tool(conn: sqlite3.Connection, home: Path | None = None) -> Tool:
     def local_events(start: str = "", end: str = "", limit: int = 20) -> str:
         query = 'SELECT title, start, "end", attendees FROM calendar_events'
         clauses, params = [], []
+        aware = "(substr(start, -6, 1) IN ('+', '-') OR substr(start, -1) = 'Z')"
+        local_day = f"CASE WHEN {aware} THEN date(start, 'localtime') ELSE substr(start, 1, 10) END"
         if start:
-            clauses.append("start >= ?")
+            clauses.append(f"({local_day}) >= ?")
             params.append(start[:10])                 # inclusive from the start of that day
         if end:
-            clauses.append("start < ?")
-            params.append((datetime.fromisoformat(end[:10]) + timedelta(days=1)).isoformat(timespec="minutes"))
+            clauses.append(f"({local_day}) <= ?")
+            params.append(end[:10])
         if clauses:
             query += " WHERE " + " AND ".join(clauses)
-        query += " ORDER BY start LIMIT ?"
+        query += f" ORDER BY CASE WHEN {aware} THEN julianday(start) ELSE julianday(start, 'utc') END LIMIT ?"
         params.append(max(1, min(int(limit or 20), 100)))
         rows = conn.execute(query, params).fetchall()
         if not rows:

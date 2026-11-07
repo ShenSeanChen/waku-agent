@@ -73,6 +73,8 @@ is stored in local time with the machine's local offset for the event date. A ti
 without an offset remains a floating local time, including existing events.
 Waku compares event instants when checking duplicates. The ICS export writes
 aware timestamps in UTC and escapes multiline text for calendar import.
+`list_events` filters aware events by the machine's current local day and sorts
+events by their instant, including repeated clock hours when daylight saving ends.
 
 The local SQLite database and `calendar.ics` stay authoritative. To also write
 `create_event` results to Google Calendar, install the opt-in extra and configure

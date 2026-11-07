@@ -1,5 +1,6 @@
 """Calendar inputs must keep their instant and produce importable ICS text."""
 
+import time
 from datetime import UTC, datetime
 
 import pytest
@@ -90,3 +91,40 @@ def test_google_sync_receives_the_original_instant(tmp_path, monkeypatch):
     assert datetime.fromisoformat(captured[0][1]) == datetime(2026, 11, 7, 9, tzinfo=UTC)
     assert datetime.fromisoformat(captured[0][2]) == datetime(2026, 11, 7, 10, tzinfo=UTC)
     conn.close()
+
+
+@pytest.fixture
+def sydney_timezone(monkeypatch):
+    if not hasattr(time, "tzset"):
+        pytest.skip("the process timezone cannot be changed on this platform")
+    try:
+        with monkeypatch.context() as patch:
+            patch.setenv("TZ", "Australia/Sydney")
+            time.tzset()
+            yield
+    finally:
+        time.tzset()
+
+
+def test_list_orders_repeated_dst_hour_by_instant(tmp_path, sydney_timezone):
+    conn = connect(tmp_path)
+    create = calendar.make_tool(conn, tmp_path).fn
+    create(title="later", start="2026-04-05T02:30:00+10:00")
+    create(title="earlier", start="2026-04-05T02:30:00+11:00")
+    result = calendar.make_list_tool(conn).fn(start="2026-04-05", end="2026-04-05")
+    assert result.index("earlier") < result.index("later")
+    conn.close()
+
+
+def test_list_projects_saved_offset_into_current_local_day(tmp_path, monkeypatch, sydney_timezone):
+    conn = connect(tmp_path)
+    calendar.make_tool(conn, tmp_path).fn(title="traveler", start="2026-11-07T20:00:00Z")
+    # Sydney stores this as November 8. After changing local timezone, it belongs to November 7.
+    with monkeypatch.context() as patch:
+        patch.setenv("TZ", "UTC")
+        time.tzset()
+        try:
+            result = calendar.make_list_tool(conn).fn(start="2026-11-07", end="2026-11-07")
+            assert "traveler" in result
+        finally:
+            conn.close()
