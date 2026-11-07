@@ -371,7 +371,10 @@ class TurnTagged:
     """
 
     def __init__(self, client) -> None:
-        self.client = client
+        # The platform proxy requires x-api-key. Newer Anthropic clients use
+        # Bearer auth by default, so pin the platform's existing wire contract.
+        key = getattr(client, "api_key", None)
+        self.client = client.with_options(default_headers={"X-Api-Key": key}) if isinstance(key, str) and key else client
         self.turn_id = ""
         self.messages = _TaggedMessages(self)
 
