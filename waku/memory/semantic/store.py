@@ -14,8 +14,8 @@ import sqlite3
 # The scripts unicode61 does not segment. It counts these as alphanumeric but
 # puts no word boundary between them, so a whole run — 「阿历克斯喜欢游泳」 — is
 # indexed as ONE term. An exact match on a name inside that run can therefore
-# never hit, which is why these tokens, and only these, are searched as
-# prefixes. Turning *every* token into `token*` would quietly make "car" match
+# never hit, which is why these tokens, and only these, use FTS prefixes plus
+# literal contains matching. Turning *every* token into `token*` would make "car" match
 # "carpet": a worse failure than this one, because it still looks like it works.
 _UNSEGMENTED = re.compile(
     "["
@@ -64,6 +64,22 @@ def _fts_query(text: str) -> str:
     )
 
 
+def _cjk_contains(query: str, columns: tuple[str, ...]) -> tuple[str, list[str]]:
+    """Literal contains terms for scripts unicode61 leaves unsegmented.
+
+    Columns are internal SQL identifiers, never user input. At least two CJK
+    characters are required, matching the query builder's minimum term length.
+    This scans local rows only for CJK queries; other scripts keep FTS semantics.
+    """
+    terms = dict.fromkeys(re.findall(_UNSEGMENTED.pattern + "{2,}", query))
+    predicates, params = [], []
+    for term in terms:
+        for column in columns:
+            predicates.append(f"instr({column}, ?) > 0")
+            params.append(term)
+    return " OR ".join(predicates), params
+
+
 class SqliteFactStore:
     def __init__(self, conn: sqlite3.Connection):
         self.conn = conn
@@ -98,15 +114,27 @@ class SqliteFactStore:
         self.conn.commit()
 
     def search(self, query: str, top_k: int = 4) -> list[str]:
+        rows = self._search_rows(query, top_k)
+        return [f"[{r['subject']}] {r['content']}" for r in rows]
+
+    def _search_rows(self, query: str, top_k: int) -> list[sqlite3.Row]:
         fts = _fts_query(query)
         if not fts:
             return []
-        rows = self.conn.execute(
-            "SELECT f.subject, f.content FROM facts_fts JOIN facts f ON f.id = facts_fts.rowid "
+        contains, params = _cjk_contains(query, ("f.subject", "f.content"))
+        if contains:
+            return self.conn.execute(
+                "WITH matches AS (SELECT rowid, rank FROM facts_fts WHERE facts_fts MATCH ?) "
+                "SELECT f.id, f.subject, f.content FROM facts f LEFT JOIN matches m ON m.rowid = f.id "
+                f"WHERE m.rowid IS NOT NULL OR ({contains}) "
+                "ORDER BY m.rowid IS NULL, m.rank, f.id DESC LIMIT ?",
+                (fts, *params, top_k),
+            ).fetchall()
+        return self.conn.execute(
+            "SELECT f.id, f.subject, f.content FROM facts_fts JOIN facts f ON f.id = facts_fts.rowid "
             "WHERE facts_fts MATCH ? ORDER BY rank LIMIT ?",
             (fts, top_k),
         ).fetchall()
-        return [f"[{r['subject']}] {r['content']}" for r in rows]
 
     # --- CRUD: humans (dashboard) and the agent (manage_memory tool) edit memory.
     # The facts_au / facts_ad triggers keep the FTS index in sync automatically.
@@ -121,11 +149,7 @@ class SqliteFactStore:
         fts = _fts_query(query)
         if not fts:
             return self.list(top_k)
-        rows = self.conn.execute(
-            "SELECT f.id, f.subject, f.content FROM facts_fts JOIN facts f ON f.id = facts_fts.rowid "
-            "WHERE facts_fts MATCH ? ORDER BY rank LIMIT ?",
-            (fts, top_k),
-        ).fetchall()
+        rows = self._search_rows(query, top_k)
         return [dict(r) for r in rows]
 
     def update(self, fact_id: int, content: str, subject: str | None = None) -> bool:
