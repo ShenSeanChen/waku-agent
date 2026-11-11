@@ -18,7 +18,7 @@ import sys
 from pathlib import Path
 
 from waku.config import MEMORY_MODES, Settings, env_write_path
-from waku.tools.waku_memory import connect, is_waku_memory
+from waku.tools.waku_memory import connect, is_waku_memory, status
 
 WHAT_LEAVES = (
     "Waku Memory keeps what Waku learns on waku.one, so your other agents "
@@ -88,6 +88,35 @@ def maybe_ask(settings: Settings) -> str | None:
     return ask(settings)
 
 
-def card(settings: Settings) -> dict:
-    """What the dashboard's Overview needs to show the question."""
-    return {"pending": pending(settings), "what": WHAT_LEAVES}
+def status_line(settings: Settings, waiting: int = 0) -> str:
+    """One honest line for the Overview: where this person's memory goes.
+    "Connected" says a sign-in exists, which is all Waku can know without
+    sending; a turn's receipt says which facts Waku Memory actually took.
+    `waiting` is how many kept facts have not reached it yet. "" while the
+    question has not been answered."""
+    if pending(settings):
+        return ""
+    if settings.memory_mode == "off":
+        return "Local only. Your memory stays on this machine."
+    line = status(settings.home)
+    waits = f" {waiting} fact(s) waiting to send." if waiting else ""
+    if line.startswith("connected · "):
+        return f"Connected to Waku Memory as {line.split(' · ', 1)[1]}.{waits}"
+    if line.startswith("configured · API key"):
+        return f"Connected to Waku Memory with your API key.{waits}"
+    if line.startswith("configured · not signed in"):
+        return "Waku Memory is set up but you are not signed in. Run: waku connect waku-memory"
+    return f"Waku Memory is not connected ({line})."
+
+
+def card(settings: Settings, conn=None) -> dict:
+    """What the dashboard's Overview needs: the question while it is pending,
+    and a status line after."""
+    waiting = 0
+    if conn is not None:
+        try:
+            waiting = conn.execute("SELECT COUNT(*) FROM facts WHERE synced = 0").fetchone()[0]
+        except Exception:
+            waiting = 0
+    return {"pending": pending(settings), "what": WHAT_LEAVES,
+            "status": status_line(settings, waiting)}

@@ -535,7 +535,7 @@ def collect() -> dict:
         # Paths and yes-or-no only: no value ever enters this payload.
         "key_locations": model_key_locations(),
         # The first-run Waku Memory question (spec 020): {pending, what}.
-        "memory_choice": memory_choice_card(settings),
+        "memory_choice": memory_choice_card(settings, conn),
         "connections": [asdict(view) for view in list_connections()],
         # MCP servers that sign in on their own page rather than through an
         # .env field (spec 007 E). Files only: no browser, no network.
