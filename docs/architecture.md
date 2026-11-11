@@ -124,9 +124,19 @@ sends pending facts before new ones. Each kept fact in the event carries
 Waku Memory. When `sent` is false, the chat's card reads "Kept on this agent
 only" and says Waku Memory did not answer, and the receipt reads "2 kept, 2 on
 this agent only", so neither claims a fact Waku Memory never stored. Rows from before spec 006 count as sent,
-because the capture shim imports that backlog from `memory/<id>.md`. Hosted
-containers consolidate every turn; laptops consolidate every 6 exchanges.
-Without a connected server, nothing is sent.
+and the capture shim can import that backlog from `memory/<id>.md`. Hosted
+containers consolidate every turn, and so does a laptop whose person chose
+Waku Memory and has it connected (`WAKU_MEMORY_MODE=agent`, spec 020);
+otherwise a laptop consolidates every 6 exchanges. Without a connected server,
+nothing is sent.
+
+`WAKU_MEMORY_MODE` records the person's answer to the first-run question
+(`waku/memory_choice.py`): `agent` sends facts as above, `off` leaves the
+`waku_memory` server unconnected, `hook` is the hosted path, and unset means
+not asked yet. The first time a person with `agent` connects, every fact
+already in `facts` is queued once (a marker file, `.waku-memory-backfill`, in
+the home) and consolidation sends at most 25 waiting facts per turn, so a
+backlog reaches Waku Memory over a few turns.
 
 ### Research reports reach Waku Memory whole
 

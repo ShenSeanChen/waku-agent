@@ -98,8 +98,14 @@ Claude Code; episodes, `MEMORY.md` and `state.db` are never written there.
 [Waku Memory](https://waku.one) is a hosted memory that several agents share
 over MCP: save something in one agent, and recall it in another.
 
+The first run of `waku` in a terminal asks "Sign in to Waku Memory now? [Y/n]",
+and the dashboard's Overview shows the same question. Enter means yes. The
+answer is saved as `WAKU_MEMORY_MODE` in your `.env`: `agent` after yes, `off`
+after "Keep local only". Nothing is sent before you answer, and a gateway, a
+pipe or a test never shows the question. To answer later, or to change your
+mind:
+
 ```bash
-pip install -e '.[mcp]'
 waku connect waku-memory     # or /connect waku-memory in the dashboard chat
 ```
 
@@ -108,8 +114,12 @@ and opens your browser once to sign in. Restart Waku and its tools appear as
 `waku_memory_*`; `waku mcp` shows which account you are signed in as. A config
 still pointing at Waku Memory's old address is moved to the current one.
 From then on, each fact consolidation keeps is also sent to Waku Memory
-(spec 006). Facts kept before you connected stay in `~/.waku/memory/` for the
-importer.
+(spec 006), once per turn. Facts you saved before connecting are sent too, 25
+per turn, the first time you connect; Waku Memory ignores a fact it already
+holds. They also stay in `~/.waku/memory/` for the capture shim. The
+dashboard's Overview says where your memory goes and how many facts are still
+waiting to send. `mcp` ships with the base install; `pip install
+'waku-agent[mcp]'` still works.
 
 The same memory, in your other agents:
 
