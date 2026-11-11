@@ -346,9 +346,13 @@ class _TaggedMessages:
         self._owner = owner
 
     def _tag(self, kwargs: dict) -> dict:
+        # The proxy reads the platform token from `x-api-key`. anthropic 2.x
+        # sends an API key as `Authorization: Bearer` instead, so the header
+        # is set here and the proxy gets the same one from every SDK version.
+        headers = {**(kwargs.get("extra_headers") or {}), **self._owner.auth_headers()}
         if self._owner.turn_id:
-            kwargs["extra_headers"] = {**(kwargs.get("extra_headers") or {}),
-                                       "X-Waku-Turn": self._owner.turn_id}
+            headers["X-Waku-Turn"] = self._owner.turn_id
+        kwargs["extra_headers"] = headers
         return kwargs
 
     def create(self, **kwargs):
@@ -378,13 +382,20 @@ class TurnTagged:
     def __getattr__(self, name: str):
         return getattr(self.client, name)
 
+    def auth_headers(self) -> dict:
+        """The platform token as `x-api-key`, which hosted/proxy/ authenticates
+        on, whatever header the installed anthropic SDK sends by default."""
+        key = getattr(self.client, "api_key", None)
+        return {"x-api-key": key} if key else {}
+
     def charges(self, turn_id: str) -> dict | None:
         """The proxy's answer for one turn, or None: an older proxy, a turn
         it never saw (404) and an unreachable proxy all leave the receipt's
         estimate in place, and never fail the turn."""
         try:
             answer = self.client.get(f"/v1/turns/{turn_id}/charges", cast_to=object,
-                                     options={"timeout": 10.0, "max_retries": 0})
+                                     options={"timeout": 10.0, "max_retries": 0,
+                                              "headers": self.auth_headers()})
         except Exception:
             return None
         return answer if isinstance(answer, dict) else None

@@ -351,7 +351,8 @@ def test_hosted_and_lab_never_ship_in_the_wheel_or_sdist():
 
 def test_the_hosted_extra_holds_only_what_hosted_needs():
     """AGENTS.md hard rule 3. The default install stays stdlib plus the
-    Anthropic and OpenAI clients; these two are the hosted services' own."""
+    Anthropic and OpenAI clients and `mcp`; these two are the hosted
+    services' own."""
     project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]
     extra = project["optional-dependencies"]["hosted"]
     assert sorted(name.split(">=")[0] for name in extra) == ["PyJWT[crypto]", "aiohttp"]

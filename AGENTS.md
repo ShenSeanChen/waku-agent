@@ -38,8 +38,9 @@ caps it at 100 lines, so the detail lives in the files it points to.
    machine: no hidden network calls, nothing reads or sends `.env` or keys, and
    nothing runs at install time. `hosted/` is the platform's own deployment and
    reads the platform's own configuration by design; it ships to nobody.
-3. **No new default dependency.** The core is stdlib plus the Anthropic and
-   OpenAI clients. Anything else goes behind an extra (`[voice]`, `[telegram]`).
+3. **No new default dependency, with one exception.** The core is stdlib plus
+   the Anthropic and OpenAI clients. `mcp` is the exception, because Waku Memory
+   connects over it. Anything else goes behind an extra (`[voice]`, `[telegram]`).
 4. **Every behaviour change gets a deterministic eval** in `evals/deterministic/`
    (0/1, offline). A bug fix adds the case that would have caught it.
 5. **Nothing under `waku/` or `evals/` imports from `examples/` or `lab/`,** and
