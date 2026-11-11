@@ -6094,6 +6094,7 @@ name = "waku-agent"
 source = { editable = "." }
 dependencies = [
     { name = "anthropic" },
+    { name = "mcp" },
     { name = "openai" },
     { name = "python-dotenv" },
     { name = "rich" },
@@ -6178,6 +6179,7 @@ requires-dist = [
     { name = "kokoro", marker = "extra == 'voice-neural'", specifier = ">=0.9" },
     { name = "langgraph", marker = "extra == 'arena'", specifier = ">=0.3" },
     { name = "langmem", marker = "extra == 'arena'", specifier = ">=0.0.30" },
+    { name = "mcp", specifier = ">=2.1" },
     { name = "mcp", marker = "extra == 'mcp'", specifier = ">=2.1" },
     { name = "mem0ai", marker = "extra == 'arena'", specifier = ">=2.0" },
     { name = "notion-client", marker = "extra == 'notion'", specifier = ">=2.5" },

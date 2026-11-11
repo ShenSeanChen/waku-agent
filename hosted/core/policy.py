@@ -101,7 +101,9 @@ ALLOWED_CONNECTIONS = frozenset({"notion", "tavily", "treg"})
 # override's address is a constant in waku/tools/treg.py.
 CONNECTION_FIELDS: dict[str, frozenset[str]] = {"treg": frozenset({"TREG_API_KEY"})}
 
-DROPPED_SETTINGS_FIELDS = ("experimental",)
+# memory_mode: a tenant's Waku Memory path is set by provisioning, never by the
+# tenant (spec 020), so a save that carries it loses that field.
+DROPPED_SETTINGS_FIELDS = ("experimental", "memory_mode")
 PLATFORM_REFUSED_FIELDS = ("key", "base_url", "custom_key")
 
 DECISIONS: dict[str, str] = {

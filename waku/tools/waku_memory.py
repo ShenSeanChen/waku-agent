@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 from pathlib import Path
 
 NAME = "waku_memory"
@@ -33,6 +34,25 @@ DOCS = "https://www.waku.one/docs"
 # and the README showed it until 2026-09-14, so a config copied from that
 # README is moved to the current address instead of failing like an outage.
 RETIRED_HOSTS = ("d1o2fv4416yi84.cloudfront.net",)
+
+
+def is_waku_memory(spec: dict) -> bool:
+    """Whether an mcp.json entry is Waku Memory: named waku_memory, or at URL
+    under any name."""
+    return isinstance(spec, dict) and (
+        spec.get("name") == NAME or str(spec.get("url", "")).rstrip("/") == URL)
+
+
+def consolidation_every(settings, connected: bool) -> int:
+    """How many exchanges pass between consolidations. A person who chose
+    Waku Memory and has it connected gets one per turn, as a hosted container
+    does, so a short chat reaches Waku Memory before it ends (spec 020).
+    WAKU_CONSOLIDATE_EVERY, when set, always wins."""
+    if "WAKU_CONSOLIDATE_EVERY" in os.environ:
+        return settings.consolidate_every
+    if connected and settings.memory_mode in ("agent", "hook"):
+        return 1
+    return settings.consolidate_every
 
 
 def _server(bridge) -> str | None:
@@ -191,6 +211,24 @@ def status(home: Path) -> str:
 
 
 def connect(home: Path) -> str:
+    message = _connect(home)
+    _record_choice(home)
+    return message
+
+
+def _record_choice(home: Path) -> None:
+    """A person who runs `waku connect waku-memory` and ends up connected has
+    chosen Waku Memory, so the first-run question is not asked later. A mode
+    already chosen, hosted's included, is left as it is."""
+    if os.getenv("WAKU_MEMORY_MODE", "").strip():
+        return
+    if status(home).startswith(("connected", "configured · API key")):
+        from waku.memory_choice import save
+
+        save("agent")
+
+
+def _connect(home: Path) -> str:
     if not _has_mcp():
         return ("Waku Memory connects over MCP, which needs an extra: "
                 "pip install 'waku-agent[mcp]' (in a checkout: pip install -e '.[mcp]'). "

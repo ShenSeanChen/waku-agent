@@ -55,6 +55,10 @@ def _observer(kind: str, event: dict) -> None:
 
 
 def main() -> None:
+    from waku.config import load_settings
+    from waku.memory_choice import maybe_ask
+
+    maybe_ask(load_settings())   # spec 020: asked once, only in a terminal
     waku = Waku()
     waku.session.session_id = "terminal"   # its own conversation thread in the inbox
     console.print(Panel.fit(
