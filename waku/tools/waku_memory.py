@@ -36,6 +36,22 @@ DOCS = "https://www.waku.one/docs"
 RETIRED_HOSTS = ("d1o2fv4416yi84.cloudfront.net",)
 
 
+BACKFILL_MARKER = ".waku-memory-backfill"
+
+
+def queue_backfill(home: Path, facts) -> int:
+    """Queue the facts saved before Waku Memory was connected, once per home
+    (spec 020 B1). The consolidation drain sends them a few per turn. Returns
+    how many were queued; 0 when this home already did it. A marker file in
+    the home, not a column, because "backfilled" is a fact about the home."""
+    marker = home / BACKFILL_MARKER
+    if marker.exists():
+        return 0
+    queued = facts.queue_all()
+    marker.write_text(json.dumps({"queued": queued}) + "\n", encoding="utf-8")
+    return queued
+
+
 def is_waku_memory(spec: dict) -> bool:
     """Whether an mcp.json entry is Waku Memory: named waku_memory, or at URL
     under any name."""

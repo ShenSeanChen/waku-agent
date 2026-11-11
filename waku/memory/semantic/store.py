@@ -87,11 +87,21 @@ class SqliteFactStore:
         self.conn.commit()
         return cur.lastrowid
 
-    def unsynced(self) -> list[dict]:
+    def unsynced(self, limit: int | None = None) -> list[dict]:
         rows = self.conn.execute(
             "SELECT id, subject, content, scope FROM facts WHERE synced = 0 ORDER BY id"
+            + (" LIMIT ?" if limit else ""), (limit,) if limit else ()
         ).fetchall()
         return [dict(r) for r in rows]
+
+    def queue_all(self) -> int:
+        """Mark every fact as still to send, once, when a person connects Waku
+        Memory (spec 020 B1): the facts saved before that were never sent. The
+        server dedupes on body hash, so a fact it already holds costs a call
+        and nothing else. Returns how many were queued."""
+        cur = self.conn.execute("UPDATE facts SET synced = 0 WHERE synced = 1")
+        self.conn.commit()
+        return cur.rowcount
 
     def mark_synced(self, fact_id: int) -> None:
         self.conn.execute("UPDATE facts SET synced = 1 WHERE id = ?", (fact_id,))

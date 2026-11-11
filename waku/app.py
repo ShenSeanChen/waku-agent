@@ -18,7 +18,14 @@ from waku.ops import receipt as receipts
 from waku.ops.tracing import Tracer, compose, metered
 from waku.runtime.session import Session
 from waku.tools import build_registry
-from waku.tools.waku_memory import consolidation_every, get_via, remember_via, search_via, tool_name
+from waku.tools.waku_memory import (
+    consolidation_every,
+    get_via,
+    queue_backfill,
+    remember_via,
+    search_via,
+    tool_name,
+)
 
 # The Waku Memory tools that read memory. What they return this turn is
 # already kept, so consolidation must not keep it again.
@@ -47,6 +54,10 @@ class Waku:
         self.memory.remember = remember_via(self.mcp_bridge)
         self.settings.consolidate_every = consolidation_every(
             self.settings, self.memory.remember is not None)
+        # Spec 020 B1: facts saved before this person connected were never
+        # sent. Hosted tenants (mode "hook") have sent every fact since spec 006.
+        if self.memory.remember is not None and self.settings.memory_mode == "agent":
+            queue_backfill(self.settings.home, self.memory.facts)
         # Spec 009 A: a research turn searches Waku Memory before the model
         # starts. None without Waku Memory, and then nothing is searched.
         self.brain_search = search_via(self.mcp_bridge)
