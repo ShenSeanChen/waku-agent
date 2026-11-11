@@ -123,8 +123,12 @@ def _auth_hint(spec: dict, auth_dir: Path) -> str:
 
 class MCPBridge:
     def __init__(self, config_path: Path, timeout: float = 30.0,
-                 call_timeout: float | None = None):
+                 call_timeout: float | None = None, skip=None):
         self.config_path = config_path
+        # A predicate on an mcp.json entry: True leaves that server unconnected.
+        # Waku Memory's "off" choice uses it (spec 020); other servers are not
+        # touched.
+        self._skip = skip
         self.timeout = timeout
         # How long one tool call may take, apart from how long connecting may
         # take. 30 seconds was both until 2026-10-02, when two treg product
@@ -168,6 +172,8 @@ class MCPBridge:
         """Connect every configured server and return their tools (as Tools)."""
         self._thread.start()
         servers = json.loads(self.config_path.read_text(encoding="utf-8")).get("servers", [])
+        if self._skip is not None:
+            servers = [s for s in servers if not self._skip(s)]
         # A treg key of the person's own wins over mcp.json's treg entry
         # (spec 014); every other server is connected as written.
         from waku.tools.treg import resolve

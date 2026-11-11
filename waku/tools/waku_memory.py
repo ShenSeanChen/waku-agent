@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 from pathlib import Path
 
 NAME = "waku_memory"
@@ -33,6 +34,25 @@ DOCS = "https://www.waku.one/docs"
 # and the README showed it until 2026-09-14, so a config copied from that
 # README is moved to the current address instead of failing like an outage.
 RETIRED_HOSTS = ("d1o2fv4416yi84.cloudfront.net",)
+
+
+def is_waku_memory(spec: dict) -> bool:
+    """Whether an mcp.json entry is Waku Memory: named waku_memory, or at URL
+    under any name."""
+    return isinstance(spec, dict) and (
+        spec.get("name") == NAME or str(spec.get("url", "")).rstrip("/") == URL)
+
+
+def consolidation_every(settings, connected: bool) -> int:
+    """How many exchanges pass between consolidations. A person who chose
+    Waku Memory and has it connected gets one per turn, as a hosted container
+    does, so a short chat reaches Waku Memory before it ends (spec 020).
+    WAKU_CONSOLIDATE_EVERY, when set, always wins."""
+    if "WAKU_CONSOLIDATE_EVERY" in os.environ:
+        return settings.consolidate_every
+    if connected and settings.memory_mode in ("agent", "hook"):
+        return 1
+    return settings.consolidate_every
 
 
 def _server(bridge) -> str | None:

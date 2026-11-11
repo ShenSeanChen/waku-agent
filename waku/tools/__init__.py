@@ -72,8 +72,12 @@ def build_registry(conn: sqlite3.Connection, settings: Settings, memory=None) ->
     if mcp_config.exists():
         try:
             from waku.tools.mcp_client import MCPBridge
+            from waku.tools.waku_memory import is_waku_memory
 
-            bridge = MCPBridge(mcp_config)
+            # Spec 020: "Keep local only" leaves Waku Memory unconnected even
+            # when mcp.json names it, and touches no other server.
+            skip = is_waku_memory if getattr(settings, "memory_mode", "") == "off" else None
+            bridge = MCPBridge(mcp_config, skip=skip)
             for t in bridge.start():
                 registry.register(t)
             registry.mcp_bridge = bridge  # so Waku.close() can stop the servers
