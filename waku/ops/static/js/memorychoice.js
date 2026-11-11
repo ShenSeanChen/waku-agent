@@ -17,7 +17,8 @@ function memoryChoiceCard(d){
     <div>${uiButton("Sign in to Waku Memory", {level: "primary", size: "sm", onclick: "chooseMemory('agent')"})}
       ${uiButton("Keep local only", {level: "tertiary", size: "sm", onclick: "chooseMemory('off')"})}
       <span id="memory-choice-msg" class="meta"></span></div>`);
-  return memoryNote ? uiCard(`<span class="meta">${esc(memoryNote)}</span>`) : "";
+  const line = memoryNote || (m && m.status) || "";
+  return line ? uiCard(`<span class="meta">${esc(line)}</span>`) : "";
 }
 
 async function chooseMemory(mode){

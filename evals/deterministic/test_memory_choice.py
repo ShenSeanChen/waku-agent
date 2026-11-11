@@ -102,3 +102,33 @@ def test_a_direct_connect_records_the_choice_and_leaves_a_chosen_mode_alone(home
     (home / ".env").write_text("", encoding="utf-8")
     waku_memory.connect(home)
     assert _env(home) == ""
+
+
+def test_the_status_line_says_where_memory_goes_and_what_is_waiting(home, monkeypatch):
+    """B3. "Connected" claims only a sign-in; the receipt says what was taken."""
+    off = Settings(home=home, memory_mode="off")
+    assert memory_choice.status_line(off) == "Local only. Your memory stays on this machine."
+    assert memory_choice.status_line(Settings(home=home, memory_mode="")) == ""   # the question shows instead
+
+    agent = Settings(home=home, memory_mode="agent")
+    monkeypatch.setattr(memory_choice, "status", lambda h: "connected · sean@example.com")
+    assert memory_choice.status_line(agent) == "Connected to Waku Memory as sean@example.com."
+    assert "3 fact(s) waiting to send" in memory_choice.status_line(agent, waiting=3)
+    monkeypatch.setattr(memory_choice, "status", lambda h: "configured · not signed in: run waku connect waku-memory")
+    assert "not signed in" in memory_choice.status_line(agent)
+    monkeypatch.setattr(memory_choice, "status", lambda h: "configured · API key in $WAKU_MEMORY_API_KEY")
+    assert memory_choice.status_line(Settings(home=home, memory_mode="hook")).startswith("Connected to Waku Memory with your API key")
+
+
+def test_the_card_counts_facts_waiting_to_send(home, monkeypatch):
+    from waku.db import connect
+    from waku.memory.semantic.store import SqliteFactStore
+
+    monkeypatch.setattr(memory_choice, "status", lambda h: "connected · sean@example.com")
+    conn = connect(home)
+    facts = SqliteFactStore(conn)
+    facts.add_unsynced("acme", "Acme cut its price to $19.", "global")
+    facts.add("alex", "Alex prefers mornings.")
+    card = memory_choice.card(Settings(home=home, memory_mode="agent"), conn)
+    assert card["pending"] is False
+    assert card["status"] == "Connected to Waku Memory as sean@example.com. 1 fact(s) waiting to send."

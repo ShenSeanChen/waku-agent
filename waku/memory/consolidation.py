@@ -134,6 +134,13 @@ def consolidate_if_due(
                            report, recalled))
 
 
+# How many waiting facts one consolidation sends before it moves on. A backlog
+# (spec 020 B1 queues every fact saved before Waku Memory was connected) then
+# reaches Waku Memory over a few turns instead of stalling one turn on a few
+# hundred calls. A failed send still stops the rest.
+DRAIN_PER_TURN = 25
+
+
 def _send(remember: Remember, content: str, scope: str) -> tuple[bool, str | None]:
     """One fact to Waku Memory. A failure is logged and reported, never raised:
     the turn has already been answered, and the fact is safe in state.db."""
@@ -186,7 +193,7 @@ def kept_if_due(
     tracked = remember is not None and isinstance(facts, SqliteFactStore)
     reachable = remember is not None
     if tracked:
-        for fact in facts.unsynced():
+        for fact in facts.unsynced(limit=DRAIN_PER_TURN):
             reachable, _ = _send(remember, fact["content"], fact["scope"])
             if not reachable:
                 break
