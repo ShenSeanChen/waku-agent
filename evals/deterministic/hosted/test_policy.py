@@ -165,6 +165,16 @@ def test_the_settings_filter_drops_experimental_and_keeps_the_rest():
     assert outcome.payload == {"graph_workflows": True}
 
 
+def test_the_settings_filter_drops_memory_mode():
+    """A tenant's Waku Memory path is set by provisioning (spec 020). A save
+    that carries memory_mode must not change it, or a tenant could switch off
+    the memory the hosted product depends on."""
+    outcome = policy.decide("POST", "/api/settings",
+                            {"memory_mode": "off", "graph_workflows": True})
+    assert outcome.verdict == "rewrite"
+    assert outcome.payload == {"graph_workflows": True}
+
+
 @pytest.mark.parametrize("method", ["GET", "PUT", "DELETE", "HEAD", "get", "patch"])
 def test_a_filtered_route_reached_with_anything_but_post_is_refused(method):
     """All four filtered routes are POST-only in dashboard.py today. Without

@@ -464,7 +464,7 @@ const VIEWS = {
   overview(d){
     const s = d.stats;
     const u = d.usage || {total_cost:0};
-    return `${uiStatBand([
+    return `${memoryChoiceCard(d)}${uiStatBand([
         {label:"spent", value:money(u.total_cost), sub:"all-time", tone:"ok"},
         {label:"avg turn", value:secs(s.latency_avg)},
         {label:"turns", value:s.turns}, {label:"tool calls", value:s.tool_calls},

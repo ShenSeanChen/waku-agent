@@ -46,6 +46,7 @@ from waku.key_locations import model_key_locations
 from waku.loop.agent import error_text
 from waku.loop.models import models_for
 from waku.memory import tool_note
+from waku.memory_choice import card as memory_choice_card
 from waku.ops import browser_agent, commands, compare_history
 from waku.ops.arena import (
     compare_clear,
@@ -533,6 +534,8 @@ def collect() -> dict:
         # Where a model key was looked for, for the setup page (spec 013).
         # Paths and yes-or-no only: no value ever enters this payload.
         "key_locations": model_key_locations(),
+        # The first-run Waku Memory question (spec 020): {pending, what}.
+        "memory_choice": memory_choice_card(settings),
         "connections": [asdict(view) for view in list_connections()],
         # MCP servers that sign in on their own page rather than through an
         # .env field (spec 007 E). Files only: no browser, no network.

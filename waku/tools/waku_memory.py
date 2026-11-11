@@ -211,6 +211,24 @@ def status(home: Path) -> str:
 
 
 def connect(home: Path) -> str:
+    message = _connect(home)
+    _record_choice(home)
+    return message
+
+
+def _record_choice(home: Path) -> None:
+    """A person who runs `waku connect waku-memory` and ends up connected has
+    chosen Waku Memory, so the first-run question is not asked later. A mode
+    already chosen, hosted's included, is left as it is."""
+    if os.getenv("WAKU_MEMORY_MODE", "").strip():
+        return
+    if status(home).startswith(("connected", "configured · API key")):
+        from waku.memory_choice import save
+
+        save("agent")
+
+
+def _connect(home: Path) -> str:
     if not _has_mcp():
         return ("Waku Memory connects over MCP, which needs an extra: "
                 "pip install 'waku-agent[mcp]' (in a checkout: pip install -e '.[mcp]'). "

@@ -277,6 +277,7 @@ NETWORK_CALLERS = {
     ("memory.js", "delMem"): "user",
     ("memory.js", "saveSoul"): "user",
     ("memory.js", "saveSkill"): "user",
+    ("memorychoice.js", "chooseMemory"): "user",   # a click on the first-run Waku Memory card (spec 020)
     ("models.js", "saveSettings"): "user",
     ("models.js", "loadModelList"): "user",
     ("models.js", "switchModel"): "user",
