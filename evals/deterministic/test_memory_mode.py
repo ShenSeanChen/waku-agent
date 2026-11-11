@@ -82,3 +82,18 @@ def test_a_connected_choice_consolidates_every_turn(monkeypatch):
 def test_an_explicit_cadence_always_wins(monkeypatch):
     monkeypatch.setenv("WAKU_CONSOLIDATE_EVERY", "4")
     assert consolidation_every(Settings(memory_mode="agent"), connected=True) == 4
+
+
+def test_mcp_is_a_default_dependency_and_its_extra_still_works():
+    """AGENTS.md rule 3's one exception (spec 020): a fresh install can sign in
+    to Waku Memory with no second install command. The extra stays, because
+    `pip install 'waku-agent[mcp]'` and the tenant image's `--extra mcp` name it."""
+    import tomllib
+    from pathlib import Path
+
+    project = tomllib.loads(
+        (Path(__file__).resolve().parents[2] / "pyproject.toml").read_text(encoding="utf-8"))["project"]
+    assert any(d.split(">=")[0] == "mcp" for d in project["dependencies"])
+    assert "mcp" in project["optional-dependencies"]
+    defaults = sorted(d.split(">=")[0] for d in project["dependencies"])
+    assert defaults == ["anthropic", "mcp", "openai", "python-dotenv", "rich"], defaults
