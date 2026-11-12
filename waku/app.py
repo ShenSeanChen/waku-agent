@@ -213,6 +213,9 @@ class Waku:
                 "provider": self.settings.provider,
                 # the card a reopened thread draws in place of the report
                 "report": report,
+                # spec 021: the lines a plugin's hooks showed the person, so a
+                # reopened thread shows them again
+                "notices": result.notices,
             }
             row_id = self.session.add_exchange(user_message, result.reply,
                                                tool_calls=result.tool_calls,

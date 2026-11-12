@@ -386,3 +386,21 @@ def test_a_failure_around_the_hooks_leaves_the_turn_running(tmp_path, monkeypatc
     _stopped(waku)
     assert result.reply == "You ship on Fridays." and bridge.calls == []
     assert client.loop_calls[0]["messages"][-1]["content"] == "can I ship today?"
+
+
+def test_a_plugins_line_for_the_person_is_kept_and_not_hidden_with_telemetry(tmp_path):
+    """Review fix 16: systemMessage lines carried the `tele` class, which the
+    telemetry toggle hides, and a reopened thread lost them."""
+    import json as _json
+    from pathlib import Path
+
+    bridge = FakeBridge({"UserPromptSubmit": brief("UserPromptSubmit", "x", notice="Waku Memory: 1 memory")})
+    waku, _ = _waku(tmp_path, bridge)
+    result = waku.respond("hi", source="dashboard")
+    _stopped(waku)
+    assert result.notices == ["Waku Memory: 1 memory"]
+    row = waku.conn.execute("SELECT meta FROM chat_log WHERE role = 'assistant'").fetchone()
+    assert _json.loads(row[0])["notices"] == ["Waku Memory: 1 memory"]
+    render = (Path(__file__).resolve().parents[2] / "waku/ops/static/js/render.js").read_text()
+    line = next(x for x in render.splitlines() if "t.notices" in x)
+    assert "tele" not in line and "notices:m.meta.notices" in render
