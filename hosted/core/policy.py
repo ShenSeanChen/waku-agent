@@ -70,6 +70,14 @@ WRONG_METHOD = "That route only takes a POST."
 ARENA_BLOCKED = "The arenas are not available on hosted waku."
 VOICE_BLOCKED = "Voice is not available on hosted waku."
 REVEAL_BLOCKED = "Opening a file in an editor only works on your own machine."
+# waku-agent spec 021: a tenant's MCP servers and memory are set when they
+# sign in, so a chat message that is a /plugin command is refused here. The
+# container refuses it too, but only while its provider is the platform's,
+# and a tenant can change the provider.
+PLUGIN_REFUSED = ("Plugins are not available on hosted Waku. A hosted container's "
+                  "servers and memory are set up when you sign in.")
+PLUGIN_COMMAND = "/plugin"
+CHAT_ROUTES = ("/api/chat", "/api/chat/stream")
 PLATFORM_FIELDS_REFUSED = ("The hosted free tier's key and endpoint are set by the "
                            "platform. Pick another provider to use your own key.")
 CONNECTION_REFUSED = ("Only Tavily, Notion and your own treg key can be connected "
@@ -300,6 +308,13 @@ FILTERS: dict[str, Callable[[dict], FilterResult]] = {
 }
 
 
+def _is_plugin_command(payload: dict | None) -> bool:
+    """Whether a chat body is a /plugin command. Text only: hosted/ never
+    imports waku/, so this reads the message the way a person types it."""
+    message = (payload or {}).get("message") if isinstance(payload, dict) else None
+    return isinstance(message, str) and message.lstrip().startswith(PLUGIN_COMMAND)
+
+
 def decide(method: str, raw_path: str, payload: dict | None = None) -> Outcome:
     """The per-request decision, with no HTTP anywhere near it.
 
@@ -321,6 +336,8 @@ def decide(method: str, raw_path: str, payload: dict | None = None) -> Outcome:
     # pins the invariant -- delete "/" from DECISIONS and it fails there,
     # rather than here as a KeyError on somebody's live request.
     decision = DECISIONS[route]
+    if route in CHAT_ROUTES and _is_plugin_command(payload):
+        return Outcome("refuse", 403, PLUGIN_REFUSED, route=route, streaming=streaming)
     if decision == BLOCK:
         return Outcome("block", 403, BLOCK_MESSAGES[route], route=route, streaming=streaming)
     if decision == FILTER:
