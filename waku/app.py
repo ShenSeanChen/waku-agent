@@ -146,7 +146,13 @@ class Waku:
         with self.tracer.turn(user_message):
             if hasattr(self.client, "turn_id"):   # waku-platform: spec 011 B1
                 self.client.turn_id = self.tracer.turn_id
-            hook_vars = self._before_turn(user_message, source, notify)
+            try:
+                hook_vars = self._before_turn(user_message, source, notify)
+            except Exception:
+                # spec 021 review: a hook never breaks a turn, and neither
+                # does the work around one (an unwritable install id, say)
+                log.exception("the plugin hooks before this turn failed; the turn runs without them")
+                hook_vars, self._turn_context, self._turn_notices, self._turn_vars = None, "", [], None
             # The graph front door is optional and can NEVER make Waku worse:
             # flag off → this is exactly the old code path; flag on → the triage
             # graph decides quick vs full, and any failure anywhere falls open

@@ -369,3 +369,20 @@ def test_the_quick_route_reads_the_plugin_context_too(tmp_path):
     _stopped(waku)
     assert routes == ["quick_reply"] and result.reply == "You ship on Fridays."
     assert any("Ian deploys on Fridays." in p and "can I ship today?" in p for p in prompts[1:])
+
+
+def test_a_failure_around_the_hooks_leaves_the_turn_running(tmp_path, monkeypatch):
+    """Review fix 15: an install id that cannot be written raised out of
+    respond() and lost the person's turn."""
+    import waku.app
+
+    def unwritable(home):
+        raise PermissionError("read-only home")
+
+    monkeypatch.setattr(waku.app.plugin_store, "install_id", unwritable)
+    bridge = FakeBridge()
+    waku, client = _waku(tmp_path, bridge)
+    result = waku.respond("can I ship today?", source="cli")
+    _stopped(waku)
+    assert result.reply == "You ship on Fridays." and bridge.calls == []
+    assert client.loop_calls[0]["messages"][-1]["content"] == "can I ship today?"
