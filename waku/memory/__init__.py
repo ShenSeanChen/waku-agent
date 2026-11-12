@@ -266,7 +266,11 @@ class Memory:
             self.settings.consolidate_every,
             self.facts,
             self.episodes,
-            remember=self.remember,
+            # Spec 021: under "plugin" the server extracts from the Stop hook,
+            # so consolidation keeps facts here and sends none, and facts an
+            # earlier send failed on are not sent again. save_note and the
+            # report upload still use self.remember: the person asked for them.
+            remember=None if self.settings.memory_mode == "plugin" else self.remember,
             report=report,
             recalled=recalled,
         )

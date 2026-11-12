@@ -159,14 +159,20 @@ def env_write_path() -> Path:
     return path
 
 
-MEMORY_MODES = ("agent", "hook", "off")
+MEMORY_MODES = ("agent", "plugin", "off")
 
 
 def _memory_mode(raw: str) -> str:
     """A WAKU_MEMORY_MODE value, or "" for unset and for anything else. An
     unknown value counts as no choice, so a typo shows the prompt again
-    instead of silently turning Waku Memory off."""
+    instead of silently turning Waku Memory off.
+
+    `hook` was reserved for hosted and never called session.hook (spec 021).
+    It reads as `agent`, which is what it always did, so a .env or a tenant
+    that holds it is not asked the first-run question again."""
     value = raw.strip().lower()
+    if value == "hook":
+        return "agent"
     return value if value in MEMORY_MODES else ""
 
 
@@ -234,10 +240,12 @@ class Settings:
     # Consolidate (distill chats into durable facts) only after N new exchanges.
     consolidate_every: int = field(default_factory=lambda: int(os.getenv("WAKU_CONSOLIDATE_EVERY", "6")))
     # Where the person's memory lives (spec 020). "agent": this agent sends each
-    # kept fact to Waku Memory. "hook": the hosted path, where Waku Memory's
-    # session.hook takes the turn. "off": Waku Memory is never connected. ""
-    # means the person has not chosen yet, and Waku behaves as it did before
-    # the choice existed: it connects Waku Memory only if mcp.json names it.
+    # kept fact to Waku Memory. "plugin" (spec 021): the Waku plugin is
+    # installed, its Stop hook sends each turn, and Waku Memory's server
+    # extracts from it, so consolidation keeps facts here and sends none.
+    # "off": Waku Memory is never connected. "" means the person has not
+    # chosen yet, and Waku behaves as it did before the choice existed: it
+    # connects Waku Memory only if mcp.json names it. "hook" reads as "agent".
     memory_mode: str = field(default_factory=lambda: _memory_mode(os.getenv("WAKU_MEMORY_MODE", "")))
     retrieval_top_k: int = field(default_factory=lambda: int(os.getenv("WAKU_RETRIEVAL_TOP_K", "4")))
     # 'sqlite' (default, zero setup) or 'supabase' (pgvector upgrade path — see launch-rag).

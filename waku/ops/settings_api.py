@@ -115,7 +115,7 @@ def apply_settings(payload: dict) -> dict:
 
     if "episodic_store" in payload:
         return {"error": "episodic_store is managed in Connections"}
-    if payload.get("memory_mode") in ("agent", "off"):
+    if payload.get("memory_mode") in ("agent", "plugin", "off"):
         # The first-run Waku Memory question (spec 020). "agent" signs in,
         # which opens a browser and waits for the click.
         from waku.memory_choice import apply as apply_memory_choice

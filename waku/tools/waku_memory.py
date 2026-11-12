@@ -50,7 +50,7 @@ def consolidation_every(settings, connected: bool) -> int:
     WAKU_CONSOLIDATE_EVERY, when set, always wins."""
     if "WAKU_CONSOLIDATE_EVERY" in os.environ:
         return settings.consolidate_every
-    if connected and settings.memory_mode in ("agent", "hook"):
+    if connected and settings.memory_mode == "agent":
         return 1
     return settings.consolidate_every
 

@@ -75,8 +75,11 @@ def test_a_prompt_is_never_shown_without_a_person_to_answer(home, monkeypatch):
     assert _env(home) == ""
 
 
-def test_hosted_provisioning_sets_hook_so_a_tenant_is_never_asked(home):
-    assert memory_choice.pending(Settings(home=home, memory_mode="hook")) is False
+def test_hosted_provisioning_sets_hook_so_a_tenant_is_never_asked(home, monkeypatch):
+    # spec 021: `hook` now reads as `agent`, which a tenant is never asked about either
+    monkeypatch.setenv("WAKU_MEMORY_MODE", "hook")
+    assert Settings(home=home).memory_mode == "agent"
+    assert memory_choice.pending(Settings(home=home)) is False
 
 
 def test_an_unrecognised_mode_cannot_be_saved(home):
