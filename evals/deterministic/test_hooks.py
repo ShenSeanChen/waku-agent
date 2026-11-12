@@ -139,3 +139,113 @@ def test_call_json_returns_the_tools_json_its_error_flag_and_honours_its_timeout
     assert ok.call_json("other", "t", {}, 1) == (None, True, "MCP server 'other' is not connected.")
     for bridge in (ok, bad, slow):
         bridge._loop.call_soon_threadsafe(bridge._loop.stop)
+
+
+# --- hooks in a turn (C2) ------------------------------------------------------------
+
+
+class RecordingClient:
+    """A model that answers the loop with the next reply and every other
+    call (the retrieval gate) with "no retrieval", and keeps each call."""
+
+    def __init__(self, replies):
+        from types import SimpleNamespace
+
+        self.replies, self.calls, self.loop_calls = list(replies), [], []
+        self.messages = SimpleNamespace(create=self._create)
+
+    def _create(self, **kwargs):
+        from evals.helpers import response, text_block
+
+        # the loop appends to `messages` after the call, so keep them as sent
+        kwargs = {**kwargs, "messages": list(kwargs.get("messages", []))}
+        self.calls.append(kwargs)
+        if "tools" in kwargs:
+            self.loop_calls.append(kwargs)
+            return response([text_block(self.replies.pop(0))])
+        return response([text_block('{"retrieve": false, "reason": "test"}')])
+
+
+def _waku(tmp_path, bridge, replies=("You ship on Fridays.",)):
+    from evals.helpers import make_waku
+
+    client = RecordingClient(replies)
+    waku = make_waku(tmp_path, client=client)
+    plugin = manifest.load(waku_plugin(tmp_path / "plugin-src"))
+    waku.hooks = hooks.HookRunner([plugin], bridge)
+    return waku, client
+
+
+def _stopped(waku):
+    if waku.stop_thread is not None:
+        waku.stop_thread.join(5)
+
+
+def test_a_gateway_turn_runs_session_start_once_then_prompt_and_stop(tmp_path, monkeypatch):
+    monkeypatch.delenv("WAKU_HOOK_PROJECT", raising=False)
+    bridge = FakeBridge({"SessionStart": brief("SessionStart", "Project brief."),
+                         "UserPromptSubmit": brief("UserPromptSubmit", "Ian deploys on Fridays.")})
+    waku, client = _waku(tmp_path, bridge, replies=("You ship on Fridays.", "Yes."))
+    result = waku.respond("can I ship the backend today?", source="telegram")
+    _stopped(waku)
+    events = [c["args"]["event"] for c in bridge.calls]
+    assert events == ["SessionStart", "UserPromptSubmit", "Stop"]
+    turn_id = bridge.calls[0]["args"]["turn_id"]
+    assert turn_id.startswith("t_") and all(c["args"]["turn_id"] == turn_id for c in bridge.calls)
+    session = bridge.calls[0]["args"]["session_id"]
+    assert session.startswith("waku:") and session.endswith(":telegram") and bridge.calls[0]["args"]["cwd"] == ""
+    assert bridge.calls[0]["args"]["source"] == "startup"
+    assert bridge.calls[2]["args"]["last_assistant_message"] == result.reply == "You ship on Fridays."
+
+    # the context reached the model in the user's turn, never the system prompt
+    sent = client.loop_calls[0]
+    last_user = sent["messages"][-1]["content"]
+    assert "Project brief." in last_user and "Ian deploys on Fridays." in last_user
+    assert last_user.endswith("can I ship the backend today?")
+    assert "Ian deploys on Fridays." not in sent["system"]
+    assert "Ian deploys on Fridays." in result.recalled
+
+    # the second turn of the same gateway runs no SessionStart
+    bridge.calls.clear()
+    waku.respond("and tomorrow?", source="telegram")
+    _stopped(waku)
+    assert [c["args"]["event"] for c in bridge.calls] == ["UserPromptSubmit", "Stop"]
+
+
+def test_brief_and_arena_turns_run_no_hooks(tmp_path):
+    bridge = FakeBridge()
+    waku, _ = _waku(tmp_path, bridge, replies=("a", "b"))
+    waku.respond("morning brief", source="brief")
+    waku.respond("race", source="compare")
+    _stopped(waku)
+    assert bridge.calls == []
+
+
+def test_a_failing_hook_leaves_the_turn_as_it_would_have_been(tmp_path):
+    bridge = FakeBridge(raises=RuntimeError("server down"))
+    waku, client = _waku(tmp_path, bridge)
+    result = waku.respond("can I ship today?", source="cli")
+    _stopped(waku)
+    assert result.reply == "You ship on Fridays."
+    assert client.loop_calls[0]["messages"][-1]["content"] == "can I ship today?"
+
+
+def test_stop_does_not_hold_the_reply(tmp_path):
+    bridge = FakeBridge(delay=1.0)
+    bridge.answers = {}
+    waku, _ = _waku(tmp_path, bridge)
+    waku.hooks.plugins[0].hooks = {"Stop": waku.hooks.plugins[0].hooks["Stop"]}
+    started = time.perf_counter()
+    waku.respond("hi", source="cli")
+    assert time.perf_counter() - started < 0.9
+    _stopped(waku)
+    assert [c["args"]["event"] for c in bridge.calls] == ["Stop"]
+
+
+def test_the_hook_project_names_the_cwd(tmp_path, monkeypatch):
+    monkeypatch.setenv("WAKU_HOOK_PROJECT", "waku-agent")
+    bridge = FakeBridge()
+    waku, _ = _waku(tmp_path, bridge)
+    waku.respond("hi", source="dashboard")
+    _stopped(waku)
+    assert {c["args"]["cwd"] for c in bridge.calls} == {"waku-agent"}

@@ -335,7 +335,8 @@ const chatTurnCard = t => uiCard(`
   ${usedList(t.used)}
   ${keptList(t.consolidation)}
   ${teleFooter(t)}
-  ${receiptBlock(t.receipt)}`, {cls: "reply"});
+  ${receiptBlock(t.receipt)}
+  ${(t.notices || []).map(n => `<div class="meta tele">${esc(n)}</div>`).join("")}`, {cls: "reply"});
 
 // While a turn runs we stream it live: stages light up as the harness reaches
 // them, and the reply text appears token by token (with a blinking caret).

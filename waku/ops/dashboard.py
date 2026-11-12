@@ -154,6 +154,8 @@ def chat_stream(message: str, emit) -> None:
         # Spec 011: the turn's receipt, the same object the chat log keeps in
         # meta.receipt, so a reopened thread draws the same line
         "receipt": getattr(result, "receipt", None),
+        # Spec 021: the lines a plugin's hooks asked to show the person
+        "notices": getattr(result, "notices", []),
     })
 
 

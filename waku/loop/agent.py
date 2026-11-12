@@ -83,6 +83,9 @@ class LoopResult:
     # True when the turn hit max_iterations and the reply came from the one
     # tools-off call after it (guardrail 2), not from a natural end.
     limit_reached: bool = False
+    # Spec 021: the lines a plugin's hooks asked to show the person
+    # (systemMessage). The dashboard draws them under the reply.
+    notices: list[str] = field(default_factory=list)
 
 
 def run_loop(
