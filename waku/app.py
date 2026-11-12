@@ -383,8 +383,10 @@ class Waku:
         )
 
         def quick_reply(state: dict) -> str:
+            # spec 021 review: the quick route reads what the plugin's hooks
+            # found, as the full loop does
             prompt = QUICK_REPLY_PROMPT.format(calendar=state.get("calendar", ""),
-                                               message=state["message"])
+                                               message=with_context(state["message"], self._turn_context))
             response = metered(self.client, "quick", notify).messages.create(
                 model=self.settings.small_model, max_tokens=600,
                 messages=[{"role": "user", "content": prompt}])

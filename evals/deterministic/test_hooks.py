@@ -340,3 +340,32 @@ def test_the_terminal_gateway_closes_waku_on_exit():
 
     assert "waku.close()" in inspect.getsource(cli.main)
     assert inspect.getsource(voice.main).count("waku.close()") == 2
+
+
+def test_the_quick_route_reads_the_plugin_context_too(tmp_path):
+    """Review fix 14: with graph workflows on, a quick turn dropped it."""
+    from types import SimpleNamespace
+
+    from evals.helpers import make_waku, response, text_block
+
+    prompts = []
+
+    def create(**kwargs):
+        content = kwargs["messages"][-1]["content"]
+        prompts.append(content)
+        if "route" in content and "quick" in content and len(prompts) == 1:
+            return response([text_block('{"route": "quick", "reason": "small talk"}')])
+        if '"retrieve"' in content:
+            return response([text_block('{"retrieve": false, "reason": "x"}')])
+        return response([text_block("You ship on Fridays.")])
+
+    client = SimpleNamespace(messages=SimpleNamespace(create=create))
+    bridge = FakeBridge({"UserPromptSubmit": brief("UserPromptSubmit", "Ian deploys on Fridays.")})
+    waku = make_waku(tmp_path, client=client, graph_workflows=True)
+    waku.hooks = hooks.HookRunner([manifest.load(waku_plugin(tmp_path / "src"))], bridge)
+    routes = []
+    result = waku.respond("can I ship today?", source="cli",
+                          observer=lambda kind, ev: kind == "route" and routes.append(ev.get("target")))
+    _stopped(waku)
+    assert routes == ["quick_reply"] and result.reply == "You ship on Fridays."
+    assert any("Ian deploys on Fridays." in p and "can I ship today?" in p for p in prompts[1:])
