@@ -6,19 +6,19 @@ from __future__ import annotations
 
 import json
 
-from evals.deterministic.plugin_fixtures import WAKU_MEMORY_URL, marketplace
+from evals.deterministic.plugin_fixtures import WAKU_MEMORY_URL, marketplace, official
 from waku.plugins import cli, store
 from waku.tools import mcp_client
 
 
-def _home(tmp_path, servers):
+def _home(tmp_path, servers, monkeypatch):
     home = tmp_path / "home"
     home.mkdir()
     (home / "mcp.json").write_text(json.dumps({"servers": servers}), encoding="utf-8")
     (home / "mcp-auth").mkdir()
     token = home / "mcp-auth" / "waku_memory.json"
     token.write_text('{"tokens": {"access_token": "kept"}}', encoding="utf-8")
-    cli.run(["marketplace", "add", str(marketplace(tmp_path / "market"))], home, lambda s: False)
+    official(monkeypatch, marketplace(tmp_path / "market"))
     return home, token
 
 
@@ -26,9 +26,9 @@ def _servers(home):
     return json.loads((home / "mcp.json").read_text(encoding="utf-8"))["servers"]
 
 
-def test_an_oauth_entry_moves_to_the_plugin_and_the_token_stays(tmp_path):
+def test_an_oauth_entry_moves_to_the_plugin_and_the_token_stays(tmp_path, monkeypatch):
     fs = {"name": "fs", "command": "npx"}
-    home, token = _home(tmp_path, [{"name": "waku_memory", "url": WAKU_MEMORY_URL, "oauth": True}, fs])
+    home, token = _home(tmp_path, [{"name": "waku_memory", "url": WAKU_MEMORY_URL, "oauth": True}, fs], monkeypatch)
     reply = cli.run(["install", "waku@waku-memory"], home, lambda s: True)
     assert "Moved waku_memory from mcp.json to the plugin" in reply
     assert "Sign in to waku_memory" not in reply
@@ -38,24 +38,24 @@ def test_an_oauth_entry_moves_to_the_plugin_and_the_token_stays(tmp_path):
     assert [s["name"] for s in merged] == ["fs", "waku_memory"] and skipped == []
 
 
-def test_an_auth_env_entry_is_left_alone_and_wins(tmp_path):
+def test_an_auth_env_entry_is_left_alone_and_wins(tmp_path, monkeypatch):
     hosted = {"name": "waku_memory", "url": WAKU_MEMORY_URL, "auth_env": "WAKU_MEMORY_API_KEY"}
-    home, _ = _home(tmp_path, [hosted])
+    home, _ = _home(tmp_path, [hosted], monkeypatch)
     reply = cli.run(["install", "waku@waku-memory"], home, lambda s: True)
     assert "Moved" not in reply and _servers(home) == [hosted]
     merged, _ = mcp_client.merge(_servers(home), store.servers(home))
     assert merged == [hosted]
 
 
-def test_an_entry_at_another_address_is_not_moved(tmp_path):
+def test_an_entry_at_another_address_is_not_moved(tmp_path, monkeypatch):
     mine = {"name": "waku_memory", "url": "https://my-own-waku.example/mcp", "oauth": True}
-    home, _ = _home(tmp_path, [mine])
+    home, _ = _home(tmp_path, [mine], monkeypatch)
     cli.run(["install", "waku@waku-memory"], home, lambda s: True)
     assert _servers(home) == [mine]
 
 
-def test_a_declined_install_moves_nothing(tmp_path):
+def test_a_declined_install_moves_nothing(tmp_path, monkeypatch):
     entry = {"name": "waku_memory", "url": WAKU_MEMORY_URL, "oauth": True}
-    home, _ = _home(tmp_path, [entry])
+    home, _ = _home(tmp_path, [entry], monkeypatch)
     cli.run(["install", "waku@waku-memory"], home, lambda s: False)
     assert _servers(home) == [entry]

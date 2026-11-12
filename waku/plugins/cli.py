@@ -134,7 +134,7 @@ def install(home: Path, target: str, confirm: Callable[[str], bool]) -> str:
         # manifest is the plugin's own file and may name anything
         relative = f"{market}/{name}"
         _copy(source, home, relative)
-    if market not in marketplace.read(home):
+    if market not in marketplace.read(home) and market not in marketplace.KNOWN:
         marketplace.write(home, {**marketplace.read(home), market: entry})
     records = store.read(home)
     records[f"{name}@{market}"] = {
@@ -230,11 +230,20 @@ def _marketplace(home: Path, args: list[str]) -> str:
         with marketplace.fetch(entry) as root:
             catalog = marketplace.catalog(root)
         names = [p.get("name") for p in catalog.get("plugins") or [] if isinstance(p, dict)]
+        refused = marketplace.claim(home, catalog["name"], entry)
+        if refused:
+            return refused
         marketplace.write(home, {**marketplace.read(home), catalog["name"]: entry})
         return f"Added marketplace {catalog['name']}. Its plugins: {', '.join(names) or 'none'}."
     if action == "remove" and len(args) == 2:
         entries = marketplace.read(home)
-        if entries.pop(args[1], None) is None:
+        recorded = entries.pop(args[1], None)
+        if args[1] in marketplace.KNOWN:
+            if recorded is not None:
+                marketplace.write(home, entries)
+            return (f"{args[1]} is built in, so it stays available from "
+                    f"{marketplace.KNOWN[args[1]].get('repo')}. Nothing else was changed.")
+        if recorded is None:
             return f"No marketplace named '{args[1]}'."
         marketplace.write(home, entries)
         return f"Removed marketplace {args[1]}. Plugins installed from it stay installed."

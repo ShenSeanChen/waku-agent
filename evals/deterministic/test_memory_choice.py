@@ -61,12 +61,12 @@ def test_a_plugin_that_cannot_be_installed_falls_back_to_a_direct_connection(hom
 
 
 def test_install_plugin_installs_from_the_marketplace_and_signs_in(tmp_path, monkeypatch):
-    from evals.deterministic.plugin_fixtures import marketplace
-    from waku.plugins import cli, store
+    from evals.deterministic.plugin_fixtures import marketplace, official
+    from waku.plugins import store
     from waku.tools import mcp_cli
 
     home = tmp_path / "home"
-    cli.run(["marketplace", "add", str(marketplace(tmp_path / "market"))], home, lambda s: False)
+    official(monkeypatch, marketplace(tmp_path / "market"))
     signed = []
 
     def fake_sign_in(h, name):

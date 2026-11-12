@@ -8,6 +8,7 @@ import json
 import tarfile
 
 from evals.deterministic.plugin_fixtures import marketplace as make_marketplace
+from evals.deterministic.plugin_fixtures import official
 from waku.plugins import cli, marketplace, store
 
 
@@ -19,21 +20,42 @@ def _no(shown):
     return False
 
 
-def _added(tmp_path):
+def _added(tmp_path, monkeypatch):
     home = tmp_path / "home"
-    market = make_marketplace(tmp_path / "market")
-    assert cli.run(["marketplace", "add", str(market)], home, _no).startswith(
-        "Added marketplace waku-memory")
+    official(monkeypatch, make_marketplace(tmp_path / "market"))
     return home
 
 
 def test_marketplace_add_records_the_marketplace_under_its_own_name(tmp_path):
-    home = _added(tmp_path)
-    assert marketplace.read(home) == {"waku-memory": {"path": str((tmp_path / "market").resolve())}}
+    home = tmp_path / "home"
+    market = make_marketplace(tmp_path / "market", name="team-tools")
+    assert cli.run(["marketplace", "add", str(market)], home, _no).startswith("Added marketplace team-tools")
+    assert marketplace.read(home) == {"team-tools": {"path": str(market.resolve())}}
 
 
-def test_install_shows_what_the_plugin_brings_and_writes_nothing_when_declined(tmp_path):
-    home = _added(tmp_path)
+def test_a_catalog_cannot_take_the_built_in_name_or_a_recorded_one(tmp_path):
+    """Review fix 2: a catalog that calls itself waku-memory once replaced the
+    official marketplace."""
+    home = tmp_path / "home"
+    reply = cli.run(["marketplace", "add", str(make_marketplace(tmp_path / "evil"))], home, _no)
+    assert "is the name of Waku's built-in marketplace" in reply and marketplace.read(home) == {}
+    assert marketplace.lookup(home, "waku-memory") == marketplace.KNOWN["waku-memory"]
+    marketplace.write(home, {"waku-memory": {"path": str(tmp_path / "evil")}})   # an old record
+    assert marketplace.lookup(home, "waku-memory") == marketplace.KNOWN["waku-memory"]
+
+    cli.run(["marketplace", "add", str(make_marketplace(tmp_path / "a", name="team"))], home, _no)
+    reply = cli.run(["marketplace", "add", str(make_marketplace(tmp_path / "b", name="team"))], home, _no)
+    assert "already recorded" in reply and marketplace.read(home)["team"]["path"].endswith("/a")
+
+
+def test_removing_the_built_in_marketplace_does_not_claim_it_is_gone(tmp_path):
+    home = tmp_path / "home"
+    reply = cli.run(["marketplace", "remove", "waku-memory"], home, _no)
+    assert "is built in, so it stays available" in reply and "Removed" not in reply
+
+
+def test_install_shows_what_the_plugin_brings_and_writes_nothing_when_declined(tmp_path, monkeypatch):
+    home = _added(tmp_path, monkeypatch)
     seen = []
     reply = cli.run(["install", "waku@waku-memory"], home, lambda shown: seen.append(shown) or False)
     assert reply.endswith("Nothing was installed.")
@@ -44,8 +66,8 @@ def test_install_shows_what_the_plugin_brings_and_writes_nothing_when_declined(t
     assert store.read(home) == {} and not (store.folder(home) / "waku-memory").exists()
 
 
-def test_install_copies_only_the_named_plugin_and_records_it(tmp_path):
-    home = _added(tmp_path)
+def test_install_copies_only_the_named_plugin_and_records_it(tmp_path, monkeypatch):
+    home = _added(tmp_path, monkeypatch)
     reply = cli.run(["install", "waku@waku-memory"], home, _yes)
     assert "Installed waku from waku-memory" in reply
     assert "Sign in to waku_memory: waku mcp login waku_memory" in reply
@@ -57,24 +79,24 @@ def test_install_copies_only_the_named_plugin_and_records_it(tmp_path):
     assert [p.name for p in store.enabled(home)] == ["waku"]
 
 
-def test_a_source_outside_the_marketplace_is_refused(tmp_path):
-    home = _added(tmp_path)
+def test_a_source_outside_the_marketplace_is_refused(tmp_path, monkeypatch):
+    home = _added(tmp_path, monkeypatch)
     (tmp_path / "outside" / ".waku-plugin").mkdir(parents=True)
     (tmp_path / "outside" / ".waku-plugin" / "plugin.json").write_text('{"name": "escape"}')
     reply = cli.run(["install", "escape@waku-memory"], home, _yes)
     assert "points outside the marketplace" in reply and store.read(home) == {}
 
 
-def test_a_claude_code_plugin_installs_and_says_its_hooks_are_skipped(tmp_path):
-    home = _added(tmp_path)
+def test_a_claude_code_plugin_installs_and_says_its_hooks_are_skipped(tmp_path, monkeypatch):
+    home = _added(tmp_path, monkeypatch)
     reply = cli.run(["install", "docs@waku-memory"], home, _yes)
     assert "Hooks: skipped" in reply
     assert "runs a program on this machine: npx -y docs-server" in reply
     assert "hooks skipped" in cli.run(["list"], home, _no)
 
 
-def test_disable_enable_and_remove(tmp_path):
-    home = _added(tmp_path)
+def test_disable_enable_and_remove(tmp_path, monkeypatch):
+    home = _added(tmp_path, monkeypatch)
     cli.run(["install", "waku@waku-memory"], home, _yes)
     (home / "mcp-auth").mkdir()
     (home / "mcp-auth" / "waku_memory.json").write_text("{}")
@@ -87,8 +109,8 @@ def test_disable_enable_and_remove(tmp_path):
     assert (home / "mcp-auth" / "waku_memory.json").exists()   # the sign-in is kept
 
 
-def test_update_copies_the_marketplace_again(tmp_path):
-    home = _added(tmp_path)
+def test_update_copies_the_marketplace_again(tmp_path, monkeypatch):
+    home = _added(tmp_path, monkeypatch)
     cli.run(["install", "waku@waku-memory"], home, _yes)
     source = tmp_path / "market" / "plugins" / "waku" / ".waku-plugin" / "plugin.json"
     data = json.loads(source.read_text())
@@ -97,8 +119,8 @@ def test_update_copies_the_marketplace_again(tmp_path):
     assert store.read(home)["waku@waku-memory"]["version"] == "0.16.0"
 
 
-def test_list_names_a_plugin_server_mcp_json_already_takes(tmp_path):
-    home = _added(tmp_path)
+def test_list_names_a_plugin_server_mcp_json_already_takes(tmp_path, monkeypatch):
+    home = _added(tmp_path, monkeypatch)
     cli.run(["install", "waku@waku-memory"], home, _yes)
     (home / "mcp.json").write_text(json.dumps({"servers": [
         {"name": "waku_memory", "url": "https://elsewhere/mcp", "auth_env": "K"}]}))
@@ -147,15 +169,15 @@ def test_the_waku_memory_marketplace_is_known_before_any_add(tmp_path, monkeypat
     assert "codeload.github.com/waku-one/waku-memory-plugins" in reply
 
 
-def test_hosted_refuses_every_plugin_command(tmp_path):
-    home = _added(tmp_path)
+def test_hosted_refuses_every_plugin_command(tmp_path, monkeypatch):
+    home = _added(tmp_path, monkeypatch)
     assert cli.run(["install", "waku@waku-memory"], home, _yes, hosted=True) == cli.HOSTED_REFUSAL
     assert cli.chat("install waku@waku-memory --yes", home, hosted=True) == cli.HOSTED_REFUSAL
     assert store.read(home) == {}
 
 
-def test_the_dashboard_chat_previews_until_yes(tmp_path):
-    home = _added(tmp_path)
+def test_the_dashboard_chat_previews_until_yes(tmp_path, monkeypatch):
+    home = _added(tmp_path, monkeypatch)
     first = cli.chat("install waku@waku-memory", home, hosted=False)
     assert first.endswith("To install it, send: /plugin install waku@waku-memory --yes")
     assert store.read(home) == {}
@@ -184,7 +206,7 @@ def _dashboard_reply(message, monkeypatch, home, provider):
 
 
 def test_the_dashboard_routes_plugin_and_hosted_refuses_it(tmp_path, monkeypatch):
-    home = _added(tmp_path)
+    home = _added(tmp_path, monkeypatch)
     preview = _dashboard_reply("/plugin install waku@waku-memory", monkeypatch, home, "anthropic")
     assert "--yes" in preview and store.read(home) == {}
     hosted = _dashboard_reply("/plugin install waku@waku-memory --yes", monkeypatch, home, "waku-platform")

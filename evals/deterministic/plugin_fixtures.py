@@ -68,6 +68,8 @@ def claude_only_plugin(root: Path) -> Path:
 
 
 def marketplace(root: Path, name: str = "waku-memory") -> Path:
+    """Named waku-memory by default, like the real one. Waku refuses to record
+    that name for another source, so a test stands it in with official()."""
     """A marketplace repository with the Waku plugin at ./plugins/waku."""
     root.mkdir(parents=True, exist_ok=True)
     (root / ".claude-plugin").mkdir(exist_ok=True)
@@ -98,3 +100,11 @@ def install_into(home: Path, plugin_root: Path, marketplace_name: str = "waku-me
                     "path": f"{marketplace_name}/{plugin.name}", "ref": "main", "enabled": enabled}
     store.write(home, records)
     return key
+
+
+def official(monkeypatch, market_root: Path) -> None:
+    """Point the built-in waku-memory marketplace at a local folder, for the
+    length of one test."""
+    from waku.plugins import marketplace as market
+
+    monkeypatch.setitem(market.KNOWN, "waku-memory", {"path": str(Path(market_root).resolve())})

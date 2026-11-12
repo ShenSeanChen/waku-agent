@@ -74,7 +74,29 @@ def entry_for(source: str) -> dict:
 
 
 def lookup(home: Path, name: str) -> dict | None:
-    return read(home).get(name) or KNOWN.get(name)
+    """A built-in marketplace always wins its name, so a catalog that calls
+    itself waku-memory cannot stand in for the official one."""
+    return KNOWN.get(name) or read(home).get(name)
+
+
+def same_source(a: dict, b: dict) -> bool:
+    return (a.get("repo"), a.get("path")) == (b.get("repo"), b.get("path"))
+
+
+def claim(home: Path, name: str, entry: dict) -> str | None:
+    """Why `name` cannot be recorded for `entry`, or None when it can. A name
+    that is built in, or recorded already for another source, stays with what
+    it names now."""
+    if not store.valid_name(name):
+        return f"'{name}' is not a marketplace name Waku records."
+    if name in KNOWN and not same_source(KNOWN[name], entry):
+        return (f"'{name}' is the name of Waku's built-in marketplace "
+                f"({KNOWN[name].get('repo')}), so another source cannot use it.")
+    recorded = read(home).get(name)
+    if recorded is not None and not same_source(recorded, entry):
+        return (f"A marketplace named '{name}' is already recorded from "
+                f"{recorded.get('repo') or recorded.get('path')}. Remove it first.")
+    return None
 
 
 def _download(url: str) -> bytes:
