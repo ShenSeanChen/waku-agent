@@ -22,7 +22,14 @@ from waku.plugins import store as plugin_store
 from waku.plugins.hooks import HookRunner
 from waku.runtime.session import Session
 from waku.tools import build_registry
-from waku.tools.waku_memory import consolidation_every, get_via, remember_via, search_via, tool_name
+from waku.tools.waku_memory import (
+    captured_by,
+    consolidation_every,
+    get_via,
+    remember_via,
+    search_via,
+    tool_name,
+)
 
 # The Waku Memory tools that read memory. What they return this turn is
 # already kept, so consolidation must not keep it again.
@@ -83,6 +90,8 @@ class Waku:
         plugins = plugin_store.enabled(self.settings.home)
         self.hooks = (HookRunner(plugins, self.mcp_bridge)
                       if self.mcp_bridge is not None and any(p.hooks for p in plugins) else None)
+        self.memory.plugin_captures = (self.hooks is not None and self.memory.remember is not None
+                                       and any(captured_by(p) for p in plugins))
         self._sessions_started: set[str] = set()   # gateways whose SessionStart ran
         self._turn_context = ""                     # what this turn's hooks found
         self._turn_notices: list[str] = []          # their lines for the person

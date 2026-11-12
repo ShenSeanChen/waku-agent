@@ -82,6 +82,43 @@ def apply(mode: str, home: Path) -> str:
     raise ValueError("choose plugin, agent or off")
 
 
+def follow_plugins(home: Path) -> str:
+    """Make the saved mode match what the installed plugins do (spec 021
+    review). A plugin whose Stop hook reaches Waku Memory means `plugin`:
+    the server extracts each turn, so consolidation must stop sending. With
+    no such plugin, `plugin` goes back to `agent` when mcp.json still names
+    Waku Memory. `off` is the person's choice and never changes here.
+
+    Only the home Waku runs from has a saved mode, so a command run on
+    another folder changes nothing. Returns a line for the person, or ""."""
+    from waku.config import _memory_mode, load_settings
+    from waku.plugins import store
+    from waku.tools.waku_memory import captured_by
+
+    if Path(home).resolve() != load_settings().home.resolve():
+        return ""
+    mode = _memory_mode(os.getenv("WAKU_MEMORY_MODE", ""))
+    if mode == "off":
+        return ""
+    if any(captured_by(p) for p in store.enabled(home)):
+        if mode == "plugin":
+            return ""
+        save("plugin")
+        return ("Waku Memory now extracts each turn from the plugin's Stop hook, so Waku "
+                "keeps facts on this machine and sends none itself.")
+    if mode != "plugin":
+        return ""
+    try:
+        servers = json.loads((home / "mcp.json").read_text(encoding="utf-8")).get("servers", [])
+    except (OSError, ValueError):
+        servers = []
+    if any(is_waku_memory(s) for s in servers):
+        save("agent")
+        return "No plugin sends turns to Waku Memory now, so Waku sends each fact it keeps again."
+    return ("No plugin sends turns to Waku Memory now, and mcp.json does not name it, so nothing "
+            "reaches Waku Memory. Install the plugin again, or run: waku connect waku-memory")
+
+
 def install_plugin(home: Path) -> tuple[bool, str]:
     """Install the Waku plugin and sign in to its server. The person already
     said yes to the sentence above, so the install asks nothing more.

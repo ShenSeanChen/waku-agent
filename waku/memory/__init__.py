@@ -75,6 +75,11 @@ class Memory:
         # Spec 006: sends each fact consolidation keeps to Waku Memory. app.py
         # sets it once the MCP servers have connected; None means no send.
         self.remember = None
+        # Spec 021 review: True when an enabled plugin's Stop hook sends each
+        # turn to the Waku Memory this agent is connected to. Consolidation
+        # then sends nothing, whatever mode is saved, so no turn reaches Waku
+        # Memory twice. app.py sets it.
+        self.plugin_captures = False
 
     @staticmethod
     def _make_fact_store(conn, settings):
@@ -270,7 +275,8 @@ class Memory:
             # so consolidation keeps facts here and sends none, and facts an
             # earlier send failed on are not sent again. save_note and the
             # report upload still use self.remember: the person asked for them.
-            remember=None if self.settings.memory_mode == "plugin" else self.remember,
+            remember=(None if self.settings.memory_mode == "plugin" or self.plugin_captures
+                      else self.remember),
             report=report,
             recalled=recalled,
         )

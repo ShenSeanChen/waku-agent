@@ -186,6 +186,7 @@ def install(home: Path, target: str, confirm: Callable[[str], bool], given: str 
     if moved:
         lines.append("Moved " + ", ".join(moved) + " from mcp.json to the plugin. "
                      "Your sign-in stays as it is.")
+    lines += [line for line in (_follow(home),) if line]
     from waku.tools.mcp_cli import _auth_file
 
     for server in plugin.servers:
@@ -256,12 +257,20 @@ def listing(home: Path) -> str:
     return "\n".join(lines)
 
 
+def _follow(home: Path) -> str:
+    from waku.memory_choice import follow_plugins
+
+    return follow_plugins(home)
+
+
 def _set_enabled(home: Path, given: str, enabled: bool) -> str:
     key = _key(home, given)
     records = store.read(home)
     records[key]["enabled"] = enabled
     store.write(home, records)
-    return f"{'Enabled' if enabled else 'Disabled'} {key}. This takes effect when Waku next starts."
+    lines = [f"{'Enabled' if enabled else 'Disabled'} {key}. This takes effect when Waku next starts.",
+             _follow(home)]
+    return "\n".join(line for line in lines if line)
 
 
 def remove(home: Path, given: str) -> str:
@@ -272,7 +281,9 @@ def remove(home: Path, given: str) -> str:
     if folder.is_dir():
         shutil.rmtree(folder)
     store.write(home, records)
-    return f"Removed {key}. Sign-ins in mcp-auth are kept; waku mcp login can replace one."
+    lines = [f"Removed {key}. Sign-ins in mcp-auth are kept; waku mcp login can replace one.",
+             _follow(home)]
+    return "\n".join(line for line in lines if line)
 
 
 def _marketplace(home: Path, args: list[str]) -> str:
