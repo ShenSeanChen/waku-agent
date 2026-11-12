@@ -79,7 +79,13 @@ def entry_for(source: str) -> dict:
     match = _REPO.match(source.strip())
     if not match:
         raise MarketplaceError(f"'{source}' is neither a folder nor a GitHub repository (owner/repo)")
-    return {"repo": match.group(1), "ref": match.group(2) or "main"}
+    repo, ref = match.group(1), match.group(2) or "main"
+    # These go into a download URL's path: a `..` or a part starting with a
+    # dot could point it somewhere else on the host (spec 021 review).
+    parts = [*repo.split("/"), *ref.split("/")]
+    if any(not part or part.startswith(".") or ".." in part for part in parts):
+        raise MarketplaceError(f"'{source}' is not a GitHub repository Waku fetches from")
+    return {"repo": repo, "ref": ref}
 
 
 def lookup(home: Path, name: str) -> dict | None:

@@ -308,3 +308,17 @@ def test_a_download_larger_than_the_cap_is_refused(monkeypatch):
     monkeypatch.setattr(marketplace.urllib.request, "urlopen", lambda url, timeout: Response(b"x" * 11))
     with pytest.raises(marketplace.MarketplaceError, match="larger than"):
         marketplace._download("https://codeload.github.com/a/b/tar.gz/main")
+
+
+@pytest.mark.parametrize("source", ["../waku-memory-plugins", "waku-one/..", "waku-one/.hidden",
+                                    "waku-one/repo@../../evil", "waku-one/repo@.x", "a/b@x/../y"])
+def test_a_repository_or_ref_with_dot_dot_or_a_leading_dot_is_refused(source):
+    """Review fix 8."""
+    with pytest.raises(marketplace.MarketplaceError):
+        marketplace.entry_for(source)
+
+
+def test_ordinary_repositories_and_refs_still_parse():
+    assert marketplace.entry_for("waku-one/waku-memory-plugins@v1.2") == {
+        "repo": "waku-one/waku-memory-plugins", "ref": "v1.2"}
+    assert marketplace.entry_for("https://github.com/a_b/c.d@feature/x")["ref"] == "feature/x"
