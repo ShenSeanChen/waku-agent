@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import json
 import secrets
+import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime
@@ -85,6 +86,10 @@ class Tracer:
         # Spec 012: the MCP server names, so a tool line can say which server
         # answered it. Read once; a server added later reads as "local".
         self._mcp_servers = observability.mcp_servers(settings.home)
+        # Spec 021 review: a plugin's Stop hook writes from its own thread
+        # while the next turn writes from the gateway's, and two appends to
+        # one file can interleave into a line neither wrote.
+        self._write_lock = threading.Lock()
 
     def _init_otel(self, settings: Settings):
         if not settings.otel_endpoint:
@@ -109,17 +114,19 @@ class Tracer:
             return None
 
     def _write(self, record: dict) -> None:
-        # An older Windows release may have created this daily file in GBK.
-        # Refuse to make a mixed-encoding JSONL file: validate once, explain how
-        # to preserve the old file, and never guess or rewrite user data.
-        if not self._trace_encoding_checked:
-            if self.path.exists():
-                for _ in iter_trace_lines(self.path):
-                    pass
-            self._trace_encoding_checked = True
-        record["ts"] = _now()
-        with self.path.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
+        with self._write_lock:
+            # An older Windows release may have created this daily file in
+            # GBK. Refuse to make a mixed-encoding JSONL file: validate once,
+            # explain how to preserve the old file, and never guess or
+            # rewrite user data.
+            if not self._trace_encoding_checked:
+                if self.path.exists():
+                    for _ in iter_trace_lines(self.path):
+                        pass
+                self._trace_encoding_checked = True
+            record["ts"] = _now()
+            with self.path.open("a", encoding="utf-8") as f:
+                f.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
 
     def _record_usage(self, event: dict) -> None:
         """Append one LLM call's token usage to a PERMANENT ledger (usage.jsonl).
