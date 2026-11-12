@@ -218,6 +218,17 @@ def _run_command(command: tuple[str, str], emit) -> None:
         reply = connect_integration(arg, load_settings().home) if arg else connect_usage()
         emit("done", {"reply": reply, "tools": [], "iterations": 0, "latency_ms": 0, "gate": None})
         return
+    if name == "plugin":
+        # Spec 021 B3: an install previews what the plugin brings, and the
+        # person sends the command again with --yes. A hosted container's
+        # servers are set at sign-in, so it refuses every /plugin command.
+        from waku.config import load_settings
+        from waku.plugins.cli import chat as plugin_chat
+
+        settings = load_settings()
+        reply = plugin_chat(arg, settings.home, hosted=settings.provider == "waku-platform")
+        emit("done", {"reply": reply, "tools": [], "iterations": 0, "latency_ms": 0, "gate": None})
+        return
     if name in ("graphs", "help", "?"):
         emit("done", {"reply": commands.describe(), "tools": [], "iterations": 0,
                       "latency_ms": 0, "gate": None})

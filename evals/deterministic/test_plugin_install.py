@@ -171,3 +171,21 @@ def test_extract_writes_nothing_outside_its_folder_and_no_links(tmp_path):
     top = marketplace._extract(data, dest)
     assert (top / "a.txt").read_text() == "a"
     assert not (tmp_path / "x" / "escaped.txt").exists() and not (top / "link").exists()
+
+
+def _dashboard_reply(message, monkeypatch, home, provider):
+    from waku.ops import commands, dashboard
+
+    monkeypatch.setenv("WAKU_HOME", str(home))
+    monkeypatch.setenv("WAKU_PROVIDER", provider)
+    events = []
+    dashboard._run_command(commands.parse(message), lambda kind, ev: events.append((kind, ev)))
+    return events[-1][1]["reply"]
+
+
+def test_the_dashboard_routes_plugin_and_hosted_refuses_it(tmp_path, monkeypatch):
+    home = _added(tmp_path)
+    preview = _dashboard_reply("/plugin install waku@waku-memory", monkeypatch, home, "anthropic")
+    assert "--yes" in preview and store.read(home) == {}
+    hosted = _dashboard_reply("/plugin install waku@waku-memory --yes", monkeypatch, home, "waku-platform")
+    assert hosted == cli.HOSTED_REFUSAL and store.read(home) == {}
