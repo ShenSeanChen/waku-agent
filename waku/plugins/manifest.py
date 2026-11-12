@@ -30,6 +30,27 @@ CLAUDE_MANIFEST = Path(".claude-plugin") / "plugin.json"
 # kept out of `hooks`, so nothing waits on an event that never fires.
 EVENTS = ("SessionStart", "UserPromptSubmit", "PreToolUse", "Stop")
 
+# Spec 021 review. A plugin server's `auth_env` names the variable whose value
+# Waku sends as a bearer token, so a plugin naming ANTHROPIC_API_KEY would
+# send the person's model key to its own server. Only a variable made for a
+# plugin may be named.
+AUTH_ENV_PREFIX = "WAKU_PLUGIN_"
+# The id Waku Memory's tokens and lookups use. A plugin may name it only for
+# Waku Memory's own address.
+RESERVED = {"waku_memory": "https://api.waku.one/mcp"}
+
+
+def refusal(entry: dict) -> str | None:
+    """Why Waku will not connect this plugin server, or None."""
+    reserved = RESERVED.get(entry["name"])
+    if reserved and str(entry.get("url", "")).rstrip("/") != reserved:
+        return f"{entry['name']}: that name is kept for Waku Memory at {reserved}"
+    auth_env = entry.get("auth_env")
+    if auth_env and not str(auth_env).startswith(AUTH_ENV_PREFIX):
+        return (f"{entry['name']}: its key variable {auth_env} does not start with "
+                f"{AUTH_ENV_PREFIX}, so Waku will not send it")
+    return None
+
 
 @dataclass
 class Plugin:
@@ -42,6 +63,8 @@ class Plugin:
     hooks: dict[str, list[dict]] = field(default_factory=dict)
     skills_dir: Path | None = None
     hooks_skipped: bool = False
+    # Servers Waku will not connect, each with the reason, for the preview.
+    refused: list[str] = field(default_factory=list)
 
 
 def _read_json(path: Path) -> dict:
@@ -83,7 +106,7 @@ def server_entry(server_id: str, spec: dict, plugin: str) -> dict | None:
     return None
 
 
-def _servers(block, root: Path, plugin: str) -> list[dict]:
+def _servers(block, root: Path, plugin: str, refused: list[str] | None = None) -> list[dict]:
     """`mcpServers` is an object of servers, or a path to a file that holds
     one (Claude Code's `.mcp.json` wraps it in {"mcpServers": ...})."""
     if isinstance(block, str):
@@ -96,8 +119,14 @@ def _servers(block, root: Path, plugin: str) -> list[dict]:
     out = []
     for server_id, spec in block.items():
         entry = server_entry(str(server_id), spec, plugin)
-        if entry is not None:
-            out.append(entry)
+        if entry is None:
+            continue
+        reason = refusal(entry)
+        if reason:
+            if refused is not None:
+                refused.append(reason)
+            continue
+        out.append(entry)
     return out
 
 
@@ -133,22 +162,24 @@ def load(root: Path) -> Plugin | None:
     manifest = _read_json(root / WAKU_MANIFEST)
     if manifest.get("name"):
         name = str(manifest["name"])
+        refused: list[str] = []
         return Plugin(
             name=name, root=root, kind="waku",
             version=str(manifest.get("version", "")),
             description=str(manifest.get("description", "")),
-            servers=_servers(manifest.get("mcpServers", {}), root, name),
+            servers=_servers(manifest.get("mcpServers", {}), root, name, refused),
             hooks=_hooks(manifest.get("hooks", {}), root),
-            skills_dir=_skills(manifest.get("skills"), root))
+            skills_dir=_skills(manifest.get("skills"), root), refused=refused)
     manifest = _read_json(root / CLAUDE_MANIFEST)
     if not manifest.get("name"):
         return None
     name = str(manifest["name"])
     servers = manifest.get("mcpServers")
+    refused = []
     return Plugin(
-        name=name, root=root, kind="claude",
+        name=name, root=root, kind="claude", refused=refused,
         version=str(manifest.get("version", "")),
         description=str(manifest.get("description", "")),
-        servers=_servers(servers if servers is not None else ".mcp.json", root, name),
+        servers=_servers(servers if servers is not None else ".mcp.json", root, name, refused),
         skills_dir=_skills(manifest.get("skills"), root),
         hooks_skipped=bool(manifest.get("hooks") or (root / "hooks").is_dir()))

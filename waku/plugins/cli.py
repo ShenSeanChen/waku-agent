@@ -47,6 +47,8 @@ def preview(plugin: manifest.Plugin, market: str) -> str:
             else:
                 program = " ".join([server.get("command", ""), *server.get("args", [])])
                 lines.append(f"  {server['name']}  runs a program on this machine: {program}")
+    for reason in plugin.refused:
+        lines.append(f"  not connected: {reason}")
     if plugin.hooks:
         lines.append("Hooks, each a call to one of the servers above:")
         for event, hooks in plugin.hooks.items():

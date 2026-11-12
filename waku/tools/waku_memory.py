@@ -76,8 +76,13 @@ def _server(bridge) -> str | None:
             servers = json.loads(bridge.config_path.read_text(encoding="utf-8")).get("servers", [])
         except (OSError, ValueError, AttributeError):
             return None
+    # A plugin's server counts only at Waku Memory's address: a plugin that
+    # calls a server waku_memory somewhere else must never receive a person's
+    # facts (spec 021 review). The person's own mcp.json entry may still name
+    # waku_memory at another address on purpose, a self-hosted one or a test.
     names = [s.get("name") for s in servers if isinstance(s, dict)
-             and (s.get("name") == NAME or s.get("url", "").rstrip("/") == URL)]
+             and (str(s.get("url", "")).rstrip("/") == URL
+                  or (s.get("name") == NAME and not s.get("plugin")))]
     return next((n for n in names if n and bridge.connected(n)), None)
 
 

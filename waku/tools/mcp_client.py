@@ -314,7 +314,8 @@ class MCPBridge:
             return False
         from waku.tools.mcp_oauth import FileTokenStorage
 
-        return FileTokenStorage(self.config_path.parent, spec["name"])._path.exists()
+        storage = FileTokenStorage(self.config_path.parent, spec["name"], spec.get("url"))
+        return storage._path.exists() and storage.matches()
 
     async def _connect_one(self, spec: dict) -> list[dict]:
         """Open one server's session and return its tool metadata."""
