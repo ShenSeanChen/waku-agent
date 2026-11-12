@@ -99,17 +99,24 @@ Claude Code; episodes, `MEMORY.md` and `state.db` are never written there.
 over MCP: save something in one agent, and recall it in another.
 
 ```bash
-pip install -e '.[mcp]'
-waku connect waku-memory     # or /connect waku-memory in the dashboard chat
+waku plugin install waku@waku-memory   # or /plugin install waku@waku-memory in the dashboard chat
+waku mcp login waku_memory             # sign in, once, in your browser
 ```
 
-That adds Waku Memory to `~/.waku/mcp.json`, next to any servers already there,
-and opens your browser once to sign in. Restart Waku and its tools appear as
-`waku_memory_*`; `waku mcp` shows which account you are signed in as. A config
-still pointing at Waku Memory's old address is moved to the current one.
-From then on, each fact consolidation keeps is also sent to Waku Memory
-(spec 006). Facts kept before you connected stay in `~/.waku/memory/` for the
-importer.
+That installs the Waku plugin, the one Claude Code and Codex use, into
+`~/.waku/plugins/`, after printing what it brings: the `waku_memory` server,
+three hooks and a skill. Restart Waku and its tools appear as `waku_memory_*`;
+`waku mcp` shows which account you are signed in as. The first-run question
+does both steps when you answer yes. A `waku_memory` entry you added to
+`mcp.json` earlier moves to the plugin, and your sign-in stays.
+
+From then on, the plugin's `Stop` hook sends each message and reply to Waku
+Memory, and Waku Memory's server extracts the memories (spec 021). You can
+turn that off for Waku Agent at waku.one/integrations. Consolidation keeps
+facts on this machine and sends none. `waku connect waku-memory` still
+connects Waku Memory without the plugin, and then each fact consolidation
+keeps is sent instead (spec 006). Facts kept before you connected stay in
+`~/.waku/memory/` for the importer.
 
 The same memory, in your other agents:
 

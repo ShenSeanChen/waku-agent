@@ -9,15 +9,22 @@ is the shape the Waku Memory importer reads.
 Spec 006: once the server is connected, remember_via() gives consolidation a
 callable that sends each fact it keeps with memory.remember. Spec 007 sends a
 turn's research report through the same callable, and spec 018 sends the fact `save_note`
-saves the same way. Those are the only uploads,
-and they go to the server the person connected, with their sign-in. Spec 009:
-search_via() gives a research turn one read of memory.search before the model
-starts, so research begins from what the person's brain already holds.
+saves the same way. They go to the server the person connected, with their
+sign-in. Spec 009: search_via() gives a research turn one read of
+memory.search before the model starts, so research begins from what the
+person's brain already holds.
+
+Spec 021: the Waku plugin (`waku plugin install waku@waku-memory`) brings the
+same server, named `waku_memory`, and three hooks. Under
+WAKU_MEMORY_MODE=plugin the plugin's Stop hook sends each turn and the server
+extracts the memories, so consolidation sends nothing. The report and
+`save_note` still send. The server is found in the bridge's merged list, so
+a plugin's server and an mcp.json entry are found the same way.
 
 `waku connect waku-memory` (or `/connect waku-memory` in the dashboard chat)
-adds the server to WAKU_HOME/mcp.json next to any servers already there, then
-signs you in once in your browser. Its tools then load like any MCP server's,
-named `waku_memory_*`.
+connects without the plugin: it adds the server to WAKU_HOME/mcp.json next to
+any servers already there, then signs you in once in your browser. Its tools
+then load like any MCP server's, named `waku_memory_*`.
 """
 
 from __future__ import annotations
@@ -209,7 +216,7 @@ def status(home: Path) -> str:
     if spec.get("auth_env"):
         return f"configured · API key in ${spec['auth_env']}"
     if not _has_mcp():
-        return "configured · needs the mcp extra: pip install 'waku-agent[mcp]'"
+        return "configured · the mcp package is missing: reinstall waku-agent"
 
     from waku.tools.mcp_cli import _auth_file, _identity
 
