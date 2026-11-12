@@ -161,6 +161,10 @@ class Tracer:
             # its arguments redacted and trimmed
             event = observability.trace_record(event, turn_id=self.turn_id,
                                                servers=self._mcp_servers)
+        elif kind == "hook":
+            # Spec 021: a plugin hook's call. Stop runs after the turn ended
+            # and names its turn itself; every other hook runs inside it.
+            event = {"turn_id": self.turn_id, **event, "span": "hook"}
         self._write({"type": kind, **event})
         if self._otel_tracer and self._span_ctx is not None:
             with self._otel_tracer.start_as_current_span(
