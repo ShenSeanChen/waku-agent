@@ -394,6 +394,44 @@ class MCPBridge:
         except Exception as exc:
             return f"MCP call {server}_{tool} failed: {exc}"
 
+    def call_json(self, server: str, tool: str, args: dict,
+                  timeout: float) -> tuple[dict | None, bool, str]:
+        """One call for a hook (spec 021): (the result as JSON, whether it
+        failed, its text). A hook needs the tool's own answer and its
+        `isError`, which `call` flattens into text for the model, and it
+        waits `timeout` seconds rather than a paid tool's two minutes."""
+        if server not in self._sessions:
+            return None, True, f"MCP server '{server}' is not connected."
+        fut = asyncio.run_coroutine_threadsafe(self._acall_raw(server, tool, args), self._loop)
+        try:
+            result = fut.result(timeout)
+        except concurrent.futures.TimeoutError:
+            fut.cancel()
+            return None, True, f"timed out after {timeout:g}s"
+        except Exception as exc:
+            return None, True, str(exc) or type(exc).__name__
+        text = "\n".join(getattr(b, "text", None) or "" for b in result.content)
+        failed = bool(getattr(result, "is_error", None) or getattr(result, "isError", False))
+        data = getattr(result, "structured_content", None) or getattr(result, "structuredContent", None)
+        if not isinstance(data, dict):
+            try:
+                data = json.loads(text) if text.strip() else {}
+            except ValueError:
+                data = None
+        return (data if isinstance(data, dict) else None), failed, text
+
+    async def _acall_raw(self, server: str, tool: str, args: dict):
+        """The tool's own result, with the same one retry `_acall` makes
+        when the server forgot the session."""
+        session = self._sessions[server]
+        try:
+            return await session.call_tool(tool, args)
+        except Exception as exc:
+            if not _session_expired(exc):
+                raise
+            session = await self._reopen(server, session)
+            return await session.call_tool(tool, args)
+
     async def _acall(self, server: str, tool: str, args: dict) -> str:
         session = self._sessions.get(server)
         if session is None:
