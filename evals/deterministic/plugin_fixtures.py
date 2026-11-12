@@ -79,3 +79,22 @@ def marketplace(root: Path, name: str = "waku-memory") -> Path:
     waku_plugin(root / "plugins" / "waku")
     claude_only_plugin(root / "plugins" / "docs")
     return root
+
+
+def install_into(home: Path, plugin_root: Path, marketplace_name: str = "waku-memory",
+                 enabled: bool = True) -> str:
+    """Put a plugin folder in <home>/plugins the way `waku plugin install`
+    leaves it, without a marketplace. Returns its key."""
+    import shutil
+
+    from waku.plugins import manifest, store
+
+    plugin = manifest.load(plugin_root)
+    dest = store.folder(home) / marketplace_name / plugin.name
+    shutil.copytree(plugin_root, dest, dirs_exist_ok=True)
+    key = f"{plugin.name}@{marketplace_name}"
+    records = store.read(home)
+    records[key] = {"name": plugin.name, "marketplace": marketplace_name,
+                    "path": f"{marketplace_name}/{plugin.name}", "ref": "main", "enabled": enabled}
+    store.write(home, records)
+    return key

@@ -67,17 +67,21 @@ def build_registry(conn: sqlite3.Connection, settings: Settings, memory=None) ->
 
         registry.register(github.make_tool(default_repo=getattr(settings, "gh_repo", "")))
 
-    # MCP servers (opt-in via .waku/mcp.json).
+    # MCP servers (opt-in via .waku/mcp.json, or an installed plugin's own,
+    # spec 021). Either one is enough to start the bridge.
+    from waku.plugins import store
+
     mcp_config = settings.home / "mcp.json"
-    if mcp_config.exists():
+    plugin_servers = store.servers(settings.home)
+    if mcp_config.exists() or plugin_servers:
         try:
             from waku.tools.mcp_client import MCPBridge
             from waku.tools.waku_memory import is_waku_memory
 
             # Spec 020: "Keep local only" leaves Waku Memory unconnected even
-            # when mcp.json names it, and touches no other server.
+            # when mcp.json or a plugin names it, and touches no other server.
             skip = is_waku_memory if getattr(settings, "memory_mode", "") == "off" else None
-            bridge = MCPBridge(mcp_config, skip=skip)
+            bridge = MCPBridge(mcp_config, skip=skip, extra_servers=plugin_servers)
             for t in bridge.start():
                 registry.register(t)
             registry.mcp_bridge = bridge  # so Waku.close() can stop the servers

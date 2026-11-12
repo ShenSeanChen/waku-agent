@@ -61,10 +61,14 @@ def _server(bridge) -> str | None:
     another name."""
     if bridge is None:
         return None
-    try:
-        servers = json.loads(bridge.config_path.read_text(encoding="utf-8")).get("servers", [])
-    except (OSError, ValueError, AttributeError):
-        return None
+    # Spec 021: the bridge's merged list, so a server a plugin brought is
+    # found as readily as one mcp.json names.
+    servers = getattr(bridge, "servers", None)
+    if not servers:
+        try:
+            servers = json.loads(bridge.config_path.read_text(encoding="utf-8")).get("servers", [])
+        except (OSError, ValueError, AttributeError):
+            return None
     names = [s.get("name") for s in servers if isinstance(s, dict)
              and (s.get("name") == NAME or s.get("url", "").rstrip("/") == URL)]
     return next((n for n in names if n and bridge.connected(n)), None)
@@ -194,6 +198,11 @@ def status(home: Path) -> str:
         servers = json.loads(config.read_text(encoding="utf-8")).get("servers", []) if config.exists() else []
     except json.JSONDecodeError:
         return f"not connected · {config} is not valid JSON"
+    # Spec 021: a server the Waku plugin brought counts the same as one in
+    # mcp.json. Reading the plugin files connects nothing.
+    from waku.plugins import store
+
+    servers = [*servers, *store.servers(home)]
     spec = next((s for s in servers if s.get("url", "").rstrip("/") == URL), None)
     if spec is None:
         return "not connected · run: waku connect waku-memory"

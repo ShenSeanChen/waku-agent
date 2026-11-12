@@ -100,6 +100,31 @@ def _model_safe_name(server: str, tool: str) -> str:
     return safe[-64:].lstrip("_")
 
 
+def merge(config_servers: list[dict], plugin_servers: list[dict]) -> tuple[list[dict], list[tuple[str, str]]]:
+    """mcp.json's servers, then each plugin server mcp.json does not already
+    have (spec 021). A plugin server at a URL mcp.json names is the same
+    server, and is left out without a word. A plugin server with an id
+    mcp.json names is a different server under a taken name: mcp.json wins,
+    and the skipped one is returned so `waku plugin list` can say so. Two
+    plugins naming one id are resolved the same way: the first one wins."""
+    merged = [s for s in config_servers if isinstance(s, dict) and s.get("name")]
+    names = {s["name"] for s in merged}
+    urls = {str(s.get("url", "")).rstrip("/") for s in merged if s.get("url")}
+    skipped: list[tuple[str, str]] = []
+    for spec in plugin_servers:
+        url = str(spec.get("url", "")).rstrip("/")
+        if url and url in urls:
+            continue
+        if spec.get("name") in names:
+            skipped.append((str(spec.get("plugin", "")), str(spec["name"])))
+            continue
+        merged.append(spec)
+        names.add(spec["name"])
+        if url:
+            urls.add(url)
+    return merged, skipped
+
+
 def _auth_hint(spec: dict, auth_dir: Path) -> str:
     """What to tell someone whose remote server would not connect.
 
@@ -123,8 +148,16 @@ def _auth_hint(spec: dict, auth_dir: Path) -> str:
 
 class MCPBridge:
     def __init__(self, config_path: Path, timeout: float = 30.0,
-                 call_timeout: float | None = None, skip=None):
+                 call_timeout: float | None = None, skip=None, extra_servers=()):
         self.config_path = config_path
+        # Spec 021: the servers installed plugins bring, in mcp.json's shape.
+        # They join mcp.json's own (merge below), and `servers` keeps the
+        # merged list, so Waku Memory is found whichever file named it.
+        self._extra = [dict(s) for s in extra_servers]
+        self.servers: list[dict] = []
+        # Plugin servers left out because mcp.json names the same id:
+        # (plugin, server id), for `waku plugin list`.
+        self.skipped: list[tuple[str, str]] = []
         # A predicate on an mcp.json entry: True leaves that server unconnected.
         # Waku Memory's "off" choice uses it (spec 020); other servers are not
         # touched.
@@ -171,9 +204,12 @@ class MCPBridge:
     def start(self) -> list[Tool]:
         """Connect every configured server and return their tools (as Tools)."""
         self._thread.start()
-        servers = json.loads(self.config_path.read_text(encoding="utf-8")).get("servers", [])
+        servers = (json.loads(self.config_path.read_text(encoding="utf-8")).get("servers", [])
+                   if self.config_path.exists() else [])
+        servers, self.skipped = merge(servers, self._extra)
         if self._skip is not None:
             servers = [s for s in servers if not self._skip(s)]
+        self.servers = servers
         # A treg key of the person's own wins over mcp.json's treg entry
         # (spec 014); every other server is connected as written.
         from waku.tools.treg import resolve
@@ -233,6 +269,11 @@ class MCPBridge:
             # Same reasoning as command-vs-url above: two credentials named,
             # no stated precedence, so refusing beats picking one silently.
             raise ValueError("server names both 'auth_env' and 'oauth' — pick one")
+
+        if isinstance(spec.get("headers"), dict):
+            # Spec 021: a plugin server that brings its own static header,
+            # the way Claude Code's .mcp.json allows. It signs in no other way.
+            headers.update({str(k): str(v) for k, v in spec["headers"].items()})
 
         if auth_env:
             token = os.environ.get(auth_env)
