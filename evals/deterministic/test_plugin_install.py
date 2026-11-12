@@ -155,13 +155,18 @@ def test_a_github_marketplace_is_one_archive_and_nothing_escapes_it(tmp_path, mo
     data = _archive(files, links=(("repo-main/plugins/waku/link", "/etc/passwd"),))
     urls = []
     monkeypatch.setattr(marketplace, "_download", lambda url: urls.append(url) or data)
+    # the archive unpacks into a temporary folder; "repo-main/../../" from
+    # there is that folder's parent, so put it where the test can look
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    monkeypatch.setattr(marketplace.tempfile, "tempdir", str(scratch))
     home = tmp_path / "home"
     assert cli.run(["marketplace", "add", "waku-one/waku-memory-plugins"], home, _no).startswith(
         "Added marketplace waku-memory")
     assert "Installed waku" in cli.run(["install", "waku@waku-memory"], home, _yes)
     assert urls[-1] == "https://codeload.github.com/waku-one/waku-memory-plugins/tar.gz/main"
     installed = store.folder(home) / "waku-memory" / "waku"
-    assert not (installed / "link").exists() and not (tmp_path / "escaped.txt").exists()
+    assert not (installed / "link").exists() and not (scratch / "escaped.txt").exists()
     assert store.read(home)["waku@waku-memory"]["ref"] == "main"
 
 
