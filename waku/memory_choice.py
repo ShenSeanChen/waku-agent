@@ -93,7 +93,7 @@ def install_plugin(home: Path) -> tuple[bool, str]:
 
     try:
         reply = cli.install(home, WAKU_PLUGIN, lambda shown: True)
-    except (MarketplaceError, OSError) as exc:
+    except (MarketplaceError, OSError, store.UnsafePath) as exc:
         return False, str(exc)
     if "Installed" not in reply:
         return False, reply.splitlines()[-1]

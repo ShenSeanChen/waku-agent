@@ -20,12 +20,14 @@ repository, and no other kind.
 
 from __future__ import annotations
 
+import http.client
 import io
 import json
 import re
 import tarfile
 import tempfile
 import urllib.request
+import zlib
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -35,6 +37,13 @@ from waku.plugins import store
 FILE = "marketplaces.json"
 CATALOG = Path(".claude-plugin") / "marketplace.json"
 ARCHIVE_URL = "https://codeload.github.com/{repo}/tar.gz/{ref}"
+
+# What one marketplace archive may cost (spec 021 review). A plugin is a few
+# JSON files and some Markdown; these are far above any real one and far
+# below what fills a disk.
+MAX_DOWNLOAD = 50 * 1024 * 1024
+MAX_EXTRACTED = 200 * 1024 * 1024
+MAX_MEMBERS = 10_000
 
 # The marketplace the first-run question installs Waku Memory from. Named
 # here so `waku plugin install waku@waku-memory` works before any `add`.
@@ -101,7 +110,10 @@ def claim(home: Path, name: str, entry: dict) -> str | None:
 
 def _download(url: str) -> bytes:
     with urllib.request.urlopen(url, timeout=60) as response:
-        return response.read()
+        data = response.read(MAX_DOWNLOAD + 1)
+    if len(data) > MAX_DOWNLOAD:
+        raise MarketplaceError(f"the archive at {url} is larger than {MAX_DOWNLOAD // 2**20} MB")
+    return data
 
 
 def _extract(data: bytes, dest: Path) -> Path:
@@ -110,16 +122,33 @@ def _extract(data: bytes, dest: Path) -> Path:
     a device or a `../` path in somebody's archive is skipped. GitHub puts
     the archive's commit in the pax header's `comment`, and it is written to
     `<top>/.waku-commit` for the preview."""
+    try:
+        return _unpack(data, dest)
+    except (tarfile.TarError, zlib.error, EOFError) as exc:
+        # a proxy's HTML error page, a cut-off download, a corrupt archive
+        raise MarketplaceError(f"the download is not a readable archive ({type(exc).__name__})") from exc
+
+
+def _unpack(data: bytes, dest: Path) -> Path:
     root = dest.resolve()
+    written = 0
     with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as tar:
         commit = str((tar.pax_headers or {}).get("comment", ""))
-        for member in tar.getmembers():
+        members = []
+        for member in tar:
+            members.append(member)
+            if len(members) > MAX_MEMBERS:
+                raise MarketplaceError(f"the archive holds more than {MAX_MEMBERS} files")
+        for member in members:
             target = (dest / member.name).resolve()
             if root not in target.parents:
                 continue
             if member.isdir():
                 target.mkdir(parents=True, exist_ok=True)
             elif member.isfile():
+                written += member.size
+                if written > MAX_EXTRACTED:
+                    raise MarketplaceError(f"the archive unpacks to more than {MAX_EXTRACTED // 2**20} MB")
                 target.parent.mkdir(parents=True, exist_ok=True)
                 source = tar.extractfile(member)
                 if source is not None:
@@ -158,7 +187,7 @@ def fetch(entry: dict, ref: str | None = None) -> Iterator[Path]:
     url = ARCHIVE_URL.format(repo=entry["repo"], ref=ref or entry.get("ref") or "main")
     try:
         data = _download(url)
-    except OSError as exc:
+    except (OSError, http.client.HTTPException) as exc:
         raise MarketplaceError(f"could not download {url}: {exc}") from exc
     with tempfile.TemporaryDirectory(prefix="waku-plugin-") as tmp:
         yield _extract(data, Path(tmp))

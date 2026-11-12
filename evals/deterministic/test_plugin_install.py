@@ -7,6 +7,8 @@ import io
 import json
 import tarfile
 
+import pytest
+
 from evals.deterministic.plugin_fixtures import marketplace as make_marketplace
 from evals.deterministic.plugin_fixtures import official
 from waku.plugins import cli, marketplace, store
@@ -268,3 +270,41 @@ def test_the_dashboard_routes_plugin_and_hosted_refuses_it(tmp_path, monkeypatch
     assert "--yes " in preview and store.read(home) == {}
     hosted = _dashboard_reply("/plugin install waku@waku-memory --yes", monkeypatch, home, "waku-platform")
     assert hosted == cli.HOSTED_REFUSAL and store.read(home) == {}
+
+
+def test_a_download_that_is_not_an_archive_is_a_marketplace_error(tmp_path, monkeypatch):
+    """Review fix 7: a proxy's HTML page used to raise tarfile.ReadError out
+    of the first-run question, on every launch."""
+    from waku import memory_choice
+
+    monkeypatch.setattr(marketplace, "_download", lambda url: b"<html>blocked by proxy</html>")
+    reply = cli.run(["install", "waku@waku-memory"], tmp_path, _yes)
+    assert "is not a readable archive" in reply
+    assert memory_choice.install_plugin(tmp_path)[0] is False
+    monkeypatch.setattr(marketplace, "_download", lambda url: _archive({"r/a": "x"})[:40])  # cut off
+    assert "is not a readable archive" in cli.run(["install", "waku@waku-memory"], tmp_path, _yes)
+
+
+def test_archive_limits(tmp_path, monkeypatch):
+    monkeypatch.setattr(marketplace, "MAX_MEMBERS", 3)
+    data = _archive({f"repo/f{i}": "x" for i in range(5)})
+    with pytest.raises(marketplace.MarketplaceError, match="more than 3 files"):
+        marketplace._extract(data, tmp_path)
+    monkeypatch.setattr(marketplace, "MAX_MEMBERS", 10_000)
+    monkeypatch.setattr(marketplace, "MAX_EXTRACTED", 10)
+    with pytest.raises(marketplace.MarketplaceError, match="unpacks to more than"):
+        marketplace._extract(_archive({"repo/big": "x" * 50}), tmp_path / "b")
+
+
+def test_a_download_larger_than_the_cap_is_refused(monkeypatch):
+    class Response(io.BytesIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    monkeypatch.setattr(marketplace, "MAX_DOWNLOAD", 10)
+    monkeypatch.setattr(marketplace.urllib.request, "urlopen", lambda url, timeout: Response(b"x" * 11))
+    with pytest.raises(marketplace.MarketplaceError, match="larger than"):
+        marketplace._download("https://codeload.github.com/a/b/tar.gz/main")
