@@ -61,3 +61,22 @@ def test_only_the_four_events_are_kept(tmp_path):
     (root / ".waku-plugin" / "plugin.json").write_text(json.dumps({"name": "p", "hooks": {
         "PreCompact": [{"hooks": [hook]}], "PreToolUse": [{"hooks": [hook]}]}}), encoding="utf-8")
     assert list(manifest.load(root).hooks) == ["PreToolUse"]
+
+
+def test_an_enabled_plugins_skills_load_and_a_disabled_ones_do_not(tmp_path):
+    """Spec 021 A3: a plugin's skills join the skill loader."""
+    from evals.deterministic.plugin_fixtures import install_into
+    from waku.config import Settings
+    from waku.db import connect
+    from waku.memory import Memory
+    from waku.plugins import store
+
+    key = install_into(tmp_path, waku_plugin(tmp_path / "src"))
+    memory = Memory(connect(tmp_path), Settings(home=tmp_path), client=None)
+    assert "waku" in [s.name for s in memory.skills.match("search waku memory for a past decision")]
+
+    records = store.read(tmp_path)
+    records[key]["enabled"] = False
+    store.write(tmp_path, records)
+    memory = Memory(connect(tmp_path), Settings(home=tmp_path), client=None)
+    assert "waku" not in [s.name for s in memory.skills.skills]
