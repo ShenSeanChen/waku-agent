@@ -73,11 +73,8 @@ def compare_stream(message: str, specs: list, emit, judge: bool = False,
         home = Path(tempfile.mkdtemp(prefix=f"compare-{provider}-"))
         gate: dict = {}
 
-        # Stream the STRUCTURAL harness live (gate decision, tool calls) — these
-        # fire from the observer without stream=True. We deliberately DON'T
-        # token-stream the reply: stream=True makes some reasoning models (gemini
-        # with tools) demand a thought_signature and 400, which the plain path
-        # doesn't. So the harness plays out live and the reply lands on finish.
+        # Stream the structural harness live (gate decision, tool calls) through
+        # the observer. Replies arrive when each comparison run finishes.
         def obs(kind, ev):
             if kind == "gate":
                 gate.update(decision=ev.get("decision"), reason=ev.get("reason"))
