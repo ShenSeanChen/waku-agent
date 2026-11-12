@@ -86,6 +86,7 @@ class Waku:
         self._sessions_started: set[str] = set()   # gateways whose SessionStart ran
         self._turn_context = ""                     # what this turn's hooks found
         self._turn_notices: list[str] = []          # their lines for the person
+        self._turn_vars: dict | None = None         # this turn's hook variables
         self.stop_thread: threading.Thread | None = None
 
     def close(self) -> None:
@@ -226,10 +227,11 @@ class Waku:
     def _before_turn(self, user_message: str, source: str, notify) -> dict | None:
         """SessionStart on a gateway's first turn, then UserPromptSubmit.
         Returns the turn's hook variables, or None when no hook runs."""
-        self._turn_context, self._turn_notices = "", []
+        self._turn_context, self._turn_notices, self._turn_vars = "", [], None
         if self.hooks is None or source not in GATEWAY_SOURCES:
             return None
         variables = self._hook_variables(source, user_message)
+        self._turn_vars = variables
         found, notices = [], []
         if source not in self._sessions_started:
             self._sessions_started.add(source)
@@ -241,6 +243,24 @@ class Waku:
         notices += prompt.messages
         self._turn_context, self._turn_notices = "\n\n".join(found), notices
         return variables
+
+    def _before_tool(self, notify):
+        """PreToolUse for this turn's loop, or None when no hook wants it.
+        `command` and `file_path` are read from the tool's input when it has
+        them, the two fields Waku Memory's act channel reads."""
+        if self.hooks is None or self._turn_vars is None or not self.hooks.has("PreToolUse"):
+            return None
+        variables = self._turn_vars
+
+        def before(name: str, args: dict) -> tuple[str | None, str]:
+            given = args if isinstance(args, dict) else {}
+            result = self.hooks.run("PreToolUse", {
+                **variables, "tool_name": name, "tool_input": given,
+                "command": str(given.get("command", "")), "file_path": str(given.get("file_path", ""))},
+                notify)
+            return result.deny, "\n\n".join(result.context)
+
+        return before
 
     def _after_turn(self, variables: dict | None, reply: str) -> None:
         """Stop, with the reply the person saw, on a thread of its own: the
@@ -323,6 +343,7 @@ class Waku:
             # is cut to its digest (spec 009 A), and any other long result it
             # read is cut to its opening (waku/loop/trim.py)
             trim=trim.chain(reports.shrink_read, trim.shrink_seen),
+            before_tool=self._before_tool(notify),
         )
         result.read_first, result.used = known.calls, known.used
         result.recalled = "\n".join(p for p in (self.session.retrieved, known.context) if p)

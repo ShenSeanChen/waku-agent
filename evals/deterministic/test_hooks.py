@@ -162,7 +162,10 @@ class RecordingClient:
         self.calls.append(kwargs)
         if "tools" in kwargs:
             self.loop_calls.append(kwargs)
-            return response([text_block(self.replies.pop(0))])
+            reply = self.replies.pop(0)
+            if isinstance(reply, list):          # tool calls
+                return response(reply, stop_reason="tool_use")
+            return response([text_block(reply)])
         return response([text_block('{"retrieve": false, "reason": "test"}')])
 
 
@@ -249,3 +252,59 @@ def test_the_hook_project_names_the_cwd(tmp_path, monkeypatch):
     waku.respond("hi", source="dashboard")
     _stopped(waku)
     assert {c["args"]["cwd"] for c in bridge.calls} == {"waku-agent"}
+
+
+# --- PreToolUse (C3) ---------------------------------------------------------------------
+
+
+def _with_pre_tool_use(waku):
+    plugin = waku.hooks.plugins[0]
+    plugin.hooks["PreToolUse"] = [{"type": "mcp_tool", "server": "waku_memory", "tool": "session.hook",
+                                  "input": {"harness": "waku", "event": "${hook_event_name}",
+                                            "tool_name": "${tool_name}", "command": "${command}"}}]
+
+
+def _note_turn(tmp_path, answers):
+    from evals.helpers import tool_block
+
+    bridge = FakeBridge(answers)
+    note = tool_block("save_note", {"subject": "deploys", "content": "Fridays only"})
+    waku, client = _waku(tmp_path, bridge, replies=([note], "Done."))
+    _with_pre_tool_use(waku)
+    result = waku.respond("remember we deploy on Fridays", source="cli")
+    _stopped(waku)
+    saved = waku.conn.execute("SELECT content FROM facts WHERE subject = 'deploys'").fetchall()
+    return result, bridge, client, saved
+
+
+def test_a_pre_tool_use_deny_stops_the_call_and_the_model_reads_why(tmp_path):
+    deny = {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
+                                   "permissionDecisionReason": "notes are read-only today"}}
+    result, bridge, _client, saved = _note_turn(tmp_path, {"PreToolUse": deny})
+    assert saved == []
+    assert result.tool_calls[0]["denied"] is True
+    assert "notes are read-only today" in result.tool_calls[0]["output"]
+    pre = next(c for c in bridge.calls if c["args"]["event"] == "PreToolUse")
+    assert pre["args"]["tool_name"] == "save_note"
+
+
+def test_pre_tool_use_context_is_added_to_the_result_and_the_call_runs(tmp_path):
+    allow = brief("PreToolUse", "Last time this note was saved twice.")
+    result, _, _, saved = _note_turn(tmp_path, {"PreToolUse": allow})
+    assert [r["content"] for r in saved] == ["Fridays only"]
+    assert result.tool_calls[0]["output"].endswith("Last time this note was saved twice.")
+    assert "denied" not in result.tool_calls[0]
+
+
+def test_run_loop_without_before_tool_runs_every_call():
+    from evals.helpers import tool_block
+    from waku.loop.agent import run_loop
+    from waku.tools.registry import Tool, ToolRegistry
+
+    ran = []
+    registry = ToolRegistry()
+    registry.register(Tool(name="t", description="", input_schema={"type": "object", "properties": {}},
+                           fn=lambda **kw: ran.append(kw) or "ok"))
+    client = RecordingClient([[tool_block("t", {})], "done"])
+    result = run_loop(client, "m", "s", [{"role": "user", "content": "x"}], registry)
+    assert ran == [{}] and result.reply == "done"

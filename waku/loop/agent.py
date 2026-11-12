@@ -99,6 +99,7 @@ def run_loop(
     observer: Observer | None = None,
     stream: bool = False,
     trim: Callable[[list[dict]], None] | None = None,
+    before_tool: Callable[[str, dict], tuple[str | None, str]] | None = None,
 ) -> LoopResult:
     """Run one agent turn. `messages` is mutated in place — after the call it
     contains the full working memory of the turn (assistant thoughts, tool
@@ -112,7 +113,12 @@ def run_loop(
     before each later call, so one large result is not re-sent on every
     iteration after it. app.py chains reports.shrink_read, which cuts a whole
     earlier research report to its digest, and trim.shrink_seen, which cuts
-    any other long result to its opening; None leaves `messages` as they are."""
+    any other long result to its opening; None leaves `messages` as they are.
+
+    `before_tool`, when given, is asked before each tool call (spec 021's
+    PreToolUse). It returns (a reason to refuse, or None; context to add).
+    A refused call does not run, and the model reads the reason as its
+    result. The loop does not know where the answer came from."""
     notify = observer or (lambda kind, ev: None)
     result = LoopResult(reply="")
     can_stream = stream and hasattr(client.messages, "stream")
@@ -166,10 +172,18 @@ def run_loop(
         tool_results = []
         for call in tool_uses:
             started = time.perf_counter()
-            output = tools.execute(call.name, call.input, notify=notify)
+            deny, extra = before_tool(call.name, call.input) if before_tool else (None, "")
+            if deny is not None:
+                output = f"A plugin hook stopped this call before it ran: {deny}"
+            else:
+                output = tools.execute(call.name, call.input, notify=notify)
+                if extra:
+                    output = f"{output}\n\n{extra}"
             event = {"tool": call.name, "args": call.input, "output": output, "call_id": call.id,
                      # spec 012: how long the call took, for the trace
                      "duration_ms": int((time.perf_counter() - started) * 1000)}
+            if deny is not None:
+                event["denied"] = True
             result.tool_calls.append(event)
             notify("tool", event)
             tool_results.append(
