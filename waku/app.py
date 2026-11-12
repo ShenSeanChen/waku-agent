@@ -96,11 +96,22 @@ class Waku:
         self._turn_context = ""                     # what this turn's hooks found
         self._turn_notices: list[str] = []          # their lines for the person
         self._turn_vars: dict | None = None         # this turn's hook variables
-        self.stop_thread: threading.Thread | None = None
+        self.stop_thread: threading.Thread | None = None      # the latest Stop
+        self._stop_threads: list[threading.Thread] = []      # every one not yet joined
 
     def close(self) -> None:
         """Release external resources (MCP subprocesses). Called when the
-        dashboard rebuilds the agent after a settings change."""
+        dashboard rebuilds the agent after a settings change, and when the
+        terminal and voice gateways exit.
+
+        A Stop hook still sending the last turn is waited for first, up to the
+        hook timeout, or that turn would never reach the server: closing the
+        bridge cancels its call (spec 021 review)."""
+        from waku.plugins.hooks import DEFAULT_TIMEOUT
+
+        for thread in self._stop_threads:
+            thread.join(DEFAULT_TIMEOUT)
+        self._stop_threads = [t for t in self._stop_threads if t.is_alive()]
         if self.mcp_bridge is not None:
             self.mcp_bridge.close()
 
@@ -285,6 +296,7 @@ class Waku:
                            lambda kind, ev: self.tracer.event(kind, {**ev, "turn_id": turn_id}))
 
         self.stop_thread = threading.Thread(target=stop, name="waku-stop-hook", daemon=True)
+        self._stop_threads = [t for t in self._stop_threads if t.is_alive()] + [self.stop_thread]
         self.stop_thread.start()
 
     def _recalled(self, result: LoopResult) -> str:

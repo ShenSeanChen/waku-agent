@@ -308,3 +308,35 @@ def test_run_loop_without_before_tool_runs_every_call():
     client = RecordingClient([[tool_block("t", {})], "done"])
     result = run_loop(client, "m", "s", [{"role": "user", "content": "x"}], registry)
     assert ran == [{}] and result.reply == "done"
+
+
+def test_close_waits_for_the_last_stop_before_closing_the_bridge(tmp_path):
+    """Review fix 11: the terminal exits right after the last reply, and the
+    Stop hook still sending that turn was cut off with the bridge."""
+    order = []
+
+    class Bridge(FakeBridge):
+        def call_json(self, server, tool, args, timeout):
+            time.sleep(0.3)
+            order.append(f"sent {args.get('event')}")
+            return {}, False, ""
+
+        def close(self):
+            order.append("closed")
+
+    bridge = Bridge()
+    waku, _ = _waku(tmp_path, bridge, replies=("a", "b"))
+    waku.mcp_bridge = bridge
+    waku.respond("one", source="cli")
+    waku.respond("two", source="cli")
+    waku.close()
+    assert order[-1] == "closed" and order.count("sent Stop") == 2
+
+
+def test_the_terminal_gateway_closes_waku_on_exit():
+    import inspect
+
+    from waku.gateway import cli, voice
+
+    assert "waku.close()" in inspect.getsource(cli.main)
+    assert inspect.getsource(voice.main).count("waku.close()") == 2
