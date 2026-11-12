@@ -133,7 +133,7 @@ def chat_stream(message: str, emit) -> None:
         # Spec 009 A: the Waku Memory searches run before a research turn come
         # first, as the cards they were while the turn streamed.
         "tools": [{"tool": c["tool"], "args": c["args"], "output": c["output"],
-                   "status": _tool_status(c["output"]),
+                   "status": "denied" if c.get("denied") else _tool_status(c["output"]),
                    "summary": (c["output"] or "").split(". ")[0][:120],
                    **({"read_first": True} if c.get("read_first") else {})}
                   for c in [*getattr(result, "read_first", []), *result.tool_calls]],

@@ -404,3 +404,15 @@ def test_a_plugins_line_for_the_person_is_kept_and_not_hidden_with_telemetry(tmp
     render = (Path(__file__).resolve().parents[2] / "waku/ops/static/js/render.js").read_text()
     line = next(x for x in render.splitlines() if "t.notices" in x)
     assert "tele" not in line and "notices:m.meta.notices" in render
+
+
+def test_a_denied_tool_is_stored_as_denied_not_ok(tmp_path):
+    """Review fix 18: a call a PreToolUse hook refused showed as ok."""
+    import json as _json
+
+    deny = {"hookSpecificOutput": {"permissionDecision": "deny", "permissionDecisionReason": "no"}}
+    _note_turn(tmp_path, {"PreToolUse": deny})
+    from waku.db import connect
+
+    row = connect(tmp_path).execute("SELECT meta FROM chat_log WHERE role = 'assistant'").fetchone()
+    assert _json.loads(row[0])["tools"][0] == {"tool": "save_note", "status": "denied"}

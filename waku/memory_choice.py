@@ -169,8 +169,9 @@ def install_plugin(home: Path) -> tuple[bool, str]:
         if not ok:
             return True, ("Installed the Waku plugin. The sign-in did not finish: "
                           f"{line.strip()} Run: waku mcp login {WAKU_SERVER}")
-    return True, (f"Installed the Waku plugin and connected to Waku Memory as {_identity(token)}. "
-                  "Restart Waku to load it.")
+    # No "restart" here: the terminal asks before it builds its agent, and the
+    # dashboard rebuilds its agent after the answer (settings_api).
+    return True, f"Installed the Waku plugin and connected to Waku Memory as {_identity(token)}."
 
 
 def ask(settings: Settings, input_fn=input, out=print) -> str | None:

@@ -202,7 +202,9 @@ class Waku:
                           if "graph_route" in captured else None),
                 "iterations": result.iterations,
                 "latency_ms": int((time.perf_counter() - t0) * 1000),
-                "tools": [{"tool": c["tool"], "status": _status(c["output"])}
+                # a call a plugin's PreToolUse hook refused never ran (spec 021)
+                "tools": [{"tool": c["tool"],
+                           "status": "denied" if c.get("denied") else _status(c["output"])}
                           for c in result.read_first + result.tool_calls],
                 # Spec 009 A: what the brain already knew, read before the turn
                 "used": result.used,

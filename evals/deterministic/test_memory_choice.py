@@ -209,3 +209,20 @@ def test_todays_marketplace_plugin_falls_back_to_agent(tmp_path, monkeypatch):
     official(monkeypatch, market)
     installed, _ = memory_choice.install_plugin(tmp_path / "home")
     assert installed is False and store.read(tmp_path / "home") == {}
+
+
+def test_the_dashboard_answer_rebuilds_its_agent_and_says_no_restart(home, monkeypatch):
+    """Review fix 18: posting the answer installs the plugin as the terminal
+    does, and the running dashboard agent is rebuilt, so no restart is asked."""
+    from waku.ops import browser_agent
+
+    rebuilt = []
+    monkeypatch.setattr(browser_agent, "current", lambda: object())
+    monkeypatch.setattr(browser_agent, "rebuild", lambda: rebuilt.append(1))
+    for mode in ("agent", "plugin"):
+        out = settings_api.apply_settings({"memory_mode": mode})
+        assert out["memory_message"] == "Installed the Waku plugin." and "plugin" in _env(home)
+    assert rebuilt == [1, 1]
+    import inspect
+
+    assert "Restart Waku" not in inspect.getsource(memory_choice.install_plugin)
