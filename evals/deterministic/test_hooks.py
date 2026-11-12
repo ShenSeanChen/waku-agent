@@ -416,3 +416,32 @@ def test_a_denied_tool_is_stored_as_denied_not_ok(tmp_path):
 
     row = connect(tmp_path).execute("SELECT meta FROM chat_log WHERE role = 'assistant'").fetchone()
     assert _json.loads(row[0])["tools"][0] == {"tool": "save_note", "status": "denied"}
+
+
+REPORT_REPLY = """Three vendors sell hosted agent memory.
+
+<!-- waku-report v1 -->
+# Agent memory vendors, 2026-11-12
+
+## Summary
+- Three vendors sell hosted memory for AI agents.
+
+## Findings
+- Vendor A charges per seat.
+"""
+
+
+def test_stop_sends_the_reply_after_the_report_was_cut_from_it(tmp_path):
+    """Review fix 19 (spec acceptance): Stop carries the reply the person
+    saw. A research report goes to Waku Memory whole, and the reply keeps
+    only its opening, so the report is not sent a second time inside Stop."""
+    bridge = FakeBridge()
+    waku, _ = _waku(tmp_path, bridge, replies=(REPORT_REPLY,))
+    sent = []
+    waku.memory.remember = lambda body, scope, kind=None: sent.append(body) or "mem-1"
+    result = waku.respond("research hosted agent memory vendors", source="cli")
+    _stopped(waku)
+    stop = next(c for c in bridge.calls if c["args"]["event"] == "Stop")
+    assert sent and "Vendor A charges per seat." in sent[0]                # the report went whole
+    assert stop["args"]["last_assistant_message"] == result.reply
+    assert "Vendor A charges per seat." not in stop["args"]["last_assistant_message"]
