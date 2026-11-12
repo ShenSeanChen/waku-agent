@@ -119,6 +119,25 @@ def follow_plugins(home: Path) -> str:
             "reaches Waku Memory. Install the plugin again, or run: waku connect waku-memory")
 
 
+FIRST_RUN_EVENTS = {"SessionStart", "UserPromptSubmit", "Stop"}
+
+
+def first_run_check(plugin) -> str | None:
+    """Why the first-run question will not install `plugin` without showing
+    it, or None. The person said yes to one sentence about Waku Memory, so
+    the plugin may bring only Waku Memory's server at its own address and
+    only the hooks that sentence describes (spec 021 review). Anything else
+    goes through `waku plugin install`, which shows it first."""
+    from waku.tools.waku_memory import URL
+
+    servers = {(s.get("name"), str(s.get("url", "")).rstrip("/")) for s in plugin.servers}
+    if servers != {(WAKU_SERVER, URL)} or any(s.get("command") for s in plugin.servers):
+        return "The plugin brings more than Waku Memory's own server."
+    if not set(plugin.hooks) <= FIRST_RUN_EVENTS:
+        return "The plugin has hooks the first-run question does not describe."
+    return None
+
+
 def install_plugin(home: Path) -> tuple[bool, str]:
     """Install the Waku plugin and sign in to its server. The person already
     said yes to the sentence above, so the install asks nothing more.
@@ -129,11 +148,12 @@ def install_plugin(home: Path) -> tuple[bool, str]:
     from waku.tools.waku_memory import captured_by
 
     try:
-        reply = cli.install(home, WAKU_PLUGIN, lambda shown: True)
+        # the person's yes covers only a plugin first_run_check accepts
+        reply = cli.install(home, WAKU_PLUGIN, lambda shown: True, check=first_run_check)
     except (MarketplaceError, OSError, store.UnsafePath) as exc:
         return False, str(exc)
     if "Installed" not in reply:
-        return False, reply.splitlines()[-1]
+        return False, reply.splitlines()[-1].removesuffix(" Nothing was installed.")
     # Spec 021 review: the marketplace's plugin may not reach Waku Memory
     # from Waku Agent yet (one with no .waku-plugin manifest loads with its
     # hooks skipped). Recording `plugin` then would send nothing at all, so

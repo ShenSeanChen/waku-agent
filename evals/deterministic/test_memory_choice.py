@@ -146,15 +146,17 @@ def test_a_direct_connect_records_the_choice_and_leaves_a_chosen_mode_alone(home
 
 
 def test_a_plugin_that_cannot_send_turns_is_not_recorded_as_plugin(tmp_path, monkeypatch):
-    """Review fix 6: today's marketplace plugin has no .waku-plugin manifest,
-    so it loads with its hooks skipped. A yes must then fall back to agent."""
-    import shutil
-
+    """Review fix 6: a plugin with no Stop hook on Waku Memory sends no turn,
+    so a yes must fall back to agent. (Today's marketplace plugin, with no
+    .waku-plugin manifest, is refused earlier by the first-run check.)"""
     from evals.deterministic.plugin_fixtures import marketplace, official
     from waku.plugins import store
 
     market = marketplace(tmp_path / "market")
-    shutil.rmtree(market / "plugins" / "waku" / ".waku-plugin")      # Claude Code files only
+    hooks = market / "plugins" / "waku" / "hooks" / "waku-agent.json"
+    data = json.loads(hooks.read_text())
+    del data["hooks"]["Stop"]                                        # no hook sends the turn
+    hooks.write_text(json.dumps(data))
     official(monkeypatch, market)
     home = tmp_path / "home"
     monkeypatch.setattr(memory_choice, "connect", lambda h: "Connected.")
@@ -168,3 +170,42 @@ def test_a_plugin_that_cannot_send_turns_is_not_recorded_as_plugin(tmp_path, mon
     assert reply.startswith("The Waku plugin could not be installed (the Waku plugin in the marketplace")
     saved = (home / ".env").read_text()
     assert "WAKU_MEMORY_MODE" in saved and "agent" in saved and "plugin" not in saved
+
+
+@pytest.mark.parametrize("change, reason", [
+    (lambda m: m["mcpServers"].update({"extra": {"url": "https://extra.example/mcp"}}), "more than Waku Memory"),
+    (lambda m: m.update({"hooks": {"hooks": {"PreToolUse": [{"hooks": [
+        {"type": "mcp_tool", "server": "waku_memory", "tool": "session.hook"}]}]}}}), "does not describe"),
+])
+def test_the_first_run_installs_only_a_plugin_its_sentence_describes(tmp_path, monkeypatch, change, reason):
+    """Review fix 12: the first-run yes confirmed whatever the marketplace held."""
+    from evals.deterministic.plugin_fixtures import marketplace, official
+    from waku.plugins import store
+
+    market = marketplace(tmp_path / "market")
+    path = market / "plugins" / "waku" / ".waku-plugin" / "plugin.json"
+    data = json.loads(path.read_text())
+    change(data)
+    path.write_text(json.dumps(data))
+    official(monkeypatch, market)
+    from waku.tools import mcp_cli
+
+    monkeypatch.setattr(mcp_cli, "sign_in", lambda h, name: (True, ""))   # never a browser
+    home = tmp_path / "home"
+    installed, message = memory_choice.install_plugin(home)
+    assert installed is False and reason in message and store.read(home) == {}
+
+
+def test_todays_marketplace_plugin_falls_back_to_agent(tmp_path, monkeypatch):
+    """The plugin as waku-one/waku-memory-plugins@main holds it today: Claude
+    Code files only, its server named waku."""
+    import shutil
+
+    from evals.deterministic.plugin_fixtures import marketplace, official
+    from waku.plugins import store
+
+    market = marketplace(tmp_path / "market")
+    shutil.rmtree(market / "plugins" / "waku" / ".waku-plugin")
+    official(monkeypatch, market)
+    installed, _ = memory_choice.install_plugin(tmp_path / "home")
+    assert installed is False and store.read(tmp_path / "home") == {}
