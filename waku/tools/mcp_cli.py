@@ -71,14 +71,20 @@ def _identity(auth_file: Path) -> str:
 
 
 def _servers(home: Path) -> list[dict]:
+    """mcp.json's servers and the ones installed plugins bring (spec 021),
+    merged the way the bridge merges them."""
+    from waku.plugins import store
+    from waku.tools.mcp_client import merge
+
     config = home / "mcp.json"
-    if not config.exists():
-        return []
-    try:
-        return json.loads(config.read_text(encoding="utf-8")).get("servers", [])
-    except json.JSONDecodeError as exc:
-        print(f"{config} is not valid JSON: {exc}")
-        raise SystemExit(1) from exc
+    servers = []
+    if config.exists():
+        try:
+            servers = json.loads(config.read_text(encoding="utf-8")).get("servers", [])
+        except json.JSONDecodeError as exc:
+            print(f"{config} is not valid JSON: {exc}")
+            raise SystemExit(1) from exc
+    return merge(servers, store.servers(home))[0]
 
 
 def _auth_file(home: Path, name: str) -> Path:
@@ -143,6 +149,7 @@ def sign_in(home: Path, name: str) -> tuple[bool, str]:
     if path.exists():
         path.unlink()
 
+    from waku.plugins import store
     from waku.tools.mcp_client import MCPBridge
 
     # Success here is "a token now exists for the account you chose", not "a
@@ -151,7 +158,7 @@ def sign_in(home: Path, name: str) -> tuple[bool, str]:
     # already-failed exit stack reported an error anyway — so the command said
     # it failed immediately after succeeding. This command exists to sign in;
     # holding a session is the next run's job.
-    bridge = MCPBridge(home / "mcp.json")
+    bridge = MCPBridge(home / "mcp.json", extra_servers=store.servers(home))
     try:
         bridge.start()
     except TimeoutError:

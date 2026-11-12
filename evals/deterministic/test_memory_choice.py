@@ -6,6 +6,7 @@ reaches Waku Memory.
 from __future__ import annotations
 
 import json
+import os
 import sys
 
 import pytest
@@ -25,8 +26,13 @@ def home(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     signed_in = []
     monkeypatch.setattr(memory_choice, "connect", lambda h: signed_in.append(h) or "Connected.")
+    # spec 021: yes installs the Waku plugin; offline, the install is replaced
+    monkeypatch.setattr(memory_choice, "install_plugin", lambda h: (True, "Installed the Waku plugin."))
     yield tmp_path
-    monkeypatch.delenv("WAKU_MEMORY_MODE", raising=False)
+    # save() writes os.environ itself. A monkeypatch.delenv here would record
+    # the saved value and put it back at teardown, leaking the choice into
+    # every later test (a leaked "plugin" stops consolidation's sends).
+    os.environ.pop("WAKU_MEMORY_MODE", None)
 
 
 def _env(home) -> str:
@@ -38,10 +44,42 @@ def test_s1_a_fresh_home_is_asked_and_enter_means_yes(home):
     """S1: no saved choice shows the question, and an empty answer is yes."""
     said = []
     mode = memory_choice.ask(Settings(home=home, memory_mode=""), input_fn=lambda _: "", out=said.append)
-    assert mode == "agent"
-    assert "Your chat history and your model keys are not sent." in said[0]
-    assert "WAKU_MEMORY_MODE=" in _env(home) and "agent" in _env(home)
-    assert said[-1] == "Connected."
+    assert mode == "plugin"
+    # spec 021: the sentence says what the plugin sends, and what it does not
+    assert "sends each message you type and each reply" in said[0]
+    assert "Your files, the commands Waku runs and your model keys are not sent." in said[0]
+    assert "WAKU_MEMORY_MODE=" in _env(home) and "plugin" in _env(home)
+    assert said[-1] == "Installed the Waku plugin."
+
+
+def test_a_plugin_that_cannot_be_installed_falls_back_to_a_direct_connection(home, monkeypatch):
+    monkeypatch.setattr(memory_choice, "install_plugin", lambda h: (False, "offline"))
+    said = []
+    memory_choice.ask(Settings(home=home, memory_mode=""), input_fn=lambda _: "", out=said.append)
+    assert "agent" in _env(home) and "plugin" not in _env(home)
+    assert said[-1].startswith("The Waku plugin could not be installed (offline)") and said[-1].endswith("Connected.")
+
+
+def test_install_plugin_installs_from_the_marketplace_and_signs_in(tmp_path, monkeypatch):
+    from evals.deterministic.plugin_fixtures import marketplace
+    from waku.plugins import cli, store
+    from waku.tools import mcp_cli
+
+    home = tmp_path / "home"
+    cli.run(["marketplace", "add", str(marketplace(tmp_path / "market"))], home, lambda s: False)
+    signed = []
+
+    def fake_sign_in(h, name):
+        signed.append(name)
+        (h / "mcp-auth").mkdir(parents=True, exist_ok=True)
+        (h / "mcp-auth" / f"{name}.json").write_text("{}", encoding="utf-8")
+        return True, "signed in"
+
+    monkeypatch.setattr(mcp_cli, "sign_in", fake_sign_in)
+    installed, message = memory_choice.install_plugin(home)
+    assert installed and message.startswith("Installed the Waku plugin and connected")
+    assert signed == ["waku_memory"] and "waku@waku-memory" in store.read(home)
+    assert memory_choice.already_connected(home)
 
 
 def test_s3_keep_local_only_opens_no_connection_and_is_not_asked_again(home, monkeypatch):
@@ -90,8 +128,8 @@ def test_an_unrecognised_mode_cannot_be_saved(home):
 
 def test_the_dashboard_saves_the_answer_through_the_settings_route(home, monkeypatch):
     monkeypatch.setattr(memory_choice, "connect", lambda h: "Connected.")
-    out = settings_api.apply_settings({"memory_mode": "agent"})
-    assert out["ok"] and out["memory_message"] == "Connected." and out["memory_mode"] == "agent"
+    out = settings_api.apply_settings({"memory_mode": "plugin"})
+    assert out["ok"] and out["memory_message"] == "Installed the Waku plugin." and out["memory_mode"] == "plugin"
     assert settings_api.apply_settings({"memory_mode": "nonsense"})["ok"] is True   # not a choice: ignored
     assert memory_choice.card(Settings(home=home, memory_mode=""))["pending"] is True
 
