@@ -86,9 +86,10 @@ def install_plugin(home: Path) -> tuple[bool, str]:
     """Install the Waku plugin and sign in to its server. The person already
     said yes to the sentence above, so the install asks nothing more.
     Returns whether the plugin is installed, and one line for the person."""
-    from waku.plugins import cli
+    from waku.plugins import cli, manifest, store
     from waku.plugins.marketplace import MarketplaceError
     from waku.tools.mcp_cli import _auth_file, _identity, sign_in
+    from waku.tools.waku_memory import captured_by
 
     try:
         reply = cli.install(home, WAKU_PLUGIN, lambda shown: True)
@@ -96,6 +97,15 @@ def install_plugin(home: Path) -> tuple[bool, str]:
         return False, str(exc)
     if "Installed" not in reply:
         return False, reply.splitlines()[-1]
+    # Spec 021 review: the marketplace's plugin may not reach Waku Memory
+    # from Waku Agent yet (one with no .waku-plugin manifest loads with its
+    # hooks skipped). Recording `plugin` then would send nothing at all, so
+    # the plugin is removed again and the caller connects the old way.
+    installed = manifest.load(store.inside(home, store.read(home)[WAKU_PLUGIN]["path"]))
+    if installed is None or not captured_by(installed):
+        cli.remove(home, WAKU_PLUGIN)
+        return False, ("the Waku plugin in the marketplace does not send Waku Agent's turns "
+                       "to Waku Memory yet")
     token = _auth_file(home, WAKU_SERVER)
     if not token.exists():
         ok, line = sign_in(home, WAKU_SERVER)

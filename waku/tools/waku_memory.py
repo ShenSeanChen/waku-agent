@@ -157,6 +157,20 @@ def get_via(bridge):
     return get
 
 
+def captured_by(plugin) -> bool:
+    """Whether a plugin's Stop hook calls one of its servers at Waku Memory's
+    address (spec 021). Only then does the server extract this agent's turns,
+    and only then may the agent stop sending what consolidation keeps."""
+    urls = {s["name"]: str(s.get("url", "")).rstrip("/") for s in plugin.servers}
+    for hook in plugin.hooks.get("Stop", []):
+        server = str(hook.get("server", ""))
+        if server.startswith("plugin:"):
+            server = server.split(":", 2)[-1]
+        if hook.get("type") == "mcp_tool" and urls.get(server) == URL:
+            return True
+    return False
+
+
 def tool_name(bridge, tool: str) -> str | None:
     """The name the model calls one of Waku Memory's tools by, such as
     waku_memory_memory_remember, or None if Waku Memory is not connected."""

@@ -143,3 +143,28 @@ def test_a_direct_connect_records_the_choice_and_leaves_a_chosen_mode_alone(home
     (home / ".env").write_text("", encoding="utf-8")
     waku_memory.connect(home)
     assert _env(home) == ""
+
+
+def test_a_plugin_that_cannot_send_turns_is_not_recorded_as_plugin(tmp_path, monkeypatch):
+    """Review fix 6: today's marketplace plugin has no .waku-plugin manifest,
+    so it loads with its hooks skipped. A yes must then fall back to agent."""
+    import shutil
+
+    from evals.deterministic.plugin_fixtures import marketplace, official
+    from waku.plugins import store
+
+    market = marketplace(tmp_path / "market")
+    shutil.rmtree(market / "plugins" / "waku" / ".waku-plugin")      # Claude Code files only
+    official(monkeypatch, market)
+    home = tmp_path / "home"
+    monkeypatch.setattr(memory_choice, "connect", lambda h: "Connected.")
+    installed, message = memory_choice.install_plugin(home)
+    assert installed is False and "does not send Waku Agent's turns" in message
+    assert store.read(home) == {}
+    monkeypatch.setenv("WAKU_HOME", str(home))
+    monkeypatch.chdir(tmp_path)
+    reply = memory_choice.apply("plugin", home)
+    os.environ.pop("WAKU_MEMORY_MODE", None)
+    assert reply.startswith("The Waku plugin could not be installed (the Waku plugin in the marketplace")
+    saved = (home / ".env").read_text()
+    assert "WAKU_MEMORY_MODE" in saved and "agent" in saved and "plugin" not in saved
