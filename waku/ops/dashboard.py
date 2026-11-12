@@ -1040,6 +1040,21 @@ EMBED_ORIGINS_HEADER = "X-Waku-Embed-Origins"
 _ORIGIN = re.compile(r"https?://[a-z0-9.-]+(?::[0-9]{1,5})?")
 
 
+def same_origin(origin: str | None, host: str | None) -> bool:
+    """Whether a POST may run: it carries no Origin, or its Origin's host and
+    port are the Host it was sent to (spec 021 review). A browser adds Origin
+    to every cross-site POST, so a web page can no longer post /plugin or
+    anything else to localhost:7777. The hosted gateway forwards no Origin
+    (hosted/gateway/forward.py REQUEST_HEADERS) and checks it itself, so a
+    container sees none, and a script with no browser sends none."""
+    if not origin:
+        return True
+    from urllib.parse import urlsplit
+
+    netloc = urlsplit(origin.strip()).netloc.lower()
+    return bool(netloc) and netloc == (host or "").strip().lower()
+
+
 def embed_origins(header: str | None) -> tuple[str, ...]:
     """The header's origins, or the default. Anything that is not exactly an
     origin is dropped: these land in the page and in postMessage's target."""
@@ -1214,6 +1229,14 @@ class Handler(BaseHTTPRequestHandler):
         self._send(target.read_bytes(), ctype, no_cache=True)
 
     def do_POST(self):
+        if not same_origin(self.headers.get("Origin"), self.headers.get("Host")):
+            body = json.dumps({"error": "this request came from another site"}).encode()
+            self.send_response(403)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
         length = int(self.headers.get("Content-Length", 0))
         # /api/voice takes a raw audio blob, not JSON — handle it first.
         if self.path == "/api/voice":

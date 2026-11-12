@@ -16,6 +16,7 @@ starts.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import shutil
 import sys
@@ -65,6 +66,33 @@ def preview(plugin: manifest.Plugin, market: str) -> str:
     return "\n".join(lines)
 
 
+def digest(folder: Path) -> str:
+    """Twelve hex characters that change when any file of the plugin does.
+    The dashboard's --yes must carry the digest its preview showed, so what
+    is installed is what the person read."""
+    h = hashlib.sha256()
+    for path in sorted(p for p in folder.rglob("*") if p.is_file()):
+        relative = path.relative_to(folder).as_posix()
+        if relative.split("/", 1)[0] in (".git", "node_modules"):
+            continue
+        h.update(relative.encode() + b"\0" + path.read_bytes() + b"\0")
+    return h.hexdigest()[:12]
+
+
+def _shape(plugin: manifest.Plugin) -> str:
+    """What an update has to show again before it lands: the servers, how
+    each signs in, and the hooks."""
+    return json.dumps({"servers": plugin.servers, "hooks": plugin.hooks}, sort_keys=True)
+
+
+def _approved(shown: str, found: str, confirm: Callable[[str], bool], given: str | None) -> bool:
+    """Yes from the terminal (`confirm`), or a dashboard --yes whose digest
+    is the one this preview computed."""
+    if given is not None:
+        return given == found
+    return confirm(shown)
+
+
 def _key(home: Path, given: str) -> str:
     """`waku` or `waku@waku-memory`, as the key installed.json uses."""
     records = store.read(home)
@@ -112,7 +140,11 @@ def migrate_mcp_json(home: Path, plugin: manifest.Plugin) -> list[str]:
     return [s["name"] for s in moved]
 
 
-def install(home: Path, target: str, confirm: Callable[[str], bool]) -> str:
+def install(home: Path, target: str, confirm: Callable[[str], bool], given: str | None = None,
+            check: Callable[[manifest.Plugin], str | None] | None = None) -> str:
+    """Fetch once, preview, and copy exactly what was previewed. `given` is
+    the digest a dashboard --yes carried. `check` may refuse a plugin with a
+    reason before anything is asked (the first-run question uses it)."""
     name, _, market = target.partition("@")
     if not name or not market:
         return "Name the plugin and its marketplace: waku plugin install <plugin>@<marketplace>"
@@ -129,9 +161,15 @@ def install(home: Path, target: str, confirm: Callable[[str], bool]) -> str:
         plugin = manifest.load(source)
         if plugin is None:
             return f"'{name}' in '{market}' has no plugin manifest."
-        shown = preview(plugin, market)
-        if not confirm(shown):
-            return shown + "\n\nNothing was installed."
+        found = digest(source)
+        shown = preview(plugin, market) + (
+            f"\nVersion {marketplace.resolved(root, entry)}, digest {found}")
+        reason = check(plugin) if check else None
+        if reason:
+            return shown + f"\n\n{reason} Nothing was installed."
+        if not _approved(shown, found, confirm, given):
+            changed = "" if given is None else "The plugin changed since that preview. "
+            return shown + f"\n\n{changed}Nothing was installed."
         # the catalog's name, checked above, never the manifest's: the
         # manifest is the plugin's own file and may name anything
         relative = f"{market}/{name}"
@@ -156,17 +194,29 @@ def install(home: Path, target: str, confirm: Callable[[str], bool]) -> str:
     return "\n".join(lines)
 
 
-def update(home: Path, given: str) -> str:
+def update(home: Path, given: str, confirm: Callable[[str], bool] = lambda shown: False,
+           digest_given: str | None = None) -> str:
+    """Copy the marketplace's current version. When its servers, their
+    sign-in or its hooks changed, the new preview is shown and needs a yes,
+    as an install does."""
     key = _key(home, given)
     record = store.read(home)[key]
     entry = marketplace.lookup(home, record["marketplace"])
     if entry is None:
         return f"The marketplace '{record['marketplace']}' is no longer recorded."
+    current = manifest.load(store.inside(home, record["path"]))
     with marketplace.fetch(entry) as root:
         source = marketplace.plugin_folder(root, marketplace.catalog(root), record["name"])
         plugin = manifest.load(source)
         if plugin is None:
             return f"'{record['name']}' no longer has a plugin manifest; nothing was changed."
+        if current is None or _shape(current) != _shape(plugin):
+            found = digest(source)
+            shown = ("This update changes the plugin's servers, their sign-in or its hooks.\n"
+                     + preview(plugin, record["marketplace"])
+                     + f"\nVersion {marketplace.resolved(root, entry)}, digest {found}")
+            if not _approved(shown, found, confirm, digest_given):
+                return shown + "\n\nNothing was updated."
         _copy(source, home, record["path"])
     records = store.read(home)
     records[key].update(version=plugin.version, ref=entry.get("ref") or "local")
@@ -255,7 +305,8 @@ def _marketplace(home: Path, args: list[str]) -> str:
     return USAGE
 
 
-def run(args: list[str], home: Path, confirm: Callable[[str], bool], hosted: bool = False) -> str:
+def run(args: list[str], home: Path, confirm: Callable[[str], bool], hosted: bool = False,
+        given: str | None = None) -> str:
     if hosted:
         return HOSTED_REFUSAL
     if not args:
@@ -265,11 +316,13 @@ def run(args: list[str], home: Path, confirm: Callable[[str], bool], hosted: boo
         if command == "marketplace":
             return _marketplace(home, rest)
         if command == "install" and len(rest) == 1:
-            return install(home, rest[0], confirm)
+            return install(home, rest[0], confirm, given)
+        if command == "update" and len(rest) == 1:
+            return update(home, rest[0], confirm, given)
         if command == "list":
             return listing(home)
-        if command in ("update", "remove", "enable", "disable") and len(rest) == 1:
-            return {"update": update, "remove": remove,
+        if command in ("remove", "enable", "disable") and len(rest) == 1:
+            return {"remove": remove,
                     "enable": lambda h, g: _set_enabled(h, g, True),
                     "disable": lambda h, g: _set_enabled(h, g, False)}[command](home, rest[0])
     except (MarketplaceError, store.UnsafePath) as exc:
@@ -278,19 +331,22 @@ def run(args: list[str], home: Path, confirm: Callable[[str], bool], hosted: boo
 
 
 def chat(arg: str, home: Path, hosted: bool) -> str:
-    """`/plugin <arg>` from the dashboard chat. An install previews until
-    the command is sent again with --yes."""
+    """`/plugin <arg>` from the dashboard chat. An install, or an update that
+    changes what the plugin connects, previews first. It runs only when the
+    command comes back with `--yes <digest>` naming the digest that preview
+    showed, so a bare --yes never installs something nobody read."""
     words = arg.split()
-    yes = "--yes" in words
-    words = [w for w in words if w != "--yes"]
-
-    def confirm(shown: str) -> bool:
-        return yes
-
-    reply = run(words, home, confirm, hosted=hosted)
-    if words[:1] == ["install"] and not yes and reply.endswith("Nothing was installed."):
-        reply = reply.removesuffix("Nothing was installed.") + (
-            f"To install it, send: /plugin {' '.join(words)} --yes")
+    given = None
+    if "--yes" in words:
+        at = words.index("--yes")
+        given = words[at + 1] if at + 1 < len(words) else ""
+        words = words[:at] + words[at + 2:]
+    reply = run(words, home, lambda shown: False, hosted=hosted, given=given)
+    for done in ("Nothing was installed.", "Nothing was updated."):
+        if words[:1] in (["install"], ["update"]) and reply.endswith(done) and "digest " in reply:
+            found = reply.rsplit("digest ", 1)[1].split()[0]
+            reply = reply.removesuffix(done) + (
+                f"To go ahead, send: /plugin {' '.join(words)} --yes {found}")
     return reply
 
 
@@ -306,9 +362,15 @@ def cli_main(args: list[str]) -> int:
             return False
         return input("\nInstall it? [y/N] ").strip().lower() in ("y", "yes")
 
-    reply = run(args, home, confirm)
+    shown_once: list[str] = []
+
+    def confirm_once(shown: str) -> bool:
+        shown_once.append(shown)
+        return confirm(shown)
+
+    reply = run(args, home, confirm_once)
     # the terminal already showed the preview; print only what came after it
-    if args[:1] == ["install"] and "\n\n" in reply:
-        reply = reply.split("\n\n", 1)[1]
+    if shown_once and reply.startswith(shown_once[-1]):
+        reply = reply[len(shown_once[-1]):].lstrip("\n")
     print(reply)
     return 0

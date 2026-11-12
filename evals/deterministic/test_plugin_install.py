@@ -176,13 +176,70 @@ def test_hosted_refuses_every_plugin_command(tmp_path, monkeypatch):
     assert store.read(home) == {}
 
 
-def test_the_dashboard_chat_previews_until_yes(tmp_path, monkeypatch):
+def test_the_dashboard_chat_previews_until_yes_with_the_previewed_digest(tmp_path, monkeypatch):
+    """Review fix 5: a bare --yes never installs, and --yes must carry the
+    digest the preview showed."""
     home = _added(tmp_path, monkeypatch)
     first = cli.chat("install waku@waku-memory", home, hosted=False)
-    assert first.endswith("To install it, send: /plugin install waku@waku-memory --yes")
-    assert store.read(home) == {}
-    assert "Installed waku" in cli.chat("install waku@waku-memory --yes", home, hosted=False)
+    digest = first.rsplit("--yes ", 1)[1].strip()
+    assert len(digest) == 12 and f"digest {digest}" in first and store.read(home) == {}
+    bare = cli.chat("install waku@waku-memory --yes", home, hosted=False)
+    assert "Installed" not in bare and store.read(home) == {}
+    assert "Installed waku" in cli.chat(f"install waku@waku-memory --yes {digest}", home, hosted=False)
     assert "waku@waku-memory" in store.read(home)
+
+
+def test_a_plugin_that_changed_after_its_preview_is_not_installed(tmp_path, monkeypatch):
+    home = _added(tmp_path, monkeypatch)
+    digest = cli.chat("install waku@waku-memory", home, hosted=False).rsplit("--yes ", 1)[1].strip()
+    hooks = tmp_path / "market" / "plugins" / "waku" / "hooks" / "waku-agent.json"
+    hooks.write_text(hooks.read_text().replace("session.hook", "memory.export"))
+    reply = cli.chat(f"install waku@waku-memory --yes {digest}", home, hosted=False)
+    assert "changed since that preview" in reply and store.read(home) == {}
+    assert "memory.export" in reply                      # the new preview is shown
+
+
+def test_an_update_that_changes_hooks_needs_a_new_yes(tmp_path, monkeypatch):
+    home = _added(tmp_path, monkeypatch)
+    cli.run(["install", "waku@waku-memory"], home, _yes)
+    hooks = tmp_path / "market" / "plugins" / "waku" / "hooks" / "waku-agent.json"
+    hooks.write_text(hooks.read_text().replace("session.hook", "memory.export"))
+    reply = cli.run(["update", "waku"], home, _no)
+    assert "changes the plugin's servers" in reply and reply.endswith("Nothing was updated.")
+    installed = store.folder(home) / "waku-memory" / "waku" / "hooks" / "waku-agent.json"
+    assert "memory.export" not in installed.read_text()
+    assert "Updated" in cli.run(["update", "waku"], home, _yes)
+    assert "memory.export" in installed.read_text()
+
+
+def test_the_terminal_installs_exactly_what_it_previewed(tmp_path, monkeypatch):
+    home = _added(tmp_path, monkeypatch)
+    plugin_json = tmp_path / "market" / "plugins" / "waku" / ".waku-plugin" / "plugin.json"
+
+    def confirm_then_change(shown):
+        plugin_json.write_text(plugin_json.read_text().replace("0.15.0", "9.9.9"))
+        return True
+
+    calls = []
+    monkeypatch.setattr(marketplace, "fetch", _counting(marketplace.fetch, calls))
+    cli.run(["install", "waku@waku-memory"], home, confirm_then_change)
+    assert len(calls) == 1
+
+
+def _counting(fetch, calls):
+    def counted(*args, **kwargs):
+        calls.append(args)
+        return fetch(*args, **kwargs)
+    return counted
+
+
+def test_a_post_from_another_site_is_refused():
+    from waku.ops.dashboard import same_origin
+
+    assert same_origin(None, "localhost:7777") and same_origin("http://localhost:7777", "localhost:7777")
+    assert not same_origin("https://evil.example", "localhost:7777")
+    assert not same_origin("http://localhost:8000", "localhost:7777")
+    assert not same_origin("null", "localhost:7777")
 
 
 def test_extract_writes_nothing_outside_its_folder_and_no_links(tmp_path):
@@ -208,6 +265,6 @@ def _dashboard_reply(message, monkeypatch, home, provider):
 def test_the_dashboard_routes_plugin_and_hosted_refuses_it(tmp_path, monkeypatch):
     home = _added(tmp_path, monkeypatch)
     preview = _dashboard_reply("/plugin install waku@waku-memory", monkeypatch, home, "anthropic")
-    assert "--yes" in preview and store.read(home) == {}
+    assert "--yes " in preview and store.read(home) == {}
     hosted = _dashboard_reply("/plugin install waku@waku-memory --yes", monkeypatch, home, "waku-platform")
     assert hosted == cli.HOSTED_REFUSAL and store.read(home) == {}

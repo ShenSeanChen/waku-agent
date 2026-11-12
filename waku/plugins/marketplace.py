@@ -107,9 +107,12 @@ def _download(url: str) -> bytes:
 def _extract(data: bytes, dest: Path) -> Path:
     """Unpack a GitHub archive into `dest` and return its one top folder.
     Only plain files and folders are written, and only inside `dest`: a link,
-    a device or a `../` path in somebody's archive is skipped."""
+    a device or a `../` path in somebody's archive is skipped. GitHub puts
+    the archive's commit in the pax header's `comment`, and it is written to
+    `<top>/.waku-commit` for the preview."""
     root = dest.resolve()
     with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as tar:
+        commit = str((tar.pax_headers or {}).get("comment", ""))
         for member in tar.getmembers():
             target = (dest / member.name).resolve()
             if root not in target.parents:
@@ -124,7 +127,23 @@ def _extract(data: bytes, dest: Path) -> Path:
     tops = [p for p in dest.iterdir() if p.is_dir()]
     if len(tops) != 1:
         raise MarketplaceError("the downloaded archive is not one repository")
+    if re.fullmatch(r"[0-9a-f]{7,40}", commit):
+        (tops[0] / COMMIT_FILE).write_text(commit, encoding="utf-8")
     return tops[0]
+
+
+COMMIT_FILE = ".waku-commit"
+
+
+def resolved(root: Path, entry: dict) -> str:
+    """What the preview names as the version it shows: the commit GitHub
+    served, the ref when no commit came with it, or `local` for a folder."""
+    if entry.get("path"):
+        return "local"
+    try:
+        return (root / COMMIT_FILE).read_text(encoding="utf-8").strip()[:12]
+    except OSError:
+        return str(entry.get("ref") or "main")
 
 
 @contextmanager
