@@ -76,7 +76,8 @@ def _key(home: Path, given: str) -> str:
                                 + ", ".join(matches))
 
 
-def _copy(source: Path, dest: Path) -> None:
+def _copy(source: Path, home: Path, relative: str) -> None:
+    dest = store.inside(home, relative)
     if dest.exists():
         shutil.rmtree(dest)
     dest.parent.mkdir(parents=True, exist_ok=True)
@@ -113,6 +114,9 @@ def install(home: Path, target: str, confirm: Callable[[str], bool]) -> str:
     name, _, market = target.partition("@")
     if not name or not market:
         return "Name the plugin and its marketplace: waku plugin install <plugin>@<marketplace>"
+    if not (store.valid_name(name) and store.valid_name(market)):
+        return (f"'{target}' is not a plugin name Waku installs. A name holds letters, "
+                "digits, '.', '_' and '-', and does not start with a dot.")
     entry = marketplace.lookup(home, market)
     if entry is None:
         return (f"No marketplace named '{market}'. Add it first: "
@@ -126,17 +130,19 @@ def install(home: Path, target: str, confirm: Callable[[str], bool]) -> str:
         shown = preview(plugin, market)
         if not confirm(shown):
             return shown + "\n\nNothing was installed."
-        relative = f"{market}/{plugin.name}"
-        _copy(source, store.folder(home) / relative)
+        # the catalog's name, checked above, never the manifest's: the
+        # manifest is the plugin's own file and may name anything
+        relative = f"{market}/{name}"
+        _copy(source, home, relative)
     if market not in marketplace.read(home):
         marketplace.write(home, {**marketplace.read(home), market: entry})
     records = store.read(home)
-    records[f"{plugin.name}@{market}"] = {
-        "name": plugin.name, "marketplace": market, "path": relative,
+    records[f"{name}@{market}"] = {
+        "name": name, "marketplace": market, "path": relative,
         "ref": entry.get("ref") or "local", "version": plugin.version, "enabled": True}
     store.write(home, records)
     moved = migrate_mcp_json(home, plugin)
-    lines = [shown, "", f"Installed {plugin.name} from {market}. It loads when Waku next starts."]
+    lines = [shown, "", f"Installed {name} from {market}. It loads when Waku next starts."]
     if moved:
         lines.append("Moved " + ", ".join(moved) + " from mcp.json to the plugin. "
                      "Your sign-in stays as it is.")
@@ -159,7 +165,7 @@ def update(home: Path, given: str) -> str:
         plugin = manifest.load(source)
         if plugin is None:
             return f"'{record['name']}' no longer has a plugin manifest; nothing was changed."
-        _copy(source, store.folder(home) / record["path"])
+        _copy(source, home, record["path"])
     records = store.read(home)
     records[key].update(version=plugin.version, ref=entry.get("ref") or "local")
     store.write(home, records)
@@ -179,7 +185,10 @@ def listing(home: Path) -> str:
     _, skipped = merge(config, store.servers(home))
     lines = []
     for key, record in records.items():
-        plugin = manifest.load(store.folder(home) / record.get("path", ""))
+        try:
+            plugin = manifest.load(store.inside(home, record.get("path", "")))
+        except store.UnsafePath:
+            plugin = None
         state = "enabled" if record.get("enabled", True) else "disabled"
         if plugin is None:
             lines.append(f"{key}  {state}  (its folder is missing)")
@@ -207,8 +216,8 @@ def remove(home: Path, given: str) -> str:
     key = _key(home, given)
     records = store.read(home)
     record = records.pop(key)
-    folder = store.folder(home) / record.get("path", "")
-    if record.get("path") and folder.is_dir():
+    folder = store.inside(home, record.get("path", ""))
+    if folder.is_dir():
         shutil.rmtree(folder)
     store.write(home, records)
     return f"Removed {key}. Sign-ins in mcp-auth are kept; waku mcp login can replace one."
@@ -252,7 +261,7 @@ def run(args: list[str], home: Path, confirm: Callable[[str], bool], hosted: boo
             return {"update": update, "remove": remove,
                     "enable": lambda h, g: _set_enabled(h, g, True),
                     "disable": lambda h, g: _set_enabled(h, g, False)}[command](home, rest[0])
-    except MarketplaceError as exc:
+    except (MarketplaceError, store.UnsafePath) as exc:
         return str(exc)
     return USAGE
 

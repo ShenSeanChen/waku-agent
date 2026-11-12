@@ -11,6 +11,7 @@ and the first-run question can ask "is the Waku plugin installed?" freely.
 from __future__ import annotations
 
 import json
+import re
 import secrets
 from pathlib import Path
 
@@ -20,9 +21,33 @@ from waku.plugins.manifest import Plugin
 DIR = "plugins"
 INSTALLED = "installed.json"
 
+# A plugin's or a marketplace's name becomes a folder name under
+# <home>/plugins, so it may hold only these characters and may not start with
+# a dot: "../../x" in somebody's catalog is a name too.
+_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
+
+
+class UnsafePath(ValueError):
+    """A name or a recorded path that would reach outside <home>/plugins."""
+
 
 def folder(home: Path) -> Path:
     return Path(home) / DIR
+
+
+def valid_name(name: str) -> bool:
+    return isinstance(name, str) and bool(_NAME.match(name)) and name not in (".", "..")
+
+
+def inside(home: Path, relative: str) -> Path:
+    """<home>/plugins/<relative>, or UnsafePath when it resolves anywhere else.
+    Checked before every copy and every delete, because both remove a folder
+    first, and a folder outside <home>/plugins is somebody's data."""
+    root = folder(home).resolve()
+    target = (folder(home) / str(relative)).resolve()
+    if not relative or root not in target.parents:
+        raise UnsafePath(f"'{relative}' is not a folder inside {root}")
+    return target
 
 
 def read(home: Path) -> dict:
@@ -49,7 +74,11 @@ def enabled(home: Path) -> list[Plugin]:
     for record in read(home).values():
         if not isinstance(record, dict) or not record.get("enabled", True):
             continue
-        plugin = manifest.load(folder(home) / str(record.get("path", "")))
+        try:
+            path = inside(home, str(record.get("path", "")))
+        except UnsafePath:
+            continue
+        plugin = manifest.load(path)
         if plugin is not None:
             out.append(plugin)
     return out
