@@ -84,6 +84,31 @@ def _copy(source: Path, dest: Path) -> None:
                     ignore=shutil.ignore_patterns(".git", "node_modules"))
 
 
+def migrate_mcp_json(home: Path, plugin: manifest.Plugin) -> list[str]:
+    """Spec 021 D3: an mcp.json entry the plugin now provides is removed. It
+    must have the plugin server's id and address and sign in with OAuth, so
+    its token file, <home>/mcp-auth/<id>.json, is the plugin server's too,
+    and nobody signs in again. An entry with `auth_env` (hosted provisioning
+    writes that shape) or anything else that differs is left as it is."""
+    config = home / "mcp.json"
+    try:
+        data = json.loads(config.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    servers = data.get("servers") if isinstance(data, dict) else None
+    if not isinstance(servers, list):
+        return []
+    provided = {(s["name"], str(s.get("url", "")).rstrip("/")) for s in plugin.servers
+                if s.get("url") and s.get("oauth")}
+    moved = [s for s in servers if isinstance(s, dict) and s.get("oauth") and not s.get("auth_env")
+             and (s.get("name"), str(s.get("url", "")).rstrip("/")) in provided]
+    if not moved:
+        return []
+    data["servers"] = [s for s in servers if s not in moved]
+    config.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    return [s["name"] for s in moved]
+
+
 def install(home: Path, target: str, confirm: Callable[[str], bool]) -> str:
     name, _, market = target.partition("@")
     if not name or not market:
@@ -110,7 +135,11 @@ def install(home: Path, target: str, confirm: Callable[[str], bool]) -> str:
         "name": plugin.name, "marketplace": market, "path": relative,
         "ref": entry.get("ref") or "local", "version": plugin.version, "enabled": True}
     store.write(home, records)
+    moved = migrate_mcp_json(home, plugin)
     lines = [shown, "", f"Installed {plugin.name} from {market}. It loads when Waku next starts."]
+    if moved:
+        lines.append("Moved " + ", ".join(moved) + " from mcp.json to the plugin. "
+                     "Your sign-in stays as it is.")
     from waku.tools.mcp_cli import _auth_file
 
     for server in plugin.servers:
