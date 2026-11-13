@@ -213,6 +213,22 @@ def test_the_runtime_guard_asks_the_same_question_under_agent_mode(agent, state,
     assert app.mcp_bridge.remembered() == sends
 
 
+def test_with_the_default_batch_a_paused_turn_sends_at_once_and_an_on_turn_waits(agent):
+    """Under plugin a laptop consolidates every 6 exchanges. A batch that holds
+    a paused turn is due at once (spec 021 amendment E2)."""
+    paused = agent(Bridge(["paused"]), turns=1, every=6)
+    _say(paused)
+    assert _kept(paused) == [FACT] and paused.mcp_bridge.remembered() == 1
+    assert paused.conn.execute("SELECT count(*) FROM chat_log WHERE consolidated = 0").fetchone()[0] == 0
+
+
+def test_with_the_default_batch_an_on_turn_is_not_consolidated_yet(agent):
+    on = agent(Bridge(["on"]), turns=1, every=6, script=_gate_and_reply())
+    _say(on)
+    assert _kept(on) == [] and on.mcp_bridge.remembered() == 0
+    assert on.conn.execute("SELECT count(*) FROM chat_log WHERE consolidated = 0").fetchone()[0] == 2
+
+
 def test_a_failed_send_from_a_paused_batch_is_sent_on_the_next_consolidation(agent):
     app = agent(Bridge(["paused", "on"], fail_remember=1), turns=2)
     _say(app)

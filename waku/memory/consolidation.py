@@ -202,11 +202,15 @@ def kept_if_due(
     rows = conn.execute(
         "SELECT id, role, content, meta FROM chat_log WHERE consolidated = 0 ORDER BY id"
     ).fetchall()
-    if len(rows) < every_n * 2:  # each exchange = 2 rows (user + assistant)
+    # spec 021 amendment E2: a batch with a turn capture did not take is due
+    # at once, so a short paused conversation reaches Waku Memory now and not
+    # after a later session fills the batch
+    paused = remember is None and send_if_paused is not None and _paused(rows)
+    if len(rows) < every_n * 2 and not paused:  # each exchange = 2 rows (user + assistant)
         return []
 
     retry = remember or send_if_paused
-    if remember is None and send_if_paused is not None and _paused(rows):
+    if paused:
         remember = send_if_paused
     tracked = remember is not None and isinstance(facts, SqliteFactStore)
     reachable = remember is not None
