@@ -167,6 +167,24 @@ def test_only_known_states_are_read():
     assert hooks.capture_of({"waku": {"capture": "off"}}) == "off"
 
 
+def test_the_prompts_answer_decides_not_the_session_starts(agent):
+    """SessionStart said paused, then this turn's UserPromptSubmit said on:
+    the turn was captured, so its fact is not sent, and on is stored."""
+
+    class StartSaysPaused(Bridge):
+        def call_json(self, server, tool, args, timeout):
+            if args.get("event") == "SessionStart":
+                self.calls.append("hook:SessionStart")
+                return {"waku": {"capture": "paused"}}, False, ""
+            return super().call_json(server, tool, args, timeout)
+
+    app = agent(StartSaysPaused(["on"]), turns=1)
+    _say(app)
+    assert "hook:SessionStart" in app.mcp_bridge.calls
+    assert _metas(app)[0]["capture"] == "on"
+    assert _kept(app) == [FACT] and app.mcp_bridge.remembered() == 0
+
+
 # --- E2: consolidation sends the facts of paused turns -------------------------------
 
 
@@ -286,9 +304,11 @@ def test_the_line_reads_exactly_as_the_spec_quotes_it():
                                    "back on.")
 
 
-def test_capture_json_is_written_in_one_step_by_the_main_thread_only(agent, monkeypatch):
+def test_capture_json_is_written_in_one_step_and_never_by_the_stop_hook(agent, monkeypatch):
+    """respond() runs on a gateway's own thread in production, so the test is
+    not which thread writes, but that the turn writes once and the Stop
+    hook's answer, read on its background thread, writes nothing."""
     import os
-    import threading
 
     from waku.plugins import store
 
@@ -296,7 +316,7 @@ def test_capture_json_is_written_in_one_step_by_the_main_thread_only(agent, monk
     real_save, real_replace = store.save_capture_told, os.replace
 
     def save(home, state):
-        writers.append(threading.current_thread() is threading.main_thread())
+        writers.append(state)
         return real_save(home, state)
 
     def replace(src, dst):
@@ -315,7 +335,7 @@ def test_capture_json_is_written_in_one_step_by_the_main_thread_only(agent, monk
 
     app = agent(StopSaysOn(["paused"]), turns=1)
     _say(app)
-    assert writers == [True]
+    assert writers == ["paused"]
     assert replaced and replaced[0].endswith("capture.json")
     # the Stop thread's "on" did not overwrite what the main thread recorded
     assert store.capture_told(app.settings.home) == "paused"
