@@ -15,6 +15,7 @@ import json
 import os
 import re
 import secrets
+import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -127,7 +128,14 @@ def save_capture_told(home: Path, state: str) -> None:
     turn's main thread calls this; the Stop thread never does."""
     path = folder(home) / CAPTURE
     path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(f"{CAPTURE}.{os.getpid()}.tmp")
-    temporary.write_text(json.dumps({"state": state, "at": datetime.now(UTC).isoformat(
-        timespec="seconds")}), encoding="utf-8")
-    os.replace(temporary, path)
+    body = json.dumps({"state": state, "at": datetime.now(UTC).isoformat(timespec="seconds")})
+    # a name of its own per write, so two writers never share a temporary file,
+    # and the file is removed whatever happens, so a failed write leaves none
+    handle, temporary = tempfile.mkstemp(dir=path.parent, prefix="capture.", suffix=".tmp")
+    try:
+        with os.fdopen(handle, "w", encoding="utf-8") as out:
+            out.write(body)
+        os.replace(temporary, path)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)

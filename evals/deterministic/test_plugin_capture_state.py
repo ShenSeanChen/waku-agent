@@ -329,3 +329,24 @@ def test_the_first_run_question_says_what_is_sent_while_paused():
 
     assert "If remembering from conversations is paused on your account" in WHAT_LEAVES
     assert "Waku sends the facts it keeps itself instead" in WHAT_LEAVES
+
+
+def test_two_writes_in_a_row_leave_no_temporary_file(tmp_path):
+    from waku.plugins import store
+
+    store.save_capture_told(tmp_path, "paused")
+    store.save_capture_told(tmp_path, "on")
+    assert store.capture_told(tmp_path) == "on"
+    assert sorted(p.name for p in store.folder(tmp_path).iterdir()) == ["capture.json"]
+
+
+def test_a_write_whose_replace_fails_leaves_no_temporary_file(tmp_path, monkeypatch):
+    from waku.plugins import store
+
+    def refuse(src, dst):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(store.os, "replace", refuse)
+    with pytest.raises(OSError):
+        store.save_capture_told(tmp_path, "paused")
+    assert list(store.folder(tmp_path).iterdir()) == []
