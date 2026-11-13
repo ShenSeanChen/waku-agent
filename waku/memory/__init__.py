@@ -67,10 +67,19 @@ class Memory:
         self.client = client
         self.facts = self._make_fact_store(conn, settings)
         self.episodes = episode_store if episode_store is not None else self._make_episode_store(conn, settings)
-        self.skills = SkillLoader([*bundled_skill_dirs(), settings.home / "skills"])
+        # Spec 021: an enabled plugin's skills load like the person's own.
+        from waku.plugins import store
+
+        plugin_skills = [p.skills_dir for p in store.enabled(settings.home) if p.skills_dir]
+        self.skills = SkillLoader([*bundled_skill_dirs(), settings.home / "skills", *plugin_skills])
         # Spec 006: sends each fact consolidation keeps to Waku Memory. app.py
         # sets it once the MCP servers have connected; None means no send.
         self.remember = None
+        # Spec 021 review: True when an enabled plugin's Stop hook sends each
+        # turn to the Waku Memory this agent is connected to. Consolidation
+        # then sends nothing, whatever mode is saved, so no turn reaches Waku
+        # Memory twice. app.py sets it.
+        self.plugin_captures = False
 
     @staticmethod
     def _make_fact_store(conn, settings):
@@ -262,7 +271,12 @@ class Memory:
             self.settings.consolidate_every,
             self.facts,
             self.episodes,
-            remember=self.remember,
+            # Spec 021: under "plugin" the server extracts from the Stop hook,
+            # so consolidation keeps facts here and sends none, and facts an
+            # earlier send failed on are not sent again. save_note and the
+            # report upload still use self.remember: the person asked for them.
+            remember=(None if self.settings.memory_mode == "plugin" or self.plugin_captures
+                      else self.remember),
             report=report,
             recalled=recalled,
         )

@@ -335,7 +335,10 @@ def test_the_judge_writes_one_score_event_with_cost_and_model(judged_home):
     assert event["cost_usd"] == obs.llm_cost("anthropic", "claude-haiku-4-5-20251001", {"in": 1200, "out": 60})
     lines = [json.loads(x) for p in (judged_home / "traces").glob("*.jsonl")
              for x in p.read_text().splitlines()]
-    assert [e for e in lines if e["type"] == "score"] == [{**event, "ts": lines[-1]["ts"]}]
+    # The score line's own ts: glob order across trace files is the folder's
+    # listing order, so "the last line read" is not always the score line.
+    scores = [e for e in lines if e["type"] == "score"]
+    assert len(scores) == 1 and scores[0] == {**event, "ts": scores[0]["ts"]}
     ledger = [json.loads(x) for x in (judged_home / "usage.jsonl").read_text().splitlines()]
     assert ledger[0]["kind"] == "judge" and ledger[0]["in"] == 1200
     # the page shows the judge's chip, with the model named in its note

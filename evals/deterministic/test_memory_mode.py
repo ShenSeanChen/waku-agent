@@ -19,7 +19,7 @@ from waku.tools.waku_memory import consolidation_every, is_waku_memory
 
 
 @pytest.mark.parametrize("raw, expected", [
-    ("", ""), ("agent", "agent"), ("HOOK", "hook"), (" off ", "off"),
+    ("", ""), ("agent", "agent"), ("HOOK", "agent"), (" off ", "off"), ("plugin", "plugin"),
     ("sometimes", ""),   # a typo is "not chosen", never a silent "off"
 ])
 def test_memory_mode_reads_the_environment(monkeypatch, raw, expected):
@@ -64,7 +64,7 @@ def test_off_leaves_only_waku_memory_unconnected(tmp_path, monkeypatch):
     assert bridge.skip({"name": "fs", "command": "npx"}) is False
 
 
-@pytest.mark.parametrize("mode", ["", "agent", "hook"])
+@pytest.mark.parametrize("mode", ["", "agent", "plugin"])
 def test_every_other_mode_connects_everything_in_mcp_json(tmp_path, monkeypatch, mode):
     assert _registry(tmp_path, monkeypatch, mode).skip is None
 
@@ -73,7 +73,9 @@ def test_a_connected_choice_consolidates_every_turn(monkeypatch):
     monkeypatch.delenv("WAKU_CONSOLIDATE_EVERY", raising=False)
     chose = Settings(memory_mode="agent")
     assert consolidation_every(chose, connected=True) == 1
-    assert consolidation_every(Settings(memory_mode="hook"), connected=True) == 1
+    # spec 021: under "plugin" the server extracts each turn, so this agent
+    # consolidates locally at its ordinary cadence
+    assert consolidation_every(Settings(memory_mode="plugin"), connected=True) == 6
     assert consolidation_every(chose, connected=False) == 6          # sign-in failed: stay local
     assert consolidation_every(Settings(memory_mode="off"), connected=True) == 6
     assert consolidation_every(Settings(memory_mode=""), connected=True) == 6   # no choice yet

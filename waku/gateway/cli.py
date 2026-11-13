@@ -90,6 +90,7 @@ def main() -> None:
             continue
         result = waku.respond(user_message, observer=_observer, source="cli")
         console.print(f"[bold green]waku ›[/bold green] {result.reply}\n")
+    waku.close()   # spec 021: lets the last turn's Stop hook finish
     console.print("[dim]bye — your memory stays in state.db[/dim]")
 
 

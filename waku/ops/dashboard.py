@@ -133,7 +133,7 @@ def chat_stream(message: str, emit) -> None:
         # Spec 009 A: the Waku Memory searches run before a research turn come
         # first, as the cards they were while the turn streamed.
         "tools": [{"tool": c["tool"], "args": c["args"], "output": c["output"],
-                   "status": _tool_status(c["output"]),
+                   "status": "denied" if c.get("denied") else _tool_status(c["output"]),
                    "summary": (c["output"] or "").split(". ")[0][:120],
                    **({"read_first": True} if c.get("read_first") else {})}
                   for c in [*getattr(result, "read_first", []), *result.tool_calls]],
@@ -154,6 +154,8 @@ def chat_stream(message: str, emit) -> None:
         # Spec 011: the turn's receipt, the same object the chat log keeps in
         # meta.receipt, so a reopened thread draws the same line
         "receipt": getattr(result, "receipt", None),
+        # Spec 021: the lines a plugin's hooks asked to show the person
+        "notices": getattr(result, "notices", []),
     })
 
 
@@ -216,6 +218,17 @@ def _run_command(command: tuple[str, str], emit) -> None:
         from waku.connect import usage as connect_usage
 
         reply = connect_integration(arg, load_settings().home) if arg else connect_usage()
+        emit("done", {"reply": reply, "tools": [], "iterations": 0, "latency_ms": 0, "gate": None})
+        return
+    if name == "plugin":
+        # Spec 021 B3: an install previews what the plugin brings, and the
+        # person sends the command again with --yes. A hosted container's
+        # servers are set at sign-in, so it refuses every /plugin command.
+        from waku.config import load_settings
+        from waku.plugins.cli import chat as plugin_chat
+
+        settings = load_settings()
+        reply = plugin_chat(arg, settings.home, hosted=settings.provider == "waku-platform")
         emit("done", {"reply": reply, "tools": [], "iterations": 0, "latency_ms": 0, "gate": None})
         return
     if name in ("graphs", "help", "?"):
@@ -1027,6 +1040,21 @@ EMBED_ORIGINS_HEADER = "X-Waku-Embed-Origins"
 _ORIGIN = re.compile(r"https?://[a-z0-9.-]+(?::[0-9]{1,5})?")
 
 
+def same_origin(origin: str | None, host: str | None) -> bool:
+    """Whether a POST may run: it carries no Origin, or its Origin's host and
+    port are the Host it was sent to (spec 021 review). A browser adds Origin
+    to every cross-site POST, so a web page can no longer post /plugin or
+    anything else to localhost:7777. The hosted gateway forwards no Origin
+    (hosted/gateway/forward.py REQUEST_HEADERS) and checks it itself, so a
+    container sees none, and a script with no browser sends none."""
+    if not origin:
+        return True
+    from urllib.parse import urlsplit
+
+    netloc = urlsplit(origin.strip()).netloc.lower()
+    return bool(netloc) and netloc == (host or "").strip().lower()
+
+
 def embed_origins(header: str | None) -> tuple[str, ...]:
     """The header's origins, or the default. Anything that is not exactly an
     origin is dropped: these land in the page and in postMessage's target."""
@@ -1201,6 +1229,14 @@ class Handler(BaseHTTPRequestHandler):
         self._send(target.read_bytes(), ctype, no_cache=True)
 
     def do_POST(self):
+        if not same_origin(self.headers.get("Origin"), self.headers.get("Host")):
+            body = json.dumps({"error": "this request came from another site"}).encode()
+            self.send_response(403)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
         length = int(self.headers.get("Content-Length", 0))
         # /api/voice takes a raw audio blob, not JSON — handle it first.
         if self.path == "/api/voice":

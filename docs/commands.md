@@ -18,7 +18,11 @@ targets are aliases for the same things, plus the eval and tracing tools.
 | `waku evals turns` | grade your own traced turns with the five turn checks and list the failing ones (`--window today`, `7d` or `all`) |
 | `waku connections` | every integration and its health, including Waku Memory |
 | `waku connect google` | sign in to Google Calendar (opens your browser) |
-| `waku connect waku-memory` | connect Waku Memory, the memory shared with your other agents (opens your browser) |
+| `waku connect waku-memory` | connect Waku Memory without the plugin (opens your browser) |
+| `waku plugin install <plugin>@<marketplace>` | install a plugin after printing its servers, hooks and skills; `waku plugin install waku@waku-memory` is Waku Memory |
+| `waku plugin list` | installed plugins, their servers and hooks, and any server `mcp.json` overrides |
+| `waku plugin update\|remove\|enable\|disable <plugin>` | manage an installed plugin; a sign-in survives `remove` |
+| `waku plugin marketplace add <owner/repo \| folder>` | add a marketplace (a repository with `.claude-plugin/marketplace.json`) |
 | `waku mcp` | MCP servers, and which account each one knows you as |
 | `waku mcp login <name>` | sign in again — as someone else, or after expiry |
 | `waku mcp logout <name>` | forget a server's token |
@@ -26,7 +30,9 @@ targets are aliases for the same things, plus the eval and tracing tools.
 | `waku skill export --to claude,codex` | copy Waku's skills to Claude Code and Codex (`--project` for `./.claude/skills`, `--force` to replace) |
 
 In the dashboard chat, `/connect google` and `/connect waku-memory` do the same
-as their `waku connect` commands, and `/help` lists the graph workflows.
+as their `waku connect` commands, `/plugin ...` does what `waku plugin ...`
+does (an install previews until you add `--yes`), and `/help` lists the graph
+workflows.
 
 ## make
 

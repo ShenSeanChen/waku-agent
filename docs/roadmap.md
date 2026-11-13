@@ -47,7 +47,7 @@ tested.
 | SQLite FTS5 keyword memory | Supabase pgvector semantic search | `WAKU_SEMANTIC_STORE=supabase` + [sql/init_supabase.sql](../sql/init_supabase.sql) — the exact schema from [launch-rag](https://github.com/ShenSeanChen/launch-rag)/[launch-agentic-rag](https://github.com/ShenSeanChen/launch-agentic-rag) |
 | Mock calendar (ICS + SQLite) | Apple / Google Calendar | `WAKU_APPLE_CALENDAR=1` (macOS) or `WAKU_GOOGLE_CALENDAR=1` with `pip install -e '.[gcal]'` — the tool schema stays |
 | Hand-built memory pillars | mem0 / Zep / LangMem | `pip install -e '.[arena]'` and set `WAKU_SEMANTIC_STORE` — then race them against each other in the Arena's Memory tab. [Where to see your memories in each provider's own console](memory-backends-playbook.md) |
-| Local memory on one machine | Waku Memory, shared across agents | `waku connect waku-memory` — see [integrations](integrations.md#share-one-memory-with-your-other-agents-waku-memory) |
+| Local memory on one machine | Waku Memory, shared across agents | `waku plugin install waku@waku-memory` — see [integrations](integrations.md#share-one-memory-with-your-other-agents-waku-memory) |
 
 ## Related repos (the building blocks)
 
