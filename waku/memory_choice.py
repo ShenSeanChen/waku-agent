@@ -28,8 +28,9 @@ WHAT_LEAVES = (
     "Waku installs the Waku plugin, which sends each message you type and each reply "
     "Waku gives to Waku's servers, signed in as you, and on to the AI providers that "
     "turn them into memories, named at www.waku.one/privacy. Each research report and "
-    "each note you save is sent too. Your files, the commands Waku runs and your "
-    "model keys are not sent."
+    "each note you save is sent too. If remembering from conversations is paused on "
+    "your account, Waku sends the facts it keeps itself instead. Your files, the "
+    "commands Waku runs and your model keys are not sent."
 )
 
 # The plugin the first-run question installs (spec 021).

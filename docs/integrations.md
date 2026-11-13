@@ -113,7 +113,11 @@ does both steps when you answer yes. A `waku_memory` entry you added to
 From then on, the plugin's `Stop` hook sends each message and reply to Waku
 Memory, and Waku Memory's server extracts the memories (spec 021). You can
 turn that off for Waku Agent at waku.one/integrations. Consolidation keeps
-facts on this machine and sends none. `waku connect waku-memory` still
+facts on this machine and sends none. Waku Memory pauses remembering from
+conversations on an account whose trial or plan has ended, and says so in
+its answer to each hook. While it is paused, consolidation sends the facts
+it keeps itself, and Waku tells you once (spec 021 amendment). While you
+have turned it off, nothing is sent. `waku connect waku-memory` still
 connects Waku Memory without the plugin, and then each fact consolidation
 keeps is sent instead (spec 006). Facts kept before you connected stay in
 `~/.waku/memory/` for the importer.

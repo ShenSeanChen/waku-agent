@@ -288,3 +288,13 @@ def test_capture_json_is_written_in_one_step_by_the_main_thread_only(agent, monk
     assert replaced and replaced[0].endswith("capture.json")
     # the Stop thread's "on" did not overwrite what the main thread recorded
     assert store.capture_told(app.settings.home) == "paused"
+
+
+# --- E4: what leaves ------------------------------------------------------------------
+
+
+def test_the_first_run_question_says_what_is_sent_while_paused():
+    from waku.memory_choice import WHAT_LEAVES
+
+    assert "If remembering from conversations is paused on your account" in WHAT_LEAVES
+    assert "Waku sends the facts it keeps itself instead" in WHAT_LEAVES
