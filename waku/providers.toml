@@ -219,6 +219,28 @@ small_model = "deepseek-v4-flash"
 key_url = "https://opencode.ai/zen"
 price = [0.435, 0.87]
 
+[commandcode]
+# Command Code's BYOK gateway: one key, every model the plan exposes, behind an
+# OpenAI-compatible endpoint -- so it needs no wire code, just this row. Without
+# it the gateway was reachable only via the global WAKU_API_KEY/WAKU_BASE_URL
+# override, which _client() honours but the registry does not: chat worked while
+# `waku connections` and the dashboard Models grid both showed nothing. Model ids
+# are namespaced upstream (deepseek/..., openai/...) and pass through verbatim.
+kind = "openai"
+key_env = "COMMANDCODE_API_KEY"
+base_url = "https://api.commandcode.ai/provider/v1"
+model = "deepseek/deepseek-v4-flash"
+small_model = "deepseek/deepseek-v4-flash"
+key_url = "https://commandcode.ai/settings/keys"
+# "Pay as you go. No markup." -- top-ups bill at the underlying lab's rate, so
+# the provider-level estimate is just the default model's own price, which
+# pricing.py already records for the bare id (deepseek-v4-flash -> 0.15/0.30).
+# It does not carry over automatically: price_for() matches MODEL_PRICING
+# exactly, and this gateway namespaces ids (deepseek/deepseek-v4-flash), so the
+# lookup falls through to here. Rough by design and labelled "est" in the UI --
+# one number cannot cover 84 models from a dozen labs.
+price = [0.15, 0.30]
+
 # The hosted free tier. Hidden on a local machine: with no
 # WAKU_PLATFORM_BASE_URL set it appears in no page, list or error message,
 # and never in .env.example. In a tenant container the four WAKU_PLATFORM_*
