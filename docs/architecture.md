@@ -128,11 +128,15 @@ because the capture shim imports that backlog from `memory/<id>.md`. Hosted
 containers consolidate every turn; laptops consolidate every 6 exchanges.
 Without a connected server, nothing is sent.
 
-Under `WAKU_MEMORY_MODE=plugin` (spec 021) consolidation sends nothing. The
-Waku plugin's `Stop` hook sends each turn instead, and Waku Memory's server
-extracts the memories, as it does for Claude Code and Codex. Consolidation
-still keeps facts on this machine. A research report and a `save_note` fact
-are still sent, because the person asked for each one.
+Under `WAKU_MEMORY_MODE=plugin` (spec 021) the Waku plugin's `Stop` hook
+sends each turn, and Waku Memory's server extracts the memories, as it does
+for Claude Code and Codex. Consolidation keeps facts on this machine and
+sends none of a captured turn's facts. Waku Memory answers each hook with
+whether capture is on, off or paused, and a turn records the answer. A batch
+that holds a paused turn is consolidated at once, and its facts are sent by
+consolidation, because the server dropped that turn. Every consolidation
+also sends again the facts an earlier send failed on. A research report and
+a `save_note` fact are still sent, because the person asked for each one.
 
 ### Plugins and hooks
 

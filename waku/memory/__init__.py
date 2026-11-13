@@ -77,8 +77,9 @@ class Memory:
         self.remember = None
         # Spec 021 review: True when an enabled plugin's Stop hook sends each
         # turn to the Waku Memory this agent is connected to. Consolidation
-        # then sends nothing, whatever mode is saved, so no turn reaches Waku
-        # Memory twice. app.py sets it.
+        # then sends no captured turn's facts, whatever mode is saved, so no
+        # turn reaches Waku Memory twice. A paused turn's facts it still sends
+        # (spec 021 amendment E2). app.py sets it.
         self.plugin_captures = False
 
     @staticmethod

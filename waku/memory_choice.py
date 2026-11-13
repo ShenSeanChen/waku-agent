@@ -105,8 +105,10 @@ def follow_plugins(home: Path) -> str:
         if mode == "plugin":
             return ""
         save("plugin")
-        return ("Waku Memory now extracts each turn from the plugin's Stop hook, so Waku "
-                "keeps facts on this machine and sends none itself.")
+        return ("Waku Memory now extracts each turn from the plugin's Stop hook. Waku keeps "
+                "the facts it finds on this machine. Waku sends a fact itself only when "
+                "you ask it to save one, or while remembering from conversations is "
+                "paused on your account.")
     if mode != "plugin":
         return ""
     try:

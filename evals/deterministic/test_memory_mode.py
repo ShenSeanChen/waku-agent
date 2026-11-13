@@ -74,7 +74,8 @@ def test_a_connected_choice_consolidates_every_turn(monkeypatch):
     chose = Settings(memory_mode="agent")
     assert consolidation_every(chose, connected=True) == 1
     # spec 021: under "plugin" the server extracts each turn, so this agent
-    # consolidates locally at its ordinary cadence
+    # consolidates locally at its ordinary cadence; a batch with a paused turn
+    # is due at once (amendment E2, test_plugin_capture_state.py)
     assert consolidation_every(Settings(memory_mode="plugin"), connected=True) == 6
     assert consolidation_every(chose, connected=False) == 6          # sign-in failed: stay local
     assert consolidation_every(Settings(memory_mode="off"), connected=True) == 6

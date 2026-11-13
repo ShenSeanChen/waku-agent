@@ -242,7 +242,9 @@ class Settings:
     # Where the person's memory lives (spec 020). "agent": this agent sends each
     # kept fact to Waku Memory. "plugin" (spec 021): the Waku plugin is
     # installed, its Stop hook sends each turn, and Waku Memory's server
-    # extracts from it, so consolidation keeps facts here and sends none.
+    # extracts from it, so consolidation keeps facts here and sends none of a
+    # captured turn's facts; a paused turn's facts it sends itself (spec 021
+    # amendment E2).
     # "off": Waku Memory is never connected. "" means the person has not
     # chosen yet, and Waku behaves as it did before the choice existed: it
     # connects Waku Memory only if mcp.json names it. "hook" reads as "agent".
