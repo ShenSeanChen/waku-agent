@@ -96,6 +96,7 @@ class Waku:
         self._turn_context = ""                     # what this turn's hooks found
         self._turn_notices: list[str] = []          # their lines for the person
         self._turn_vars: dict | None = None         # this turn's hook variables
+        self._turn_capture: str | None = None       # Waku Memory's capture state this turn
         self.stop_thread: threading.Thread | None = None      # the latest Stop
         self._stop_threads: list[threading.Thread] = []      # every one not yet joined
 
@@ -153,6 +154,7 @@ class Waku:
                 # does the work around one (an unwritable install id, say)
                 log.exception("the plugin hooks before this turn failed; the turn runs without them")
                 hook_vars, self._turn_context, self._turn_notices, self._turn_vars = None, "", [], None
+                self._turn_capture = None
             # The graph front door is optional and can NEVER make Waku worse:
             # flag off → this is exactly the old code path; flag on → the triage
             # graph decides quick vs full, and any failure anywhere falls open
@@ -219,6 +221,10 @@ class Waku:
                 # reopened thread shows them again
                 "notices": result.notices,
             }
+            if self._turn_capture is not None:
+                # spec 021 amendment E1: whether Waku Memory took this turn,
+                # from its own UserPromptSubmit answer. Consolidation reads it.
+                meta["capture"] = self._turn_capture
             row_id = self.session.add_exchange(user_message, result.reply,
                                                tool_calls=result.tool_calls,
                                                source=source, meta=meta)
@@ -259,6 +265,7 @@ class Waku:
         """SessionStart on a gateway's first turn, then UserPromptSubmit.
         Returns the turn's hook variables, or None when no hook runs."""
         self._turn_context, self._turn_notices, self._turn_vars = "", [], None
+        self._turn_capture = None
         if self.hooks is None or source not in GATEWAY_SOURCES:
             return None
         variables = self._hook_variables(source, user_message)
@@ -272,6 +279,10 @@ class Waku:
         prompt = self.hooks.run("UserPromptSubmit", variables, notify)
         found += prompt.context
         notices += prompt.messages
+        # spec 021 amendment E1: the state that decides this turn's facts is
+        # the one in this turn's own UserPromptSubmit answer, read here on the
+        # main thread before consolidation runs
+        self._turn_capture = prompt.capture
         self._turn_context, self._turn_notices = "\n\n".join(found), notices
         return variables
 
