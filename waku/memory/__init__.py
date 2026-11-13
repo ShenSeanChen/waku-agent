@@ -259,6 +259,14 @@ class Memory:
             if path.stem.isdigit() and path.name not in current:
                 path.unlink()
 
+    def _server_extracts(self) -> bool:
+        """Whether Waku Memory takes this agent's turns from the Stop hook:
+        the saved mode says so, or an enabled plugin's Stop hook reaches
+        Waku Memory whatever the mode (spec 021 review fix 10). Both answer
+        the amendment's question the same way: a paused turn's facts are
+        sent by consolidation."""
+        return self.settings.memory_mode == "plugin" or self.plugin_captures
+
     def maybe_consolidate(self, notify=None, report: str = "", recalled: str = "") -> None:
         """`report` is the research report this turn saved, if it saved one
         (spec 009 B): its findings stay in it, not in loose facts. `recalled`
@@ -272,13 +280,15 @@ class Memory:
             self.facts,
             self.episodes,
             # Spec 021: under "plugin" the server extracts from the Stop hook,
-            # so consolidation keeps facts here and sends none, and facts an
-            # earlier send failed on are not sent again. save_note and the
-            # report upload still use self.remember: the person asked for them.
-            remember=(None if self.settings.memory_mode == "plugin" or self.plugin_captures
-                      else self.remember),
+            # so consolidation keeps facts here and sends none. The amendment
+            # (E2): a batch with a turn whose capture was paused sends its
+            # facts itself, and facts an earlier send failed on are sent
+            # again. save_note and the report upload still use self.remember:
+            # the person asked for them.
+            remember=None if self._server_extracts() else self.remember,
             report=report,
             recalled=recalled,
+            send_if_paused=self.remember if self._server_extracts() else None,
         )
         # Spec 006: `kept` lists each fact (subject, content, project, its
         # Waku Memory id when the send succeeded, and `sent`), so a chat panel

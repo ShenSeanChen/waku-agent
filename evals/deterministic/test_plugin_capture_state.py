@@ -62,15 +62,22 @@ class Bridge:
         return self.calls.count("memory.remember")
 
 
-def _turn_script(turns: int, facts_per_turn: int = 1) -> list:
-    """Per turn: the retrieval gate, the reply, then consolidation's answer."""
-    distilled = json.dumps({"facts": [{"subject": "deploys", "content": FACT}] * facts_per_turn,
-                            "episode": "Talked about deploys."})
+def _gate_and_reply() -> list:
+    return [response([text_block('{"retrieve": false, "query": "", "reason": "chat"}')]),
+            response([text_block("Noted.")])]
+
+
+def _distilled(content: str = FACT):
+    return response([text_block(json.dumps({"facts": [{"subject": "deploys", "content": content}],
+                                            "episode": "Talked about deploys."}))])
+
+
+def _turn_script(turns: int) -> list:
+    """Per turn: the retrieval gate, the reply, then consolidation's answer,
+    one fact a turn, each with its own words."""
     out = []
-    for _ in range(turns):
-        out += [response([text_block('{"retrieve": false, "query": "", "reason": "chat"}')]),
-                response([text_block("Noted.")]),
-                response([text_block(distilled)])]
+    for n in range(turns):
+        out += _gate_and_reply() + [_distilled(FACT if n == 0 else f"Fact number {n + 1}.")]
     return out
 
 
@@ -97,7 +104,7 @@ def agent(tmp_path, monkeypatch):
     fake.MCPBridge = Idle
     monkeypatch.setitem(sys.modules, "waku.tools.mcp_client", fake)
 
-    def build(bridge, turns, every=1, script=None):
+    def build(bridge, turns, every=1, script=None, mode="plugin"):
         home = tmp_path / "home"
         install_into(home, waku_plugin(tmp_path / "src"))
         real = waku.app.build_registry
@@ -109,7 +116,7 @@ def agent(tmp_path, monkeypatch):
 
         monkeypatch.setattr(waku.app, "build_registry", with_bridge)
         client = ScriptedClient(script if script is not None else _turn_script(turns))
-        return make_waku(home, client=client, consolidate_every=every, memory_mode="plugin")
+        return make_waku(home, client=client, consolidate_every=every, memory_mode=mode)
 
     return build
 
@@ -158,3 +165,62 @@ def test_only_known_states_are_read():
     assert hooks.capture_of({"waku": {"capture": "maybe"}}) is None
     assert hooks.capture_of({"waku": "paused"}) is None
     assert hooks.capture_of({"waku": {"capture": "off"}}) == "off"
+
+
+# --- E2: consolidation sends the facts of paused turns -------------------------------
+
+
+def test_a_paused_turn_sends_its_fact(agent):
+    app = agent(Bridge(["paused"]), turns=1)
+    _say(app)
+    assert _kept(app) == [FACT]
+    assert app.mcp_bridge.remembered() == 1
+
+
+@pytest.mark.parametrize("state", ["on", "off", None])
+def test_an_on_off_or_unknown_turn_keeps_its_fact_here_and_sends_none(agent, state):
+    app = agent(Bridge([state]), turns=1)
+    _say(app)
+    assert _kept(app) == [FACT]
+    assert app.mcp_bridge.remembered() == 0
+
+
+def test_a_paused_answer_from_another_address_sends_nothing(agent):
+    app = agent(Bridge(["paused"], url="https://elsewhere.example/mcp"), turns=1)
+    _say(app)
+    assert _kept(app) == [FACT]
+    assert app.mcp_bridge.remembered() == 0
+
+
+def test_a_batch_with_one_paused_turn_sends_its_facts(agent):
+    script = _gate_and_reply() + _gate_and_reply() + [_distilled()]
+    app = agent(Bridge(["on", "paused"]), turns=2, every=2, script=script)
+    _say(app, "first")
+    assert app.mcp_bridge.remembered() == 0          # not due yet
+    _say(app, "second")
+    assert _kept(app) == [FACT]
+    assert app.mcp_bridge.remembered() == 1
+
+
+@pytest.mark.parametrize("state, sends", [("paused", 1), ("on", 0)])
+def test_the_runtime_guard_asks_the_same_question_under_agent_mode(agent, state, sends):
+    """Review fix 10: with the plugin's Stop hook installed, consolidation
+    defers to the server whatever mode is saved. A paused turn still sends."""
+    app = agent(Bridge([state]), turns=1, mode="agent")
+    assert app.memory.plugin_captures is True
+    _say(app)
+    assert _kept(app) == [FACT]
+    assert app.mcp_bridge.remembered() == sends
+
+
+def test_a_failed_send_from_a_paused_batch_is_sent_on_the_next_consolidation(agent):
+    app = agent(Bridge(["paused", "on"], fail_remember=1), turns=2)
+    _say(app)
+    assert app.mcp_bridge.remembered() == 1          # tried, and failed
+    _say(app)
+    # the failed fact goes again although this turn was captured; this turn's
+    # own fact is not sent, because the server takes it from the Stop hook
+    assert app.mcp_bridge.remembered() == 2
+    assert sorted(_kept(app)) == sorted([FACT, "Fact number 2."])
+    unsent = app.conn.execute("SELECT count(*) FROM facts WHERE synced = 0").fetchone()[0]
+    assert unsent == 0

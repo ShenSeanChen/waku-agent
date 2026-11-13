@@ -145,6 +145,19 @@ def _send(remember: Remember, content: str, scope: str) -> tuple[bool, str | Non
         return False, None
 
 
+def _paused(rows) -> bool:
+    """Whether Waku Memory's capture was paused for any turn in the batch.
+    The turn's state is in its assistant row's meta (spec 021 amendment E1)."""
+    for row in rows:
+        try:
+            meta = json.loads(row["meta"] or "{}")
+        except (TypeError, ValueError):
+            continue
+        if isinstance(meta, dict) and meta.get("capture") == "paused":
+            return True
+    return False
+
+
 def kept_if_due(
     conn,
     client: anthropic.Anthropic,
@@ -155,6 +168,7 @@ def kept_if_due(
     remember: Remember | None = None,
     report: str = "",
     recalled: str = "",
+    send_if_paused: Remember | None = None,
 ) -> list[dict]:
     """The facts this consolidation kept, each as {subject, content, project,
     memory_id, sent}. [] when it was not due or nothing was worth keeping.
@@ -171,6 +185,14 @@ def kept_if_due(
     what research read first, and what the model's own Waku Memory searches
     and gets returned. A proposed fact that only restates it is dropped.
 
+    `send_if_paused` is `remember` for a batch that Waku Memory's capture did
+    not take (spec 021 amendment E2). Under `plugin` the server extracts each
+    turn from the Stop hook, so consolidation sends nothing, unless a turn in
+    the batch was paused: then it sends the batch's facts itself. A batch that
+    mixes captured and paused turns sends them all, so a captured turn's fact
+    can reach Waku Memory twice; that is the price of not losing the paused
+    ones. Facts an earlier send failed on are sent again whatever the batch.
+
     With `remember`, facts an earlier send failed on go first, then each kept
     fact once. Only the SQLite store records which are still unsent; with
     another store a failed send is logged and not retried. After one failure
@@ -183,14 +205,18 @@ def kept_if_due(
     if len(rows) < every_n * 2:  # each exchange = 2 rows (user + assistant)
         return []
 
+    retry = remember or send_if_paused
+    if remember is None and send_if_paused is not None and _paused(rows):
+        remember = send_if_paused
     tracked = remember is not None and isinstance(facts, SqliteFactStore)
     reachable = remember is not None
-    if tracked:
+    if retry is not None and isinstance(facts, SqliteFactStore):
         for fact in facts.unsynced():
-            reachable, _ = _send(remember, fact["content"], fact["scope"])
+            reachable, _ = _send(retry, fact["content"], fact["scope"])
             if not reachable:
                 break
             facts.mark_synced(fact["id"])
+        reachable = reachable and remember is not None
 
     # tool_note.clip: a row from before tool notes were compact can carry a
     # whole tool output, which the summarizer has no use for
