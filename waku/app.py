@@ -35,6 +35,11 @@ from waku.tools.waku_memory import (
 # already kept, so consolidation must not keep it again.
 MEMORY_READS = ("memory.search", "memory.get", "memory.recall")
 
+# Spec 021 amendment E3: the line Waku Agent adds when Waku Memory's capture
+# is paused for this person, once per change to paused.
+CAPTURE_PAUSED_LINE = ("Waku Agent will send the facts it keeps from this conversation to Waku "
+                       "Memory itself until remembering from conversations is back on.")
+
 # Spec 021: the turns a plugin's hooks run for. The morning brief and the
 # arenas call respond() too, and their turns are not a person talking.
 GATEWAY_SOURCES = ("cli", "dashboard", "telegram", "discord", "whatsapp", "voice")
@@ -283,8 +288,25 @@ class Waku:
         # the one in this turn's own UserPromptSubmit answer, read here on the
         # main thread before consolidation runs
         self._turn_capture = prompt.capture
+        if prompt.capture is not None:
+            notices += self._capture_change(prompt.capture)
         self._turn_context, self._turn_notices = "\n\n".join(found), notices
         return variables
+
+    def _capture_change(self, state: str) -> list[str]:
+        """The line for the person when capture has just become paused
+        (spec 021 amendment E3), once per change: three paused turns in a row
+        say it once, and an on turn between two paused ones says it again.
+        Runs on the turn's main thread, the only writer of capture.json. A
+        file that cannot be written costs the line, never the turn."""
+        try:
+            if plugin_store.capture_told(self.settings.home) == state:
+                return []
+            plugin_store.save_capture_told(self.settings.home, state)
+        except OSError:
+            log.warning("could not record the capture state in %s", self.settings.home)
+            return []
+        return [CAPTURE_PAUSED_LINE] if state == "paused" else []
 
     def _before_tool(self, notify):
         """PreToolUse for this turn's loop, or None when no hook wants it.

@@ -3,6 +3,7 @@
     <home>/plugins/installed.json      {"plugins": {"waku@waku-memory": {...}}}
     <home>/plugins/<marketplace>/<name>/   one plugin's folder, as copied
     <home>/plugins/install_id          this install's id, for hook session ids
+    <home>/plugins/capture.json        the last capture state the person was told about
 
 Reading these files opens nothing and connects nothing, so `waku connections`
 and the first-run question can ask "is the Waku plugin installed?" freely.
@@ -11,8 +12,10 @@ and the first-run question can ask "is the Waku plugin installed?" freely.
 from __future__ import annotations
 
 import json
+import os
 import re
 import secrets
+from datetime import UTC, datetime
 from pathlib import Path
 
 from waku.plugins import manifest
@@ -102,3 +105,29 @@ def install_id(home: Path) -> str:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(value + "\n", encoding="utf-8")
     return value
+
+
+CAPTURE = "capture.json"
+
+
+def capture_told(home: Path) -> str | None:
+    """The capture state the person was last told about (spec 021 amendment
+    E3), or None when none was recorded or the file cannot be read."""
+    try:
+        data = json.loads((folder(home) / CAPTURE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    state = data.get("state") if isinstance(data, dict) else None
+    return state if isinstance(state, str) else None
+
+
+def save_capture_told(home: Path, state: str) -> None:
+    """Record `state` as told, in one step: the file is written beside its
+    place and moved over it, so a reader never sees half of it. Only the
+    turn's main thread calls this; the Stop thread never does."""
+    path = folder(home) / CAPTURE
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f"{CAPTURE}.{os.getpid()}.tmp")
+    temporary.write_text(json.dumps({"state": state, "at": datetime.now(UTC).isoformat(
+        timespec="seconds")}), encoding="utf-8")
+    os.replace(temporary, path)

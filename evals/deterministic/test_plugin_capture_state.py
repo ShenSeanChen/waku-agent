@@ -224,3 +224,67 @@ def test_a_failed_send_from_a_paused_batch_is_sent_on_the_next_consolidation(age
     assert sorted(_kept(app)) == sorted([FACT, "Fact number 2."])
     unsent = app.conn.execute("SELECT count(*) FROM facts WHERE synced = 0").fetchone()[0]
     assert unsent == 0
+
+
+# --- E3: tell the person once per change ---------------------------------------------
+
+
+def _paused_lines(result):
+    from waku.app import CAPTURE_PAUSED_LINE
+
+    return [n for n in result.notices if n == CAPTURE_PAUSED_LINE]
+
+
+def test_the_paused_line_is_shown_once_over_three_paused_turns(agent):
+    app = agent(Bridge(["paused", "paused", "paused"]), turns=3)
+    shown = [len(_paused_lines(_say(app))) for _ in range(3)]
+    assert shown == [1, 0, 0]
+
+
+def test_the_paused_line_is_shown_again_after_an_on_turn(agent):
+    app = agent(Bridge(["paused", "on", "paused"]), turns=3)
+    shown = [len(_paused_lines(_say(app))) for _ in range(3)]
+    assert shown == [1, 0, 1]
+
+
+def test_the_line_reads_exactly_as_the_spec_quotes_it():
+    from waku.app import CAPTURE_PAUSED_LINE
+
+    assert CAPTURE_PAUSED_LINE == ("Waku Agent will send the facts it keeps from this conversation "
+                                   "to Waku Memory itself until remembering from conversations is "
+                                   "back on.")
+
+
+def test_capture_json_is_written_in_one_step_by_the_main_thread_only(agent, monkeypatch):
+    import os
+    import threading
+
+    from waku.plugins import store
+
+    writers, replaced = [], []
+    real_save, real_replace = store.save_capture_told, os.replace
+
+    def save(home, state):
+        writers.append(threading.current_thread() is threading.main_thread())
+        return real_save(home, state)
+
+    def replace(src, dst):
+        replaced.append(str(dst))
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(store, "save_capture_told", save)
+    monkeypatch.setattr(store.os, "replace", replace)
+
+    class StopSaysOn(Bridge):
+        def call_json(self, server, tool, args, timeout):
+            if args.get("event") == "Stop":
+                self.calls.append("hook:Stop")
+                return {"waku": {"capture": "on"}}, False, ""
+            return super().call_json(server, tool, args, timeout)
+
+    app = agent(StopSaysOn(["paused"]), turns=1)
+    _say(app)
+    assert writers == [True]
+    assert replaced and replaced[0].endswith("capture.json")
+    # the Stop thread's "on" did not overwrite what the main thread recorded
+    assert store.capture_told(app.settings.home) == "paused"
