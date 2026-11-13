@@ -317,8 +317,11 @@ def test_a_download_larger_than_the_cap_is_refused(monkeypatch):
 
 @pytest.mark.parametrize("source", ["../waku-memory-plugins", "waku-one/..", "waku-one/.hidden",
                                     "waku-one/repo@../../evil", "waku-one/repo@.x", "a/b@x/../y"])
-def test_a_repository_or_ref_with_dot_dot_or_a_leading_dot_is_refused(source):
-    """Review fix 8."""
+def test_a_repository_or_ref_with_dot_dot_or_a_leading_dot_is_refused(source, tmp_path, monkeypatch):
+    """Review fix 8. Run from an empty folder: a source that names an existing
+    folder is a local marketplace, and `../waku-memory-plugins` does exist
+    beside a checkout that has the plugins repository as a sibling."""
+    monkeypatch.chdir(tmp_path)
     with pytest.raises(marketplace.MarketplaceError):
         marketplace.entry_for(source)
 
