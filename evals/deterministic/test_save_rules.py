@@ -129,3 +129,14 @@ def test_the_first_run_question_says_notes_are_sent_when_asked():
     from waku.memory_choice import WHAT_LEAVES
 
     assert "each note you ask Waku to save is sent too" in WHAT_LEAVES
+
+
+def test_the_hosted_soul_template_no_longer_says_to_save_everything_durable():
+    """A hosted tenant's SOUL.md is written from this template, not from
+    DEFAULT_SOUL, so it carries the same save rule."""
+    from pathlib import Path
+
+    template = (Path(__file__).resolve().parents[2] / "hosted" / "templates" / "SOUL.md").read_text(
+        encoding="utf-8")
+    assert "shares something durable" not in template
+    assert "When the user asks you to remember or save something, use save_note." in template
