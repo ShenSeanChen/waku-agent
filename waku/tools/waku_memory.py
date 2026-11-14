@@ -242,8 +242,10 @@ def status(home: Path) -> str:
     # mcp.json. Reading the plugin files connects nothing.
     from waku.plugins import store
 
+    own = len(servers)
     servers = [*servers, *store.servers(home)]
-    spec = next((s for s in servers if s.get("url", "").rstrip("/") == URL), None)
+    found = next((i for i, s in enumerate(servers) if s.get("url", "").rstrip("/") == URL), None)
+    spec = servers[found] if found is not None else None
     if spec is None:
         return "not connected · run: waku connect waku-memory"
     if spec.get("auth_env"):
@@ -255,6 +257,11 @@ def status(home: Path) -> str:
 
     token = _auth_file(home, spec["name"])
     if not token.exists():
+        # A server the plugin brought signs in with `waku mcp login`. Running
+        # `waku connect waku-memory` there would add a second entry to
+        # mcp.json and undo the move to the plugin (spec 021 D3).
+        if found >= own:
+            return f"configured · not signed in: run waku mcp login {spec['name']}"
         return "configured · not signed in: run waku connect waku-memory"
     return f"connected · {_identity(token)}"
 
