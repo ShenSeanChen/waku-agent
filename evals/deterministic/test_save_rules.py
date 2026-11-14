@@ -99,3 +99,27 @@ def test_the_one_tool_line_is_absent_without_waku_memory(tmp_path, monkeypatch):
     app = _app(tmp_path, monkeypatch, with_waku_memory=False)
     assert app.session.remember_tool is None
     assert "waku_memory_memory_remember" not in app.session.build_system("hello")
+
+
+# --- consolidation does not keep again what the plugin's remember tool saved ---------
+
+from waku.loop.agent import LoopResult  # noqa: E402
+
+BODY = "The team only deploys on Fridays."
+
+
+def _call(output: str) -> dict:
+    return {"tool": "waku_memory_memory_remember", "args": {"body": BODY, "kind": "preference"},
+            "output": output}
+
+
+def test_a_body_waku_memory_took_is_part_of_what_the_turn_saved(tmp_path, monkeypatch):
+    app = _app(tmp_path, monkeypatch, with_waku_memory=True)
+    stored = json.dumps({"memory": {"id": "mem-1", "body": BODY}, "deduped": False})
+    assert BODY in app._recalled(LoopResult(reply="Saved.", tool_calls=[_call(stored)]))
+
+
+def test_a_body_waku_memory_refused_is_not(tmp_path, monkeypatch):
+    app = _app(tmp_path, monkeypatch, with_waku_memory=True)
+    refused = "MCP call waku_memory_memory.remember failed: Out of credits. (credit_limit_reached)"
+    assert BODY not in app._recalled(LoopResult(reply="", tool_calls=[_call(refused)]))
