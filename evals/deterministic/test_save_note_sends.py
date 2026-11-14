@@ -136,5 +136,7 @@ def test_any_other_refusal_keeps_its_answer(tmp_path):
         raise RuntimeError("Waku Memory answered 503")
 
     _conn, tool = _tool(tmp_path, remember)
-    assert "credits" not in tool.fn("Alex", "Alex prefers morning meetings.")
+    assert tool.fn("Alex", "Alex prefers morning meetings.") == (
+        "Saved here. Waku Memory did not take it (Waku Memory answered 503); "
+        "it is sent again later.")
     assert issubclass(CreditsUsedUp, RuntimeError)
