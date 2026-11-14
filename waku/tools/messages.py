@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from pathlib import Path
+from tempfile import NamedTemporaryFile
 
 from waku.tools.registry import Tool
 
@@ -17,8 +18,12 @@ def make_tool(home: Path) -> Tool:
     def send_message(to: str, body: str) -> str:
         stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S")
         safe_to = "".join(c if c.isalnum() else "-" for c in to)[:40]
-        path = home / "outbox" / f"{stamp}-{safe_to}.txt"
-        path.write_text(f"To: {to}\n\n{body}\n", encoding="utf-8")
+        with NamedTemporaryFile(
+            mode="w", encoding="utf-8", dir=home / "outbox",
+            prefix=f"{stamp}-{safe_to}-", suffix=".txt", delete=False,
+        ) as draft:
+            draft.write(f"To: {to}\n\n{body}\n")
+            path = Path(draft.name)
         return f"Message to {to} placed in outbox ({path.name}). Nothing was sent — review it there."
 
     return Tool(
