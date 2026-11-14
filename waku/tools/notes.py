@@ -17,8 +17,11 @@ from __future__ import annotations
 import sqlite3
 
 from waku.tools.registry import Tool
+from waku.tools.waku_memory import CreditsUsedUp
 
 SCOPE = "global"
+CREDITS_ANSWER = ("Saved here. Your Waku Memory credits for this month are used up, so it is "
+                  "sent when they refresh.")
 REASON_MAX = 80
 
 
@@ -52,6 +55,10 @@ def make_tool(conn: sqlite3.Connection, memory=None) -> Tool:
         conn.commit()
         try:
             memory_id = remember(content, SCOPE)
+        except CreditsUsedUp:
+            # Spec 022: "sent again later" read as soon, and a refused retry is
+            # refused again until the month's credits refresh.
+            return CREDITS_ANSWER
         except Exception as exc:
             return f"Saved here. Waku Memory did not take it ({_reason(exc)}); it is sent again later."
         conn.execute("UPDATE facts SET synced = 1 WHERE id = ?", (cur.lastrowid,))

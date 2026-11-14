@@ -93,3 +93,46 @@ def test_a_fact_save_note_saved_counts_as_read_so_consolidation_leaves_it_out():
     )
     text = Waku._recalled(SimpleNamespace(mcp_bridge=None), result)
     assert "Alex prefers morning meetings." in text
+
+
+# --- spec 022: a Free account whose monthly credits are used up ----------------------
+
+def test_a_send_refused_for_credits_says_so_and_waits_for_the_refresh(tmp_path):
+    """The server's refusal names `credit_limit_reached`. "It is sent again later"
+    read as soon; a refused retry is refused again until the credits refresh."""
+    import json as _json
+
+    from waku.tools.notes import CREDITS_ANSWER
+    from waku.tools.waku_memory import remember_via
+
+    class Refusing:
+        config_path = tmp_path / "mcp.json"
+
+        def connected(self, server):
+            return server == "waku_memory"
+
+        def call(self, server, tool, args):
+            return ("Out of credits. Free includes 100,000 credits a month -- upgrade to Pro or "
+                    "buy a top-up to keep adding memories. Recall and search stay free. "
+                    "(credit_limit_reached)")
+
+    from waku.tools import waku_memory
+    Refusing.config_path.write_text(_json.dumps({"servers": [
+        {"name": "waku_memory", "url": waku_memory.URL, "auth_env": "WAKU_MEMORY_API_KEY"}]}),
+        encoding="utf-8")
+    conn, tool = _tool(tmp_path, remember_via(Refusing()))
+    assert tool.fn("Alex", "Alex prefers morning meetings.") == CREDITS_ANSWER
+    assert CREDITS_ANSWER == ("Saved here. Your Waku Memory credits for this month are used up, "
+                              "so it is sent when they refresh.")
+    assert _row(conn)["synced"] == 0, "the fact waits for the retry"
+
+
+def test_any_other_refusal_keeps_its_answer(tmp_path):
+    from waku.tools.waku_memory import CreditsUsedUp
+
+    def remember(body, scope):
+        raise RuntimeError("Waku Memory answered 503")
+
+    conn, tool = _tool(tmp_path, remember)
+    assert "credits" not in tool.fn("Alex", "Alex prefers morning meetings.")
+    assert issubclass(CreditsUsedUp, RuntimeError)

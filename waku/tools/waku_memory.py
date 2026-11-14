@@ -88,6 +88,16 @@ def _server(bridge) -> str | None:
     return next((n for n in names if n and bridge.connected(n)), None)
 
 
+CREDIT_LIMIT_CODE = "credit_limit_reached"
+
+
+class CreditsUsedUp(RuntimeError):
+    """Waku Memory refused memory.remember because a Free account has spent its
+    monthly credits (the server's `credit_limit_reached`). A subclass of
+    RuntimeError, so every caller that handles a failed send still does; only
+    save_note tells this one apart, to say when the fact will be sent (spec 022)."""
+
+
 def remember_via(bridge):
     """A remember(body, scope, kind=None) for consolidation and for research
     reports, or None if Waku Memory is not connected. It returns the new memory's id and raises when the send
@@ -108,6 +118,8 @@ def remember_via(bridge):
         try:
             return json.loads(text)["memory"]["id"]
         except (ValueError, KeyError, TypeError):
+            if CREDIT_LIMIT_CODE in text:
+                raise CreditsUsedUp(text[:200]) from None
             raise RuntimeError(text[:200]) from None
 
     return remember
