@@ -133,6 +133,6 @@ def test_any_other_refusal_keeps_its_answer(tmp_path):
     def remember(body, scope):
         raise RuntimeError("Waku Memory answered 503")
 
-    conn, tool = _tool(tmp_path, remember)
+    _conn, tool = _tool(tmp_path, remember)
     assert "credits" not in tool.fn("Alex", "Alex prefers morning meetings.")
     assert issubclass(CreditsUsedUp, RuntimeError)
