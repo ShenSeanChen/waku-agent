@@ -17,8 +17,10 @@ person's brain already holds.
 Spec 021: the Waku plugin (`waku plugin install waku@waku-memory`) brings the
 same server, named `waku_memory`, and three hooks. Under
 WAKU_MEMORY_MODE=plugin the plugin's Stop hook sends each turn and the server
-extracts the memories, so consolidation sends nothing. The report and
-`save_note` still send. The server is found in the bridge's merged list, so
+extracts the memories, so consolidation sends none of a captured turn's
+facts. It does send a batch's facts when Waku Memory's capture was paused
+for a turn in it, and it sends again any fact an earlier send failed on
+(spec 021 amendment E2). The report and `save_note` still send. The server is found in the bridge's merged list, so
 a plugin's server and an mcp.json entry are found the same way.
 
 `waku connect waku-memory` (or `/connect waku-memory` in the dashboard chat)

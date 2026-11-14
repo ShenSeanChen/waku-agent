@@ -575,10 +575,12 @@ def test_the_summariser_is_told_to_extract_only_what_the_person_said():
 
 
 @pytest.mark.parametrize("mode, sends", [("plugin", False), ("agent", True)])
-def test_under_plugin_mode_consolidation_keeps_facts_here_and_sends_none(tmp_path, mode, sends):
+def test_under_plugin_mode_consolidation_keeps_its_facts_here_and_retries_only_failed_sends(tmp_path, mode, sends):
     """Spec 021 D1: with the Waku plugin installed, the server extracts from
-    the Stop hook. Consolidation keeps facts on this machine, sends none, and
-    does not send again a fact an earlier send failed on."""
+    the Stop hook. Consolidation keeps this batch's facts on this machine and
+    sends none of them. The amendment (E2) sends again a fact an earlier send
+    failed on, whatever the batch: it was meant for Waku Memory and never got
+    there."""
     from waku.config import Settings
     from waku.memory import Memory
 
@@ -593,6 +595,10 @@ def test_under_plugin_mode_consolidation_keeps_facts_here_and_sends_none(tmp_pat
     memory.maybe_consolidate()
     stored = [r[0] for r in memory.conn.execute("SELECT content FROM facts ORDER BY id")]
     assert stored == ["Raj plays tennis.", "Alex prefers morning meetings.", "The Acme demo is on Friday."]
-    assert bool(remember.sent) is sends
+    assert bool(remember.sent) is True
     if not sends:
-        assert remember.sent == [] and memory.remember is remember   # save_note keeps its send
+        # only the fact that failed earlier; none of this batch's two
+        assert remember.sent == [("Raj plays tennis.", "global")]
+        assert memory.remember is remember   # save_note keeps its send
+    else:
+        assert len(remember.sent) == 3

@@ -35,6 +35,11 @@ from waku.tools.waku_memory import (
 # already kept, so consolidation must not keep it again.
 MEMORY_READS = ("memory.search", "memory.get", "memory.recall")
 
+# Spec 021 amendment E3: the line Waku Agent adds when Waku Memory's capture
+# is paused for this person, once per change to paused.
+CAPTURE_PAUSED_LINE = ("Waku Agent will send the facts it keeps from this conversation to Waku "
+                       "Memory itself until remembering from conversations is back on.")
+
 # Spec 021: the turns a plugin's hooks run for. The morning brief and the
 # arenas call respond() too, and their turns are not a person talking.
 GATEWAY_SOURCES = ("cli", "dashboard", "telegram", "discord", "whatsapp", "voice")
@@ -96,6 +101,7 @@ class Waku:
         self._turn_context = ""                     # what this turn's hooks found
         self._turn_notices: list[str] = []          # their lines for the person
         self._turn_vars: dict | None = None         # this turn's hook variables
+        self._turn_capture: str | None = None       # Waku Memory's capture state this turn
         self.stop_thread: threading.Thread | None = None      # the latest Stop
         self._stop_threads: list[threading.Thread] = []      # every one not yet joined
 
@@ -153,6 +159,7 @@ class Waku:
                 # does the work around one (an unwritable install id, say)
                 log.exception("the plugin hooks before this turn failed; the turn runs without them")
                 hook_vars, self._turn_context, self._turn_notices, self._turn_vars = None, "", [], None
+                self._turn_capture = None
             # The graph front door is optional and can NEVER make Waku worse:
             # flag off → this is exactly the old code path; flag on → the triage
             # graph decides quick vs full, and any failure anywhere falls open
@@ -219,6 +226,10 @@ class Waku:
                 # reopened thread shows them again
                 "notices": result.notices,
             }
+            if self._turn_capture is not None:
+                # spec 021 amendment E1: whether Waku Memory took this turn,
+                # from its own UserPromptSubmit answer. Consolidation reads it.
+                meta["capture"] = self._turn_capture
             row_id = self.session.add_exchange(user_message, result.reply,
                                                tool_calls=result.tool_calls,
                                                source=source, meta=meta)
@@ -259,6 +270,7 @@ class Waku:
         """SessionStart on a gateway's first turn, then UserPromptSubmit.
         Returns the turn's hook variables, or None when no hook runs."""
         self._turn_context, self._turn_notices, self._turn_vars = "", [], None
+        self._turn_capture = None
         if self.hooks is None or source not in GATEWAY_SOURCES:
             return None
         variables = self._hook_variables(source, user_message)
@@ -272,8 +284,29 @@ class Waku:
         prompt = self.hooks.run("UserPromptSubmit", variables, notify)
         found += prompt.context
         notices += prompt.messages
+        # spec 021 amendment E1: the state that decides this turn's facts is
+        # the one in this turn's own UserPromptSubmit answer, read here on the
+        # main thread before consolidation runs
+        self._turn_capture = prompt.capture
+        if prompt.capture is not None:
+            notices += self._capture_change(prompt.capture)
         self._turn_context, self._turn_notices = "\n\n".join(found), notices
         return variables
+
+    def _capture_change(self, state: str) -> list[str]:
+        """The line for the person when capture has just become paused
+        (spec 021 amendment E3), once per change: three paused turns in a row
+        say it once, and an on turn between two paused ones says it again.
+        Runs on the turn's main thread, the only writer of capture.json. A
+        file that cannot be written costs the line, never the turn."""
+        try:
+            if plugin_store.capture_told(self.settings.home) == state:
+                return []
+            plugin_store.save_capture_told(self.settings.home, state)
+        except OSError:
+            log.warning("could not record the capture state in %s", self.settings.home)
+            return []
+        return [CAPTURE_PAUSED_LINE] if state == "paused" else []
 
     def _before_tool(self, notify):
         """PreToolUse for this turn's loop, or None when no hook wants it.

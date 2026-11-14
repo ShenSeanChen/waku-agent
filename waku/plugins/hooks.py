@@ -18,6 +18,10 @@ What a hook answers is read the way Claude Code reads it:
     hookSpecificOutput.additionalContext   context for this turn's model
     hookSpecificOutput.permissionDecision  "deny" stops a PreToolUse call
     systemMessage                          a line for the person
+    waku.capture                           "on", "off" or "paused": whether Waku
+                                           Memory is taking this person's turns
+                                           (waku-memory spec 086 C2), read only
+                                           from a server at Waku Memory's address
 
 A hook that errors, times out or answers `isError` is skipped. The turn goes
 on as if the hook were not there, and the trace records the failure.
@@ -35,11 +39,24 @@ DEFAULT_TIMEOUT = 10.0
 _VARIABLE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
 
 
+CAPTURE_STATES = ("on", "off", "paused")
+
+
 @dataclass
 class HookResult:
     context: list[str] = field(default_factory=list)
     deny: str | None = None
     messages: list[str] = field(default_factory=list)
+    # spec 021 amendment E1: Waku Memory's answer to "is capture taking this
+    # person's turns", or None when no hook from Waku Memory's address said
+    capture: str | None = None
+
+
+def capture_of(data) -> str | None:
+    """`waku.capture` from a hook answer, or None when it holds none."""
+    block = data.get("waku") if isinstance(data, dict) else None
+    state = block.get("capture") if isinstance(block, dict) else None
+    return state if state in CAPTURE_STATES else None
 
 
 def substitute(value, variables: dict):
@@ -108,6 +125,15 @@ class HookRunner:
                      and not s.get("plugin")), None)
         return same["name"] if same else None
 
+    def _is_waku_memory(self, server: str) -> bool:
+        """Whether the bridge's server `server` is at Waku Memory's address.
+        Another server's `waku` field says nothing about Waku Memory."""
+        from waku.tools.waku_memory import URL
+
+        live = getattr(self.bridge, "servers", []) or []
+        spec = next((s for s in live if s.get("name") == server), None)
+        return spec is not None and str(spec.get("url", "")).rstrip("/") == URL
+
     def run(self, event: str, variables: dict, notify: Callable[[str, dict], None] | None = None) -> HookResult:
         notify = notify or self.notify
         total = HookResult()
@@ -117,6 +143,7 @@ class HookRunner:
                 outcome = self._one(plugin, hook, event, values, notify)
                 total.context += outcome.context
                 total.messages += outcome.messages
+                total.capture = outcome.capture or total.capture
                 if outcome.deny and total.deny is None:
                     total.deny = outcome.deny
         return total
@@ -143,6 +170,10 @@ class HookRunner:
                 return HookResult()
             record["ok"] = True
             outcome = read_output(data, event)
+            if self._is_waku_memory(server):
+                outcome.capture = capture_of(data)
+                if outcome.capture:
+                    record["capture"] = outcome.capture
             record["context_chars"] = sum(len(c) for c in outcome.context)
             if outcome.deny:
                 record["deny"] = outcome.deny[:200]
