@@ -21,7 +21,7 @@ from waku.tools.waku_memory import CreditsUsedUp
 
 SCOPE = "global"
 CREDITS_ANSWER = ("Saved here. Your Waku Memory credits for this month are used up, so it is "
-                  "sent when they refresh.")
+                  "sent the next time you talk to Waku after they refresh.")
 REASON_MAX = 80
 
 

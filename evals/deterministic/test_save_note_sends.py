@@ -122,8 +122,10 @@ def test_a_send_refused_for_credits_says_so_and_waits_for_the_refresh(tmp_path):
         encoding="utf-8")
     conn, tool = _tool(tmp_path, remember_via(Refusing()))
     assert tool.fn("Alex", "Alex prefers morning meetings.") == CREDITS_ANSWER
+    # The retry runs with a later consolidation, which runs on a later turn:
+    # the fact is sent the next time the person talks to Waku after the refresh.
     assert CREDITS_ANSWER == ("Saved here. Your Waku Memory credits for this month are used up, "
-                              "so it is sent when they refresh.")
+                              "so it is sent the next time you talk to Waku after they refresh.")
     assert _row(conn)["synced"] == 0, "the fact waits for the retry"
 
 
