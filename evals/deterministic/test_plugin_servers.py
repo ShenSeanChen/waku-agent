@@ -114,3 +114,15 @@ def test_connections_reports_the_plugins_server(tmp_path):
     (tmp_path / "mcp-auth").mkdir()
     (tmp_path / "mcp-auth" / "waku_memory.json").write_text(json.dumps({"tokens": {}}), encoding="utf-8")
     assert wm.status(tmp_path).startswith("connected")
+
+
+def test_a_plugins_server_not_signed_in_is_told_to_log_in_not_to_connect(tmp_path):
+    """`waku connect waku-memory` would add a second entry to mcp.json beside
+    the plugin's server; the plugin's server signs in with `waku mcp login`."""
+    install_into(tmp_path, waku_plugin(tmp_path / "src"))
+    assert wm.status(tmp_path) == "configured · not signed in: run waku mcp login waku_memory"
+
+
+def test_an_mcp_json_server_not_signed_in_keeps_the_connect_hint(tmp_path):
+    wm.add_server(tmp_path)
+    assert wm.status(tmp_path) == "configured · not signed in: run waku connect waku-memory"
