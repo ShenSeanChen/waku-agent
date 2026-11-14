@@ -61,6 +61,13 @@ SAVE_RULE = ("\nUse save_note only when the user asks you to remember or save so
              "This replaces any older instruction to save everything durable.")
 
 
+def one_tool_line(remember_tool: str) -> str:
+    """Spec 022: the line that keeps the model to one save tool while Waku
+    Memory's own remember tool is also offered to it."""
+    return (f"\nTo remember something, use save_note, not {remember_tool}: save_note keeps "
+            "it here and sends it to Waku Memory.")
+
+
 def load_soul(settings: Settings) -> str:
     """SOUL.md is the editable persona file, created on first run. Changing it
     changes who your Waku is — that's procedural memory at its simplest."""
@@ -82,6 +89,11 @@ class Session:
         # what the retrieval gate found for the latest build_system, so
         # consolidation can tell a fact the turn read from one it learned
         self.retrieved = ""
+        # Spec 022: the name the model calls Waku Memory's own remember tool by,
+        # such as waku_memory_memory_remember, or None. Set by app.py once the
+        # MCP bridge is up; while it is set, one line steers the model to
+        # save_note, so one turn does not save the same fact with both tools.
+        self.remember_tool: str | None = None
 
     def build_system(self, user_message: str, notify=None) -> str:
         from datetime import datetime
@@ -105,6 +117,9 @@ class Session:
         if unavailable_tools := unavailable(self.settings.unavailable_tools):
             parts.append("\nNot available here, so never call them: "
                          + ", ".join(unavailable_tools) + ".")
+
+        if self.remember_tool:
+            parts.append(one_tool_line(self.remember_tool))
 
         if self.memory is not None:
             # Hero moment #1: a cheap judge decides IF we retrieve at all —

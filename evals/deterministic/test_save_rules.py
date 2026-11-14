@@ -43,3 +43,59 @@ def test_every_prompt_carries_the_save_rule_even_with_an_older_soul(tmp_path):
     assert OLD_SOUL_LINE in system
     assert SAVE_RULE in system
     assert "This replaces any older instruction to save everything durable." in system
+
+
+# --- one save tool while Waku Memory's remember tool is on offer ---------------------
+
+import json  # noqa: E402
+
+from evals.helpers import ScriptedClient, make_waku  # noqa: E402
+from waku.runtime.session import one_tool_line  # noqa: E402
+from waku.tools import waku_memory  # noqa: E402
+
+
+class _Bridge:
+    def __init__(self, config_path):
+        self.config_path = config_path
+
+    def connected(self, server):
+        return server == "waku_memory"
+
+    def call(self, server, tool, args):
+        return json.dumps({"memory": {"id": "mem-1"}})
+
+    def close(self):
+        pass
+
+
+def _app(tmp_path, monkeypatch, with_waku_memory: bool):
+    import waku.app
+
+    if with_waku_memory:
+        path = tmp_path / "mcp.json"
+        path.write_text(json.dumps({"servers": [
+            {"name": "waku_memory", "url": waku_memory.URL, "auth_env": "WAKU_MEMORY_API_KEY"}]}),
+            encoding="utf-8")
+        real_build = waku.app.build_registry
+
+        def build_with_bridge(*args, **kwargs):
+            registry = real_build(*args, **kwargs)
+            registry.mcp_bridge = _Bridge(path)
+            return registry
+
+        monkeypatch.setattr(waku.app, "build_registry", build_with_bridge)
+    return make_waku(tmp_path / "home", client=ScriptedClient([]))
+
+
+def test_the_one_tool_line_is_there_while_waku_memory_is_connected(tmp_path, monkeypatch):
+    app = _app(tmp_path, monkeypatch, with_waku_memory=True)
+    assert app.session.remember_tool == "waku_memory_memory_remember"
+    system = app.session.build_system("hello")
+    assert one_tool_line("waku_memory_memory_remember") in system
+    assert "use save_note, not waku_memory_memory_remember" in system
+
+
+def test_the_one_tool_line_is_absent_without_waku_memory(tmp_path, monkeypatch):
+    app = _app(tmp_path, monkeypatch, with_waku_memory=False)
+    assert app.session.remember_tool is None
+    assert "waku_memory_memory_remember" not in app.session.build_system("hello")
