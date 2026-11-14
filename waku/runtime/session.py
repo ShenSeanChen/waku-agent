@@ -25,8 +25,8 @@ Rules:
   what time it is.
 - When the user asks what's on their calendar (a day, a week, "yesterday"), use
   list_events — you CAN read the calendar, not just write to it.
-- When the user shares something durable about a person, project, or preference,
-  use save_note to remember it.
+- When the user asks you to remember or save something, use save_note. Do not
+  save a fact the user only mentions; Waku keeps what matters by itself.
 - When asked to message someone, use send_message (it drafts to a local outbox).
 - If memory context is provided below, trust it — it came from your own store.
 - Call each tool at most once per request. Your history shows [tools used: ...]
@@ -49,6 +49,16 @@ Rules:
 LOOKUP_RULE = ("\nWhen a lookup of the same target (a channel, profile, company or page found "
                "by name) fails twice, stop guessing: use the exact URL, handle or domain the "
                "user gave, or ask them for it.")
+
+
+# Spec 022: a harness rule for the same reason as LOOKUP_RULE. An older SOUL.md
+# tells the model to save everything durable, and on 2026-11-13 the model saved
+# "releases need two reviewers", which the person had only mentioned. That fact
+# then reached Waku Memory twice: once from save_note and once from the turn.
+SAVE_RULE = ("\nUse save_note only when the user asks you to remember or save something, or "
+             "states a standing preference and asks you to keep it. Do not save a fact the "
+             "user only mentions; Waku keeps what matters from the conversation by itself. "
+             "This replaces any older instruction to save everything durable.")
 
 
 def load_soul(settings: Settings) -> str:
@@ -86,7 +96,7 @@ class Session:
                  (f"Your model: you are running on '{self.settings.model}' via the "
                  f"'{self.settings.provider}' provider, inside Waku, a local-first "
                  f"open-source agent harness (github.com/ShenSeanChen/waku-agent)."),
-                 LOOKUP_RULE]
+                 LOOKUP_RULE, SAVE_RULE]
         # Spec 009 E: a call the deployment refuses is a wasted step and, on a
         # metered tenant, a wasted turn. Spec 014: with the person's own treg
         # key the relay is not in the path, so treg's tools are all theirs.

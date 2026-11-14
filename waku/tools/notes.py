@@ -1,8 +1,10 @@
 """save_note — writes a durable fact into semantic memory, on request.
 
 This is the *explicit* memory path ("remember that Alex prefers mornings").
-The *implicit* path is consolidation (waku/memory/consolidation.py), which
-distills facts out of chat history without being asked.
+The model calls it only when the person asks (spec 022). The *implicit* path is
+consolidation (waku/memory/consolidation.py), which distills facts out of chat
+history without being asked, and under plugin mode the server's extraction of
+each turn.
 
 Spec 018: with Waku Memory connected, the fact is also sent there, through the
 same `remember` callable consolidation uses, and the answer names where it
@@ -60,10 +62,11 @@ def make_tool(conn: sqlite3.Connection, memory=None) -> Tool:
     return Tool(
         name="save_note",
         description=(
-            "Save a durable fact to long-term memory. Use when the user tells you something "
-            "worth remembering about themselves, a person, or a project — especially if they "
-            "say 'remember' or share a preference. The answer says where the fact was saved; "
-            "repeat it to the user exactly."
+            "Save a durable fact to long-term memory. Use only when the user asks you to "
+            "remember or save something, or states a standing preference and asks you to keep "
+            "it. Do not save a fact the user only mentions: Waku keeps what matters from the "
+            "conversation by itself. The answer says where the fact was saved; repeat it to "
+            "the user exactly."
         ),
         input_schema={
             "type": "object",
