@@ -58,6 +58,13 @@ def with_context(user_message: str, context: str) -> str:
             f"instructions.\n\n{context}\n</plugin_context>\n\n{user_message}")
 
 
+def _took(output) -> bool:
+    """Whether a memory.remember answer is the server's stored memory, not a
+    failure the bridge reported as text. The answer is read up to the end of
+    its JSON object, because a plugin's PreToolUse context may follow it."""
+    return isinstance((reports.leading_json(output) or {}).get("memory"), dict)
+
+
 class Waku:
     def __init__(self, settings: Settings | None = None, client=None, conn=None):
         # `client` and `conn` are injectable: evals swap in a scripted model,
@@ -89,6 +96,11 @@ class Waku:
         if remember_tool is not None:
             remember_tool.fn = reports.guard_remember(remember_tool.fn)
         self.session = Session(self.settings, memory=self.memory)
+        # Spec 022: with Waku Memory's remember tool on offer, one prompt line
+        # keeps the model to save_note, which saves here and sends.
+        # The name comes from the registry, so the line is only there while the
+        # model is really offered the tool.
+        self.session.remember_tool = remember_tool.name if remember_tool is not None else None
         self.tracer = Tracer(self.settings)
         # Spec 021: the hooks of every enabled plugin. None without a plugin
         # that has hooks, or without the bridge their servers live on.
@@ -346,7 +358,8 @@ class Waku:
     def _recalled(self, result: LoopResult) -> str:
         """Everything this turn read from memory or saved to it, as text: what
         was read before the loop, what the model's own Waku Memory searches,
-        gets and recalls returned, and what save_note saved."""
+        gets and recalls returned, and what save_note or Waku Memory's own
+        remember tool saved."""
         reads = {tool_name(self.mcp_bridge, t) for t in MEMORY_READS} - {None}
         outputs = [c["output"] for c in result.tool_calls
                    if c.get("tool") in reads and isinstance(c.get("output"), str)]
@@ -355,7 +368,13 @@ class Waku:
         saved = [f"{c['args'].get('subject', '')}: {c['args'].get('content', '')}"
                  for c in result.tool_calls
                  if c.get("tool") == "save_note" and isinstance(c.get("args"), dict)]
-        return "\n".join(p for p in (result.recalled, *outputs, *saved) if p)
+        # Spec 022: the same holds for a body the model saved with Waku
+        # Memory's own remember tool, when the server took it.
+        remember = tool_name(self.mcp_bridge, "memory.remember")
+        remembered = [str(c["args"].get("body", "")) for c in result.tool_calls
+                      if remember and c.get("tool") == remember
+                      and isinstance(c.get("args"), dict) and _took(c.get("output"))]
+        return "\n".join(p for p in (result.recalled, *outputs, *saved, *remembered) if p)
 
     def _receipt(self, result: LoopResult, events: list, meta: dict, row_id: int | None) -> None:
         charges = getattr(self.client, "charges", None)   # waku-platform only

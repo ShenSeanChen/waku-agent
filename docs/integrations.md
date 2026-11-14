@@ -119,7 +119,10 @@ plan has ended, and says so in its answer to each hook. While it is paused,
 Waku sends the facts it finds itself, and tells you once (spec 021
 amendment). While you have turned it off, Waku sends no facts from your
 conversations. Three things are still sent while it is off: a note you ask
-Waku to save, a research report, and a fact an earlier send failed on.
+Waku to save, a research report, and a fact an earlier send failed on. Waku
+saves a note only when you ask it to (spec 022). A Free account's notes are
+refused once its monthly credits are used up. Waku keeps the note here and
+sends it the next time you talk to Waku after the credits refresh.
 `waku connect waku-memory` still
 connects Waku Memory without the plugin, and then each fact consolidation
 keeps is sent instead (spec 006). Facts kept before you connected stay in
