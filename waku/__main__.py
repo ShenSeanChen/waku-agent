@@ -8,6 +8,7 @@
   waku connect treg          live data for research, on your own treg account (opens your browser)
   waku mcp                   MCP servers, and which account each knows you as
   waku mcp login <name>      sign in again — as someone else, or after expiry
+  waku plugin ...            install, list and manage plugins (waku plugin for the commands)
   waku voice                 talk to it (needs the [voice] extra)
   waku telegram              phone → laptop (needs TELEGRAM_BOT_TOKEN)
   waku discord               Discord → laptop (needs DISCORD_BOT_TOKEN)
@@ -84,6 +85,10 @@ def main() -> None:
         from waku.tools.mcp_cli import cli_main as mcp_main
 
         sys.exit(mcp_main())
+    elif args[0] == "plugin":
+        from waku.plugins.cli import cli_main as plugin_main
+
+        sys.exit(plugin_main(args[1:]))
     elif args[0] == "skill" and len(args) >= 2 and args[1] == "export":
         from waku.memory.procedural.exporter import cli_main as export_main
 

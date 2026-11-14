@@ -70,8 +70,18 @@ class FileTokenStorage(TokenStorage):
     holding it can act as the user against that server until it expires.
     """
 
-    def __init__(self, home: Path, server_name: str) -> None:
+    def __init__(self, home: Path, server_name: str, url: str | None = None) -> None:
         self._path = Path(home) / AUTH_DIR / f"{_sanitise(server_name)}.json"
+        # Spec 021 review: a file is keyed by server id, and a plugin can name
+        # any id. The file records the address it signed in to, and a server
+        # at another address under the same id is never handed its tokens.
+        self._url = url.rstrip("/") if url else None
+
+    def matches(self) -> bool:
+        """False when the file was written for another address. A file from
+        before addresses were recorded names none, and matches."""
+        stored = self._read().get("url")
+        return not (self._url and stored and stored.rstrip("/") != self._url)
 
     def _read(self) -> dict:
         try:
@@ -94,20 +104,32 @@ class FileTokenStorage(TokenStorage):
         tmp.replace(self._path)
 
     async def get_tokens(self):
+        if not self.matches():
+            return None
         raw = self._read().get("tokens")
         return OAuthToken.model_validate(raw) if raw else None
 
+    def _own(self) -> dict:
+        """The file's data, or a fresh start when it belongs to another
+        address: a new sign-in never keeps the other server's registration."""
+        data = self._read() if self.matches() else {}
+        if self._url:
+            data["url"] = self._url
+        return data
+
     async def set_tokens(self, tokens) -> None:
-        data = self._read()
+        data = self._own()
         data["tokens"] = tokens.model_dump(mode="json", exclude_none=True)
         self._write(data)
 
     async def get_client_info(self):
+        if not self.matches():
+            return None
         raw = self._read().get("client_info")
         return OAuthClientInformationFull.model_validate(raw) if raw else None
 
     async def set_client_info(self, client_info) -> None:
-        data = self._read()
+        data = self._own()
         data["client_info"] = client_info.model_dump(mode="json", exclude_none=True)
         self._write(data)
 
@@ -217,7 +239,7 @@ def build_provider(server_url: str, server_name: str, home: Path) -> OAuthClient
     return OAuthClientProvider(
         server_url=server_url,
         client_metadata=metadata,
-        storage=FileTokenStorage(home, server_name),
+        storage=FileTokenStorage(home, server_name, server_url),
         redirect_handler=redirect_handler,
         callback_handler=callback_handler,
     )

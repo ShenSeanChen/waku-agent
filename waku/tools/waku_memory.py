@@ -9,21 +9,31 @@ is the shape the Waku Memory importer reads.
 Spec 006: once the server is connected, remember_via() gives consolidation a
 callable that sends each fact it keeps with memory.remember. Spec 007 sends a
 turn's research report through the same callable, and spec 018 sends the fact `save_note`
-saves the same way. Those are the only uploads,
-and they go to the server the person connected, with their sign-in. Spec 009:
-search_via() gives a research turn one read of memory.search before the model
-starts, so research begins from what the person's brain already holds.
+saves the same way. They go to the server the person connected, with their
+sign-in. Spec 009: search_via() gives a research turn one read of
+memory.search before the model starts, so research begins from what the
+person's brain already holds.
+
+Spec 021: the Waku plugin (`waku plugin install waku@waku-memory`) brings the
+same server, named `waku_memory`, and three hooks. Under
+WAKU_MEMORY_MODE=plugin the plugin's Stop hook sends each turn and the server
+extracts the memories, so consolidation sends none of a captured turn's
+facts. It does send a batch's facts when Waku Memory's capture was paused
+for a turn in it, and it sends again any fact an earlier send failed on
+(spec 021 amendment E2). The report and `save_note` still send. The server is found in the bridge's merged list, so
+a plugin's server and an mcp.json entry are found the same way.
 
 `waku connect waku-memory` (or `/connect waku-memory` in the dashboard chat)
-adds the server to WAKU_HOME/mcp.json next to any servers already there, then
-signs you in once in your browser. Its tools then load like any MCP server's,
-named `waku_memory_*`.
+connects without the plugin: it adds the server to WAKU_HOME/mcp.json next to
+any servers already there, then signs you in once in your browser. Its tools
+then load like any MCP server's, named `waku_memory_*`.
 """
 
 from __future__ import annotations
 
 import importlib.util
 import json
+import os
 from pathlib import Path
 
 NAME = "waku_memory"
@@ -35,18 +45,46 @@ DOCS = "https://www.waku.one/docs"
 RETIRED_HOSTS = ("d1o2fv4416yi84.cloudfront.net",)
 
 
+def is_waku_memory(spec: dict) -> bool:
+    """Whether an mcp.json entry is Waku Memory: named waku_memory, or at URL
+    under any name."""
+    return isinstance(spec, dict) and (
+        spec.get("name") == NAME or str(spec.get("url", "")).rstrip("/") == URL)
+
+
+def consolidation_every(settings, connected: bool) -> int:
+    """How many exchanges pass between consolidations. A person who chose
+    Waku Memory and has it connected gets one per turn, as a hosted container
+    does, so a short chat reaches Waku Memory before it ends (spec 020).
+    WAKU_CONSOLIDATE_EVERY, when set, always wins."""
+    if "WAKU_CONSOLIDATE_EVERY" in os.environ:
+        return settings.consolidate_every
+    if connected and settings.memory_mode == "agent":
+        return 1
+    return settings.consolidate_every
+
+
 def _server(bridge) -> str | None:
     """The connected Waku Memory server's name, or None. It is the one named
     waku_memory or the one at URL; a person may have added it by hand under
     another name."""
     if bridge is None:
         return None
-    try:
-        servers = json.loads(bridge.config_path.read_text(encoding="utf-8")).get("servers", [])
-    except (OSError, ValueError, AttributeError):
-        return None
+    # Spec 021: the bridge's merged list, so a server a plugin brought is
+    # found as readily as one mcp.json names.
+    servers = getattr(bridge, "servers", None)
+    if not servers:
+        try:
+            servers = json.loads(bridge.config_path.read_text(encoding="utf-8")).get("servers", [])
+        except (OSError, ValueError, AttributeError):
+            return None
+    # A plugin's server counts only at Waku Memory's address: a plugin that
+    # calls a server waku_memory somewhere else must never receive a person's
+    # facts (spec 021 review). The person's own mcp.json entry may still name
+    # waku_memory at another address on purpose, a self-hosted one or a test.
     names = [s.get("name") for s in servers if isinstance(s, dict)
-             and (s.get("name") == NAME or s.get("url", "").rstrip("/") == URL)]
+             and (str(s.get("url", "")).rstrip("/") == URL
+                  or (s.get("name") == NAME and not s.get("plugin")))]
     return next((n for n in names if n and bridge.connected(n)), None)
 
 
@@ -121,6 +159,20 @@ def get_via(bridge):
     return get
 
 
+def captured_by(plugin) -> bool:
+    """Whether a plugin's Stop hook calls one of its servers at Waku Memory's
+    address (spec 021). Only then does the server extract this agent's turns,
+    and only then may the agent stop sending what consolidation keeps."""
+    urls = {s["name"]: str(s.get("url", "")).rstrip("/") for s in plugin.servers}
+    for hook in plugin.hooks.get("Stop", []):
+        server = str(hook.get("server", ""))
+        if server.startswith("plugin:"):
+            server = server.split(":", 2)[-1]
+        if hook.get("type") == "mcp_tool" and urls.get(server) == URL:
+            return True
+    return False
+
+
 def tool_name(bridge, tool: str) -> str | None:
     """The name the model calls one of Waku Memory's tools by, such as
     waku_memory_memory_remember, or None if Waku Memory is not connected."""
@@ -174,13 +226,18 @@ def status(home: Path) -> str:
         servers = json.loads(config.read_text(encoding="utf-8")).get("servers", []) if config.exists() else []
     except json.JSONDecodeError:
         return f"not connected · {config} is not valid JSON"
+    # Spec 021: a server the Waku plugin brought counts the same as one in
+    # mcp.json. Reading the plugin files connects nothing.
+    from waku.plugins import store
+
+    servers = [*servers, *store.servers(home)]
     spec = next((s for s in servers if s.get("url", "").rstrip("/") == URL), None)
     if spec is None:
         return "not connected · run: waku connect waku-memory"
     if spec.get("auth_env"):
         return f"configured · API key in ${spec['auth_env']}"
     if not _has_mcp():
-        return "configured · needs the mcp extra: pip install 'waku-agent[mcp]'"
+        return "configured · the mcp package is missing: reinstall waku-agent"
 
     from waku.tools.mcp_cli import _auth_file, _identity
 
@@ -191,6 +248,24 @@ def status(home: Path) -> str:
 
 
 def connect(home: Path) -> str:
+    message = _connect(home)
+    _record_choice(home)
+    return message
+
+
+def _record_choice(home: Path) -> None:
+    """A person who runs `waku connect waku-memory` and ends up connected has
+    chosen Waku Memory, so the first-run question is not asked later. A mode
+    already chosen, hosted's included, is left as it is."""
+    if os.getenv("WAKU_MEMORY_MODE", "").strip():
+        return
+    if status(home).startswith(("connected", "configured · API key")):
+        from waku.memory_choice import save
+
+        save("agent")
+
+
+def _connect(home: Path) -> str:
     if not _has_mcp():
         return ("Waku Memory connects over MCP, which needs an extra: "
                 "pip install 'waku-agent[mcp]' (in a checkout: pip install -e '.[mcp]'). "

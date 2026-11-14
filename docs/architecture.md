@@ -128,6 +128,43 @@ because the capture shim imports that backlog from `memory/<id>.md`. Hosted
 containers consolidate every turn; laptops consolidate every 6 exchanges.
 Without a connected server, nothing is sent.
 
+Under `WAKU_MEMORY_MODE=plugin` (spec 021) the Waku plugin's `Stop` hook
+sends each turn, and Waku Memory's server extracts the memories, as it does
+for Claude Code and Codex. Consolidation keeps facts on this machine and
+sends none of a captured turn's facts. Waku Memory answers each hook with
+whether capture is on, off or paused, and a turn records the answer. A batch
+that holds a paused turn is consolidated at once, and its facts are sent by
+consolidation, because the server dropped that turn. Every consolidation
+also sends again the facts an earlier send failed on. A research report and
+a `save_note` fact are still sent, because the person asked for each one.
+
+### Plugins and hooks
+
+A plugin is a folder with a manifest, `.waku-plugin/plugin.json`, that names
+MCP servers, hooks and skills (spec 021, `waku/plugins/`). `waku plugin install
+<plugin>@<marketplace>` copies one into `<home>/plugins/` after printing what it
+brings. A plugin's servers join `mcp.json`'s in the MCP bridge, with
+`mcp.json` winning a name both use, and its skills join the skill loader. A
+Claude Code plugin without a Waku manifest loads its servers and skills, and
+its hooks are skipped.
+
+Hooks run for turns from a gateway (cli, dashboard, telegram, discord,
+whatsapp, voice), never for the brief or the arenas. Each hook is an
+`mcp_tool` call to one of the plugin's own servers:
+
+- `SessionStart` on a gateway's first turn and `UserPromptSubmit` on every
+  turn run before the model. What they return goes into the person's message
+  as a `<plugin_context>` block, never into the system prompt, and into the
+  turn's `recalled` text, so consolidation does not keep it again.
+- `PreToolUse` runs inside the loop through `run_loop`'s `before_tool`. A
+  refusal stops the call, and the model reads the reason as its result.
+- `Stop` runs on its own thread after the reply, with the reply the person saw.
+
+A hook that errors or times out (10 seconds unless it says otherwise) is
+skipped, and the turn goes on. Each call is a `hook` span in the turn's
+waterfall. `Stop`'s line is written after the turn ended, and the waterfall
+puts it back in the turn its `turn_id` names.
+
 ### Research reports reach Waku Memory whole
 
 The bundled `research-report` skill teaches the house language and the
@@ -264,8 +301,11 @@ shows those instead. A proxy that does not know the turn leaves the estimate.
   `supervisor.py`. Gateways only move text.
 - `waku/runtime/session.py` — working memory for one turn: SOUL.md, memory
   context and chat history.
-- `waku/loop/agent.py` — the loop. `loop/models.py` — pluggable providers over
+- `waku/loop/agent.py` — the loop, with an optional `before_tool` a plugin's
+  `PreToolUse` hook answers. `loop/models.py` — pluggable providers over
   two wire formats.
+- `waku/plugins/` — plugins: the manifest, what is installed, marketplaces,
+  `waku plugin ...`, and the hook runner (spec 021).
 - `waku/graph/` — the engine, node factories and `workflows/` (triage): opt-in
   structure around the loop. The loop never changes, a graph node can be a loop
   turn, and every failure fails open to the plain loop.

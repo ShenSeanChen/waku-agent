@@ -110,6 +110,12 @@ function obsStepName(s){
   } else if (s.kind === "consolidation"){
     name = `consolidation kept ${s.new_facts}${s.sent ? ` · ${s.sent} sent` : ""}${s.local_only ? ` · ${s.local_only} local only` : ""}`;
     (s.facts || []).forEach(f => detail.push(esc(f)));
+  } else if (s.kind === "hook"){
+    name = `${esc(s.event)} · <code>${esc(s.plugin)}</code> <code>${esc(s.tool)}</code>`;
+    if (!s.ok) name += " " + uiBadge("error", "bad");
+    if (s.deny) detail.push(`<span class="obs-io">refused</span> ${esc(s.deny)}`);
+    if (s.context_chars) detail.push(`<span class="obs-io">context</span> ${esc(String(s.context_chars))} characters`);
+    if (s.error) detail.push(`<span class="obs-io">error</span> ${esc(s.error)}`);
   } else if (s.kind === "report"){
     name = `report saved${s.title ? " · " + esc(s.title) : ""}`;
   } else {

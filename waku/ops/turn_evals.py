@@ -709,6 +709,9 @@ REPLY_CHARS = 4000
 OUTPUT_CHARS = 800
 OUTPUTS_CHARS = 6000
 
+# The number check before the scores (waku-agent#353): without it Haiku 4.5
+# scored "The research cost $0.00" grounded 9/10 on all five runs, while a
+# tool output showed `"cost_usd": 0.0089`. With it the same reply scores 2-4.
 JUDGE_RUBRIC = """You are a strict, fair judge grading one turn of an AI assistant.
 
 The person asked:
@@ -719,6 +722,10 @@ The assistant replied:
 
 The tool outputs the assistant saw this turn (each cut to {output_chars} characters):
 {outputs}
+
+Before you score, check every number the reply states: each count, price and cost. Find the
+tool output it comes from. A number no output supports is unsupported; a number an output
+contradicts is false.
 
 Score two things from 0 to 10:
 - addresses_question: does the reply answer what the person asked?
@@ -793,6 +800,18 @@ def judge_client(settings):
     return client, model, copy.provider
 
 
+def judge_sampling(provider: str) -> dict:
+    """`temperature=0` for an Anthropic judge, so one turn gets one score:
+    at the default temperature one reply scored 0.5 on some runs and 0.6 on
+    others (waku-agent#353). Nothing for an OpenAI-compatible
+    provider: its adapter takes no temperature, and some OpenAI models
+    refuse any value but the default."""
+    from waku.loop.models import PROVIDERS  # noqa: PLC0415
+
+    row = PROVIDERS.get(provider or "")
+    return {"temperature": 0} if row is not None and row.kind == "anthropic" else {}
+
+
 class JudgeRefused(Exception):
     """The judge route's answer for a turn it will not judge."""
 
@@ -846,7 +865,8 @@ def judge_turn(home: Path, turn_id: str, client, model: str, provider: str,
         client.turn_id = call_id
     try:
         resp = client.messages.create(model=model, max_tokens=JUDGE_MAX_TOKENS,
-                                      messages=[{"role": "user", "content": prompt}])
+                                      messages=[{"role": "user", "content": prompt}],
+                                      **judge_sampling(provider))
     except Exception as exc:
         with _RECENT_LOCK:
             _RECENT.pop(turn_id, None)   # a failed call may be retried at once

@@ -96,6 +96,8 @@ def settings_info() -> dict:
         # graph workflows (triage-first turns) — same toggle contract as
         # experimental: the UI renders it, apply_settings writes it.
         "graph_workflows": s.graph_workflows,
+        # Waku Memory choice (spec 020): "" until the person answers.
+        "memory_mode": s.memory_mode,
     }
 
 
@@ -113,6 +115,21 @@ def apply_settings(payload: dict) -> dict:
 
     if "episodic_store" in payload:
         return {"error": "episodic_store is managed in Connections"}
+    if payload.get("memory_mode") in ("agent", "plugin", "off"):
+        # The first-run Waku Memory question (spec 020), answered on the
+        # dashboard. "plugin", and "agent" from a page older than spec 021,
+        # mean yes and do what yes does in the terminal: install the Waku
+        # plugin and sign in (a browser opens and waits for the click), or
+        # connect Waku Memory directly when the plugin cannot be installed.
+        # The dashboard's agent is rebuilt, so the answer works on the next
+        # message without a restart.
+        from waku.memory_choice import apply as apply_memory_choice
+        from waku.ops.browser_agent import current, rebuild
+
+        message = apply_memory_choice(payload["memory_mode"], load_settings().home)
+        if current() is not None:
+            rebuild()
+        return {"ok": True, "memory_message": message, **settings_info()}
     env_path = str(env_write_path())
     # NOT `if toggle:` — turning it OFF sends "", which is falsy. Absent (None)
     # means "don't touch"; "" means "switch it off".

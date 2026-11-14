@@ -71,12 +71,12 @@ Waku's own memory is local. **[Waku Memory](https://www.waku.one)** is the hoste
 share across agents: save something in Claude Code, recall it here.
 
 ```bash
-pip install 'waku-agent[mcp]'           # in a checkout: uv pip install -e '.[mcp]'
-waku connect waku-memory                # or /connect waku-memory in the dashboard chat
+waku plugin install waku@waku-memory    # or /plugin install waku@waku-memory in the dashboard chat
+waku mcp login waku_memory              # sign in, once, in your browser
 waku skill export --to claude,codex     # carry Waku's skills to Claude Code and Codex too
 ```
 
-Your browser opens once to sign in. To connect Claude Code, Codex, Hermes or Grok Bot to the
+That installs the Waku plugin, the one Claude Code and Codex use. To connect Claude Code, Codex, Hermes or Grok Bot to the
 same memory, see [integrations](docs/integrations.md#share-one-memory-with-your-other-agents-waku-memory).
 For live data when it researches, `waku connect treg` (or `/connect treg`) signs in to your own
 [treg](https://treg.to) account the same way; see [integrations](docs/integrations.md#live-data-for-research-treg).

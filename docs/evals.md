@@ -65,8 +65,10 @@ One more check runs only when you ask. "Judge this turn" in a turn's
 waterfall sends that stored turn's message, reply and tool outputs to the
 small model of the provider you use now (Haiku on the hosted free tier) and
 asks whether the reply answers the question and stays grounded in the tool
-outputs. The button shows the estimated cost first ("about $0.002 with
-claude-haiku-4-5"). The answer is written once to the trace as a `score`
+outputs. The judge is told to check every count, price and cost the reply
+states against those outputs before it scores. An Anthropic judge runs at
+temperature 0, so a turn judged twice gets the same score. The button shows
+the estimated cost first ("about $0.002 with claude-haiku-4-5"). The answer is written once to the trace as a `score`
 event (`answer_grounded`, 0 to 1, passing at 0.7) with the model that judged
 and what the call cost, and the chip reads "judge · answer grounded 0.3".
 On the hosted free tier the call goes through the metering proxy, so it is

@@ -67,10 +67,20 @@ class Memory:
         self.client = client
         self.facts = self._make_fact_store(conn, settings)
         self.episodes = episode_store if episode_store is not None else self._make_episode_store(conn, settings)
-        self.skills = SkillLoader([*bundled_skill_dirs(), settings.home / "skills"])
+        # Spec 021: an enabled plugin's skills load like the person's own.
+        from waku.plugins import store
+
+        plugin_skills = [p.skills_dir for p in store.enabled(settings.home) if p.skills_dir]
+        self.skills = SkillLoader([*bundled_skill_dirs(), settings.home / "skills", *plugin_skills])
         # Spec 006: sends each fact consolidation keeps to Waku Memory. app.py
         # sets it once the MCP servers have connected; None means no send.
         self.remember = None
+        # Spec 021 review: True when an enabled plugin's Stop hook sends each
+        # turn to the Waku Memory this agent is connected to. Consolidation
+        # then sends no captured turn's facts, whatever mode is saved, so no
+        # turn reaches Waku Memory twice. A paused turn's facts it still sends
+        # (spec 021 amendment E2). app.py sets it.
+        self.plugin_captures = False
 
     @staticmethod
     def _make_fact_store(conn, settings):
@@ -250,6 +260,14 @@ class Memory:
             if path.stem.isdigit() and path.name not in current:
                 path.unlink()
 
+    def _server_extracts(self) -> bool:
+        """Whether Waku Memory takes this agent's turns from the Stop hook:
+        the saved mode says so, or an enabled plugin's Stop hook reaches
+        Waku Memory whatever the mode (spec 021 review fix 10). Both answer
+        the amendment's question the same way: a paused turn's facts are
+        sent by consolidation."""
+        return self.settings.memory_mode == "plugin" or self.plugin_captures
+
     def maybe_consolidate(self, notify=None, report: str = "", recalled: str = "") -> None:
         """`report` is the research report this turn saved, if it saved one
         (spec 009 B): its findings stay in it, not in loose facts. `recalled`
@@ -262,9 +280,16 @@ class Memory:
             self.settings.consolidate_every,
             self.facts,
             self.episodes,
-            remember=self.remember,
+            # Spec 021: under "plugin" the server extracts from the Stop hook,
+            # so consolidation keeps facts here and sends none. The amendment
+            # (E2): a batch with a turn whose capture was paused sends its
+            # facts itself, and facts an earlier send failed on are sent
+            # again. save_note and the report upload still use self.remember:
+            # the person asked for them.
+            remember=None if self._server_extracts() else self.remember,
             report=report,
             recalled=recalled,
+            send_if_paused=self.remember if self._server_extracts() else None,
         )
         # Spec 006: `kept` lists each fact (subject, content, project, its
         # Waku Memory id when the send succeeded, and `sent`), so a chat panel

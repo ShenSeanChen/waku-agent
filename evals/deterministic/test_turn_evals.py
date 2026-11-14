@@ -326,6 +326,28 @@ def test_the_judge_prompt_comes_from_the_stored_turn_only(judged_home):
     assert all(len(line) <= te.OUTPUT_CHARS + 40 for line in outputs.splitlines() if line.startswith("["))
 
 
+def test_the_judge_rubric_asks_for_every_number_to_be_checked(judged_home):
+    """waku-agent#353: without this paragraph Haiku 4.5 scored "The research
+    cost $0.00" grounded 9/10 while an output showed cost_usd 0.0089."""
+    turn, _ = te.find_turn(judged_home, TID)
+    prompt = te.judge_prompt(turn)
+    check = prompt.index("check every number the reply states: each count, price and cost")
+    assert check < prompt.index("Score two things") and check > prompt.index("[treg_call]")
+
+
+def test_an_anthropic_judge_runs_at_temperature_zero_and_an_openai_one_does_not(judged_home, tmp_path):
+    """waku-agent#353: temperature 0 gives one turn one score. The OpenAI
+    adapter takes no temperature, so none is sent there."""
+    client = _FakeClient()
+    te.judge_turn(judged_home, TID, client, "claude-haiku-4-5-20251001", "anthropic", now=1e9)
+    assert client.messages.calls[0]["temperature"] == 0
+    te._RECENT.clear()
+    client = _FakeClient()
+    te.judge_turn(_home(tmp_path / "openai", [REHEARSAL]), TID, client, "gpt-5-mini", "openai", now=1e9)
+    assert "temperature" not in client.messages.calls[0]
+    assert te.judge_sampling("no-such-provider") == {}
+
+
 def test_the_judge_writes_one_score_event_with_cost_and_model(judged_home):
     client = _FakeClient()
     event = te.judge_turn(judged_home, TID, client, "claude-haiku-4-5-20251001", "anthropic", now=1e9)
@@ -335,7 +357,10 @@ def test_the_judge_writes_one_score_event_with_cost_and_model(judged_home):
     assert event["cost_usd"] == obs.llm_cost("anthropic", "claude-haiku-4-5-20251001", {"in": 1200, "out": 60})
     lines = [json.loads(x) for p in (judged_home / "traces").glob("*.jsonl")
              for x in p.read_text().splitlines()]
-    assert [e for e in lines if e["type"] == "score"] == [{**event, "ts": lines[-1]["ts"]}]
+    # The score line's own ts: glob order across trace files is the folder's
+    # listing order, so "the last line read" is not always the score line.
+    scores = [e for e in lines if e["type"] == "score"]
+    assert len(scores) == 1 and scores[0] == {**event, "ts": scores[0]["ts"]}
     ledger = [json.loads(x) for x in (judged_home / "usage.jsonl").read_text().splitlines()]
     assert ledger[0]["kind"] == "judge" and ledger[0]["in"] == 1200
     # the page shows the judge's chip, with the model named in its note

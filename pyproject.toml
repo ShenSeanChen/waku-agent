@@ -26,6 +26,10 @@ dependencies = [
     "openai>=1.50",      # openai wire format: OpenAI, Gemini, DeepSeek (and embeddings)
     "python-dotenv>=1.0",
     "rich>=13.0",
+    # Waku Memory connects over MCP (spec 020), so a fresh install can sign in
+    # without a second install command. The one exception to "no new default
+    # dependency" in AGENTS.md rule 3. >=2.1 for the reason under [mcp] below.
+    "mcp>=2.1",
 ]
 
 [project.urls]
@@ -108,7 +112,9 @@ arena = [
 notion = [
     "notion-client>=2.5",
 ]
-# Optional: connect MCP servers (.waku/mcp.json)
+# `mcp` is a default dependency now (above). This extra stays so
+# `pip install 'waku-agent[mcp]'` and `uv sync --extra mcp` keep working.
+# Connect MCP servers (.waku/mcp.json)
 # >=2.1: the Streamable HTTP transport is `streamable_http_client` and takes a
 # pre-built httpx client. 1.x spelled it `streamablehttp_client`, took headers
 # directly, and yielded a third element — so mcp_client.py's remote branch does

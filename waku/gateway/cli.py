@@ -55,6 +55,10 @@ def _observer(kind: str, event: dict) -> None:
 
 
 def main() -> None:
+    from waku.config import load_settings
+    from waku.memory_choice import maybe_ask
+
+    maybe_ask(load_settings())   # spec 020: asked once, only in a terminal
     waku = Waku()
     waku.session.session_id = "terminal"   # its own conversation thread in the inbox
     console.print(Panel.fit(
@@ -86,6 +90,7 @@ def main() -> None:
             continue
         result = waku.respond(user_message, observer=_observer, source="cli")
         console.print(f"[bold green]waku ›[/bold green] {result.reply}\n")
+    waku.close()   # spec 021: lets the last turn's Stop hook finish
     console.print("[dim]bye — your memory stays in state.db[/dim]")
 
 

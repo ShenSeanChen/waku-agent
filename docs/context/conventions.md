@@ -145,8 +145,8 @@ surprising finding, and which board to film.
 
 ## 7. Dependencies and extras
 
-The default install is the stdlib plus the Anthropic and OpenAI clients. An
-optional feature goes behind an extra in `pyproject.toml`, and it fails with an
+The default install is the stdlib plus the Anthropic and OpenAI clients, and
+`mcp`, which connects Waku Memory. An optional feature goes behind an extra in `pyproject.toml`, and it fails with an
 install hint, not a crash, when the extra is missing. A new core dependency
 needs a discussion on an issue first.
 
