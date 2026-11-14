@@ -27,6 +27,7 @@ import subprocess
 import sys
 import time
 from datetime import datetime
+from itertools import count
 from pathlib import Path
 
 from waku.tools._env import delegate_env as _delegate_env
@@ -51,9 +52,15 @@ def new_run_folder(model: str, task: str, now: datetime | None = None) -> Path:
     """Create and return a fresh dated run folder for one delegation."""
     now = now or datetime.now()
     name = f"{now.strftime('%H%M%S')}-{_slug(model, 2)}-{_slug(task)}"
-    folder = workspace_root() / now.strftime("%Y-%m-%d") / name
-    folder.mkdir(parents=True, exist_ok=True)
-    return folder
+    day = workspace_root() / now.strftime("%Y-%m-%d")
+    day.mkdir(parents=True, exist_ok=True)
+    for suffix in count(1):
+        folder = day / (name if suffix == 1 else f"{name}-{suffix}")
+        try:
+            folder.mkdir()  # Atomic reservation, even across independent processes.
+        except FileExistsError:
+            continue
+        return folder
 
 
 def created_files(folder: Path) -> list[Path]:
