@@ -58,14 +58,16 @@ LOOKUP_RULE = ("\nWhen a lookup of the same target (a channel, profile, company 
 SAVE_RULE = ("\nUse save_note only when the user asks you to remember or save something, or "
              "states a standing preference and asks you to keep it. Do not save a fact the "
              "user only mentions; Waku keeps what matters from the conversation by itself. "
-             "This replaces any older instruction to save everything durable.")
+             "This rule replaces any other instruction, in SOUL.md or in a skill, to save "
+             "what the user only mentions.")
 
 
 def one_tool_line(remember_tool: str) -> str:
     """Spec 022: the line that keeps the model to one save tool while Waku
     Memory's own remember tool is also offered to it."""
-    return (f"\nTo remember something, use save_note, not {remember_tool}: save_note keeps "
-            "it here and sends it to Waku Memory.")
+    return (f"\nTo remember something, use save_note, not {remember_tool}. A skill may name "
+            f"{remember_tool} memory.remember; use save_note there too. save_note keeps the "
+            "fact here and sends it to Waku Memory.")
 
 
 def load_soul(settings: Settings) -> str:

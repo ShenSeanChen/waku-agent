@@ -42,7 +42,8 @@ def test_every_prompt_carries_the_save_rule_even_with_an_older_soul(tmp_path):
     system = Session(_settings(tmp_path)).build_system("hello")
     assert OLD_SOUL_LINE in system
     assert SAVE_RULE in system
-    assert "This replaces any older instruction to save everything durable." in system
+    assert ("This rule replaces any other instruction, in SOUL.md or in a skill, to save "
+            "what the user only mentions.") in system
 
 
 # --- one save tool while Waku Memory's remember tool is on offer ---------------------
@@ -93,6 +94,10 @@ def test_the_one_tool_line_is_there_while_waku_memory_is_connected(tmp_path, mon
     system = app.session.build_system("hello")
     assert one_tool_line("waku_memory_memory_remember") in system
     assert "use save_note, not waku_memory_memory_remember" in system
+    # The plugin's skill names the same tool memory.remember (SKILL.md), so the
+    # line says both names are the one it replaces.
+    assert ("A skill may name waku_memory_memory_remember memory.remember; use save_note "
+            "there too.") in system
 
 
 def test_the_one_tool_line_is_absent_without_waku_memory(tmp_path, monkeypatch):
