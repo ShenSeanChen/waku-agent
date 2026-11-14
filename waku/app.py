@@ -6,7 +6,6 @@ session → loop. If you want to understand the repo in one place, start here.
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 import threading
@@ -61,11 +60,9 @@ def with_context(user_message: str, context: str) -> str:
 
 def _took(output) -> bool:
     """Whether a memory.remember answer is the server's stored memory, not a
-    failure the bridge reported as text."""
-    try:
-        return isinstance(json.loads(output).get("memory"), dict)
-    except (TypeError, ValueError, AttributeError):
-        return False
+    failure the bridge reported as text. The answer is read up to the end of
+    its JSON object, because a plugin's PreToolUse context may follow it."""
+    return isinstance((reports.leading_json(output) or {}).get("memory"), dict)
 
 
 class Waku:

@@ -163,3 +163,18 @@ def test_the_hosted_soul_template_no_longer_says_to_save_everything_durable():
         encoding="utf-8")
     assert "shares something durable" not in template
     assert "When the user asks you to remember or save something, use save_note." in template
+
+
+def test_a_stored_answer_with_a_plugin_note_after_it_still_counts(tmp_path, monkeypatch):
+    """A plugin's PreToolUse hook may append its context after the tool's
+    output (waku/loop/agent.py). The stored memory still counts as saved."""
+    from waku.memory.reports import saved_by_model
+
+    app = _app(tmp_path, monkeypatch, with_waku_memory=True)
+    stored = json.dumps({"memory": {"id": "mem-1", "body": BODY}}) + "\n\nA plugin note."
+    assert BODY in app._recalled(LoopResult(reply="Saved.", tool_calls=[_call(stored)]))
+    report = "<!-- waku-report v1 -->\n# A report\n\n## Summary\n- one finding.\n"
+    call = {"tool": "waku_memory_memory_remember", "args": {"body": report, "scope": "global"},
+            "output": json.dumps({"memory": {"id": "rep-1"}}) + "\n\nA plugin note."}
+    found = saved_by_model([call])
+    assert found is not None and found["memory_id"] == "rep-1"
