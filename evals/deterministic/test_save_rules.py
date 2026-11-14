@@ -123,3 +123,9 @@ def test_a_body_waku_memory_refused_is_not(tmp_path, monkeypatch):
     app = _app(tmp_path, monkeypatch, with_waku_memory=True)
     refused = "MCP call waku_memory_memory.remember failed: Out of credits. (credit_limit_reached)"
     assert BODY not in app._recalled(LoopResult(reply="", tool_calls=[_call(refused)]))
+
+
+def test_the_first_run_question_says_notes_are_sent_when_asked():
+    from waku.memory_choice import WHAT_LEAVES
+
+    assert "each note you ask Waku to save is sent too" in WHAT_LEAVES

@@ -137,6 +137,10 @@ that holds a paused turn is consolidated at once, and its facts are sent by
 consolidation, because the server dropped that turn. Every consolidation
 also sends again the facts an earlier send failed on. A research report and
 a `save_note` fact are still sent, because the person asked for each one.
+The model calls `save_note` only when the person asks it to remember or save
+something; a harness rule says so on every prompt, and one more line names
+`save_note` over Waku Memory's own remember tool while that tool is offered
+(spec 022).
 
 ### Plugins and hooks
 
