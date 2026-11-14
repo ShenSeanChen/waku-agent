@@ -101,7 +101,9 @@ class Waku:
         self.session = Session(self.settings, memory=self.memory)
         # Spec 022: with Waku Memory's remember tool on offer, one prompt line
         # keeps the model to save_note, which saves here and sends.
-        self.session.remember_tool = tool_name(self.mcp_bridge, "memory.remember")
+        # The name comes from the registry, so the line is only there while the
+        # model is really offered the tool.
+        self.session.remember_tool = remember_tool.name if remember_tool is not None else None
         self.tracer = Tracer(self.settings)
         # Spec 021: the hooks of every enabled plugin. None without a plugin
         # that has hooks, or without the bridge their servers live on.

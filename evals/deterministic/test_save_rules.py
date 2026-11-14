@@ -69,7 +69,15 @@ class _Bridge:
         pass
 
 
-def _app(tmp_path, monkeypatch, with_waku_memory: bool):
+def _remember_tool():
+    from waku.tools.registry import Tool
+
+    return Tool(name="waku_memory_memory_remember", description="[MCP:waku_memory] Save a memory.",
+                input_schema={"type": "object", "properties": {"body": {"type": "string"}}},
+                fn=lambda **kw: json.dumps({"memory": {"id": "mem-1"}}))
+
+
+def _app(tmp_path, monkeypatch, with_waku_memory: bool, offered: bool = True):
     import waku.app
 
     if with_waku_memory:
@@ -82,6 +90,8 @@ def _app(tmp_path, monkeypatch, with_waku_memory: bool):
         def build_with_bridge(*args, **kwargs):
             registry = real_build(*args, **kwargs)
             registry.mcp_bridge = _Bridge(path)
+            if offered:
+                registry.register(_remember_tool())
             return registry
 
         monkeypatch.setattr(waku.app, "build_registry", build_with_bridge)
@@ -98,6 +108,14 @@ def test_the_one_tool_line_is_there_while_waku_memory_is_connected(tmp_path, mon
     # line says both names are the one it replaces.
     assert ("A skill may name waku_memory_memory_remember memory.remember; use save_note "
             "there too.") in system
+
+
+def test_the_one_tool_line_is_absent_when_the_tool_is_not_offered(tmp_path, monkeypatch):
+    """Waku Memory is connected, but its remember tool is not in the registry:
+    the line would name a tool the model does not have."""
+    app = _app(tmp_path, monkeypatch, with_waku_memory=True, offered=False)
+    assert app.session.remember_tool is None
+    assert "waku_memory_memory_remember" not in app.session.build_system("hello")
 
 
 def test_the_one_tool_line_is_absent_without_waku_memory(tmp_path, monkeypatch):
