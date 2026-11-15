@@ -348,6 +348,40 @@ def test_an_anthropic_judge_runs_at_temperature_zero_and_an_openai_one_does_not(
     assert te.judge_sampling("no-such-provider") == {}
 
 
+def test_a_library_that_refuses_temperature_is_judged_without_it(judged_home):
+    """Version 1 of the `anthropic` library removed `temperature` from
+    `messages.create`: passing it raises a TypeError before anything is sent.
+    A fresh install gets such a library, and from 0.1.10 to 0.1.12 the judge
+    answered "The judge could not be reached: TypeError" there. The call is
+    sent again without the setting, and any other TypeError still fails."""
+    from types import SimpleNamespace
+
+    class Refusing:
+        def __init__(self, message):
+            self.calls, self.message = [], message
+            self.messages = SimpleNamespace(create=self._create)
+
+        def _create(self, **kwargs):
+            self.calls.append(kwargs)
+            if "temperature" in kwargs:
+                raise TypeError(self.message)
+            return SimpleNamespace(
+                content=[SimpleNamespace(type="text", text='{"addresses_question": 9, "grounded": 9, "reason": "ok"}')],
+                usage=SimpleNamespace(input_tokens=1200, output_tokens=60))
+
+    client = Refusing("Messages.create() got an unexpected keyword argument 'temperature'")
+    event = te.judge_turn(judged_home, TID, client, "claude-haiku-4-5-20251001", "anthropic", now=1e9)
+    assert event["value"] == 0.9
+    assert ["temperature" in call for call in client.calls] == [True, False]
+    assert client.calls[0]["messages"] == client.calls[1]["messages"]
+
+    te._RECENT.clear()
+    other = Refusing("create() missing 1 required argument")
+    with pytest.raises(te.JudgeRefused):
+        te.judge_turn(judged_home, TID, other, "claude-haiku-4-5-20251001", "anthropic", now=2e9)
+    assert len(other.calls) == 1
+
+
 def test_the_judge_writes_one_score_event_with_cost_and_model(judged_home):
     client = _FakeClient()
     event = te.judge_turn(judged_home, TID, client, "claude-haiku-4-5-20251001", "anthropic", now=1e9)
