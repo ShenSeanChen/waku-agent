@@ -553,7 +553,9 @@ def collect() -> dict:
         # MCP servers that sign in on their own page rather than through an
         # .env field (spec 007 E). Files only: no browser, no network.
         "mcp_connections": [treg.card(home)],
-        "tools": tools_info(),
+        "tools": tools_info(events),
+        # The outside memory, for the Memory page's "which memory is which".
+        "waku_memory": waku_memory_info(settings),
         "usage": usage_summary(home),
     }
 
@@ -665,21 +667,130 @@ def _tool_source(name: str, mcp_servers: list[str]) -> str:
     return "other"
 
 
-def tools_info() -> dict:
-    """The agent's available tools + any configured MCP servers — so the Tools
-    tab shows CAPABILITIES, not just the artifacts tool calls produced. Reflects
-    the live agent's registry when one exists (exact), else builds a display-only
-    catalog (no MCP subprocess is spawned just to render the page)."""
+def mcp_servers(home: Path) -> list[dict]:
+    """Every MCP server Waku would connect: mcp.json's, then the ones enabled
+    plugins bring, merged as the bridge merges them. Reads files, opens
+    nothing. Until 2026-11-14 the Tools page read mcp.json alone, so the
+    server a plugin brought (Waku Memory, after `waku plugin install`) was
+    not listed anywhere and its tools were filed under "Other"."""
+    from waku.plugins import store
+    from waku.tools.mcp_client import merge
+
+    try:
+        config = json.loads((home / "mcp.json").read_text(encoding="utf-8")).get("servers", [])
+    except (OSError, ValueError, AttributeError):
+        config = []
+    try:
+        brought = store.servers(home)
+    except (OSError, ValueError):
+        brought = []
+    return merge(config if isinstance(config, list) else [], brought)[0]
+
+
+def _mcp_row(home: Path, spec: dict, live, tools: list) -> dict:
+    """One server as the MCP tab lists it. `connected` and `tools` are None
+    until a chat turn has built the agent: the page never opens a connection
+    of its own."""
+    from waku.tools.mcp_cli import _auth_file, _identity
+
+    name = str(spec.get("name", "?"))
+    bridge = getattr(live, "mcp_bridge", None) if live is not None else None
+    remote = bool(spec.get("url"))
+    account = None
+    if remote and not spec.get("auth_env") and not spec.get("headers"):
+        # a server that signs in on its own page; the line says who, or that
+        # nobody has yet
+        try:
+            account = _identity(_auth_file(home, name))
+        except Exception:
+            account = None
+    return {
+        "name": name,
+        "address": str(spec.get("url") or f"{spec.get('command', '')} (runs on this machine)").strip(),
+        "plugin": str(spec.get("plugin") or ""),
+        "connected": bool(bridge.connected(name)) if bridge is not None else None,
+        "tools": (sum(1 for t in tools if t.name.startswith(f"{name}_"))
+                  if bridge is not None else None),
+        "account": account,
+    }
+
+
+def hooks_info(home: Path, events: list[dict] | None = None) -> dict:
+    """The hooks enabled plugins declare (spec 021), one row per hook, with
+    the last time each ran. A hook is a call Waku makes by itself at a fixed
+    moment of a turn, so it is listed beside the tools: Observability shows
+    each run, and this shows what exists. An event no plugin uses is listed
+    too, so the four moments are all visible."""
+    from waku.plugins import manifest, store
+
+    try:
+        plugins = store.enabled(home)
+    except (OSError, ValueError):
+        plugins = []
+    last: dict[tuple, dict] = {}
+    for ev in events or []:
+        if ev.get("type") == "hook":
+            last[(ev.get("plugin"), ev.get("event"), ev.get("tool"))] = {
+                "ok": bool(ev.get("ok")), "duration_ms": ev.get("duration_ms"),
+                "ts": ev.get("ts"), "error": (str(ev.get("error"))[:200] if ev.get("error") else None)}
+    rows = []
+    for event in manifest.EVENTS:
+        found = [(p, h) for p in plugins for h in p.hooks.get(event, [])]
+        if not found:
+            rows.append({"event": event, "plugin": None})
+            continue
+        for plugin, hook in found:
+            tool = str(hook.get("tool") or hook.get("command") or "")
+            rows.append({"event": event, "plugin": plugin.name,
+                         "kind": str(hook.get("type") or ""),
+                         "server": str(hook.get("server") or ""), "tool": tool,
+                         "last": last.get((plugin.name, event, tool))})
+    return {"rows": rows, "count": sum(1 for r in rows if r["plugin"]),
+            # a Claude Code plugin loads here without its hooks (spec 021)
+            "skipped": [p.name for p in plugins if p.hooks_skipped]}
+
+
+def waku_memory_info(settings) -> dict:
+    """What the Memory page says about the outside memory: whether Waku
+    Memory is connected, as whom, and which of the two ways facts reach it.
+    Files only."""
+    from waku.memory_choice import already_connected
+    from waku.plugins import store
+    from waku.tools.mcp_cli import _auth_file, _identity
+    from waku.tools.waku_memory import is_waku_memory
+
+    home = settings.home
+    try:
+        connected = already_connected(home)
+    except (OSError, ValueError):
+        connected = False
+    spec = next((s for s in mcp_servers(home) if is_waku_memory(s)), None)
+    account = None
+    if spec is not None and not spec.get("auth_env"):
+        try:
+            account = _identity(_auth_file(home, str(spec.get("name"))))
+        except Exception:
+            account = None
+    try:
+        by_plugin = any(is_waku_memory(s) for s in store.servers(home))
+    except (OSError, ValueError):
+        by_plugin = False
+    return {"connected": connected, "account": account, "by_plugin": by_plugin,
+            "mode": settings.memory_mode}
+
+
+def tools_info(events: list[dict] | None = None) -> dict:
+    """The agent's available tools, every MCP server it would connect and
+    every hook its plugins declare — so the Tools tab shows CAPABILITIES, not
+    just the artifacts tool calls produced. Reflects the live agent's registry
+    when one exists (exact), else builds a display-only catalog (no MCP
+    subprocess is spawned just to render the page). `events` are the trace
+    events `data()` already read; a hook's last run comes from them."""
     settings = load_settings()
     settings.ensure_home()
-    mcp = {"configured": False, "servers": [], "live": False}
-    mcp_path = settings.home / "mcp.json"
-    if mcp_path.exists():
-        mcp["configured"] = True
-        try:
-            mcp["servers"] = [s.get("name", "?") for s in json.loads(mcp_path.read_text(encoding="utf-8")).get("servers", [])]
-        except (json.JSONDecodeError, OSError):
-            pass
+    specs = mcp_servers(settings.home)
+    mcp = {"configured": bool(specs), "servers": [str(s.get("name", "?")) for s in specs],
+           "live": False, "rows": []}
 
     catalog = []
     live = browser_agent.current()
@@ -738,7 +849,9 @@ def tools_info() -> dict:
     catalog.sort(key=lambda c: (c["source"], c["name"]))
     from waku.tools.experimental import PLANNED
 
-    return {"catalog": catalog, "mcp": mcp, "apple_on": settings.apple_tools,
+    mcp["rows"] = [_mcp_row(settings.home, spec, live, tools) for spec in specs]
+    return {"catalog": catalog, "mcp": mcp, "hooks": hooks_info(settings.home, events),
+            "apple_on": settings.apple_tools,
             "planned": PLANNED}   # whiteboard boxes not wired in yet (coming soon)
 
 
