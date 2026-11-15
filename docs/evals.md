@@ -67,7 +67,10 @@ small model of the provider you use now (Haiku on the hosted free tier) and
 asks whether the reply answers the question and stays grounded in the tool
 outputs. The judge is told to check every count, price and cost the reply
 states against those outputs before it scores. An Anthropic judge runs at
-temperature 0, so a turn judged twice gets the same score. The button shows
+temperature 0, so a turn judged twice gets the same score. Version 1 and later
+of the `anthropic` library no longer take that setting; with one of those
+installed the judge runs at the default temperature, and two runs can differ
+by a point. The button shows
 the estimated cost first ("about $0.002 with claude-haiku-4-5"). The answer is written once to the trace as a `score`
 event (`answer_grounded`, 0 to 1, passing at 0.7) with the model that judged
 and what the call cost, and the chip reads "judge · answer grounded 0.3".
