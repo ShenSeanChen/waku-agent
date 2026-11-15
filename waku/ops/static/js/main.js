@@ -20,7 +20,7 @@ const TITLES = {chat:"Chat & watch",
                 "compare/models":"Model race — ten brains, one harness",
                 "compare/memory":"Memory race — one brain, five places to put facts",
                 settings:"Behaviour — how a turn runs",
-                database:"Database — everything Waku stores (state.db)"};
+                sql:"SQL console — read-only questions over state.db"};
 function render(){
   if (!D) return;
   let [hashView, subRaw] = (location.hash||"#overview").slice(1).split("/");
@@ -67,7 +67,7 @@ function render(){
   if (view === "overview" || view === "graph"){
     // don't rebuild mid-animation or the glowing SVG gets wiped
     if (activeView !== view || !animating){ document.getElementById("view").innerHTML = VIEWS[view](D); }
-  } else if ((view === "memory" || view === "settings" || view === "database" || view === "compare" || view === "models" || view === "connections" || view === "judgment") && editing && !subChanged){
+  } else if ((view === "memory" || view === "settings" || view === "sql" || view === "compare" || view === "models" || view === "connections" || view === "judgment") && editing && !subChanged){
     // don't wipe an in-progress edit on the 5s refresh — but DO switch sub-tabs
     // ("judgment" is here for hover: rebuilding the table mid-hover destroys the
     // element under the pointer, and a native tooltip never gets to appear)
@@ -89,7 +89,6 @@ function render(){
     (D.graph && (D.graph.stats.quick + D.graph.stats.full)) || "";
   document.getElementById("n-mem").textContent = (D.facts.length + D.episodes.length) || "";
   document.getElementById("n-tools").textContent = (D.calendar.length + D.outbox.length) || "";
-  document.getElementById("n-db").textContent = (D.db && D.db.all_tables.length) || "";
   document.getElementById("n-obs").textContent = D.stats.tool_errors || "";
 }
 let lastFetch = Date.now();

@@ -85,6 +85,10 @@
   /* long tables scroll within their own box, header pinned */
   .scrolly{max-height:62vh;overflow:auto;border:1px solid var(--rule);border-radius:var(--radius);background:var(--surface-paper)}
   .scrolly table{border:none}
+  /* the raw SQLite rows behind a page, closed until asked for */
+  .raw{margin-top:var(--space-4)}
+  .raw>summary{cursor:pointer;font-family:var(--face-mono);font-size:var(--text-xs);letter-spacing:var(--tracking-label);text-transform:uppercase;color:var(--text-muted)}
+  .raw>summary code{text-transform:none;letter-spacing:0}
   .scrolly th{position:sticky;top:0;background:var(--surface-paper);z-index:1}
   /* aligned schema: the column header IS the indigo chip, so labels line up
      over their data (no separate, misaligned chip row). */
