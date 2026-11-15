@@ -3,7 +3,7 @@
 // step, no modules). Load order + rules: static/README.md.
 
 // --- sub-tabs: keep long pages short by splitting them into hash-routed tabs
-// (#memory/semantic, #database/facts). Each tab is a plain link, so it's
+// (#memory/semantic, #tools/hooks). Each tab is a plain link, so it's
 // bookmarkable and the architecture cards can deep-link straight to one.
 function subtabBar(view, tabs, active){
   return uiTabs(tabs.map(([key,label,n]) =>
@@ -21,11 +21,32 @@ function dbTable(t){
   return `<div class="scrolly">${uiTable(cols, rows)}</div>
     <div class="meta" style="margin-top:calc(var(--spacing) * 1.5)">showing ${t.sample.length} of ${t.count} row${t.count===1?"":"s"} (newest first)</div>`;
 }
+// The raw SQLite rows behind a page, closed until asked for. Each page that
+// lists a table's rows carries its own raw view, so no page exists only to
+// show the same rows a second time (the old Database page). `rawOpen` keeps
+// a view open across the 5-second refresh, which rebuilds the page.
+const rawOpen = {};
+function rawToggle(name, el){ rawOpen[name] = el.open; }
+function rawRows(d, name, note = ""){
+  const t = ((d.db || {}).tables || []).find(x => x.name === name);
+  if (!t) return "";
+  return `<details class="raw" ${rawOpen[name] ? "open" : ""} ontoggle="rawToggle('${esc(name)}', this)">
+    <summary>Raw rows · <code>${esc(name)}</code> table · ${t.count}</summary>
+    <div class="meta" style="margin:var(--space-2) 0">${note || "These are the same rows as above, as SQLite stores them in <code>state.db</code>."}
+      Ask your own question in the ${uiLink("SQL console", "#sql")}.</div>${dbTable(t)}</details>`;
+}
 const DB_DESC = {
   calendar_events: "events the create_event tool wrote (the flagship task)",
-  facts: "semantic memory — durable facts (Memory ▸ Semantic)",
-  episodes: "episodic memory — dated summaries (Memory ▸ Episodic)",
+  facts: "semantic memory — durable facts",
+  episodes: "episodic memory — dated summaries",
   chat_log: "every message, tagged by session_id — consolidation reads from here",
+};
+// The page that shows each table's rows, with their raw view at its foot.
+const DB_HOME = {
+  calendar_events: ["Tools ▸ Results", "#tools/results"],
+  facts: ["Memory ▸ Semantic", "#memory/semantic"],
+  episodes: ["Memory ▸ Episodic", "#memory/episodic"],
+  chat_log: ["Gateway", "#gateway"],
 };
 const QUERY_EXAMPLES = [
   "SELECT role, content FROM chat_log ORDER BY id DESC LIMIT 10",
@@ -59,6 +80,26 @@ async function runQuery(){
 
 // --- Memory sub-tabs. Memory is the friendly, per-pillar view of what persists;
 // the Data tab shows the SAME rows as raw SQLite tables (see the explainer).
+// Which memory is which: this agent's own, on this machine, beside the
+// outside one every agent of the person's reads.
+function memWhich(d){
+  const w = d.waku_memory || {};
+  const n = (count, word) => `${count} ${word}${count === 1 ? "" : "s"}`;
+  const local = uiCard(`<span>Waku Agent's own memory, in ${reveal("","the .waku folder")}.
+      ${n(d.facts.length, "fact")}, ${n(d.episodes.length, "episode")}, ${n(d.skills.length, "skill")}.
+      It works offline, and only this agent reads it.</span>`, {title: "On this machine", cls: "box"});
+  const how = w.mode === "plugin" || w.by_plugin
+    ? "The Waku plugin sends each turn, and Waku Memory picks what to keep."
+    : w.mode === "off" ? "Nothing is sent." : "Waku Agent sends each fact it keeps.";
+  const shared = uiCard(`<span>An outside memory that every agent of yours reads: Claude Code, Codex, the phone app.
+      ${w.connected
+        ? `${uiBadge("connected", "ok")} ${w.account ? esc(w.account) + ". " : ""}${how}`
+        : `${uiBadge("not connected", "neutral")} Everything stays on this machine.`}</span>`,
+    {title: "Waku Memory, shared",
+     action: w.connected ? `<a class="link" href="https://www.waku.one/memories" target="_blank" rel="noopener noreferrer">open waku.one</a>`
+                         : uiLink("how to connect", "#tools/mcp"), cls: "box"});
+  return `<div class="tiles" style="grid-template-columns:repeat(auto-fill,minmax(280px,1fr));margin-bottom:var(--space-3)">${local}${shared}</div>`;
+}
 function memOverview(d){
   const s = d.stats;
   const pillars = [
@@ -67,13 +108,12 @@ function memOverview(d){
     ["Procedural","skills",d.skills.length+" skills","SKILL.md files loaded only when relevant — how to act"],
   ].map(([t,sub,n,desc]) => uiCard(`<span>${desc}</span>`,
       {title: t, action: uiLink(n, `#memory/${sub}`), cls: "box"})).join("");
-  return uiNotice("note", `<b>Memory vs Database — two views of one file.</b>
-      <div class="r">This tab is the curated, per-pillar view of what Waku remembers. The
-      ${uiLink("Database tab", "#database")} shows the exact same
-      thing as raw SQLite tables (plus the FTS5 keyword index). Same
-      <code>.waku/state.db</code> — different altitude.
+  return memWhich(d) + uiNotice("note", `<b>One file underneath.</b>
+      <div class="r">What Waku remembers is rows in <code>.waku/state.db</code>: facts and episodes, searchable
+      by keyword (FTS5). Each tab here is the readable view, and the raw rows are at the foot of
+      ${uiLink("Semantic", "#memory/semantic")} and ${uiLink("Episodic", "#memory/episodic")}.
       <br><br>Some assistants (Hermes) keep memory as a single <code>MEMORY.md</code> file. Waku keeps
-      the queryable source in <code>state.db</code> (facts + episodes, FTS5-searchable) <b>and</b> writes a
+      the queryable source in <code>state.db</code> <b>and</b> writes a
       human-readable ${reveal("MEMORY.md","MEMORY.md")} mirror after every turn — so you get both: a real file
       you can open, backed by a sturdy database.</div>`) + `
     <h2>The three pillars</h2>
@@ -95,7 +135,7 @@ function memSemantic(d){
     `<span class="meta">${esc(f.source)}</span>`,
     `<span style="white-space:nowrap">${uiButton("edit", {level: "tertiary", size: "sm", onclick: `editFact(${f.id})`})} · ${uiButton("delete", {level: "tertiary", size: "sm", danger: true, onclick: `delMem('delete_fact',${f.id})`})}</span>`,
   ]})), {empty: "no facts yet"});
-  return h;
+  return h + rawRows(d, "facts");
 }
 function memEpisodic(d){
   const src = d.episodes_source || "sqlite";
@@ -103,13 +143,14 @@ function memEpisodic(d){
   if (d.episodes_error) h += uiCard(`<span class="empty">Could not read episodes from Notion: ${esc(d.episodes_error)}</span>`);
   h += uiNotice("note", `<b>Why is this small?</b> <span class="r">Episodic memory holds one <i>distilled</i> summary per
     consolidation, not every message. The raw, blow-by-blow conversation lives in the
-    ${uiLink("<code>chat_log</code> table", "#database/chat_log")}
-    (the big one) on the Database tab — episodes are its highlights.</span>`);
+    ${uiLink("<code>chat_log</code> table", "#gateway")}
+    (the big one), under Gateway — episodes are its highlights.</span>`);
   h += uiTable(["date","episode",""], d.episodes.map(e => [
     `<span class="meta">${esc(e.happened_at)}</span>`, esc(e.summary),
     uiButton("delete", {level: "tertiary", size: "sm", danger: true, onclick: `delMem('delete_episode','${e.id}')`}),
   ]), {empty: "no episodes yet"});
-  return h;
+  return h + rawRows(d, "episodes", d.episodes_source === "notion"
+    ? "Episodes live in Notion now. These rows are the old local copy in <code>state.db</code>." : "");
 }
 function memSkills(d){
   let h = `<div class="meta" style="margin-bottom:var(--space-3)">Procedural memory — markdown instructions loaded
@@ -172,29 +213,64 @@ function toolsResults(d){
   h += `<h2>Outbox — drafted messages <span style="font-weight:400;text-transform:none;letter-spacing:0">· ${reveal("outbox","open the outbox folder")}</span></h2>`;
   h += d.outbox.length ? d.outbox.map(o => uiCard(`<span class="u">${esc(o.name)}</span><div class="r">${esc(o.text)}</div>`)).join("")
                        : uiCard(`<span class="empty">no drafted messages</span>`);
-  return h;
+  return h + rawRows(d, "calendar_events");
 }
 // Tools ▸ MCP: external connectors. Shows live status + a copy-paste config so
 // anyone can plug in their own server (scalable, not a one-off).
 function toolsMCP(t){
-  const m = t.mcp;
+  const m = t.mcp, rows = m.rows || [];
+  // Every server Waku would connect: mcp.json's and the ones a plugin brings.
   let h = uiNotice(m.live ? "ok" : "note", `<b>Model Context Protocol${m.live?" — connected":m.configured?" — configured":" — not set up"}.</b>
-    <div class="r">MCP lets Waku borrow tools from any external server (files, GitHub, a database, …),
-    namespaced <code>&lt;server&gt;_&lt;tool&gt;</code>. ${m.configured
-      ? `Configured servers: ${m.servers.map(s=>`<code>${esc(s)}</code>`).join(" ")}${m.live?"":" — start a chat to connect them."}`
-      : "None configured yet."}</div>`);
-  h += `<h2>Connect one (30 seconds)</h2>` + uiCard(`
-    <div class="meta">1 — install the extra: <code>pip install -e '.[mcp]'</code></div>
-    <div class="meta" style="margin-top:calc(var(--spacing) * 1.5)">2 — create ${reveal("","the .waku folder")}<code>/mcp.json</code>:</div>
+    <div class="r">MCP lets Waku borrow tools from an outside server, named <code>&lt;server&gt;_&lt;tool&gt;</code>.
+    A server comes from <code>mcp.json</code> or from a plugin you installed.${m.configured && !m.live
+      ? " Send a chat message to connect them." : ""}</div>`);
+  h += `<h2>Servers</h2>` + uiTable(["Server", "Address", "From", "State"], rows.map(r => [
+    `<code>${esc(r.name)}</code>`,
+    `<span class="meta">${esc(r.address)}</span>`,
+    r.plugin ? `the ${esc(r.plugin)} plugin` : `<code>mcp.json</code>`,
+    (r.connected === null ? uiBadge("not started", "neutral")
+      : r.connected ? uiBadge("connected", "ok") : uiBadge("not connected", "warn"))
+      + (r.tools ? ` <span class="meta">${r.tools} tool${r.tools===1?"":"s"}</span>` : "")
+      + (r.account ? `<div class="meta">${esc(r.account)}</div>` : ""),
+  ]), {empty: "No server yet. Add one below."});
+  h += `<h2>Add one</h2>` + uiCard(`
+    <div class="meta">A plugin brings its server and its ${uiLink("hooks", "#tools/hooks")} with it:
+      <code>waku plugin install &lt;name&gt;@&lt;marketplace&gt;</code>, or <code>/plugin install …</code> in the chat.</div>
+    <div class="meta" style="margin-top:var(--space-2)">Or name a server yourself in ${reveal("","the .waku folder")}<code>/mcp.json</code>:</div>
     <pre style="font-family:var(--face-mono);font-size:var(--text-xs);color:var(--text-muted);white-space:pre-wrap;margin-top:var(--space-2)">{"servers": [
   {"name": "fs", "command": "npx",
    "args": ["-y", "@modelcontextprotocol/server-filesystem", "${esc(D&&D.home||"")}"]}
 ]}</pre>
-    <div class="meta" style="margin-top:var(--space-2)">3 — restart the dashboard. The server's tools appear above under
-      ${uiLink("Available ▸ MCP servers", "#tools/available")}, callable in chat.</div>`);
-  h += `<div class="meta" style="margin-top:var(--space-3)">The same pattern scales: any MCP server (yours or a vendor's)
-    plugs in the same way — no code changes to Waku. Skills work the same way — drop a <code>SKILL.md</code>
-    in ${reveal("skills","skills/")}.</div>`;
+    <div class="meta" style="margin-top:var(--space-2)">Then restart the dashboard. The server's tools appear under
+      ${uiLink("Available ▸ MCP servers", "#tools/available")}.</div>`);
+  return h;
+}
+
+// What each of the four hook moments is, in the words a person would use.
+const HOOK_WHEN = {SessionStart: "Session start", UserPromptSubmit: "Each message",
+  PreToolUse: "Before a tool runs", Stop: "After each reply"};
+
+function toolsHooks(t){
+  const k = t.hooks || {rows: [], skipped: []};
+  let h = uiNotice("note", `<b>Hooks — calls Waku makes by itself.</b>
+    <div class="r">A tool is called when the model decides to. A hook is called at a fixed moment of every turn,
+    whatever the model decides. Plugins declare them. This tab lists the hooks that exist;
+    ${uiLink("Observability ▸ Turns", "#observability/turns")} shows each time one ran.</div>`);
+  h += uiTable(["When", "Plugin", "Calls", "Last run"], (k.rows || []).map(r => {
+    const when = `${esc(HOOK_WHEN[r.event] || r.event)}<div class="meta"><code>${esc(r.event)}</code></div>`;
+    if (!r.plugin) return [when, `<span class="meta">no plugin uses this yet</span>`, "", ""];
+    const last = r.last
+      ? (r.last.ok ? uiBadge("ok", "ok") : uiBadge("failed", "bad"))
+        + ` <span class="meta">${Math.round(r.last.duration_ms || 0)} ms · ${esc(String(r.last.ts || "").replace("T", " ").slice(0, 16))}</span>`
+        + (r.last.error ? `<div class="meta">${esc(r.last.error)}</div>` : "")
+      : `<span class="meta">not yet</span>`;
+    return [when, esc(r.plugin),
+      `<code>${esc(r.tool)}</code><div class="meta">on ${esc(r.server || "?")}${r.kind && r.kind !== "mcp_tool" ? ` · type ${esc(r.kind)} is not run` : ""}</div>`,
+      last];
+  }));
+  if ((k.skipped || []).length)
+    h += `<div class="meta" style="margin-top:var(--space-2)">Loaded without their hooks, because they were written for
+      Claude Code: ${k.skipped.map(n => `<code>${esc(n)}</code>`).join(" ")}.</div>`;
   return h;
 }
 
@@ -459,7 +535,8 @@ const VIEWS = {
       `${esc(s.title||s.id)} <span class="meta" style="font-weight:400;white-space:nowrap">· ${sessionMeta(s)}</span>`,
       esc(s.last||""),
       {onclick: `openConversation('${esc(s.id)}')`, cls: s.id === SESSION ? "on" : ""})).join("");
-    return h;
+    return h + rawRows(d, "chat_log",
+      "Every message of every conversation above, one row each, as SQLite stores them in <code>state.db</code>.");
   },
   overview(d){
     const s = d.stats;
@@ -576,10 +653,12 @@ const VIEWS = {
     const t = d.tools || {catalog:[], mcp:{configured:false,servers:[],live:false}, apple_on:false};
     sub = sub || "available";
     const tabs = [["available","Available",t.catalog.length],["results","Results"],
-      ["mcp","MCP",t.mcp.servers.length||null]];
+      ["mcp","MCP",t.mcp.servers.length||null],
+      ["hooks","Hooks",(t.hooks && t.hooks.count)||null]];
     let h = subtabBar("tools", tabs, sub);
     if (sub === "results") return h + toolsResults(d);
     if (sub === "mcp") return h + toolsMCP(t);
+    if (sub === "hooks") return h + toolsHooks(t);
     // Available: what the agent CAN do (grouped by origin), not just what it did.
     h += `<div class="meta" style="margin-bottom:var(--space-3)">The capabilities the agent can call this turn.
       A tool is a name + description the model reads, a JSON schema, and a Python function — that's it.
@@ -605,41 +684,22 @@ const VIEWS = {
     }
     return h;
   },
-  database(d, sub){
-    // The persistence layer itself — one SQLite file, real tables, FTS5 index.
-    // "Data" in the nav (plainer than "state.db"), but we keep saying state.db
-    // because that's literally the filename you can open.
+  sql(d){
+    // The one thing the old Database page had that no other page does: a
+    // read-only console over state.db. The tables themselves are shown where
+    // they belong, each with its raw rows.
     const db = d.db || {tables:[], all_tables:[], fts:[], size:0, path:""};
-    const tables = db.tables || [];
-    sub = sub || "overview";
-    const tabs = [["overview","Overview"],
-      ...tables.map(t => [t.name, t.name, t.count]),
-      ["query","SQL console"]];
-    let h = subtabBar("database", tabs, sub);
-    if (sub === "query") return h + dbQueryView();
-    if (sub !== "overview"){
-      const t = tables.find(x => x.name === sub);
-      if (!t) return h + uiCard(`<span class="empty">no such table</span>`);
-      const notionNote = (t.name === "episodes" && d.episodes_source === "notion")
-        ? `<div class="meta" style="margin-bottom:var(--space-2)">Episodes currently live in Notion — see
-            ${uiLink("Memory ▸ Episodic", "#memory/episodic")}.
-            The rows below are the old local copy in state.db.</div>` : "";
-      return h + notionNote + `<div class="meta" style="margin-bottom:var(--space-2)">${DB_DESC[t.name]||""}</div>` + dbTable(t);
-    }
     const kb = (db.size/1024).toFixed(1);
-    h += uiNotice("note", `<b>Database vs Memory.</b> <span class="r">This is the raw persistence layer — the literal SQLite
-      tables. The ${uiLink("Memory tab", "#memory")} is the friendly
-      view of the same rows (facts, episodes, skills, persona). One file, two altitudes. Where Hermes
-      uses a <code>MEMORY.md</code> file, Waku uses these queryable tables — and mirrors them to a
-      readable <code>MEMORY.md</code> too.</span>`);
-    h += uiCard(`
+    let h = uiCard(`
       <div class="u" style="font-family:var(--face-mono);font-size:var(--text-xs);word-break:break-all">${esc(db.path)}</div>
       <div class="meta">${kb} KB on disk · SQLite + FTS5 · open it yourself: <code>sqlite3 .waku/state.db</code></div>
       <div class="meta" style="margin-top:var(--space-2)">${reveal("state.db","reveal state.db in Finder")} &nbsp;·&nbsp; ${reveal("","open the .waku folder")}</div>`);
-    h += `<h2>Tables — click a tab above, or a row here</h2>`;
-    h += table(["table","rows","what it holds"], tables.map(t =>
-      `<tr><td>${uiLink(`<code>${esc(t.name)}</code>`, `#database/${esc(t.name)}`)}</td>
-        <td class="meta">${t.count}</td><td class="meta">${DB_DESC[t.name]||""}</td></tr>`));
+    h += dbQueryView();
+    h += `<h2>Tables</h2>` + uiTable(["table", "rows", "what it holds", "shown on"], (db.tables || []).map(t => {
+      const home = DB_HOME[t.name];
+      return [`<code>${esc(t.name)}</code>`, `<span class="meta">${t.count}</span>`,
+        `<span class="meta">${DB_DESC[t.name] || ""}</span>`, home ? uiLink(home[0], home[1]) : ""];
+    }));
     h += `<h2>FTS5 — the keyword index</h2>` + uiCard(`The <code>*_fts</code> virtual tables (and their
       <code>*_fts_data</code>/<code>*_fts_idx</code> shadows) make memory searchable by keyword — no embeddings,
       no vector DB. This is the "keyword top-k" the retrieval gate queries.
