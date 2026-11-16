@@ -1156,16 +1156,44 @@ _ORIGIN = re.compile(r"https?://[a-z0-9.-]+(?::[0-9]{1,5})?")
 def same_origin(origin: str | None, host: str | None) -> bool:
     """Whether a POST may run: it carries no Origin, or its Origin's host and
     port are the Host it was sent to (spec 021 review). A browser adds Origin
-    to every cross-site POST, so a web page can no longer post /plugin or
-    anything else to localhost:7777. The hosted gateway forwards no Origin
-    (hosted/gateway/forward.py REQUEST_HEADERS) and checks it itself, so a
-    container sees none, and a script with no browser sends none."""
+    to every cross-site POST, so another site's page cannot post /plugin or
+    anything else to localhost:7777 directly. This does not stop DNS
+    rebinding, where the attacker's own name is made to mean this machine and
+    Origin and Host both carry it; host_allowed() below does. The hosted
+    gateway forwards no Origin (hosted/gateway/forward.py REQUEST_HEADERS) and
+    checks it itself, so a container sees none, and a script with no browser
+    sends none."""
     if not origin:
         return True
     from urllib.parse import urlsplit
 
     netloc = urlsplit(origin.strip()).netloc.lower()
     return bool(netloc) and netloc == (host or "").strip().lower()
+
+
+def loopback_only() -> bool:
+    """Whether this dashboard listens on this machine alone. A container binds
+    0.0.0.0 and sits behind the hosted gateway, which checks the Host itself."""
+    host = os.getenv("WAKU_DASHBOARD_HOST", "127.0.0.1").strip() or "127.0.0.1"
+    return host in LOOPBACK
+
+
+def host_allowed(host: str | None) -> bool:
+    """Whether a request's Host names this machine. DNS rebinding makes a
+    page's own name, say evil.test, resolve to 127.0.0.1 after the page loads,
+    so the browser sends this dashboard `Host: evil.test` and the same name in
+    Origin. same_origin() sees two matching labels and passes it. A dashboard
+    bound to loopback therefore answers only to localhost, 127.0.0.1 and
+    [::1], on any port. A request with no Host is a script, not a browser, and
+    a dashboard bound anywhere else was exposed on purpose."""
+    if not loopback_only() or not host or not host.strip():
+        return True
+    value = host.strip().lower()
+    if value.startswith("["):                       # [::1]:7777
+        name = value[1:].split("]", 1)[0]
+    else:
+        name = value.rsplit(":", 1)[0] if value.count(":") == 1 else value
+    return name in LOOPBACK
 
 
 def embed_origins(header: str | None) -> tuple[str, ...]:
@@ -1216,7 +1244,22 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _foreign_host(self) -> bool:
+        """Refuse a request whose Host is not this machine (DNS rebinding).
+        True when it did, and the caller returns."""
+        if host_allowed(self.headers.get("Host")):
+            return False
+        body = json.dumps({"error": "this request used a name that is not this machine"}).encode()
+        self.send_response(403)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+        return True
+
     def do_GET(self):
+        if self._foreign_host():
+            return
         if self.path == "/api/data":
             self._send(json.dumps(collect(), default=str).encode(), "application/json")
         elif self.path == "/api/session" or self.path.startswith("/api/session?"):
@@ -1342,6 +1385,8 @@ class Handler(BaseHTTPRequestHandler):
         self._send(target.read_bytes(), ctype, no_cache=True)
 
     def do_POST(self):
+        if self._foreign_host():
+            return
         if not same_origin(self.headers.get("Origin"), self.headers.get("Host")):
             body = json.dumps({"error": "this request came from another site"}).encode()
             self.send_response(403)
