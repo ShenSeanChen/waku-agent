@@ -77,6 +77,21 @@ CREATE TABLE IF NOT EXISTS chat_log (
     session_id TEXT DEFAULT 'default',
     created_at TEXT DEFAULT (datetime('now'))
 );
+
+-- The event inbox (spec 023). A handler under `waku serve` writes one row per
+-- incoming message and returns; the worker claims rows and starts a run.
+-- UNIQUE(source, external_id) makes a redelivered message a no-op.
+CREATE TABLE IF NOT EXISTS events (
+    id INTEGER PRIMARY KEY,
+    received_at TEXT NOT NULL,     -- UTC, ISO 8601: when the handler saw it
+    source TEXT NOT NULL,          -- 'telegram' | 'slack' | 'github' | 'timer'
+    external_id TEXT NOT NULL,     -- the sender's own id for this message
+    session_id TEXT NOT NULL,      -- the conversation, e.g. 'telegram:<chat id>'
+    payload TEXT NOT NULL,         -- JSON: the text, the sender, where a reply goes
+    status TEXT NOT NULL DEFAULT 'pending',  -- pending | claimed | done | failed
+    UNIQUE(source, external_id)
+);
+CREATE INDEX IF NOT EXISTS events_status ON events(status, id);
 """
 
 
@@ -115,6 +130,11 @@ def connect(home: Path, check_same_thread: bool = True) -> sqlite3.Connection:
     conn = sqlite3.connect(home / "state.db", check_same_thread=check_same_thread)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA busy_timeout=3000")
+    # WAL (spec 023): `waku serve` and the dashboard are two processes on this
+    # file. In the default journal a reader blocks the writer, so a dashboard
+    # page could stall a handler that has to store a message. The mode is
+    # stored in the file; state.db-wal and state.db-shm appear beside it.
+    conn.execute("PRAGMA journal_mode=WAL")
     conn.executescript(SCHEMA)
     _migrate(conn)
     return conn
