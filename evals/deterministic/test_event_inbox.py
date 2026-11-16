@@ -160,3 +160,197 @@ def test_insert_migrates_a_database_from_before_the_table(tmp_path):
         assert _add(upgraded, external_id="1") is not None
     finally:
         upgraded.close()
+
+
+# ---- A2: the worker --------------------------------------------------------
+
+class Killed(BaseException):
+    """The process dying: not an Exception, so nothing in the worker catches it."""
+
+
+def _worker(conn, runs, **kwargs):
+    from waku.alwayson.worker import Worker
+
+    def run(session_id, batch):
+        runs.append((session_id, [e.payload["text"] for e in batch]))
+
+    kwargs.setdefault("wait", lambda seconds: None)
+    return Worker(conn, kwargs.pop("run", run), **kwargs)
+
+
+def test_batch_two_events_for_one_session_make_one_run_that_sees_both(conn):
+    """Acceptance 3. The second message arrives during the 3-second wait."""
+    runs, waits = [], []
+    _add(conn, external_id="1", text="book a room")
+
+    def wait(seconds):
+        waits.append(seconds)
+        _add(conn, external_id="2", text="for six people")
+
+    worker = _worker(conn, runs, wait=wait)
+
+    assert worker.step() is True
+    assert runs == [("telegram:42", ["book a room", "for six people"])]
+    assert waits == [3.0], "the worker waits 3 seconds after the first row"
+    assert _statuses(conn) == ["done", "done"]
+    assert worker.step() is False, "nothing is left to run"
+
+
+def test_batch_keeps_other_sessions_for_their_own_run(conn):
+    runs = []
+    _add(conn, external_id="1", session_id="telegram:42", text="from Sean")
+    _add(conn, external_id="2", session_id="slack:C1:1.0", text="from Ana", source="slack")
+    _add(conn, external_id="3", session_id="telegram:42", text="Sean again")
+    worker = _worker(conn, runs)
+
+    while worker.step():
+        pass
+
+    assert runs == [("telegram:42", ["from Sean", "Sean again"]),
+                    ("slack:C1:1.0", ["from Ana"])]
+
+
+def test_batch_marks_the_rows_failed_when_the_run_raises(conn):
+    _add(conn, external_id="1")
+    _add(conn, external_id="2", session_id="telegram:77", text="next")
+    runs, logged = [], []
+
+    def run(session_id, batch):
+        if session_id == "telegram:42":
+            raise RuntimeError("model is down")
+        runs.append(session_id)
+
+    worker = _worker(conn, runs, run=run, log=logged.append)
+    while worker.step():
+        pass
+
+    assert _statuses(conn) == ["failed", "done"]
+    assert runs == ["telegram:77"], "one failed run does not stop the worker"
+    assert any("RuntimeError" in line for line in logged)
+
+
+def test_batch_of_a_redelivered_message_is_one_run(conn):
+    """Acceptance 2: the same external_id twice leaves one row and one run."""
+    runs = []
+    _add(conn, external_id="900", text="hello")
+    _add(conn, external_id="900", text="hello")
+    worker = _worker(conn, runs)
+
+    while worker.step():
+        pass
+
+    assert runs == [("telegram:42", ["hello"])]
+
+
+def test_kill_after_claiming_then_a_new_worker_runs_it_once(tmp_path):
+    """Acceptance 1. The first worker dies between the claim and the run."""
+    runs = []
+    first_conn = connect(tmp_path)
+    _add(first_conn, external_id="1", text="do not lose me")
+
+    def die(seconds):
+        raise Killed
+
+    with pytest.raises(Killed):
+        _worker(first_conn, runs, wait=die).step()
+    assert _statuses(first_conn) == ["claimed"]
+    assert runs == []
+    first_conn.close()
+
+    second_conn = connect(tmp_path)
+    try:
+        worker = _worker(second_conn, runs)
+        assert worker.recover() == 1
+        while worker.step():
+            pass
+        assert runs == [("telegram:42", ["do not lose me"])]
+        assert _statuses(second_conn) == ["done"]
+    finally:
+        second_conn.close()
+
+
+def test_kill_by_stop_during_the_wait_returns_the_rows_to_pending(conn):
+    """SIGTERM during the 3-second wait: no run starts, and nothing is claimed
+    when the process exits."""
+    runs = []
+    _add(conn, external_id="1")
+    worker = _worker(conn, runs)
+    worker._wait = lambda seconds: worker.stop.set()
+
+    assert worker.step() is False
+    assert runs == []
+    assert _statuses(conn) == ["pending"]
+
+
+def test_second_worker_on_the_same_home_is_refused(tmp_path):
+    from waku.alwayson.worker import AlreadyRunning, ServeLock
+
+    first = ServeLock(tmp_path)
+    first.acquire()
+    try:
+        with pytest.raises(AlreadyRunning) as refused:
+            ServeLock(tmp_path).acquire()
+        assert "already running" in str(refused.value)
+    finally:
+        first.release()
+
+    again = ServeLock(tmp_path)
+    again.acquire()   # the lock goes with its holder
+    again.release()
+
+
+def test_second_worker_in_another_home_starts(tmp_path):
+    from waku.alwayson.worker import ServeLock
+
+    (tmp_path / "a").mkdir()
+    (tmp_path / "b").mkdir()
+    first, second = ServeLock(tmp_path / "a"), ServeLock(tmp_path / "b")
+    first.acquire()
+    second.acquire()
+    first.release()
+    second.release()
+
+
+def test_batch_runs_through_respond_in_the_events_own_session(tmp_path):
+    """The run is waku.respond(): one turn, in the session the events name,
+    with both messages in the one user message."""
+    from evals.helpers import ScriptedClient, make_waku, response, text_block
+    from waku.alwayson.worker import AgentRun
+
+    home = tmp_path / "home"
+    home.mkdir()
+    client = ScriptedClient([
+        response([text_block('{"retrieve": false, "query": "", "reason": "test"}')]),
+        response([text_block("Booked for six.")]),
+    ])
+    printed = []
+    run = AgentRun(lambda: make_waku(home, client=client, episodic_store="sqlite"),
+                   log=printed.append)
+    conn = connect(home)
+    try:
+        _add(conn, external_id="1", text="book a room")
+        _add(conn, external_id="2", text="for six people")
+        worker = _worker(conn, [], run=run)
+        while worker.step():
+            pass
+
+        rows = [(r["session_id"], r["source"], r["role"], r["content"]) for r in conn.execute(
+            "SELECT session_id, source, role, content FROM chat_log ORDER BY id")]
+    finally:
+        run.close()
+        conn.close()
+
+    assert rows == [
+        ("telegram:42", "telegram", "user", "book a room\n\nfor six people"),
+        ("telegram:42", "telegram", "assistant", "Booked for six."),
+    ]
+    assert any("Booked for six." in line for line in printed)
+    assert _statuses_at(home) == ["done", "done"]
+
+
+def _statuses_at(home):
+    connection = connect(home)
+    try:
+        return _statuses(connection)
+    finally:
+        connection.close()
