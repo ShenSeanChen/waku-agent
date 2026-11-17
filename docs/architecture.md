@@ -188,7 +188,7 @@ no.'
   model as an ordinary message.
 - **The conversation that parked hears the outcome.** The outcome is an event
   with `source = approval` in that session, so the next run there starts
-  with "Approved and done: ..." or "Declined and discarded: ...".
+  with "Approved and posted: ..." or "Declined and discarded: ...".
 - **One call waits per conversation**, and it expires after 72 hours.
 - **Only the owner approves.** `who_may_approve` in `approvals.py` is the one
   function that decides, and it answers with `WAKU_OWNER`. The yes counts in

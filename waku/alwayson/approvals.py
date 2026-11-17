@@ -207,6 +207,9 @@ def park(conn: sqlite3.Connection, run_id: int, tool: str, args: dict, now: date
 SOURCE = "approval"
 _ANSWER = re.compile(r"^(yes|approve|approved|no|deny|denied)(?:\s+\[?([0-9a-f]{8})\]?)?$")
 APPROVED = "Approved and done: {what} The tool answered: {output}"
+# A message is the one call whose result a person can be told in two words.
+POSTED = "Approved and posted: {what}"
+NOT_POSTED = "Approved, and not posted: {what} The reason: {output}"
 DECLINED = "Declined and discarded: {what} The owner answered no, so the call did not run."
 BROKEN = ("Approved, and not run: {what} The stored call no longer matches its hash, so it "
           "was discarded.")
@@ -259,6 +262,10 @@ def outcome(run: runs.Run, approved: bool, output: str = "") -> str:
         return DECLINED.format(what=what)
     if not intact(run):
         return BROKEN.format(what=what)
+    if call.get("tool") == "send_message":
+        refused = output.startswith(("Not sent", "Error"))
+        return (NOT_POSTED.format(what=what, output=output) if refused
+                else POSTED.format(what=what))
     return APPROVED.format(what=what, output=output)
 
 

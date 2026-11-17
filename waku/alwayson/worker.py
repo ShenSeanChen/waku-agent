@@ -79,6 +79,23 @@ class ServeLock:
             self._file = None
 
 
+def serving(home: Path) -> bool:
+    """Whether a `waku serve` holds this home's lock right now. A tool asks,
+    so that it only tells a person a message or a timer waits when it does."""
+    lock = ServeLock(Path(home))
+    try:
+        handle = open(lock.path, "a+")  # noqa: SIM115  (closed below)
+    except OSError:
+        return False
+    try:
+        _lock(handle)
+    except OSError:
+        return True
+    finally:
+        handle.close()
+    return False
+
+
 def _lock(handle) -> None:
     """Take an exclusive lock without waiting; OSError when someone holds it."""
     if os.name == "nt":

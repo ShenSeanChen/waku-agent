@@ -268,7 +268,7 @@ def test_park_only_happens_inside_a_run(home, conn):
 
     assert approvals.Gate(home, conn)("send_message", COMMENT) == (None, "")
     said = messages.make_tool(home).fn(**COMMENT)
-    assert "approval" in said and "waku serve" in said
+    assert "approval" in said and "cannot ask" in said
     assert _outbox(conn) == []
 
 
@@ -472,7 +472,7 @@ def test_yes_from_the_owner_runs_only_the_stored_call(home):
     assert set(statuses) == {"done"}
     assert len(told) == 1, "Sean hears nothing more after his yes"
     first_line = seen[-1][-1]["content"].splitlines()[0]
-    assert first_line.startswith("[Approved and done: Comment on acme/app#12")
+    assert first_line.startswith("[Approved and posted: Comment on acme/app#12")
     assert client._script == [], "the model was called for two runs, not to approve"
 
 
@@ -488,7 +488,7 @@ def test_yes_executes_the_stored_arguments_and_starts_the_next_run(home, conn):
     assert runs.get(conn, run_id).status == "done"
     ((session, text),) = recorder.runs
     assert session == "slack:C1:1700.0001"
-    assert text.startswith("[Approved and done: Comment on acme/app#12")
+    assert text.startswith("[Approved and posted: Comment on acme/app#12")
 
 
 def test_yes_spelled_approve_counts(home, conn):

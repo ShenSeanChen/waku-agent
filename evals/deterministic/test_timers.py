@@ -148,7 +148,8 @@ def test_tool_sets_a_timer_at_an_absolute_time_in_the_persons_time_zone(home):
     (timer,) = _timers(home)
     assert timer.due_at == "2026-11-19T17:00:00+00:00"
     assert (timer.session_id, timer.note, timer.status) == ("telegram:42", NOTE, "pending")
-    assert "Thursday" in said and "09:00" in said and "waku serve" in said
+    assert "Thursday 09:00" in said and "always-on mode" in said
+    assert "waku serve" not in said, "the model repeats what it is given (spec 024)"
 
 
 def test_tool_keeps_the_offset_a_time_carries(home):
@@ -165,7 +166,7 @@ def test_tool_inside_a_run_sends_the_woken_runs_reply_to_that_conversation(home)
     (timer,) = _timers(home)
     assert timer.address == THREAD
     assert timer.session_id == "slack:C1:1700.0001"
-    assert "slack:C1:1700.0001" in said
+    assert said == "Timer 1 is set for Thursday 09:00."
 
 
 def test_tool_outside_a_run_sends_the_woken_runs_reply_to_the_owner(home, monkeypatch):
@@ -173,7 +174,7 @@ def test_tool_outside_a_run_sends_the_woken_runs_reply_to_the_owner(home, monkey
     said = _tool(home).fn(when="2026-11-19T09:00", note=NOTE)
 
     assert _timers(home)[0].address == ("telegram", {"chat_id": 42})
-    assert "telegram:42" in said
+    assert "telegram:42" not in said, "the owner's chat id is not handed to the model"
 
 
 def test_tool_outside_a_run_without_an_owner_says_the_reply_has_nowhere_to_go(home):
