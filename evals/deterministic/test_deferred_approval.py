@@ -543,3 +543,41 @@ def test_yes_with_two_calls_waiting_needs_the_code(home, conn):
     assert [args for _, args, _ in recorder.executed] == [other]
     assert runs.get(conn, first).status == "parked"
     assert runs.get(conn, second.id).status == "done"
+
+
+# ---- the licence line ------------------------------------------------------
+
+def test_who_may_approve_is_the_one_place_that_decides(home, conn, monkeypatch):
+    """A team layer replaces one function. With another answer, another
+    person is asked, and that person's yes counts while the owner's does not."""
+    monkeypatch.setattr(approvals, "who_may_approve",
+                        lambda tool, args: [("telegram", {"chat_id": 77})])
+    clock, recorder = Clock(), Recorder()
+    run_id = _park(conn, home, clock)
+    assert [(row[0], row[1]) for row in _outbox(conn)] == [("telegram", {"chat_id": 77})]
+
+    _telegram(conn, "yes", external_id="900", sender="42", chat_id=42)
+    _drain(_worker(conn, recorder, clock))
+    assert recorder.executed == [] and runs.get(conn, run_id).status == "parked"
+
+    _telegram(conn, "yes", external_id="901", sender="77", chat_id=77)
+    _drain(_worker(conn, recorder, clock))
+    assert len(recorder.executed) == 1 and runs.get(conn, run_id).status == "done"
+
+
+def test_the_always_on_package_imports_nothing_from_team_or_hosted():
+    """Everything in waku/alwayson/ is MIT. The team layer and the hosted
+    platform are under another licence, and neither is imported here."""
+    import ast
+    from pathlib import Path
+
+    import waku.alwayson
+
+    files = sorted(Path(waku.alwayson.__file__).parent.rglob("*.py"))
+    assert len(files) >= 14
+    for path in files:
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            names = ([alias.name for alias in node.names] if isinstance(node, ast.Import)
+                     else [node.module or ""] if isinstance(node, ast.ImportFrom) else [])
+            for name in names:
+                assert name.split(".")[0] not in ("team", "hosted"), f"{path.name}: {name}"

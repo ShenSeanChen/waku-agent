@@ -86,8 +86,20 @@ failure `waku serve` gives up on it. Set `WAKU_OWNER` to where you are reached
 `github:<owner>/<repo>#<number>`) and it tells you there, on another channel
 than the one that failed.
 
-`send_message` uses the same path. It can message you (`WAKU_OWNER`) and the
-conversation it was asked in. It refuses anyone else until approval exists.
+`send_message` uses the same path. A message to you (`WAKU_OWNER`), or back
+into the conversation it was asked in, is sent without a question.
+
+A message to anyone else waits for your yes. Ask "comment on acme/app#12 that
+Sean will review it this week", and nothing is posted. You read on Telegram:
+'Comment on acme/app#12: "Sean will review this issue this week." Approve?
+Reply yes or no.' Answer "yes" and that exact comment is posted once. Answer
+"no" and it is discarded. Without an answer the request expires after 72
+hours. For this to work, `WAKU_OWNER` must name your private Telegram chat
+(`telegram:<chat id>`): that is where you are asked, and only a yes from that
+chat counts. One call waits per conversation. `WAKU_APPROVE_ASK` and
+`WAKU_APPROVE_ALLOW` take tool names, comma-separated, and make one tool
+always wait or never wait. A tool from an MCP server does not wait unless
+`WAKU_APPROVE_ASK` names it.
 
 `schedule_task` lets the agent set a follow-up. Ask "check issue 12 on Thursday
 at 09:00 and tell me if it is still open", and on Thursday at 09:00 `waku

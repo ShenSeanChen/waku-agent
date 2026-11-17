@@ -20,7 +20,7 @@ their `mcp_tool` hooks run at SessionStart, UserPromptSubmit, PreToolUse and
 Stop (spec 021). `command` hooks, which run a program on this machine, are
 not built.
 
-`waku serve` starts (spec 023, groups A, D and B). It stores each Telegram
+`waku serve` starts (spec 023). It stores each Telegram
 message, Slack @mention and GitHub issue or mention as a row in `state.db`,
 and one worker answers them one conversation at a time. A message that arrives
 during a restart is answered after it. Each reply is a row in the `outbox`
@@ -28,9 +28,13 @@ table, and a dispatcher sends it to the Telegram chat, the Slack thread or the
 GitHub issue it answers, retrying a failed delivery four times. `send_message`
 writes a row in the same table. `schedule_task` sets a one-time timer: the
 agent names a time and a note, and `waku serve` starts a run with that note in
-the same conversation within 30 seconds of that time. The Slack and GitHub handlers and all three
-senders have run against fake events, fake answers and a fake `gh` only, never
-against a live chat, workspace or repository.
+the same conversation within 30 seconds of that time. A tool call that writes
+to someone else waits for a yes: `send_message` to a GitHub issue or to
+another chat is stored, the owner in `WAKU_OWNER` is asked on Telegram, and
+the stored call runs when the owner answers "yes". The Slack and GitHub
+handlers, all three senders and the approval path have run against fake
+events, fake answers and a fake `gh` only, never against a live chat,
+workspace or repository.
 
 **3,645 deterministic evals pass offline**, with no API key; 60 more are live
 evals that skip without one. CI runs the offline tier on every PR along with
@@ -53,11 +57,14 @@ Nothing here is a surprise. If you hit one of these, the issue exists.
 | The model picker offers OpenAI models that 404 on use | #137 | #178 |
 | GPT-5.6 tool calls fail on Chat Completions | — | #146 |
 | OpenCode Zen fails with a rate-limit error | #112 | #113 |
-| `send_message` reaches only the owner in `WAKU_OWNER` and the conversation a `waku serve` run came from. It refuses anyone else, and it has no address book, so "message Alex" is refused | — | spec 023, group C (approval) |
+| `send_message` has no address book, so "message Alex" is refused: it takes `owner` or an address. In `waku` and `waku dashboard` it reaches only the owner and refuses anyone else, because only `waku serve` can ask for a yes | — | — |
 | A message `send_message` queues waits until `waku serve` runs; `waku` and `waku dashboard` do not send it, and the dashboard does not list it | — | — |
 | `waku serve` can deliver a chat reply twice when it dies after the channel accepted the reply and before the row is marked `sent` | — | — |
 | `waku serve` and the dashboard's Telegram cannot share one bot token: Telegram allows one poller, and the second one stays idle | — | — |
-| `waku serve` cannot wait for a yes: approval is spec 023, group C | — | — |
+| The owner can approve only in a private Telegram chat or a Slack direct message named in `WAKU_OWNER`, and `waku serve` hears no Slack direct message, so in practice on Telegram. Without one, a call that needs a yes is refused | — | — |
+| A tool from an MCP server runs under `waku serve` without a yes, whatever it writes, until `WAKU_APPROVE_ASK` names it | — | — |
+| A call that waits is not listed anywhere but the `runs` table; it cannot be cancelled, and it expires after 72 hours without telling anyone | — | — |
+| The model reads a call that waits for a yes as "A plugin hook stopped this call before it ran", followed by the real reason | — | — |
 | A timer `schedule_task` sets fires only while `waku serve` runs; `waku` and `waku dashboard` do not fire it, and the dashboard does not list it. A timer cannot repeat or be cancelled | — | — |
 | Google Calendar sign-in has no bundled OAuth client, so `waku connect google` needs your own `~/.waku/credentials.json` | — | — |
 
