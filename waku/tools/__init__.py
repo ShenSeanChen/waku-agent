@@ -5,13 +5,17 @@ Apple ecosystem (WAKU_APPLE_TOOLS=1) and MCP servers (.waku/mcp.json)."""
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Callable
 
 from waku.config import Settings
-from waku.tools import calendar, memory_admin, messages, notes, search
+from waku.tools import calendar, memory_admin, messages, notes, schedule, search
 from waku.tools.registry import ToolRegistry
 
 
-def build_registry(conn: sqlite3.Connection, settings: Settings, memory=None) -> ToolRegistry:
+def build_registry(conn: sqlite3.Connection, settings: Settings, memory=None,
+                   session_id: Callable[[], str] | None = None) -> ToolRegistry:
+    """`session_id` says which conversation the turn in flight belongs to.
+    schedule_task stores it, so a timer wakes the agent in that conversation."""
     registry = ToolRegistry()
     registry.register(
         calendar.make_tool(
@@ -28,6 +32,9 @@ def build_registry(conn: sqlite3.Connection, settings: Settings, memory=None) ->
     registry.register(calendar.make_list_tool(conn, settings.home))
     registry.register(notes.make_tool(conn, memory))
     registry.register(messages.make_tool(settings.home))
+    # A follow-up the agent sets for itself (spec 023): a row in `timers`
+    # that `waku serve` turns into an event when its time comes.
+    registry.register(schedule.make_tool(settings.home, session_id=session_id))
     # Web search — pairs with create_event for the multi-tool loop demo
     # ("find the World Cup games left and add them to my calendar").
     registry.register(search.make_tool())
@@ -40,7 +47,7 @@ def build_registry(conn: sqlite3.Connection, settings: Settings, memory=None) ->
         registry.register(memory_admin.make_create_skill_tool(settings, memory))
 
     # Experimental tools — off by default; opt in with WAKU_EXPERIMENTAL=1.
-    # delegate_task (sub-agents via pi) is live; terminal/browser/cron are
+    # delegate_task (sub-agents via pi) is live; terminal and browser are
     # still skeletons that report "coming soon".
     #
     # Trust settings.experimental ALONE. load_settings() already defaults it from

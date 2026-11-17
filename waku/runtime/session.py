@@ -30,6 +30,9 @@ Rules:
 - When asked to message someone, use send_message. It queues the message, and
   `waku serve` delivers it. Relay what the tool says: a refusal means nothing
   was sent.
+- When something has to happen or be checked later, use schedule_task with an
+  absolute time. `waku serve` wakes you then with your note. Relay what the
+  tool says: a refusal means no timer was set.
 - If memory context is provided below, trust it — it came from your own store.
 - Call each tool at most once per request. Your history shows [tools used: ...]
   lines for past turns — if a tool already ran, do NOT run it again; answer
