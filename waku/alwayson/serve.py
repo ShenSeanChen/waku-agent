@@ -185,10 +185,13 @@ def _agent_run(settings: Settings, log: Callable[[str], None]) -> AgentRun:
 def configured(settings: Settings) -> tuple[dict[str, Source], dict[str, Route]]:
     """The sources and webhook routes this machine's settings turn on. Each
     source's start returns None when its own settings are missing."""
-    from waku.alwayson.sources import slack, telegram
+    from waku.alwayson.sources import github, slack, telegram
 
-    sources: dict[str, Source] = {"telegram": telegram.start, "slack": slack.start}
+    sources: dict[str, Source] = {"telegram": telegram.start, "slack": slack.start,
+                                  "github": github.start}
     routes: dict[str, Route] = {}
+    if webhook := github.route(Inbox(settings.home)):
+        routes["/webhooks/github"] = webhook
     return sources, routes
 
 
@@ -219,7 +222,8 @@ def main(argv: list[str]) -> int:
         print("  sources: " + (", ".join(service.running) or
                                "none configured (docs/integrations.md lists them)"))
         if service.address:
-            print("  listening on http://{}:{}".format(*service.address))
+            print("  webhooks: " + ", ".join(
+                "http://{}:{}{}".format(*service.address, path) for path in routes))
         print("  A reply is printed here and kept in the chat log. It is not sent back yet.")
         while not stop.wait(1):
             pass
