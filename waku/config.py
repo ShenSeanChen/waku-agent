@@ -318,5 +318,15 @@ class Settings:
         return self.home
 
 
+def approval_overrides() -> tuple[frozenset[str], frozenset[str]]:
+    """(WAKU_APPROVE_ALLOW, WAKU_APPROVE_ASK): tool names, comma-separated, whose
+    approval mode under `waku serve` is set here instead of by the built-in
+    table in waku/alwayson/approvals.py. Read at each call, as WAKU_OWNER is."""
+    def names(variable: str) -> frozenset[str]:
+        return frozenset(n.strip() for n in os.getenv(variable, "").split(",") if n.strip())
+
+    return names("WAKU_APPROVE_ALLOW"), names("WAKU_APPROVE_ASK")
+
+
 def load_settings() -> Settings:
     return Settings()
