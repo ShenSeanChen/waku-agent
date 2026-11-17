@@ -77,10 +77,20 @@ GitHub's signature on every delivery, and stops polling.
 Each Telegram chat, Slack thread and GitHub issue is its own conversation.
 Two messages sent to one conversation within 3 seconds become one run.
 
-Three limits today:
+The reply goes back where the message came from: the Telegram chat, the Slack
+thread, or a comment on the GitHub issue through `gh issue comment`. Slack
+needs the bot scope `chat:write` for that. A reply that fails to send is tried
+again after 10 seconds, 1 minute, 10 minutes and 1 hour, and after the fifth
+failure `waku serve` gives up on it. Set `WAKU_OWNER` to where you are reached
+(`telegram:<chat id>`, `slack:<channel id>` or
+`github:<owner>/<repo>#<number>`) and it tells you there, on another channel
+than the one that failed.
 
-- The reply is printed in the `waku serve` terminal and kept in the chat log.
-  It is not sent back to Telegram, Slack or GitHub yet.
+`send_message` uses the same path. It can message you (`WAKU_OWNER`) and the
+conversation it was asked in. It refuses anyone else until approval exists.
+
+Two limits today:
+
 - One `waku serve` runs per Waku home. A second one refuses to start.
 - Telegram allows one poller per bot token, so stop `waku telegram` and the
   dashboard's Telegram before starting `waku serve` with the same token.
