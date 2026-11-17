@@ -4,7 +4,8 @@ Each tool has a mode. `allow` runs. `ask` does not run under `waku serve`:
 
   park     the call is stored in the run's row with a SHA-256 hash of its name
            and arguments, one outbox row asks the owner, and the run ends
-           `parked`. The model reads that the call waits.
+           `parked`. The model reads that the call waits, and the run sends
+           no reply of its own: the request is the one message.
   answer   the owner's answer arrives as an ordinary event. The worker reads
            it before it starts a run: `yes` runs the stored call exactly as
            stored, `no` discards it, anything else is an ordinary message.
@@ -132,12 +133,25 @@ def can_answer(address: Address) -> bool:
     return channel == "telegram" and isinstance(chat_id, int) and chat_id > 0
 
 
+def asked_line() -> str:
+    """The line a conversation reads when its call waits for an owner who
+    answers somewhere else. WAKU_OWNER_NAME is how the owner is called."""
+    return ASKED.format(owner=outbox.owner_name() or "the owner")
+
+
 # ---- park ------------------------------------------------------------------
 
 REQUEST = "{what}\n\nApprove? Reply yes or no. [{code}]"
-WAITS = ("This call waits for the owner's approval and has not run. The owner was asked "
-         "on {where}. Do not make the call again: when the owner answers, this "
-         "conversation is told what happened.")
+# What the model reads in place of the tool's result. The request the owner
+# got is the one message this run sends (spec 024, decision 1), so the model
+# is told to say nothing, and it is given no address to quote.
+WAITS = ("This call waits for the owner's approval and has not run. The request is with "
+         "the owner, and it is the only message this needs. Do not make the call again, "
+         "and do not describe the request: reply with the single word SILENT. When the "
+         "owner answers, this conversation is told what happened.")
+# What a conversation other than the owner's chat reads when its run parked.
+# Code writes this line; the model's own reply is not sent.
+ASKED = "I asked {owner} to approve this. I will say here what {owner} decides."
 ALREADY_WAITS = ("Not run: another call in this conversation already waits for the owner's "
                  "approval [{code}]. One call waits at a time.")
 NOBODY = ("Not run: this call needs the owner's approval, and WAKU_OWNER names no chat "
@@ -185,7 +199,7 @@ def park(conn: sqlite3.Connection, run_id: int, tool: str, args: dict, now: date
     outbox.insert(conn, run_id=str(run.id), channel=channel, target=target,
                   body=REQUEST.format(what=describe(tool, args), code=digest[:8]),
                   idempotency_key=f"{run.id}:ask", now=now)
-    return WAITS.format(where=outbox.format_address(channel, target))
+    return WAITS
 
 
 # ---- the answer ------------------------------------------------------------

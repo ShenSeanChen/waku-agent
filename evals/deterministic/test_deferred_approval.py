@@ -224,7 +224,8 @@ def test_park_an_ask_call_stores_it_asks_the_owner_and_runs_nothing(home):
     assert json.loads(row["pending_call"])["tool"] == "send_message"
     assert json.loads(row["pending_call"])["args"] == COMMENT
     assert row["pending_hash"] == COMMENT_HASH
-    assert len(rows) == 1, "one row: the request. The run's SILENT reply writes none"
+    assert len(rows) == 2, "the request, and the fixed line in Ana's thread"
+    assert rows[1][:3] == ("slack", THREAD[1], approvals.asked_line())
     channel, target, body, key = rows[0]
     assert (channel, target) == ("telegram", {"chat_id": 42})
     assert key == f"{row['id']}:ask"
@@ -344,6 +345,83 @@ def test_park_the_worker_ends_the_run_as_parked(home, conn):
     _worker(conn, run, clock).step()
 
     assert [row["status"] for row in _run_rows(conn)] == ["parked"]
+
+
+# ---- spec 024, decision 1: a parked run sends one message ------------------
+
+OWNER_CHAT = 5441400551
+
+
+def _parked_run(home, monkeypatch, insert, reply):
+    """One run through waku.respond() whose model calls send_message for the
+    GitHub comment and then answers `reply`. Returns (outbox rows, what the
+    model read in place of the tool's result)."""
+    monkeypatch.setenv("WAKU_OWNER", f"telegram:{OWNER_CHAT}")
+    client = ScriptedClient([
+        response([text_block(GATE)]),
+        response([tool_block("send_message", COMMENT)], stop_reason="tool_use"),
+        response([text_block(reply)])])
+    seen = []
+    create = client.messages.create
+    client.messages.create = lambda **kw: (seen.append(list(kw["messages"])), create(**kw))[1]
+    run = AgentRun(lambda: make_waku(home, client=client, episodic_store="sqlite"),
+                   log=lambda line: None)
+    conn = connect(home)
+    try:
+        insert(conn)
+        _worker(conn, run, Clock()).step()
+        (row,) = _run_rows(conn)
+        assert row["status"] == "parked"
+        return _outbox(conn), json.dumps(seen[-1][-1]["content"], default=str)
+    finally:
+        run.close()
+        conn.close()
+
+
+def test_one_message_a_run_that_parks_in_the_owners_chat_sends_only_the_request(
+        home, monkeypatch):
+    """Spec 024, acceptance 1. The owner asked in his own chat. The model's
+    reply after the call parked is not sent, and nothing names the chat id."""
+    rows, told = _parked_run(
+        home, monkeypatch,
+        lambda conn: _telegram(conn, "comment on issue 12", sender=str(OWNER_CHAT),
+                               chat_id=OWNER_CHAT),
+        "Your comment is queued, but it needs the owner's approval first.")
+
+    (request,) = rows
+    channel, target, body, key = request
+    assert (channel, target) == ("telegram", {"chat_id": OWNER_CHAT})
+    assert key.endswith(":ask") and "Approve? Reply yes or no." in body
+    assert str(OWNER_CHAT) not in body
+    assert str(OWNER_CHAT) not in told, "the model is not given the owner's chat id"
+    assert "SILENT" in told
+
+
+def test_one_message_the_text_a_parked_call_returns_carries_no_address():
+    assert "{" not in approvals.WAITS
+    assert "SILENT" in approvals.WAITS
+    assert "telegram" not in approvals.WAITS.lower()
+
+
+def test_one_message_another_conversation_reads_one_fixed_line(home, monkeypatch):
+    """Ana asked in Slack and Sean approves on Telegram. Her thread gets one
+    line that code wrote, not the model's reply."""
+    monkeypatch.setenv("WAKU_OWNER_NAME", "Sean")
+    rows, _ = _parked_run(home, monkeypatch, _slack,
+                          "Queued. It will post once the outbox is processed.")
+
+    assert [(channel, key.rsplit(":", 1)[1]) for channel, _, _, key in rows] == [
+        ("telegram", "ask"), ("slack", "0")]
+    assert rows[1][1] == THREAD[1]
+    assert rows[1][2] == "I asked Sean to approve this. I will say here what Sean decides."
+
+
+def test_one_message_the_fixed_line_says_the_owner_without_a_name(home, monkeypatch):
+    monkeypatch.delenv("WAKU_OWNER_NAME", raising=False)
+    rows, _ = _parked_run(home, monkeypatch, _slack, "SILENT")
+
+    assert rows[1][2] == ("I asked the owner to approve this. I will say here what "
+                          "the owner decides.")
 
 
 # ---- C4: resuming ----------------------------------------------------------
