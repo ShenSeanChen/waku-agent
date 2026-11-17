@@ -102,7 +102,7 @@ read and change. Versus the big open-source assistants (OpenClaw, Hermes)? Same 
 | [Getting started](docs/getting-started.md) | installing, the first run, connecting Waku Memory |
 | [The tour](docs/tour.md) | the dashboard, things to try, the loop, graph workflows, skills |
 | [Architecture](docs/architecture.md) | every box on the whiteboard, and the file behind it |
-| [Integrations](docs/integrations.md) | voice, Telegram, calendars, MCP servers, Waku Memory |
+| [Integrations](docs/integrations.md) | voice, Telegram, always-on `waku serve`, calendars, MCP servers, Waku Memory |
 | [Commands](docs/commands.md) | every `waku` and `make` command |
 | [Evals & tracing](docs/evals.md) | the two kinds of eval, the Docker tier, the release gate, traces and spend |
 | [Roadmap](docs/roadmap.md) | what is live, what is still a skeleton, upgrade paths |

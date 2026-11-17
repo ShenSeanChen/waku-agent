@@ -79,6 +79,47 @@ flowchart LR
 > ([@ShenSeanChen](https://github.com/ShenSeanChen)). Code is MIT; **this diagram is licensed CC BY-NC-SA 4.0** —
 > reuse it with credit to the channel, not for commercial resale._
 
+### The always-on path
+
+`waku serve` puts an inbox in front of the same loop (spec 023,
+`waku/alwayson/`). A gateway above runs the turn while the message is still in
+memory. A handler under `waku serve` writes the message into the `events`
+table of `state.db` and returns, and one worker starts the run.
+
+```mermaid
+flowchart LR
+  TG["Telegram message"] & SL["Slack @mention"] & GH["GitHub issue or mention"] -->|insert only| EV[("events<br/>state.db")]
+  EV -->|claim, wait 3 s,<br/>batch per session| W["Worker<br/>one per home"]
+  W -->|one run| RUN["waku.respond()<br/>the loop above"]
+  RUN -->|done or failed| EV
+```
+
+Ana writes "@waku is issue 12 still open?" in a Slack thread while a run for
+Sean's Telegram chat is busy. Her message is one `pending` row before any
+model is called. The worker claims the oldest pending row, waits 3 seconds,
+claims every other pending row of that session, and starts one run with all
+of them in the session `slack:<channel>:<thread>`. The rows end `done`, or
+`failed` when the run raised.
+
+- **A redelivery is a no-op.** `UNIQUE(source, external_id)` drops a message
+  the sender delivers twice. Telegram's `update_id`, Slack's `event_id` and
+  GitHub's `X-GitHub-Delivery` are the external ids.
+- **A restart loses nothing.** At startup the worker returns every `claimed`
+  row to `pending`, so a run that died runs again.
+- **One worker per home.** A second `waku serve` on the same home refuses to
+  start, because `<home>/serve.lock` is held.
+- **Each conversation is its own session**: `telegram:<chat id>`,
+  `slack:<channel>:<thread>` or `github:<owner>/<repo>#<number>`.
+- **GitHub arrives by poll or by webhook.** Every 60 seconds the poller asks
+  the `gh` CLI about `WAKU_GITHUB_REPOS`. With `GITHUB_WEBHOOK_SECRET` set,
+  `POST /webhooks/github` on `127.0.0.1:7780` replaces the poller and checks
+  `X-Hub-Signature-256`.
+- **`state.db` is in WAL mode**, so the dashboard reads it while
+  `waku serve` writes.
+
+A run's reply is printed in the `waku serve` terminal and kept in the chat
+log. It is not sent back to Telegram, Slack or GitHub yet.
+
 ### Which memories earn a slot
 
 Retrieval finds the top facts for a message and, by default, puts all of them
@@ -304,7 +345,12 @@ shows those instead. A proxy that does not know the turn leaves the estimate.
 
 - `waku/gateway/` — how text gets in and out: `cli.py`, `voice.py` (wake word),
   `telegram.py`, `discord.py` and `whatsapp.py`, started by `runner.py` and
-  `supervisor.py`. Gateways only move text.
+  `supervisor.py`. Gateways only move text. Under `waku serve` the Telegram
+  handler writes an event instead of running the turn.
+- `waku/alwayson/` — the always-on path (spec 023): `events.py` (the inbox),
+  `worker.py` (one worker, one run per session batch, the lock), `serve.py`
+  (`waku serve`) and `sources/` (Telegram, Slack and GitHub handlers that
+  only insert a row).
 - `waku/runtime/session.py` — working memory for one turn: SOUL.md, memory
   context and chat history.
 - `waku/loop/agent.py` — the loop, with an optional `before_tool` a plugin's
@@ -334,7 +380,9 @@ shows those instead. A proxy that does not know the turn leaves the estimate.
   The two never mix. `evals/hosted_docker/` is a third tier for `hosted/`:
   0/1 and offline, but it needs a Docker daemon and its own CI job.
 - `examples/` — teaching material, not product; one folder per topic.
-- `~/.waku/` — runtime state: `state.db`, `calendar.ics`, `outbox/`, `traces/`.
+- `~/.waku/` — runtime state: `state.db` (with `state.db-wal` and
+  `state.db-shm` beside it), `calendar.ics`, `outbox/`, `traces/`, and
+  `serve.lock` while `waku serve` runs.
   `WAKU_HOME` moves it; `make` sets it to the repo's own `.waku/`, which is
   gitignored. `waku/config.py` `resolve_home()` has the rules.
 - `.env` — a model key is read from the environment, then the nearest `.env`
