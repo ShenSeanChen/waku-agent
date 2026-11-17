@@ -13,6 +13,7 @@ row in `events` instead of a turn:
 from __future__ import annotations
 
 from waku.alwayson.events import Inbox
+from waku.alwayson.sources import MissingExtra
 from waku.gateway import telegram as gateway
 
 
@@ -43,7 +44,8 @@ class Handle:
 
 
 def start(inbox: Inbox) -> Handle | None:
-    """Start polling, or return None when Telegram is not configured."""
+    """Start polling, or return None when Telegram is not configured.
+    Raises MissingExtra when the token is set and the extra is not installed."""
     from waku.config import load_settings
 
     token = load_settings().telegram_token
@@ -52,9 +54,7 @@ def start(inbox: Inbox) -> Handle | None:
     try:
         import telegram  # noqa: F401
     except ImportError:
-        print("(telegram) TELEGRAM_BOT_TOKEN is set but the extra isn't installed — "
-              "pip install 'waku-agent[telegram]'")
-        return None
+        raise MissingExtra("TELEGRAM_BOT_TOKEN", "telegram") from None
     print("(telegram) starting:")
     print(gateway.posture())
     app = build_app(token, inbox)

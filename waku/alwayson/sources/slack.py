@@ -26,6 +26,7 @@ from __future__ import annotations
 import os
 
 from waku.alwayson.events import Inbox
+from waku.alwayson.sources import MissingExtra
 
 
 def allowed_channels() -> set[str]:
@@ -68,7 +69,8 @@ class Handle:
 
 
 def start(inbox: Inbox) -> Handle | None:
-    """Connect over Socket Mode, or return None when Slack is not configured."""
+    """Connect over Socket Mode, or return None when Slack is not configured.
+    Raises MissingExtra when the tokens are set and the extra is not installed."""
     app_token, bot_token = os.getenv("SLACK_APP_TOKEN", ""), os.getenv("SLACK_BOT_TOKEN", "")
     if not app_token or not bot_token:
         return None
@@ -77,9 +79,7 @@ def start(inbox: Inbox) -> Handle | None:
         from slack_sdk.socket_mode.response import SocketModeResponse
         from slack_sdk.web import WebClient
     except ImportError:
-        print("(slack) SLACK_APP_TOKEN is set but the extra isn't installed — "
-              "pip install 'waku-agent[slack]'")
-        return None
+        raise MissingExtra("SLACK_APP_TOKEN", "slack") from None
 
     channels = allowed_channels()
     web = WebClient(token=bot_token)

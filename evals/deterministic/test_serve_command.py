@@ -192,6 +192,61 @@ def test_sources_start_with_the_inbox_and_stop_with_the_service(tmp_path):
     assert seen == [tmp_path, "stopped"]
 
 
+def test_the_sources_line_names_a_source_whose_extra_is_missing(tmp_path):
+    """Found in a live run: TELEGRAM_BOT_TOKEN was set, the extra was not
+    installed, and the line that lists the sources said only `github`. The
+    reason was printed once, far above it."""
+    from waku.alwayson.sources import MissingExtra
+
+    class Handle:
+        def stop(self):
+            pass
+
+    def needs_extra(inbox):
+        raise MissingExtra("TELEGRAM_BOT_TOKEN", "telegram")
+
+    logged = []
+    service = _service(tmp_path, log=logged.append, sources={
+        "telegram": needs_extra, "slack": lambda inbox: None,
+        "github": lambda inbox: Handle()})
+    service.start()
+    try:
+        line = serve.sources_line(service)
+    finally:
+        service.stop()
+
+    assert line == ("  sources: github. Not running: telegram (TELEGRAM_BOT_TOKEN is set, "
+                    "but the extra is not installed: pip install 'waku-agent[telegram]')")
+    assert service.missing == {}, "stop clears what start found"
+
+
+def test_the_sources_line_when_the_only_configured_source_lacks_its_extra(tmp_path):
+    from waku.alwayson.sources import MissingExtra
+
+    def needs_extra(inbox):
+        raise MissingExtra("SLACK_APP_TOKEN", "slack")
+
+    service = _service(tmp_path, sources={"slack": needs_extra})
+    service.start()
+    try:
+        line = serve.sources_line(service)
+    finally:
+        service.stop()
+
+    assert line.startswith("  sources: none running. Not running: slack (SLACK_APP_TOKEN")
+    assert "pip install 'waku-agent[slack]'" in line
+
+
+def test_the_sources_line_without_any_configured_source(tmp_path):
+    service = _service(tmp_path, sources={"slack": lambda inbox: None})
+    service.start()
+    try:
+        assert serve.sources_line(service) == (
+            "  sources: none configured (docs/integrations.md lists them)")
+    finally:
+        service.stop()
+
+
 def test_the_listener_binds_to_loopback_by_default(tmp_path, monkeypatch):
     monkeypatch.delenv("WAKU_SERVE_HOST", raising=False)
     service = _service(tmp_path, port=0,

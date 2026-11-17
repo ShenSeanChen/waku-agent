@@ -145,13 +145,16 @@ def test_telegram_source_is_off_without_a_token(monkeypatch, inbox):
     assert source.start(inbox) is None
 
 
-def test_telegram_source_names_the_extra_when_it_is_missing(monkeypatch, inbox, capsys):
+def test_telegram_source_names_the_extra_when_it_is_missing(monkeypatch, inbox):
+    from waku.alwayson.sources import MissingExtra
     from waku.alwayson.sources import telegram as source
 
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "fake-token")
     monkeypatch.setitem(sys.modules, "telegram", None)   # import telegram -> ImportError
-    assert source.start(inbox) is None
-    assert "waku-agent[telegram]" in capsys.readouterr().out
+    with pytest.raises(MissingExtra) as missing:
+        source.start(inbox)
+    assert "TELEGRAM_BOT_TOKEN" in str(missing.value)
+    assert "pip install 'waku-agent[telegram]'" in str(missing.value)
 
 
 # ---- Slack -----------------------------------------------------------------
@@ -302,14 +305,16 @@ def test_slack_source_is_off_without_both_tokens(monkeypatch, inbox):
     assert slack.start(inbox) is None
 
 
-def test_slack_source_names_the_extra_when_it_is_missing(monkeypatch, inbox, capsys):
-    from waku.alwayson.sources import slack
+def test_slack_source_names_the_extra_when_it_is_missing(monkeypatch, inbox):
+    from waku.alwayson.sources import MissingExtra, slack
 
     monkeypatch.setenv("SLACK_APP_TOKEN", "xapp-fake")
     monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-fake")
     monkeypatch.setitem(sys.modules, "slack_sdk", None)   # import slack_sdk -> ImportError
-    assert slack.start(inbox) is None
-    assert "waku-agent[slack]" in capsys.readouterr().out
+    with pytest.raises(MissingExtra) as missing:
+        slack.start(inbox)
+    assert "SLACK_APP_TOKEN" in str(missing.value)
+    assert "pip install 'waku-agent[slack]'" in str(missing.value)
 
 
 def test_slack_sdk_is_not_needed_to_import_waku(tmp_path):

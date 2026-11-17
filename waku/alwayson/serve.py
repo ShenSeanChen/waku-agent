@@ -32,6 +32,7 @@ from typing import Any
 from waku.alwayson import outbox
 from waku.alwayson.dispatcher import Dispatcher, Sender
 from waku.alwayson.events import Event, Inbox
+from waku.alwayson.sources import MissingExtra
 from waku.alwayson.timers import CHECK_SECONDS, TimerLoop
 from waku.alwayson.worker import BATCH_WAIT_SECONDS, AgentRun, AlreadyRunning, ServeLock, Worker
 from waku.config import Settings
@@ -42,7 +43,8 @@ MAX_BODY_BYTES = 1_000_000
 STOP_TIMEOUT_SECONDS = 60
 
 # A source: given the inbox, start receiving and return something with stop(),
-# or None when the source is not configured.
+# or None when the source is not configured. It raises MissingExtra when its
+# setting is there and the extra it needs is not installed.
 Source = Callable[[Inbox], Any]
 # A route: given the request's headers and body, return (status, JSON bytes).
 Route = Callable[[Mapping[str, str], bytes], tuple[int, bytes]]
@@ -113,6 +115,7 @@ class Service:
         self._lock = ServeLock(settings.home)
         self.inbox = Inbox(settings.home)
         self.running: list[str] = []          # the sources that started
+        self.missing: dict[str, str] = {}     # source -> why it could not start
         self._handles: list[Any] = []
         self._worker: Worker | None = None
         self._ready = threading.Event()
@@ -192,6 +195,9 @@ class Service:
             for name, source in self._sources.items():
                 try:
                     handle = source(self.inbox)
+                except MissingExtra as exc:
+                    self.missing[name] = str(exc)
+                    continue
                 except Exception as exc:
                     from waku.gateway.runner import safe_exception
 
@@ -213,7 +219,7 @@ class Service:
                 handle.stop()
             except Exception as exc:
                 self._log(f"(serve) a source did not stop cleanly: {type(exc).__name__}")
-        self._handles, self.running = [], []
+        self._handles, self.running, self.missing = [], [], {}
         if self._server is not None:
             self._server.shutdown()
             self._server.server_close()
@@ -231,6 +237,19 @@ class Service:
         if self.dispatcher_thread is not None and self.dispatcher_thread.is_alive():
             self.dispatcher_thread.join(STOP_TIMEOUT_SECONDS)
         self._lock.release()
+
+
+def sources_line(service: Service) -> str:
+    """The line of `waku serve` that lists the sources. A source whose setting
+    is there and whose extra is missing is named here with the command that
+    installs it, so the list never reads as if the source were switched off."""
+    if not service.running and not service.missing:
+        return "  sources: none configured (docs/integrations.md lists them)"
+    line = "  sources: " + (", ".join(service.running) or "none running")
+    if service.missing:
+        line += ". Not running: " + "; ".join(
+            f"{name} ({why})" for name, why in service.missing.items())
+    return line
 
 
 def _agent_run(settings: Settings, log: Callable[[str], None]) -> AgentRun:
@@ -280,8 +299,7 @@ def main(argv: list[str]) -> int:
         return 1
     try:
         print(f"waku serve is running on {settings.home}. Ctrl-C to stop.")
-        print("  sources: " + (", ".join(service.running) or
-                               "none configured (docs/integrations.md lists them)"))
+        print(sources_line(service))
         if service.address:
             print("  webhooks: " + ", ".join(
                 "http://{}:{}{}".format(*service.address, path) for path in routes))
