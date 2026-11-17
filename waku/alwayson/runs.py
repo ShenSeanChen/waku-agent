@@ -64,17 +64,23 @@ def get(conn: sqlite3.Connection, run_id: int) -> Run | None:
     return _run(row) if row else None
 
 
+def find(conn: sqlite3.Connection, session_id: str, first_event_id: int) -> Run | None:
+    """The run whose first event is this one, or None."""
+    row = conn.execute(
+        "SELECT * FROM runs WHERE session_id = ? AND json_extract(event_ids, '$[0]') = ? "
+        "ORDER BY id DESC LIMIT 1", (session_id, first_event_id)).fetchone()
+    return _run(row) if row else None
+
+
 def start(conn: sqlite3.Connection, session_id: str, event_ids: list[int],
           now: datetime | None = None) -> Run:
     """The row for the run these events start, `running`. An event starts one
     run, so a row whose first event is this batch's first event is an earlier
     attempt of the same run, and it is used again."""
     stamp, ids = outbox._stamp(now or outbox.utc_now()), json.dumps(event_ids)
-    row = conn.execute(
-        "SELECT id FROM runs WHERE session_id = ? AND json_extract(event_ids, '$[0]') = ? "
-        "ORDER BY id DESC LIMIT 1", (session_id, event_ids[0])).fetchone()
-    if row:
-        run_id = row["id"]
+    earlier = find(conn, session_id, event_ids[0])
+    if earlier:
+        run_id = earlier.id
         conn.execute("UPDATE runs SET status = 'running', started_at = ?, ended_at = '', "
                      "event_ids = ? WHERE id = ?", (stamp, ids, run_id))
     else:

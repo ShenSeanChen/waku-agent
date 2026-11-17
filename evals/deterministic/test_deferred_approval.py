@@ -317,7 +317,9 @@ def test_park_a_replayed_run_asks_the_owner_once(home, conn):
 
 def test_park_without_an_owner_who_can_answer_stores_nothing(home, conn, monkeypatch):
     clock = Clock()
-    for owner in ("", "github:acme/app#1"):
+    # a GitHub issue and a group chat are read by several people, and `waku
+    # serve` hears no Slack direct message, so no yes could come back from one
+    for owner in ("", "github:acme/app#1", "telegram:-1001234", "slack:D0123ABC"):
         monkeypatch.setenv("WAKU_OWNER", owner)
         event_id = _slack(conn, external_id=f"Ev-{owner}")
         run = runs.start(conn, "slack:C1:1700.0001", [event_id], now=clock())

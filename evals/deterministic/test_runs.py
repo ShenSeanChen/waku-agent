@@ -177,6 +177,8 @@ def test_a_run_through_waku_carries_the_turn_id_of_its_receipt(tmp_path):
 
     assert row["status"] == "done"
     assert row["turn_id"] and row["turn_id"] == meta["turn_id"]
+    assert row["started_at"] == "2026-11-16T12:00:00+00:00", (
+        "the run reads the worker's row; it does not start the row again")
 
 
 def test_start_migrates_a_database_from_before_the_table(tmp_path):

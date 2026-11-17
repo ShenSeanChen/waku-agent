@@ -187,8 +187,7 @@ no.'
 - **One call waits per conversation**, and it expires after 72 hours.
 - **Only the owner approves.** `who_may_approve` in `approvals.py` is the one
   function that decides, and it answers with `WAKU_OWNER`. The yes counts in
-  a private Telegram chat or a Slack direct message, where one person
-  writes.
+  a private Telegram chat, where one person writes.
 - **Only `waku serve` parks a call.** In `waku` and the dashboard nothing can
   bring a parked call back, so `send_message` to a third party is refused
   there.

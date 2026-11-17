@@ -122,17 +122,14 @@ def call_hash(tool: str, args: dict) -> str:
 
 
 def can_answer(address: Address) -> bool:
-    """Whether an answer from this address names one person. A Telegram chat
-    with a positive id is a private chat, and a Slack channel whose id starts
-    with D is a direct message. A group chat, a channel and a GitHub issue are
-    read by several people, so no yes counts there."""
+    """Whether a yes from this address names one person and reaches `waku
+    serve`. A Telegram chat with a positive id is a private chat. A group
+    chat, a Slack channel and a GitHub issue are read by several people, so no
+    yes counts there. A Slack direct message has one person, but the Slack
+    source hears mentions in channels only, so an answer there never arrives."""
     channel, target = address
-    if channel == "telegram":
-        chat_id = target.get("chat_id")
-        return isinstance(chat_id, int) and chat_id > 0
-    if channel == "slack":
-        return str(target.get("channel", "")).startswith("D") and "thread_ts" not in target
-    return False
+    chat_id = target.get("chat_id")
+    return channel == "telegram" and isinstance(chat_id, int) and chat_id > 0
 
 
 # ---- park ------------------------------------------------------------------
@@ -223,10 +220,9 @@ def is_approver(event, run: runs.Run) -> bool:
         return False
     if address not in who_may_approve(call.get("tool", ""), call.get("args") or {}):
         return False
+    # In a private Telegram chat the chat's id is the person's id.
     sender = str((event.payload.get("sender") or {}).get("id", ""))
-    if event.source == "telegram":   # in a private chat the chat id is the person's id
-        return sender == str(address[1].get("chat_id"))
-    return bool(sender)
+    return sender == str(address[1].get("chat_id"))
 
 
 def waiting_for(conn: sqlite3.Connection, event, now: datetime) -> list[runs.Run]:

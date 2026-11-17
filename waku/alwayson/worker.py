@@ -164,8 +164,9 @@ class AgentRun:
         if self._agent is None:
             self._agent = self._factory()
         session = self._agent.session
-        # The row the worker started for this batch. `start` finds it again.
-        run = runs.start(self._agent.conn, session_id, [e.id for e in batch])
+        # The row the worker started for this batch.
+        run = (runs.find(self._agent.conn, session_id, batch[0].id)
+               or runs.start(self._agent.conn, session_id, [e.id for e in batch]))
         if session.session_id != session_id:
             session.switch(session_id)   # load that conversation's recent turns
         text = render(batch)
