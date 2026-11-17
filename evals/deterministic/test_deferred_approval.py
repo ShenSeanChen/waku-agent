@@ -149,9 +149,10 @@ def test_modes_a_tool_that_reads_or_writes_for_the_person_is_allow():
 def test_modes_send_message_asks_unless_it_goes_to_the_owner_or_the_conversation(home):
     assert approvals.mode("send_message", {"to": "owner", "body": "hi"}) == "allow"
     assert approvals.mode("send_message", {"to": "telegram:42", "body": "hi"}) == "allow"
-    assert approvals.mode("send_message", {"to": "slack:C1:1700.0001", "body": "hi"},
-                          address=THREAD) == "allow"
-    for to in ("github:acme/app#12", "telegram:77", "slack:C2", "Alex", ""):
+    assert approvals.mode("send_message", {"to": "telegram:77", "body": "hi"},
+                          address=("telegram", {"chat_id": 77})) == "allow"
+    for to in ("github:acme/app#12", "telegram:77", "slack:C2", "Alex", "",
+               "slack:C1:1700.0001"):   # a thread other people read (spec 024)
         assert approvals.mode("send_message", {"to": to, "body": "hi"},
                               address=THREAD) == "ask", to
 
@@ -256,7 +257,6 @@ def test_park_lets_an_allow_call_through(home, conn):
     with outbox.running(home, str(run.id), THREAD):
         assert gate("list_events", {}) == (None, "")
         assert gate("send_message", {"to": "owner", "body": "hi"}) == (None, "")
-        assert gate("send_message", {"to": "slack:C1:1700.0001", "body": "hi"}) == (None, "")
     assert _outbox(conn) == []
     assert runs.get(conn, run.id).pending_call is None
 
@@ -699,6 +699,166 @@ def test_yes_with_two_calls_waiting_needs_the_code(home, conn):
     assert [args for _, args, _ in recorder.executed] == [other]
     assert runs.get(conn, first).status == "parked"
     assert runs.get(conn, second.id).status == "done"
+
+
+# ---- spec 024, decision 5: a reply other people can read is a write ---------
+
+ISSUE = ("github", {"repo": "acme/app", "number": 12})
+
+
+def _mention(conn, external_id="comment:1"):
+    return events.insert(conn, source="github", external_id=external_id,
+                         session_id="github:acme/app#12",
+                         payload={"text": "ana mentioned you: is this still open?",
+                                  "sender": {"login": "ana"}, "reply_to": ISSUE[1]})
+
+
+class Replier:
+    """A run that answers with one sentence, and an executor that runs the
+    stored call through the real send_message, as AgentRun.execute does."""
+
+    def __init__(self, home, reply="It is still open.") -> None:
+        self.home, self.reply, self.runs = home, reply, []
+
+    def __call__(self, session_id, batch):
+        self.runs.append(session_id)
+        return self.reply
+
+    def execute(self, run, address):
+        from waku.tools import messages
+
+        call = run.pending_call
+        with outbox.running(self.home, str(run.id), address,
+                            approved_key=f"{run.id}:{run.pending_hash}"):
+            return messages.make_tool(self.home).fn(**call["args"])
+
+
+def test_public_reply_to_a_github_issue_waits_for_the_owners_yes(home, conn):
+    """Spec 024, item 5: a comment nobody approved appeared under the owner's
+    name. The reply is now the request the owner reads."""
+    clock, run = Clock(), Replier(home)
+    _mention(conn)
+    _drain(_worker(conn, run, clock))
+
+    ((channel, target, body, _key),) = _outbox(conn)
+    assert (channel, target) == ("telegram", {"chat_id": 42}), "nothing is queued for GitHub"
+    assert 'Comment on acme/app#12: "It is still open."' in body and "Approve?" in body
+    (parked,) = _run_rows(conn)
+    assert parked["status"] == "parked"
+    assert json.loads(parked["pending_call"])["args"] == {
+        "to": "github:acme/app#12", "body": "It is still open."}
+
+
+def test_public_reply_is_posted_once_after_a_yes_and_starts_no_run(home, conn):
+    clock, run = Clock(), Replier(home)
+    _mention(conn)
+    worker = _worker(conn, run, clock)
+    _drain(worker)
+    _telegram(conn, "yes")
+    _drain(worker)
+
+    posted = [row for row in _outbox(conn) if row[0] == "github"]
+    assert [(target, body) for _, target, body, _ in posted] == [(ISSUE[1], "It is still open.")]
+    assert run.runs == ["github:acme/app#12"], (
+        "the posted reply is the end: no run is started to talk about the approval")
+    assert [r["status"] for r in _run_rows(conn)] == ["done"]
+
+
+def test_public_reply_is_dropped_after_a_no(home, conn):
+    clock, run = Clock(), Replier(home)
+    _mention(conn)
+    worker = _worker(conn, run, clock)
+    _drain(worker)
+    _telegram(conn, "no")
+    _drain(worker)
+
+    assert [row[0] for row in _outbox(conn)] == ["telegram"]
+    assert run.runs == ["github:acme/app#12"]
+
+
+def test_public_reply_to_a_slack_thread_and_a_group_chat_wait_too(home, conn):
+    clock, run = Clock(), Replier(home)
+    _slack(conn)
+    _telegram(conn, "hello all", external_id="77", sender="7", chat_id=-100123)
+    _drain(_worker(conn, run, clock))
+
+    assert [row[0] for row in _outbox(conn)] == ["telegram", "telegram"]
+    assert all(row[1] == {"chat_id": 42} and "Approve?" in row[2] for row in _outbox(conn))
+    assert 'Send to slack:C1:1700.0001: "It is still open."' in _outbox(conn)[0][2]
+
+
+def test_public_reply_rule_leaves_a_private_place_alone(home, conn, monkeypatch):
+    """The owner's own chat, any address WAKU_OWNER names, and a Telegram chat
+    with one person get the reply at once."""
+    monkeypatch.setenv("WAKU_OWNER", "telegram:42,slack:D9")
+    clock, run = Clock(), Replier(home, reply="Done.")
+    _telegram(conn, "hello")
+    _telegram(conn, "hello", external_id="901", sender="77", chat_id=77)
+    events.insert(conn, source="slack", external_id="Ev7", session_id="slack:D9",
+                  payload={"text": "hello", "reply_to": {"channel": "D9"}})
+    _drain(_worker(conn, run, clock))
+
+    assert sorted((row[0], json.dumps(row[1]), row[2]) for row in _outbox(conn)) == [
+        ("slack", '{"channel": "D9"}', "Done."),
+        ("telegram", '{"chat_id": 42}', "Done."),
+        ("telegram", '{"chat_id": 77}', "Done.")]
+    assert {r["status"] for r in _run_rows(conn)} == {"done"}
+
+
+def test_public_reply_goes_out_at_once_when_the_owner_allowed_the_channel(
+        home, conn, monkeypatch):
+    monkeypatch.setenv("WAKU_APPROVE_ALLOW", "reply:github")
+    clock, run = Clock(), Replier(home)
+    _mention(conn)
+    _slack(conn)
+    _drain(_worker(conn, run, clock))
+
+    rows = _outbox(conn)
+    assert (rows[0][0], rows[0][1], rows[0][2]) == ("github", ISSUE[1], "It is still open.")
+    assert rows[1][0] == "telegram" and "Send to slack:" in rows[1][2], "Slack still asks"
+    assert approvals.mode("send_message", {"to": "github:acme/app#12", "body": "x"},
+                          address=ISSUE) == "allow"
+
+
+def test_public_reply_a_call_parked_from_an_issue_posts_no_line_on_the_issue(home, conn):
+    """The fixed line of decision 1 is for a chat. On GitHub it would be one
+    more comment under the owner's name."""
+    clock = Clock()
+    _mention(conn)
+    gate = approvals.Gate(home, conn, now=clock)
+
+    def run(session_id, batch):
+        (row,) = _run_rows(conn)
+        with outbox.running(home, str(row["id"]), ISSUE):
+            gate("send_message", {"to": "telegram:77", "body": "Issue 12 needs you."})
+        return "I asked."
+
+    _worker(conn, run, clock).step()
+
+    assert [row[0] for row in _outbox(conn)] == ["telegram"]
+    assert [r["status"] for r in _run_rows(conn)] == ["parked"]
+
+
+def test_public_reply_through_send_message_asks_as_well(home):
+    """The model cannot post into a public conversation by calling the tool
+    in place of replying."""
+    assert approvals.mode("send_message", {"to": "github:acme/app#12", "body": "x"},
+                          address=ISSUE) == "ask"
+    assert approvals.mode("send_message", {"to": "slack:C1:1700.0001", "body": "x"},
+                          address=THREAD) == "ask"
+    assert approvals.mode("send_message", {"to": "telegram:77", "body": "x"},
+                          address=("telegram", {"chat_id": 77})) == "allow"
+
+
+def test_public_reply_without_an_owner_to_ask_is_not_posted(home, conn, monkeypatch):
+    monkeypatch.delenv("WAKU_OWNER")
+    clock, run, said = Clock(), Replier(home), []
+    _mention(conn)
+    Worker(conn, run, wait=lambda seconds: None, now=clock, log=said.append).step()
+
+    assert _outbox(conn) == []
+    assert [r["status"] for r in _run_rows(conn)] == ["done"]
+    assert any("WAKU_OWNER" in line for line in said)
 
 
 # ---- the licence line ------------------------------------------------------

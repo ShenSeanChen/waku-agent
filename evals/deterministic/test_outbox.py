@@ -571,7 +571,11 @@ def test_silent_inside_a_sentence_is_still_a_reply(conn):
     assert [row[3] for row in _sent_rows(conn)] == ["The room is silent now."]
 
 
-def test_silent_or_not_a_slack_reply_goes_to_the_thread_and_github_to_the_issue(conn):
+def test_silent_or_not_a_slack_reply_goes_to_the_thread_and_github_to_the_issue(
+        conn, monkeypatch):
+    # Spec 024: a reply to a Slack thread or a GitHub issue waits for a yes
+    # unless the owner allows it. These rows are about delivery, so it is on.
+    monkeypatch.setenv("WAKU_APPROVE_ALLOW", "reply:slack,reply:github")
     _event(conn, external_id="Ev1", session_id="slack:C1:1700.0001", source="slack",
            reply_to={"channel": "C1", "thread_ts": "1700.0001"})
     _event(conn, external_id="label:acme/app#12", session_id="github:acme/app#12",
