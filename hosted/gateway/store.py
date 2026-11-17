@@ -1,4 +1,5 @@
-"""control.db -- tenants, sessions and proxy tokens. The gateway's alone.
+"""control.db -- tenants, sessions, proxy tokens, and each tenant's waiting
+events and next wakeup (spec 026). The gateway's alone.
 
 On the VM, control/ is owned by UID 10002 with mode 0700, so the one-writer
 rule is enforced by file ownership rather than by convention. The proxy never
@@ -11,6 +12,7 @@ file is a list of hashes, not a set of live credentials.
 
 from __future__ import annotations
 
+import json
 import sqlite3
 import threading
 import time
@@ -26,7 +28,7 @@ from hosted.core.tenant import (
     normalise_timezone,
     token_hash,
 )
-from hosted.ports.control import Tenant
+from hosted.ports.control import Tenant, TenantEvent
 
 SESSION_TTL_SECONDS = 30 * 24 * 3600
 
@@ -42,7 +44,7 @@ PRAGMAS = (
     # backup.sh opens this file from a second process (spec, F3).
     "PRAGMA busy_timeout=5000",
 )
-# No foreign_keys pragma: neither table declares a foreign key, so turning it
+# No foreign_keys pragma: no table declares a foreign key, so turning it
 # on would enforce nothing while implying a constraint that is not there.
 
 SCHEMA = """
@@ -78,9 +80,35 @@ CREATE TABLE IF NOT EXISTS memory_key (
   key_id      TEXT NOT NULL,
   created_at  REAL NOT NULL
 );
+-- Spec 026: an event for a tenant, kept here until the tenant's container has
+-- it. The UNIQUE key makes a redelivered message a no-op: Slack resends an
+-- event whose answer was slow, and a chat client resends after a dropped
+-- connection.
+CREATE TABLE IF NOT EXISTS tenant_events (
+  id           INTEGER PRIMARY KEY,
+  tenant_id    TEXT NOT NULL,
+  source       TEXT NOT NULL,
+  external_id  TEXT NOT NULL,
+  session_id   TEXT NOT NULL,
+  payload      TEXT NOT NULL,
+  status       TEXT NOT NULL DEFAULT 'pending',
+  received_at  REAL NOT NULL,
+  handed_at    REAL,
+  UNIQUE (tenant_id, source, external_id)
+);
+CREATE INDEX IF NOT EXISTS tenant_events_waiting ON tenant_events(status, tenant_id, id);
+-- Spec 026: when to start a stopped tenant's container, as its container
+-- reported before the gateway stopped it. One row per tenant.
+CREATE TABLE IF NOT EXISTS tenant_wakeups (
+  tenant_id   TEXT PRIMARY KEY,
+  due_at      REAL NOT NULL,
+  updated_at  REAL NOT NULL
+);
 """
 
 _COLUMNS = "id, sub, email, timezone, status, project_id, created_at"
+_EVENT_COLUMNS = ("id, tenant_id, source, external_id, session_id, payload, status, "
+                  "received_at")
 
 
 class ControlDb:
@@ -342,6 +370,84 @@ class ControlDb:
                 "SELECT key FROM memory_key WHERE tenant_id = ?", (tenant_id,)).fetchone()
         return row[0] if row else ""
 
+    def add_event(self, tenant_id: str, *, source: str, external_id: str,
+                  session_id: str, payload: dict) -> bool:
+        """Keep one event for this tenant, `pending`. True when a row was
+        written, False when this source already delivered this external_id to
+        this tenant: the first row stays as it is, handed or not."""
+        self._require_tenant_id(tenant_id)
+        with self._lock:
+            cursor = self._conn.execute(
+                "INSERT OR IGNORE INTO tenant_events (tenant_id, source, external_id, "
+                "session_id, payload, received_at) VALUES (?, ?, ?, ?, ?, ?)",
+                (tenant_id, source, str(external_id), session_id, json.dumps(payload),
+                 self._now()))
+            self._conn.commit()
+            return cursor.rowcount == 1
+
+    def pending_events(self, tenant_id: str) -> list[TenantEvent]:
+        """This tenant's events that its container does not have yet, in the
+        order they arrived."""
+        with self._lock:
+            rows = self._conn.execute(
+                f"SELECT {_EVENT_COLUMNS} FROM tenant_events "
+                "WHERE status = 'pending' AND tenant_id = ? ORDER BY id",
+                (tenant_id,)).fetchall()
+        return [TenantEvent(row["id"], row["tenant_id"], row["source"], row["external_id"],
+                            row["session_id"], json.loads(row["payload"]), row["status"],
+                            row["received_at"]) for row in rows]
+
+    def tenants_with_pending_events(self) -> list[str]:
+        """Every tenant with an event waiting, the longest wait first."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT tenant_id FROM tenant_events WHERE status = 'pending' "
+                "GROUP BY tenant_id ORDER BY MIN(id)").fetchall()
+        return [row[0] for row in rows]
+
+    def mark_events_handed(self, tenant_id: str, event_ids: list[int]) -> None:
+        """The container answered 200 for these rows. The tenant id is part of
+        the match, so a row id can only ever mark its own tenant's event."""
+        self._require_tenant_id(tenant_id)
+        with self._lock:
+            self._conn.executemany(
+                "UPDATE tenant_events SET status = 'handed', handed_at = ? "
+                "WHERE id = ? AND tenant_id = ? AND status = 'pending'",
+                [(self._now(), event_id, tenant_id) for event_id in event_ids])
+            self._conn.commit()
+
+    def set_wakeup(self, tenant_id: str, due_at: float) -> None:
+        """When to start this tenant's container next. A tenant has one
+        wakeup, its earliest timer, and a new report replaces it."""
+        self._require_tenant_id(tenant_id)
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO tenant_wakeups (tenant_id, due_at, updated_at) VALUES (?, ?, ?) "
+                "ON CONFLICT(tenant_id) DO UPDATE SET due_at = excluded.due_at, "
+                "updated_at = excluded.updated_at", (tenant_id, float(due_at), self._now()))
+            self._conn.commit()
+
+    def clear_wakeup(self, tenant_id: str) -> None:
+        self._require_tenant_id(tenant_id)
+        with self._lock:
+            self._conn.execute("DELETE FROM tenant_wakeups WHERE tenant_id = ?", (tenant_id,))
+            self._conn.commit()
+
+    def wakeup(self, tenant_id: str) -> float | None:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT due_at FROM tenant_wakeups WHERE tenant_id = ?",
+                (tenant_id,)).fetchone()
+        return row[0] if row else None
+
+    def due_wakeups(self, now: float) -> list[str]:
+        """Every tenant whose wakeup time has come, the earliest first."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT tenant_id FROM tenant_wakeups WHERE due_at <= ? "
+                "ORDER BY due_at, tenant_id", (now,)).fetchall()
+        return [row[0] for row in rows]
+
     def delete_tenant(self, tenant_id: str) -> None:
         """The row goes; the archive keeps the files for 30 days.
 
@@ -359,5 +465,7 @@ class ControlDb:
             self._conn.execute("DELETE FROM session WHERE tenant_id = ?", (tenant_id,))
             self._conn.execute("DELETE FROM proxy_token WHERE tenant_id = ?", (tenant_id,))
             self._conn.execute("DELETE FROM memory_key WHERE tenant_id = ?", (tenant_id,))
+            self._conn.execute("DELETE FROM tenant_events WHERE tenant_id = ?", (tenant_id,))
+            self._conn.execute("DELETE FROM tenant_wakeups WHERE tenant_id = ?", (tenant_id,))
             self._conn.execute("DELETE FROM tenant WHERE id = ?", (tenant_id,))
             self._conn.commit()
