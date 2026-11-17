@@ -185,9 +185,9 @@ def _agent_run(settings: Settings, log: Callable[[str], None]) -> AgentRun:
 def configured(settings: Settings) -> tuple[dict[str, Source], dict[str, Route]]:
     """The sources and webhook routes this machine's settings turn on. Each
     source's start returns None when its own settings are missing."""
-    from waku.alwayson.sources import telegram
+    from waku.alwayson.sources import slack, telegram
 
-    sources: dict[str, Source] = {"telegram": telegram.start}
+    sources: dict[str, Source] = {"telegram": telegram.start, "slack": slack.start}
     routes: dict[str, Route] = {}
     return sources, routes
 
