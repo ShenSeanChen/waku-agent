@@ -18,8 +18,11 @@ import json
 import os
 import re
 import sqlite3
+import threading
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 CHANNELS = ("telegram", "slack", "github")
 # The wait after the first, second, third and fourth failure.
@@ -49,6 +52,16 @@ def parse_address(text: str) -> tuple[str, dict] | None:
     if (found := _GITHUB_RE.match(text)) and _REPO_RE.match(found[1]):
         return "github", {"repo": found[1], "number": int(found[2])}
     return None
+
+
+def format_address(channel: str, target: dict) -> str:
+    """The address a (channel, target) pair was parsed from."""
+    if channel == "telegram":
+        return f"telegram:{target.get('chat_id')}"
+    if channel == "slack":
+        thread = target.get("thread_ts")
+        return f"slack:{target.get('channel')}" + (f":{thread}" if thread else "")
+    return f"github:{target.get('repo')}#{target.get('number')}"
 
 
 def owner_addresses() -> list[tuple[str, dict]]:
@@ -138,3 +151,43 @@ def record_failure(conn: sqlite3.Connection, message_id: int, error: str,
         "WHERE id = ?", (status, attempts, next_attempt, error[:_MAX_ERROR_CHARS], message_id))
     conn.commit()
     return status
+
+
+# ---- the run in flight -----------------------------------------------------
+
+@dataclass
+class RunContext:
+    """What a tool needs to know about the run it is called from."""
+    run_id: str
+    address: tuple[str, dict] | None   # the conversation the run's events came from
+    sends: int = 0                     # the messages this run has queued itself
+
+    def next_key(self) -> str:
+        """`<run>:1`, `<run>:2`, ... in call order. The run's reply is `<run>:0`.
+        A replayed run makes the same calls in the same order, so it writes
+        the same keys."""
+        self.sends += 1
+        return f"{self.run_id}:{self.sends}"
+
+
+# One worker per home runs one run at a time, so a home has at most one entry.
+_RUNS: dict[Path, RunContext] = {}
+_RUNS_LOCK = threading.Lock()
+
+
+@contextmanager
+def running(home: Path, run_id: str, address: tuple[str, dict] | None):
+    """Mark a run as in flight for this home while the block runs."""
+    context = RunContext(run_id, address)
+    with _RUNS_LOCK:
+        _RUNS[Path(home)] = context
+    try:
+        yield context
+    finally:
+        with _RUNS_LOCK:
+            _RUNS.pop(Path(home), None)
+
+
+def current_run(home: Path) -> RunContext | None:
+    with _RUNS_LOCK:
+        return _RUNS.get(Path(home))

@@ -314,6 +314,9 @@ def test_retry_safe_address_forms():
         "slack", {"channel": "C0123ABC", "thread_ts": "1700000000.000100"})
     assert outbox.parse_address("github:acme/app#12") == (
         "github", {"repo": "acme/app", "number": 12})
+    for address in ("telegram:42", "slack:C0123ABC", "slack:C0123ABC:1700000000.000100",
+                    "github:acme/app#12"):
+        assert outbox.format_address(*outbox.parse_address(address)) == address
     for not_an_address in ("Alex", "telegram:sean", "slack:", "github:acme/app",
                            "github:-x/app#1", "github:acme/app#0", "email:a@b.c", ""):
         assert outbox.parse_address(not_an_address) is None, not_an_address

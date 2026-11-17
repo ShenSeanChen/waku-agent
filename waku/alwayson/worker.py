@@ -133,7 +133,10 @@ class AgentRun:
             session.switch(session_id)   # load that conversation's recent turns
         text = render(batch)
         self._log(f"{session_id} › {text}")
-        result = self._agent.respond(text, observer=self._observer, source=batch[0].source)
+        # send_message reads this to key its rows to the run it is called from.
+        with outbox.running(self._agent.settings.home, run_id(batch), reply_address(batch)):
+            result = self._agent.respond(text, observer=self._observer,
+                                         source=batch[0].source)
         self._log(f"waku › {result.reply}")
         return result.reply
 
