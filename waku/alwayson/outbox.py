@@ -1,0 +1,107 @@
+"""The outbox: one row in `outbox` per outgoing message (spec 023, decision 5).
+
+A run never calls Telegram, Slack or GitHub. It calls `insert`, and the
+dispatcher (dispatcher.py) sends the row. `idempotency_key` is UNIQUE, so a
+run that is replayed after a crash writes the same key again and the second
+row is dropped: the person gets one reply.
+
+  pending   waiting for its next attempt (next_attempt_at)
+  sent      delivered
+  dead      failed 5 times; the dispatcher stops trying
+
+Read the table yourself:  sqlite3 ~/.waku/state.db 'SELECT * FROM outbox'
+"""
+
+from __future__ import annotations
+
+import json
+import sqlite3
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
+
+CHANNELS = ("telegram", "slack", "github")
+# The wait after the first, second, third and fourth failure.
+BACKOFF_SECONDS = (10, 60, 600, 3600)
+MAX_ATTEMPTS = 5
+_MAX_ERROR_CHARS = 300
+
+
+@dataclass(frozen=True)
+class Message:
+    id: int
+    run_id: str            # the run that wrote it
+    channel: str           # telegram, slack or github
+    target: dict           # a chat id, a channel and thread, or an issue
+    body: str
+    idempotency_key: str
+    status: str
+    attempts: int
+    next_attempt_at: str   # UTC, ISO 8601
+    last_error: str
+
+
+def utc_now() -> datetime:
+    return datetime.now(UTC)
+
+
+def _stamp(moment: datetime) -> str:
+    """One fixed UTC form, so comparing two stamps as text compares the times."""
+    return moment.astimezone(UTC).isoformat(timespec="seconds")
+
+
+def _message(row: sqlite3.Row) -> Message:
+    return Message(row["id"], row["run_id"], row["channel"], json.loads(row["target"]),
+                   row["body"], row["idempotency_key"], row["status"], row["attempts"],
+                   row["next_attempt_at"], row["last_error"])
+
+
+def insert(conn: sqlite3.Connection, *, run_id: str, channel: str, target: dict, body: str,
+           idempotency_key: str, now: datetime | None = None) -> int | None:
+    """Write one pending row that is due at once. Returns its id, or None when
+    a row with this idempotency_key exists already, sent or not."""
+    if channel not in CHANNELS:
+        raise ValueError(f"'{channel}' is not an outbox channel: {', '.join(CHANNELS)}")
+    cursor = conn.execute(
+        "INSERT OR IGNORE INTO outbox (run_id, channel, target, body, idempotency_key, "
+        "next_attempt_at) VALUES (?, ?, ?, ?, ?, ?)",
+        (str(run_id), channel, json.dumps(target), body, idempotency_key,
+         _stamp(now or utc_now())))
+    conn.commit()
+    return cursor.lastrowid if cursor.rowcount else None
+
+
+def get(conn: sqlite3.Connection, message_id: int) -> Message | None:
+    row = conn.execute("SELECT * FROM outbox WHERE id = ?", (message_id,)).fetchone()
+    return _message(row) if row else None
+
+
+def due(conn: sqlite3.Connection, now: datetime) -> list[Message]:
+    """Every pending row whose next attempt time has passed, oldest first."""
+    rows = conn.execute(
+        "SELECT * FROM outbox WHERE status = 'pending' AND next_attempt_at <= ? ORDER BY id",
+        (_stamp(now),)).fetchall()
+    return [_message(row) for row in rows]
+
+
+def mark_sent(conn: sqlite3.Connection, message_id: int) -> None:
+    conn.execute("UPDATE outbox SET status = 'sent', last_error = '' WHERE id = ?",
+                 (message_id,))
+    conn.commit()
+
+
+def record_failure(conn: sqlite3.Connection, message_id: int, error: str,
+                   now: datetime) -> str:
+    """Count one failed delivery and return the row's status: `pending` with
+    its next attempt time moved out, or `dead` after the fifth failure."""
+    row = conn.execute("SELECT attempts FROM outbox WHERE id = ?", (message_id,)).fetchone()
+    attempts = row["attempts"] + 1
+    if attempts >= MAX_ATTEMPTS:
+        status, next_attempt = "dead", _stamp(now)
+    else:
+        status = "pending"
+        next_attempt = _stamp(now + timedelta(seconds=BACKOFF_SECONDS[attempts - 1]))
+    conn.execute(
+        "UPDATE outbox SET status = ?, attempts = ?, next_attempt_at = ?, last_error = ? "
+        "WHERE id = ?", (status, attempts, next_attempt, error[:_MAX_ERROR_CHARS], message_id))
+    conn.commit()
+    return status

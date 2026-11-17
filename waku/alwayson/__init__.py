@@ -3,6 +3,7 @@ nobody is talking to it.
 
   events.py   the inbox: every incoming message is one row in `events`
   worker.py   the one worker that claims rows and starts a run per session
+  outbox.py   every outgoing message is one row in `outbox`
   serve.py    `waku serve`: the handlers and the worker in one process
   sources/    one handler per source; each only inserts a row
 

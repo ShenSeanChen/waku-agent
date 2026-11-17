@@ -92,6 +92,23 @@ CREATE TABLE IF NOT EXISTS events (
     UNIQUE(source, external_id)
 );
 CREATE INDEX IF NOT EXISTS events_status ON events(status, id);
+
+-- The outbox (spec 023). A run writes one row per outgoing message and the
+-- dispatcher in `waku serve` sends it. UNIQUE(idempotency_key) drops the
+-- second row when a run is replayed after a crash.
+CREATE TABLE IF NOT EXISTS outbox (
+    id INTEGER PRIMARY KEY,
+    run_id TEXT NOT NULL,          -- the run that wrote it
+    channel TEXT NOT NULL,         -- 'telegram' | 'slack' | 'github'
+    target TEXT NOT NULL,          -- JSON: a chat id, a channel and thread, or an issue
+    body TEXT NOT NULL,
+    idempotency_key TEXT NOT NULL UNIQUE,
+    status TEXT NOT NULL DEFAULT 'pending',  -- pending | sent | dead
+    attempts INTEGER NOT NULL DEFAULT 0,     -- failed deliveries so far
+    next_attempt_at TEXT NOT NULL,           -- UTC, ISO 8601
+    last_error TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS outbox_due ON outbox(status, next_attempt_at);
 """
 
 
