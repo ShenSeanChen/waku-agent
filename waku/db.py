@@ -109,6 +109,21 @@ CREATE TABLE IF NOT EXISTS outbox (
     last_error TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS outbox_due ON outbox(status, next_attempt_at);
+
+-- Timers (spec 023). schedule_task writes one row, and a loop in `waku serve`
+-- turns each due row into an event with source 'timer'. UNIQUE(idempotency_key)
+-- drops the second row when a run is replayed after a crash.
+CREATE TABLE IF NOT EXISTS timers (
+    id INTEGER PRIMARY KEY,
+    created_at TEXT NOT NULL,      -- UTC, ISO 8601
+    due_at TEXT NOT NULL,          -- UTC, ISO 8601: when the agent wakes
+    session_id TEXT NOT NULL,      -- the conversation that set it
+    note TEXT NOT NULL,            -- what the agent told itself to do then
+    reply_to TEXT NOT NULL DEFAULT '',       -- JSON: channel and target, or ''
+    idempotency_key TEXT NOT NULL UNIQUE,
+    status TEXT NOT NULL DEFAULT 'pending'   -- pending | fired
+);
+CREATE INDEX IF NOT EXISTS timers_due ON timers(status, due_at);
 """
 
 
