@@ -6,8 +6,10 @@ nobody is talking to it.
   outbox.py      every outgoing message is one row in `outbox`
   dispatcher.py  sends each row, and retries a delivery that failed
   senders/       one sender per channel; only the dispatcher calls one
-  serve.py       `waku serve`: the handlers, the worker and the dispatcher in
-                 one process
+  timers.py      a follow-up the agent set is one row in `timers`; the timer
+                 loop writes each due row into `events`
+  serve.py       `waku serve`: the handlers, the worker, the timer loop and
+                 the dispatcher in one process
   sources/       one handler per source; each only inserts a row
 
 A handler never calls `waku.respond()`. It writes a row and returns, so a

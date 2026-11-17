@@ -17,10 +17,15 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import threading
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 
-from waku.alwayson import outbox
+from waku.alwayson import events, outbox
+
+SOURCE = "timer"
+CHECK_SECONDS = 30.0
 
 
 @dataclass(frozen=True)
@@ -72,3 +77,43 @@ def due(conn: sqlite3.Connection, now: datetime) -> list[Timer]:
 def mark_fired(conn: sqlite3.Connection, timer_id: int) -> None:
     conn.execute("UPDATE timers SET status = 'fired' WHERE id = ?", (timer_id,))
     conn.commit()
+
+
+def fire(conn: sqlite3.Connection, timer: Timer, now: datetime) -> None:
+    """Write the timer's event, then mark the timer fired. The event's
+    external id is `timer:<id>`, so a process that dies between the two writes
+    writes no second event at its next start: UNIQUE(source, external_id)
+    drops it, and the timer is marked then."""
+    payload: dict = {"text": timer.note, "set_at": timer.created_at, "due_at": timer.due_at}
+    if timer.address:
+        payload["channel"], payload["reply_to"] = timer.address
+    events.insert(conn, source=SOURCE, external_id=f"timer:{timer.id}",
+                  session_id=timer.session_id, payload=payload,
+                  received_at=outbox._stamp(now))
+    mark_fired(conn, timer.id)
+
+
+class TimerLoop:
+    """The loop in `waku serve` that turns each due timer into an event."""
+
+    def __init__(self, conn: sqlite3.Connection, *,
+                 now: Callable[[], datetime] = outbox.utc_now,
+                 log: Callable[[str], None] = print) -> None:
+        self.conn, self._now, self._log = conn, now, log
+        self.stop = threading.Event()
+
+    def step(self) -> int:
+        """Fire every due timer. Returns how many fired."""
+        now = self._now()
+        found = due(self.conn, now)
+        for timer in found:
+            fire(self.conn, timer, now)
+        return len(found)
+
+    def run_forever(self, interval: float = CHECK_SECONDS) -> None:
+        while not self.stop.is_set():
+            try:
+                self.step()
+            except Exception as exc:
+                self._log(f"(serve) the timer loop hit an error: {type(exc).__name__}")
+            self.stop.wait(interval)

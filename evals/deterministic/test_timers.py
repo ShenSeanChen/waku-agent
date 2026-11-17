@@ -255,3 +255,227 @@ def test_tool_in_a_real_agent_uses_the_session_the_agent_is_in(home):
 
     assert [t.session_id for t in _timers(home)] == ["telegram:42"], said
 
+
+# ---- B3: the timer loop -----------------------------------------------------
+
+def _events(conn):
+    import json
+
+    return [(r["source"], r["external_id"], r["session_id"], json.loads(r["payload"]),
+             r["status"]) for r in conn.execute("SELECT * FROM events ORDER BY id")]
+
+
+def _loop(conn, clock):
+    return timers.TimerLoop(conn, now=clock, log=lambda line: None)
+
+
+def test_timer_fires_once_as_one_event_with_its_note(home):
+    """Acceptance 4: schedule_task for Thursday 09:00, the clock moves to
+    Thursday 09:00, and one event with source timer and the note appears."""
+    from waku.alwayson import outbox
+
+    clock = Clock()
+    with outbox.running(home, "e7", THREAD):
+        _tool(home, clock, session="slack:C1:1700.0001").fn(when="2026-11-19T09:00", note=NOTE)
+    connection = connect(home)
+    try:
+        loop = _loop(connection, clock)
+        clock.at = datetime(2026, 11, 19, 8, 59, 59, tzinfo=PACIFIC)
+        assert loop.step() == 0
+        assert _events(connection) == []
+
+        clock.at = datetime(2026, 11, 19, 9, 0, tzinfo=PACIFIC)
+        assert loop.step() == 1
+        ((source, external_id, session_id, payload, status),) = _events(connection)
+        assert (source, external_id, session_id, status) == (
+            "timer", "timer:1", "slack:C1:1700.0001", "pending")
+        assert payload["text"] == NOTE
+        assert (payload["channel"], payload["reply_to"]) == THREAD
+
+        clock.advance(days=30)
+        assert loop.step() == 0, "a fired timer never fires again"
+        assert len(_events(connection)) == 1
+        assert timers.get(connection, 1).status == "fired"
+    finally:
+        connection.close()
+
+
+def test_timer_fires_once_when_the_process_dies_between_the_event_and_the_mark(
+        tmp_path, monkeypatch):
+    """The event is written and the process dies before the timer is marked
+    fired. The next start sees the timer as due again and writes no second
+    event, because the event's external id is the timer's id."""
+
+    class Killed(BaseException):
+        pass
+
+    def die(conn, timer_id):
+        raise Killed
+
+    clock = Clock(THURSDAY_9)
+    first = connect(tmp_path)
+    _add(first)
+    with monkeypatch.context() as patch:
+        patch.setattr(timers, "mark_fired", die)
+        with pytest.raises(Killed):
+            _loop(first, clock).step()
+    assert timers.get(first, 1).status == "pending"
+    assert len(_events(first)) == 1
+    first.close()
+
+    second = connect(tmp_path)
+    try:
+        clock.advance(seconds=30)
+        _loop(second, clock).step()
+        assert [(e[0], e[1]) for e in _events(second)] == [("timer", "timer:1")]
+        assert timers.get(second, 1).status == "fired"
+    finally:
+        second.close()
+
+
+def test_two_timers_due_together_each_fires_once_in_due_order(conn):
+    _add(conn, due_at=THURSDAY_9, key="e1:t1", note="second")
+    _add(conn, due_at=THURSDAY_9 - timedelta(hours=1), key="e1:t2", note="first")
+
+    assert _loop(conn, Clock(THURSDAY_9)).step() == 2
+    assert [(e[1], e[3]["text"]) for e in _events(conn)] == [
+        ("timer:2", "first"), ("timer:1", "second")]
+
+
+def test_the_loop_checks_every_30_seconds():
+    assert timers.CHECK_SECONDS == 30
+
+
+def _worker(conn, reply):
+    from waku.alwayson.worker import Worker
+
+    run = reply if callable(reply) else (lambda session_id, batch: reply)
+    return Worker(conn, run, wait=lambda seconds: None, now=Clock(THURSDAY_9),
+                  log=lambda line: None)
+
+
+def _outbox(conn):
+    import json
+
+    return [(r["channel"], json.loads(r["target"]), r["body"])
+            for r in conn.execute("SELECT * FROM outbox ORDER BY id")]
+
+
+def test_a_run_a_timer_fires_once_replies_to_the_conversation_that_set_it(conn):
+    _add(conn)
+    _loop(conn, Clock(THURSDAY_9)).step()
+    seen = []
+
+    def run(session_id, batch):
+        seen.append((session_id, [e.source for e in batch]))
+        return "Issue 12 is still open."
+
+    assert _worker(conn, run).step() is True
+    assert seen == [("slack:C1:1700.0001", ["timer"])]
+    assert _outbox(conn) == [("slack", THREAD[1], "Issue 12 is still open.")]
+
+
+def test_a_run_a_timer_without_an_address_fires_once_and_writes_no_reply(conn):
+    _add(conn, address=None, session_id="default")
+    _loop(conn, Clock(THURSDAY_9)).step()
+
+    assert _worker(conn, "Issue 12 is still open.").step() is True
+    assert _outbox(conn) == []
+    assert [e[4] for e in _events(conn)] == ["done"]
+
+
+def test_the_prompt_of_a_timer_run_carries_the_note_and_allows_silent(conn):
+    """The model can only choose to say nothing when it is told that it may."""
+    from waku.alwayson import events
+    from waku.alwayson.worker import render
+
+    _add(conn)
+    _loop(conn, Clock(THURSDAY_9)).step()
+    prompt = render([events.claim_next(conn)])
+
+    assert NOTE in prompt
+    assert "SILENT" in prompt
+    assert "timer" in prompt.lower()
+    assert "2026-11-16" in prompt, "the prompt says when the timer was set"
+
+
+def test_the_prompt_of_a_message_run_is_the_message_alone(conn):
+    from waku.alwayson import events
+    from waku.alwayson.worker import render
+
+    events.insert(conn, source="telegram", external_id="1", session_id="telegram:42",
+                  payload={"text": "is issue 12 open?", "reply_to": {"chat_id": 42}})
+    assert render([events.claim_next(conn)]) == "is issue 12 open?"
+
+
+def test_a_timer_run_that_answers_silent_sends_nothing_and_the_model_was_told(tmp_path):
+    """The whole path with waku.respond(): the Thursday run finds nothing to
+    report, answers SILENT, and no outbox row is written."""
+    from evals.helpers import ScriptedClient, make_waku, response, text_block
+    from waku.alwayson.worker import AgentRun
+
+    class Recording(ScriptedClient):
+        def __init__(self, script):
+            super().__init__(script)
+            self.asked = []
+
+        def _create(self, **kwargs):
+            self.asked.append(kwargs)
+            return super()._create(**kwargs)
+
+    home = tmp_path / "home"
+    home.mkdir()
+    gate = response([text_block('{"retrieve": false, "query": "", "reason": "test"}')])
+    client = Recording([gate, response([text_block("SILENT")])])
+    run = AgentRun(lambda: make_waku(home, client=client, episodic_store="sqlite"),
+                   log=lambda line: None)
+    connection = connect(home)
+    try:
+        _add(connection)
+        _loop(connection, Clock(THURSDAY_9)).step()
+        assert _worker(connection, run).step() is True
+        assert _outbox(connection) == []
+        assert [e[4] for e in _events(connection)] == ["done"]
+    finally:
+        run.close()
+        connection.close()
+
+    told = [str(m["content"]) for m in client.asked[-1]["messages"] if m["role"] == "user"]
+    assert any(NOTE in text and "SILENT" in text for text in told), told
+
+
+def test_serve_fires_once_a_timer_that_comes_due_while_it_runs(tmp_path):
+    """The timer loop runs inside `waku serve`, beside the worker."""
+    import time
+
+    from waku.alwayson import serve
+    from waku.config import Settings
+
+    settings = Settings(home=tmp_path)
+    settings.ensure_home()
+    runs = []
+    service = serve.Service(
+        settings, batch_wait=0, timer_interval=0.01, log=lambda line: None,
+        run=lambda session_id, batch: runs.append(
+            (session_id, [(e.source, e.payload["text"]) for e in batch])))
+    service.start()
+    connection = connect(tmp_path)
+    try:
+        timers.insert(connection, due_at=datetime.now(UTC) - timedelta(seconds=1),
+                      session_id="telegram:42", note=NOTE, address=None,
+                      idempotency_key="e1:t1")
+        timers.insert(connection, due_at=datetime.now(UTC) + timedelta(days=1),
+                      session_id="telegram:42", note="not yet", address=None,
+                      idempotency_key="e1:t2")
+        deadline = time.monotonic() + 5
+        while not runs and time.monotonic() < deadline:
+            time.sleep(0.01)
+        time.sleep(0.1)   # several more checks of the loop
+    finally:
+        service.stop()
+        statuses = [r["status"] for r in connection.execute(
+            "SELECT status FROM timers ORDER BY id")]
+        connection.close()
+    assert runs == [("telegram:42", [("timer", NOTE)])]
+    assert statuses == ["fired", "pending"]
+    assert service.timer_thread is not None and not service.timer_thread.is_alive()
