@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import sqlite3
 from collections.abc import Callable
 from datetime import datetime
@@ -188,3 +189,72 @@ def park(conn: sqlite3.Connection, run_id: int, tool: str, args: dict, now: date
                   body=REQUEST.format(what=describe(tool, args), code=digest[:8]),
                   idempotency_key=f"{run.id}:ask", now=now)
     return WAITS.format(where=outbox.format_address(channel, target))
+
+
+# ---- the answer ------------------------------------------------------------
+
+SOURCE = "approval"
+_ANSWER = re.compile(r"^(yes|approve|approved|no|deny|denied)(?:\s+\[?([0-9a-f]{8})\]?)?$")
+APPROVED = "Approved and done: {what} The tool answered: {output}"
+DECLINED = "Declined and discarded: {what} The owner answered no, so the call did not run."
+BROKEN = ("Approved, and not run: {what} The stored call no longer matches its hash, so it "
+          "was discarded.")
+WHICH = "Several calls wait for your answer. Reply yes or no with the code of one:\n{calls}"
+
+
+def read_answer(text: str) -> tuple[bool, str] | None:
+    """(yes or no, the 8-character code or "") when the whole message is an
+    answer, None when it is anything else."""
+    found = _ANSWER.match((text or "").strip().strip(".!").strip().lower())
+    if found is None:
+        return None
+    return found[1].startswith(("yes", "approve")), found[2] or ""
+
+
+def is_approver(event, run: runs.Run) -> bool:
+    """Whether this event is an answer to this parked run's request from a
+    person who may approve it: it came in at the address the request went to,
+    that address is still one `who_may_approve` names, and its sender is the
+    one person a chat at that address holds."""
+    call = run.pending_call or {}
+    asked = call.get("asked") or {}
+    address = (asked.get("channel"), asked.get("target"))
+    if (event.source, event.payload.get("reply_to")) != address or not can_answer(address):
+        return False
+    if address not in who_may_approve(call.get("tool", ""), call.get("args") or {}):
+        return False
+    sender = str((event.payload.get("sender") or {}).get("id", ""))
+    if event.source == "telegram":   # in a private chat the chat id is the person's id
+        return sender == str(address[1].get("chat_id"))
+    return bool(sender)
+
+
+def waiting_for(conn: sqlite3.Connection, event, now: datetime) -> list[runs.Run]:
+    """The parked runs this event's sender may answer, oldest first."""
+    runs.expire(conn, now)
+    return [run for run in runs.parked(conn) if is_approver(event, run)]
+
+
+def intact(run: runs.Run) -> bool:
+    """Whether the stored call is the one that was hashed when it parked."""
+    call = run.pending_call or {}
+    return call_hash(call.get("tool", ""), call.get("args")) == run.pending_hash
+
+
+def outcome(run: runs.Run, approved: bool, output: str = "") -> str:
+    """The first line of the next run in the conversation that parked."""
+    call = run.pending_call or {}
+    what = describe(call.get("tool", ""), call.get("args") or {})
+    if not approved:
+        return DECLINED.format(what=what)
+    if not intact(run):
+        return BROKEN.format(what=what)
+    return APPROVED.format(what=what, output=output)
+
+
+def which(waiting: list[runs.Run]) -> str:
+    """What the owner reads when a bare yes or no could mean several calls."""
+    calls = "\n".join(
+        f"[{run.pending_hash[:8]}] "
+        f"{describe(run.pending_call['tool'], run.pending_call['args'])}" for run in waiting)
+    return WHICH.format(calls=calls)

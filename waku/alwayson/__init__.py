@@ -4,6 +4,7 @@ nobody is talking to it.
   events.py      the inbox: every incoming message is one row in `events`
   worker.py      the one worker that claims rows and starts a run per session
   runs.py        every run the worker starts is one row in `runs`
+  approvals.py   a tool call that needs the owner's yes waits for it
   outbox.py      every outgoing message is one row in `outbox`
   dispatcher.py  sends each row, and retries a delivery that failed
   senders/       one sender per channel; only the dispatcher calls one

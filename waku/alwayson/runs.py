@@ -101,6 +101,14 @@ def set_pending(conn: sqlite3.Connection, run_id: int, call: dict, call_hash: st
     conn.commit()
 
 
+def resolve(conn: sqlite3.Connection, run_id: int, status: str) -> None:
+    """Close a parked run once the owner answered. The stored call stays in
+    the row as a record of what was asked."""
+    conn.execute("UPDATE runs SET status = ? WHERE id = ? AND status = 'parked'",
+                 (status, run_id))
+    conn.commit()
+
+
 def parked(conn: sqlite3.Connection, session_id: str | None = None) -> list[Run]:
     """Every parked run, oldest first; of one session when one is named."""
     where, values = ("AND session_id = ?", (session_id,)) if session_id else ("", ())

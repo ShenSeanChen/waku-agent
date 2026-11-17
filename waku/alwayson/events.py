@@ -24,7 +24,7 @@ STATUSES = ("pending", "claimed", "done", "failed")
 class Event:
     id: int
     received_at: str     # UTC, ISO 8601
-    source: str          # telegram, slack, github or timer
+    source: str          # telegram, slack, github, timer or approval
     external_id: str     # the sender's own id for this message
     session_id: str      # the conversation the message belongs to
     payload: dict        # the text, the sender, and where a reply goes

@@ -84,7 +84,7 @@ CREATE TABLE IF NOT EXISTS chat_log (
 CREATE TABLE IF NOT EXISTS events (
     id INTEGER PRIMARY KEY,
     received_at TEXT NOT NULL,     -- UTC, ISO 8601: when the handler saw it
-    source TEXT NOT NULL,          -- 'telegram' | 'slack' | 'github' | 'timer'
+    source TEXT NOT NULL,          -- 'telegram' | 'slack' | 'github' | 'timer' | 'approval'
     external_id TEXT NOT NULL,     -- the sender's own id for this message
     session_id TEXT NOT NULL,      -- the conversation, e.g. 'telegram:<chat id>'
     payload TEXT NOT NULL,         -- JSON: the text, the sender, where a reply goes

@@ -342,3 +342,204 @@ def test_park_the_worker_ends_the_run_as_parked(home, conn):
     _worker(conn, run, clock).step()
 
     assert [row["status"] for row in _run_rows(conn)] == ["parked"]
+
+
+# ---- C4: resuming ----------------------------------------------------------
+
+def test_yes_from_the_owner_runs_only_the_stored_call(home):
+    """Acceptance 6, through waku.respond() and the fake gh."""
+    client = ScriptedClient([
+        response([text_block(GATE)]),
+        response([tool_block("send_message", COMMENT)], stop_reason="tool_use"),
+        response([text_block("SILENT")]),
+        # the run that follows the yes, in Ana's thread
+        response([text_block(GATE)]),
+        response([text_block("SILENT")])])
+    seen = []
+    create = client.messages.create
+    client.messages.create = lambda **kw: (seen.append(list(kw["messages"])), create(**kw))[1]
+    run = AgentRun(lambda: make_waku(home, client=client, episodic_store="sqlite"),
+                   log=lambda line: None)
+    gh, told, clock = FakeGh(), [], Clock()
+    conn = connect(home)
+    try:
+        worker = _worker(conn, run, clock)
+        dispatcher = Dispatcher(conn, {"github": github_sender.make(run=gh),
+                                       "telegram": lambda m: told.append(m.body)},
+                                now=clock, log=lambda line: None)
+        _slack(conn)
+        _drain(worker)
+        dispatcher.step()
+        assert gh.comments == [] and len(told) == 1
+
+        clock.advance(hours=2)
+        _telegram(conn, "yes")
+        _drain(worker)
+        dispatcher.step()
+        (row,) = [r for r in _run_rows(conn) if r["pending_hash"]]
+        sessions = [r["session_id"] for r in _run_rows(conn)]
+        statuses = [r["status"] for r in conn.execute("SELECT status FROM events")]
+    finally:
+        run.close()
+        conn.close()
+
+    (argv,) = gh.comments
+    assert argv[:6] == ["gh", "issue", "comment", "12", "--repo", "acme/app"]
+    assert argv[6].startswith("--body=Sean will review this issue this week.\n")
+    assert row["status"] == "done"
+    assert sessions == ["slack:C1:1700.0001", "slack:C1:1700.0001"], (
+        "the yes starts no run in Sean's chat; the next run is in Ana's thread")
+    assert set(statuses) == {"done"}
+    assert len(told) == 1, "Sean hears nothing more after his yes"
+    first_line = seen[-1][-1]["content"].splitlines()[0]
+    assert first_line.startswith("[Approved and done: Comment on acme/app#12")
+    assert client._script == [], "the model was called for two runs, not to approve"
+
+
+def test_yes_executes_the_stored_arguments_and_starts_the_next_run(home, conn):
+    clock, recorder = Clock(), Recorder()
+    run_id = _park(conn, home, clock)
+    clock.advance(hours=2)
+    _telegram(conn, " Yes. ")
+
+    _drain(_worker(conn, recorder, clock))
+
+    assert recorder.executed == [("send_message", COMMENT, THREAD)]
+    assert runs.get(conn, run_id).status == "done"
+    ((session, text),) = recorder.runs
+    assert session == "slack:C1:1700.0001"
+    assert text.startswith("[Approved and done: Comment on acme/app#12")
+
+
+def test_yes_spelled_approve_counts(home, conn):
+    clock, recorder = Clock(), Recorder()
+    _park(conn, home, clock)
+    _telegram(conn, "approve")
+    _drain(_worker(conn, recorder, clock))
+    assert len(recorder.executed) == 1
+
+
+def test_yes_runs_the_call_once_when_the_answer_is_replayed(home, conn):
+    """The process dies after the call ran and before the answer was marked
+    done. The answer is read again and finds nothing parked."""
+    clock, recorder = Clock(), Recorder()
+    _park(conn, home, clock)
+    answer = _telegram(conn, "yes")
+    worker = _worker(conn, recorder, clock)
+    _drain(worker)
+    events.mark(conn, [answer], "pending")
+    _drain(worker)
+
+    assert len(recorder.executed) == 1
+    assert [session for session, _ in recorder.runs] == [
+        "slack:C1:1700.0001", "telegram:42"], "the second yes is an ordinary message"
+
+
+def test_yes_with_a_changed_stored_call_runs_nothing(home, conn):
+    """The hash binds the yes to one exact call."""
+    clock, recorder = Clock(), Recorder()
+    run_id = _park(conn, home, clock)
+    changed = {"tool": "send_message", "args": {**COMMENT, "body": "Ship it today."},
+               "asked": {"channel": "telegram", "target": {"chat_id": 42}}}
+    conn.execute("UPDATE runs SET pending_call = ? WHERE id = ?",
+                 (json.dumps(changed), run_id))
+    conn.commit()
+    _telegram(conn, "yes")
+
+    _drain(_worker(conn, recorder, clock))
+
+    assert recorder.executed == []
+    assert runs.get(conn, run_id).status == "failed"
+
+
+def test_no_from_the_owner_discards_the_call(home, conn):
+    """Acceptance 6."""
+    clock, recorder = Clock(), Recorder()
+    run_id = _park(conn, home, clock)
+    _telegram(conn, "no")
+
+    _drain(_worker(conn, recorder, clock))
+
+    assert recorder.executed == []
+    assert runs.get(conn, run_id).status == "done"
+    ((session, text),) = recorder.runs
+    assert session == "slack:C1:1700.0001"
+    assert text.startswith("[Declined and discarded: Comment on acme/app#12")
+    _telegram(conn, "yes", external_id="901")
+    _drain(_worker(conn, recorder, clock))
+    assert recorder.executed == [], "a yes after the no finds nothing to approve"
+
+
+def test_stranger_yes_runs_nothing(home, conn):
+    """Acceptance 6: Ana's yes in her Slack thread, a yes from another
+    Telegram chat, and a yes from another person in the owner's chat."""
+    clock, recorder = Clock(), Recorder()
+    run_id = _park(conn, home, clock)
+    _slack(conn, text="yes", external_id="Ev2")
+    _telegram(conn, "yes", external_id="901", sender="77", chat_id=77)
+    _telegram(conn, "yes", external_id="902", sender="77", chat_id=42)
+
+    _drain(_worker(conn, recorder, clock))
+
+    assert recorder.executed == []
+    assert runs.get(conn, run_id).status == "parked"
+    assert sorted(session for session, _ in recorder.runs) == [
+        "slack:C1:1700.0001", "telegram:42", "telegram:77"], (
+        "each yes went to the model as an ordinary message")
+    assert all(text == "yes" for _, text in recorder.runs)
+
+
+def test_yes_inside_a_sentence_is_an_ordinary_message(home, conn):
+    clock, recorder = Clock(), Recorder()
+    run_id = _park(conn, home, clock)
+    _telegram(conn, "yes but change the wording first")
+
+    _drain(_worker(conn, recorder, clock))
+
+    assert recorder.executed == []
+    assert runs.get(conn, run_id).status == "parked"
+    assert recorder.runs == [("telegram:42", "yes but change the wording first")]
+
+
+def test_expire_after_72_hours_a_yes_runs_nothing(home, conn):
+    clock, recorder = Clock(), Recorder()
+    run_id = _park(conn, home, clock)
+    clock.advance(hours=71, minutes=59)
+    _worker(conn, recorder, clock).step()
+    assert runs.get(conn, run_id).status == "parked"
+
+    clock.advance(minutes=1)
+    _telegram(conn, "yes")
+    _drain(_worker(conn, recorder, clock))
+
+    assert recorder.executed == []
+    assert runs.get(conn, run_id).status == "expired"
+    assert recorder.runs == [("telegram:42", "yes")]
+
+
+def test_yes_with_two_calls_waiting_needs_the_code(home, conn):
+    """Two conversations each parked a call. A bare yes names neither."""
+    clock, recorder = Clock(), Recorder()
+    first = _park(conn, home, clock)
+    event_id = events.insert(conn, source="slack", external_id="Ev9",
+                             session_id="slack:C1:1800.0002",
+                             payload={"text": "tell 77", "reply_to": {"channel": "C1"}})
+    second = runs.start(conn, "slack:C1:1800.0002", [event_id], now=clock())
+    other = {"to": "telegram:77", "body": "The demo moved to Friday."}
+    with outbox.running(home, str(second.id), ("slack", {"channel": "C1"})):
+        approvals.Gate(home, conn, now=clock)("send_message", other)
+    events.mark(conn, [event_id], "done")
+    runs.finish(conn, second.id, "parked", now=clock())
+    code = runs.get(conn, second.id).pending_hash[:8]
+
+    _telegram(conn, "yes")
+    _drain(_worker(conn, recorder, clock))
+    assert recorder.executed == [] and recorder.runs == []
+    which = _outbox(conn)[-1]
+    assert which[0] == "telegram" and code in which[2] and COMMENT_HASH[:8] in which[2]
+
+    _telegram(conn, f"yes {code}", external_id="901")
+    _drain(_worker(conn, recorder, clock))
+    assert [args for _, args, _ in recorder.executed] == [other]
+    assert runs.get(conn, first).status == "parked"
+    assert runs.get(conn, second.id).status == "done"
