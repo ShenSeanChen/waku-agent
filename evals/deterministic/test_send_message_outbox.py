@@ -1,9 +1,9 @@
 """DETERMINISTIC EVAL: send_message writes an outbox row (spec 023, task D4).
 
 The tool used to write a .txt file and say "Nothing was sent". It now writes
-one row into `outbox`, which `waku serve` delivers. Until approvals exist
-(spec 023, group C) it reaches two places only: the owner, and the
-conversation the run came from. Offline: a temporary home and no sender.
+one row into `outbox`, which `waku serve` delivers. Without the owner's yes
+it reaches two places only: the owner, and the conversation the run came
+from. Offline: a temporary home and no sender.
 """
 
 from __future__ import annotations
@@ -69,9 +69,10 @@ def test_a_name_without_an_address_writes_nothing_and_says_what_works(home):
     assert "not sent" in said.lower()
 
 
-def test_a_third_party_is_refused_until_approval_exists(home):
-    """A message to someone other than the owner needs the owner's yes. Nothing
-    can ask for that yes yet, so the tool writes no row."""
+def test_a_third_party_is_refused_where_nothing_can_ask(home):
+    """A message to someone other than the owner needs the owner's yes. Only
+    `waku serve` can ask for it (test_deferred_approval.py), so a call from
+    the terminal or the dashboard writes no row."""
     for to in ("telegram:77", "slack:C0123ABC", "github:acme/app#12"):
         said = _send(home, to)
         assert "approv" in said.lower(), said

@@ -203,16 +203,21 @@ class Worker:
         except Exception as exc:
             from waku.gateway.runner import safe_exception
 
-            runs.finish(self.conn, run.id, "failed", now=self._now())
+            runs.finish(self.conn, run.id, self._ended(run.id, "failed"), now=self._now())
             events.mark(self.conn, ids, "failed")
             self._log(f"(serve) the run for {first.session_id} failed: {safe_exception(exc)}")
         else:
             if not isinstance(outcome, runs.Outcome):
                 outcome = runs.Outcome(outcome)
             self._queue_reply(run.id, batch, outcome.reply)
-            runs.finish(self.conn, run.id, "done", outcome.turn_id, now=self._now())
+            runs.finish(self.conn, run.id, self._ended(run.id, "done"), outcome.turn_id,
+                        now=self._now())
             events.mark(self.conn, ids, "done")
         return True
+
+    def _ended(self, run_id: int, status: str) -> str:
+        """`parked` when the run left a call waiting for the owner's yes."""
+        return "parked" if runs.get(self.conn, run_id).pending_hash else status
 
     def _queue_reply(self, run_id: int, batch: list[Event], reply: str | None) -> None:
         """The run's reply becomes one outbox row. Its key is `<run id>:0`."""

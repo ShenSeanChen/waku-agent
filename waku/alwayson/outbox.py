@@ -162,11 +162,17 @@ class RunContext:
     address: tuple[str, dict] | None   # the conversation the run's events came from
     sends: int = 0                     # the messages this run has queued itself
     timers: int = 0                    # the timers this run has set
+    # Set while the worker runs a call the owner approved (approvals.py): the
+    # key of the one row that call may write.
+    approved_key: str | None = None
 
     def next_key(self) -> str:
         """`<run>:1`, `<run>:2`, ... in call order. The run's reply is `<run>:0`.
         A replayed run makes the same calls in the same order, so it writes
-        the same keys."""
+        the same keys. An approved call writes its own key, however often it
+        is run."""
+        if self.approved_key:
+            return self.approved_key
         self.sends += 1
         return f"{self.run_id}:{self.sends}"
 
@@ -182,9 +188,10 @@ _RUNS_LOCK = threading.Lock()
 
 
 @contextmanager
-def running(home: Path, run_id: str, address: tuple[str, dict] | None):
+def running(home: Path, run_id: str, address: tuple[str, dict] | None,
+            approved_key: str | None = None):
     """Mark a run as in flight for this home while the block runs."""
-    context = RunContext(run_id, address)
+    context = RunContext(run_id, address, approved_key=approved_key)
     with _RUNS_LOCK:
         _RUNS[Path(home)] = context
     try:

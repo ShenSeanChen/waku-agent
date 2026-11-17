@@ -20,9 +20,14 @@ the owner in WAKU_OWNER.
 
 from __future__ import annotations
 
+import hashlib
+import json
+import sqlite3
 from collections.abc import Callable
+from datetime import datetime
+from pathlib import Path
 
-from waku.alwayson import outbox
+from waku.alwayson import outbox, runs
 
 ALLOW, ASK = "allow", "ask"
 Address = tuple[str, dict]
@@ -86,3 +91,100 @@ def who_may_approve(tool: str, args: dict) -> list[Address]:
     layer with several approvers replaces this function; nothing else in this
     package decides who approves."""
     return outbox.owner_addresses()
+
+
+# ---- what a call says about itself -----------------------------------------
+
+def _describe_send_message(args: dict) -> str:
+    to, body = str(args.get("to", "")).strip(), str(args.get("body", "")).strip()
+    target = outbox.parse_address(to)
+    if target is not None and target[0] == "github":
+        return f'Comment on {target[1]["repo"]}#{target[1]["number"]}: "{body}"'
+    return f'Send to {to}: "{body}"'
+
+
+# What a call will do, in the tool's own words. The owner reads this.
+DESCRIBE: dict[str, Callable[[dict], str]] = {"send_message": _describe_send_message}
+_MAX_DESCRIPTION_CHARS = 1500
+
+
+def describe(tool: str, args: dict) -> str:
+    words = DESCRIBE.get(tool)
+    text = words(args) if words else f"Run {tool} with {json.dumps(args, ensure_ascii=False)}"
+    return text[:_MAX_DESCRIPTION_CHARS]
+
+
+def call_hash(tool: str, args: dict) -> str:
+    """SHA-256 of the tool name and the arguments. A yes is bound to it."""
+    exact = json.dumps({"tool": tool, "args": args}, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(exact.encode()).hexdigest()
+
+
+def can_answer(address: Address) -> bool:
+    """Whether an answer from this address names one person. A Telegram chat
+    with a positive id is a private chat, and a Slack channel whose id starts
+    with D is a direct message. A group chat, a channel and a GitHub issue are
+    read by several people, so no yes counts there."""
+    channel, target = address
+    if channel == "telegram":
+        chat_id = target.get("chat_id")
+        return isinstance(chat_id, int) and chat_id > 0
+    if channel == "slack":
+        return str(target.get("channel", "")).startswith("D") and "thread_ts" not in target
+    return False
+
+
+# ---- park ------------------------------------------------------------------
+
+REQUEST = "{what}\n\nApprove? Reply yes or no. [{code}]"
+WAITS = ("This call waits for the owner's approval and has not run. The owner was asked "
+         "on {where}. Do not make the call again: when the owner answers, this "
+         "conversation is told what happened.")
+ALREADY_WAITS = ("Not run: another call in this conversation already waits for the owner's "
+                 "approval [{code}]. One call waits at a time.")
+NOBODY = ("Not run: this call needs the owner's approval, and WAKU_OWNER names no chat "
+          "where the owner can answer. Set WAKU_OWNER in .env to telegram:<chat id>.")
+
+
+class Gate:
+    """The check before each tool call of a run under `waku serve`. It has
+    the shape of the loop's `before_tool`: (a reason to refuse, or None; "").
+    Outside a run it lets every call through, because only the worker can
+    bring a parked call back."""
+
+    def __init__(self, home: Path, conn: sqlite3.Connection,
+                 now: Callable[[], datetime] = outbox.utc_now) -> None:
+        self.home, self.conn, self._now = home, conn, now
+
+    def __call__(self, tool: str, args: dict) -> tuple[str | None, str]:
+        context = outbox.current_run(self.home)
+        if context is None or not context.run_id.isdigit():
+            return None, ""
+        args = args if isinstance(args, dict) else {}
+        if mode(tool, args, context.address) == ALLOW:
+            return None, ""
+        return park(self.conn, int(context.run_id), tool, args, self._now()), ""
+
+
+def park(conn: sqlite3.Connection, run_id: int, tool: str, args: dict, now: datetime) -> str:
+    """Store the call in its run's row and ask the owner. Returns what the
+    model reads in place of the tool's result."""
+    run = runs.get(conn, run_id)
+    digest = call_hash(tool, args)
+    runs.expire(conn, now)
+    waiting = [r.pending_hash for r in runs.parked(conn, run.session_id) if r.id != run.id]
+    if run.pending_hash and run.pending_hash != digest:
+        waiting.append(run.pending_hash)
+    if waiting:
+        return ALREADY_WAITS.format(code=waiting[0][:8])
+    asked = next((a for a in who_may_approve(tool, args) if can_answer(a)), None)
+    if asked is None:
+        return NOBODY
+    channel, target = asked
+    runs.set_pending(conn, run.id, {"tool": tool, "args": args,
+                                    "asked": {"channel": channel, "target": target}}, digest)
+    # One request per run: a replayed run asks with the same key.
+    outbox.insert(conn, run_id=str(run.id), channel=channel, target=target,
+                  body=REQUEST.format(what=describe(tool, args), code=digest[:8]),
+                  idempotency_key=f"{run.id}:ask", now=now)
+    return WAITS.format(where=outbox.format_address(channel, target))
