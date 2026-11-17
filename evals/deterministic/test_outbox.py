@@ -7,6 +7,7 @@ and a fake clock, so they need no network, no model and no real seconds.
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from datetime import UTC, datetime, timedelta
 
@@ -406,23 +407,78 @@ def test_retry_when_slack_answers_200_with_an_error():
     assert "xoxb-test" not in str(failed.value)
 
 
+class FakeGh:
+    """Stands in for the `gh` CLI: it lists the issue's comments and records
+    every comment it is asked to post."""
+
+    def __init__(self, existing=(), can_list=True) -> None:
+        self.existing, self.can_list, self.calls = list(existing), can_list, []
+
+    def __call__(self, argv):
+        self.calls.append(argv)
+        if argv[:3] == ["gh", "issue", "view"]:
+            if not self.can_list:
+                return False, "gh timed out after 20s"
+            return True, json.dumps({"comments": [{"body": body} for body in self.existing]})
+        return True, "https://github.com/acme/app/issues/12#issuecomment-1"
+
+    @property
+    def posted(self):
+        return [argv for argv in self.calls if argv[:3] == ["gh", "issue", "comment"]]
+
+
 def test_once_the_github_sender_comments_through_gh():
     from waku.alwayson.senders import github
 
-    calls = []
+    gh = FakeGh(existing=["an older comment", "another\n\n<!-- waku:e6:0 -->"])
+    github.make(run=gh)(_message("github", {"repo": "acme/app", "number": 12},
+                                 "--repo evil/other is only text", key="e7:0"))
 
-    def run(argv):
-        calls.append(argv)
-        return True, "https://github.com/acme/app/issues/12#issuecomment-1"
-
-    github.make(run=run)(_message("github", {"repo": "acme/app", "number": 12},
-                                  "--repo evil/other is only text", key="e7:0"))
-
-    (argv,) = calls
+    assert gh.calls[0] == ["gh", "issue", "view", "12", "--repo", "acme/app",
+                           "--json", "comments"]
+    (argv,) = gh.posted
     assert argv[:6] == ["gh", "issue", "comment", "12", "--repo", "acme/app"]
     assert len(argv) == 7, "the body is one argument, so it cannot become a flag"
     assert argv[6].startswith("--body=--repo evil/other is only text")
     assert argv[6].endswith("<!-- waku:e7:0 -->"), "the comment carries its key"
+
+
+def test_github_marker_with_the_same_key_means_the_comment_is_not_posted_again(conn):
+    """Task C5. The comment reached GitHub and the process died before the
+    row was marked sent. The next start finds the comment and posts nothing."""
+    from waku.alwayson.senders import github
+
+    posted_before = "Sean will review this issue this week.\n\n<!-- waku:7:abc123 -->"
+    gh = FakeGh(existing=["unrelated", posted_before])
+    _add(conn, key="7:abc123", channel="github", target={"repo": "acme/app", "number": 12},
+         body="Sean will review this issue this week.")
+    dispatcher = _dispatcher(conn, Clock(), {"github": github.make(run=gh)})
+
+    dispatcher.step()
+
+    assert gh.posted == [], "the issue already carries this key"
+    assert [r["status"] for r in _rows(conn)] == ["sent"]
+
+
+def test_github_marker_of_another_key_does_not_stop_the_comment():
+    from waku.alwayson.senders import github
+
+    gh = FakeGh(existing=["earlier\n\n<!-- waku:7:abc1234 -->", "<!-- waku:17:abc123 -->"])
+    github.make(run=gh)(_message("github", {"repo": "acme/app", "number": 12}, key="7:abc123"))
+
+    assert len(gh.posted) == 1
+
+
+def test_github_marker_that_cannot_be_read_posts_nothing_and_retries():
+    """Without the list, a comment could go out twice. The row waits."""
+    from waku.alwayson.senders import SendFailed, github
+
+    gh = FakeGh(can_list=False)
+    with pytest.raises(SendFailed) as failed:
+        github.make(run=gh)(_message("github", {"repo": "acme/app", "number": 12}))
+
+    assert "timed out" in str(failed.value)
+    assert gh.posted == []
 
 
 def test_retry_when_gh_fails_or_the_target_is_not_an_issue():
