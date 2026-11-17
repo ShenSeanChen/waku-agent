@@ -424,6 +424,82 @@ def test_one_message_the_fixed_line_says_the_owner_without_a_name(home, monkeypa
                           "the owner decides.")
 
 
+# ---- spec 024, decision 4: the request says when the same call ran ---------
+
+def _ask_again(conn, home, clock, external_id, args=COMMENT):
+    """The same person asks for a call once more. Returns the request."""
+    event_id = _slack(conn, external_id=external_id)
+    run = runs.start(conn, "slack:C1:1700.0001", [event_id], now=clock())
+    with outbox.running(home, str(run.id), THREAD):
+        approvals.Gate(home, conn, now=clock, tz=UTC)("send_message", args)
+    events.mark(conn, [event_id], "done")
+    runs.finish(conn, run.id, "parked", now=clock())
+    return _outbox(conn)[-1][2]
+
+
+def test_ran_before_the_request_names_the_time_the_same_call_ran(home, conn):
+    """Spec 024, acceptance 4. Sean approved "hello from Waku" at 09:00 and
+    the same comment is asked for an hour later."""
+    clock, recorder = Clock(), Recorder()
+    first = _park(conn, home, clock)
+    assert "The same call ran" not in _outbox(conn)[0][2]
+    _telegram(conn, "yes")
+    _drain(_worker(conn, recorder, clock))
+    assert runs.get(conn, first).status == "done"
+
+    clock.advance(hours=1)
+    request = _ask_again(conn, home, clock, "Ev2")
+
+    assert request == ('Comment on acme/app#12: "Sean will review this issue this week."\n\n'
+                       "The same call ran at 09:00 today.\n\n"
+                       f"Approve? Reply yes or no. [{COMMENT_HASH[:8]}]")
+
+
+def test_ran_before_the_owner_still_decides_and_a_second_yes_posts_again(home, conn):
+    """The line informs. The key stays <run id>:<hash>, so a second yes is a
+    second call."""
+    clock, recorder = Clock(), Recorder()
+    _park(conn, home, clock)
+    _telegram(conn, "yes")
+    _drain(_worker(conn, recorder, clock))
+    clock.advance(hours=1)
+    _ask_again(conn, home, clock, "Ev2")
+
+    _telegram(conn, "yes", external_id="901")
+    _drain(_worker(conn, recorder, clock))
+
+    assert len(recorder.executed) == 2
+
+
+def test_ran_before_says_yesterday_for_a_call_that_ran_the_day_before(home, conn):
+    clock, recorder = Clock(), Recorder()
+    _park(conn, home, clock)
+    _telegram(conn, "yes")
+    _drain(_worker(conn, recorder, clock))
+
+    clock.advance(hours=23)
+    assert "The same call ran at 09:00 yesterday." in _ask_again(conn, home, clock, "Ev2")
+
+
+def test_ran_before_is_silent_about_a_declined_an_older_and_another_call(home, conn):
+    clock, recorder = Clock(), Recorder()
+    _park(conn, home, clock)
+    _telegram(conn, "no")
+    _drain(_worker(conn, recorder, clock))
+    clock.advance(hours=1)
+    assert "The same call ran" not in _ask_again(conn, home, clock, "Ev2"), "it was declined"
+
+    _telegram(conn, "yes", external_id="901")
+    _drain(_worker(conn, recorder, clock))
+    other = {**COMMENT, "body": "Another comment."}
+    assert "The same call ran" not in _ask_again(conn, home, clock, "Ev3", other), "another call"
+    _telegram(conn, "no", external_id="902")
+    _drain(_worker(conn, recorder, clock))
+
+    clock.advance(hours=24, minutes=1)
+    assert "The same call ran" not in _ask_again(conn, home, clock, "Ev4"), "over 24 hours ago"
+
+
 # ---- C4: resuming ----------------------------------------------------------
 
 def test_yes_from_the_owner_runs_only_the_stored_call(home):

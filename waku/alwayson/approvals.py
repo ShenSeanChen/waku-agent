@@ -26,7 +26,7 @@ import json
 import re
 import sqlite3
 from collections.abc import Callable
-from datetime import datetime
+from datetime import datetime, timedelta, tzinfo
 from pathlib import Path
 
 from waku.alwayson import outbox, runs
@@ -141,7 +141,12 @@ def asked_line() -> str:
 
 # ---- park ------------------------------------------------------------------
 
-REQUEST = "{what}\n\nApprove? Reply yes or no. [{code}]"
+REQUEST = "{what}\n\n{before}Approve? Reply yes or no. [{code}]"
+# One more line in a request for a call the owner approved in the last 24
+# hours (spec 024, decision 4). The owner still decides: the same request can
+# be meant twice, and it can be a mistake.
+RAN_BEFORE = "The same call ran at {time} {day}.\n\n"
+RAN_BEFORE_HOURS = 24
 # What the model reads in place of the tool's result. The request the owner
 # got is the one message this run sends (spec 024, decision 1), so the model
 # is told to say nothing, and it is given no address to quote.
@@ -165,8 +170,10 @@ class Gate:
     bring a parked call back."""
 
     def __init__(self, home: Path, conn: sqlite3.Connection,
-                 now: Callable[[], datetime] = outbox.utc_now) -> None:
-        self.home, self.conn, self._now = home, conn, now
+                 now: Callable[[], datetime] = outbox.utc_now, tz: tzinfo | None = None) -> None:
+        # `tz` is for the evals: the zone a time in a request is said in.
+        # None is the zone of this machine, which is the owner's.
+        self.home, self.conn, self._now, self._tz = home, conn, now, tz
 
     def __call__(self, tool: str, args: dict) -> tuple[str | None, str]:
         context = outbox.current_run(self.home)
@@ -175,10 +182,23 @@ class Gate:
         args = args if isinstance(args, dict) else {}
         if mode(tool, args, context.address) == ALLOW:
             return None, ""
-        return park(self.conn, int(context.run_id), tool, args, self._now()), ""
+        return park(self.conn, int(context.run_id), tool, args, self._now(), self._tz), ""
 
 
-def park(conn: sqlite3.Connection, run_id: int, tool: str, args: dict, now: datetime) -> str:
+def ran_before(conn: sqlite3.Connection, digest: str, now: datetime,
+               tz: tzinfo | None = None) -> str:
+    """The line that says when the same call last ran, or "" when it did not
+    run in the last 24 hours."""
+    at = runs.ran_at(conn, digest, now - timedelta(hours=RAN_BEFORE_HOURS))
+    if at is None:
+        return ""
+    at, today = at.astimezone(tz), now.astimezone(tz).date()
+    return RAN_BEFORE.format(time=f"{at:%H:%M}",
+                             day="today" if at.date() == today else "yesterday")
+
+
+def park(conn: sqlite3.Connection, run_id: int, tool: str, args: dict, now: datetime,
+         tz: tzinfo | None = None) -> str:
     """Store the call in its run's row and ask the owner. Returns what the
     model reads in place of the tool's result."""
     run = runs.get(conn, run_id)
@@ -197,7 +217,8 @@ def park(conn: sqlite3.Connection, run_id: int, tool: str, args: dict, now: date
                                     "asked": {"channel": channel, "target": target}}, digest)
     # One request per run: a replayed run asks with the same key.
     outbox.insert(conn, run_id=str(run.id), channel=channel, target=target,
-                  body=REQUEST.format(what=describe(tool, args), code=digest[:8]),
+                  body=REQUEST.format(what=describe(tool, args), code=digest[:8],
+                                      before=ran_before(conn, digest, now, tz)),
                   idempotency_key=f"{run.id}:ask", now=now)
     return WAITS
 

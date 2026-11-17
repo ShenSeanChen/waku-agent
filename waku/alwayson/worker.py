@@ -316,8 +316,9 @@ class Worker:
         events.insert(self.conn, source=approvals.SOURCE, external_id=f"approval:{run.id}",
                       session_id=run.session_id, payload=payload,
                       received_at=outbox._stamp(self._now()))
-        runs.resolve(self.conn, run.id,
-                     "failed" if approved and not approvals.intact(run) else "done")
+        ran = approved and approvals.intact(run)
+        runs.resolve(self.conn, run.id, "failed" if approved and not ran else "done",
+                     approved=ran, now=self._now())
 
     def _ended(self, run_id: int, status: str) -> str:
         """`parked` when the run left a call waiting for the owner's yes."""

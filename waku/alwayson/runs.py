@@ -107,12 +107,28 @@ def set_pending(conn: sqlite3.Connection, run_id: int, call: dict, call_hash: st
     conn.commit()
 
 
-def resolve(conn: sqlite3.Connection, run_id: int, status: str) -> None:
+def resolve(conn: sqlite3.Connection, run_id: int, status: str, *, approved: bool = False,
+            now: datetime | None = None) -> None:
     """Close a parked run once the owner answered. The stored call stays in
-    the row as a record of what was asked."""
-    conn.execute("UPDATE runs SET status = ? WHERE id = ? AND status = 'parked'",
-                 (status, run_id))
+    the row as a record of what was asked, with the answer and its time."""
+    answered = json.dumps({"approved": approved,
+                           "at": outbox._stamp(now or outbox.utc_now())})
+    conn.execute(
+        "UPDATE runs SET status = ?, pending_call = json_set(pending_call, '$.answered', "
+        "json(?)) WHERE id = ? AND status = 'parked'", (status, answered, run_id))
     conn.commit()
+
+
+def ran_at(conn: sqlite3.Connection, call_hash: str, since: datetime) -> datetime | None:
+    """When the owner last approved a call with this hash, if that was after
+    `since` and the call ran. None otherwise."""
+    row = conn.execute(
+        "SELECT json_extract(pending_call, '$.answered.at') AS at FROM runs "
+        "WHERE pending_hash = ? AND status = 'done' "
+        "AND json_extract(pending_call, '$.answered.approved') = 1 "
+        "AND json_extract(pending_call, '$.answered.at') >= ? "
+        "ORDER BY at DESC LIMIT 1", (call_hash, outbox._stamp(since))).fetchone()
+    return datetime.fromisoformat(row["at"]) if row else None
 
 
 def parked(conn: sqlite3.Connection, session_id: str | None = None) -> list[Run]:

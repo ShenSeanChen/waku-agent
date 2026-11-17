@@ -96,7 +96,9 @@ Reply yes or no.' Answer "yes" and that exact comment is posted once. Answer
 "no" and it is discarded. The request is the only message you get about it.
 When someone else asked, in a Slack thread for example, that thread reads "I
 asked Sean to approve this. I will say here what Sean decides.", with the name
-from `WAKU_OWNER_NAME`. Without an answer the request expires after 72
+from `WAKU_OWNER_NAME`. A request for a call you approved in the last 24 hours
+carries one more line, "The same call ran at 14:52 today.", and you still
+decide. Without an answer the request expires after 72
 hours. For this to work, `WAKU_OWNER` must name your private Telegram chat
 (`telegram:<chat id>`): that is where you are asked, and only a yes from that
 chat counts. One call waits per conversation. `WAKU_APPROVE_ASK` and
