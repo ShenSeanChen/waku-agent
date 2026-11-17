@@ -474,6 +474,15 @@ def _worker(conn, reply):
     return Worker(conn, run, wait=lambda seconds: None, now=Clock(), log=lambda line: None)
 
 
+def _run_id(conn, event_id):
+    """The id of the run that read this event, as the outbox writes it."""
+    import json
+
+    (row,) = [r for r in conn.execute("SELECT id, event_ids FROM runs")
+              if event_id in json.loads(r["event_ids"])]
+    return str(row["id"])
+
+
 def _sent_rows(conn):
     import json
 
@@ -486,8 +495,9 @@ def test_silent_is_not_needed_for_a_reply_to_reach_the_conversation(conn):
 
     assert _worker(conn, "I am here.").step() is True
 
+    run = _run_id(conn, first)
     assert _sent_rows(conn) == [
-        (f"e{first}", "telegram", {"chat_id": 42}, "I am here.", f"e{first}:0", "pending")]
+        (run, "telegram", {"chat_id": 42}, "I am here.", f"{run}:0", "pending")]
 
 
 def test_silent_reply_writes_no_row(conn):
@@ -562,9 +572,9 @@ def test_replay_of_a_run_after_a_crash_leaves_one_row(tmp_path, monkeypatch):
         while worker.step():
             pass
         assert runs == ["telegram:42"], "the run did happen a second time"
+        run = _run_id(second_conn, event_id)
         assert _sent_rows(second_conn) == [
-            (f"e{event_id}", "telegram", {"chat_id": 42}, "Booked.", f"e{event_id}:0",
-             "pending")]
+            (run, "telegram", {"chat_id": 42}, "Booked.", f"{run}:0", "pending")]
     finally:
         second_conn.close()
 

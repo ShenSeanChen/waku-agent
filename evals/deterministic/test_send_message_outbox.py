@@ -147,11 +147,14 @@ def test_the_worker_gives_the_tool_its_run(tmp_path, monkeypatch):
             payload={"text": "tell Sean I need a room",
                      "reply_to": {"channel": "C1", "thread_ts": "1700.0001"}})
         Worker(conn, run, wait=lambda seconds: None, log=lambda line: None).step()
+        (row,) = conn.execute("SELECT id, event_ids FROM runs").fetchall()
+        assert json.loads(row["event_ids"]) == [event_id]
+        run_id = str(row["id"])
     finally:
         run.close()
         conn.close()
 
     assert [(row[0], row[1], row[3], row[4]) for row in _rows(home)] == [
-        (f"e{event_id}", "telegram", "Ana asked for a room.", f"e{event_id}:1"),
-        (f"e{event_id}", "slack", "I told Sean.", f"e{event_id}:0"),
+        (run_id, "telegram", "Ana asked for a room.", f"{run_id}:1"),
+        (run_id, "slack", "I told Sean.", f"{run_id}:0"),
     ]

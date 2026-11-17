@@ -31,7 +31,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from waku.alwayson import events, outbox
+from waku.alwayson import events, outbox, runs
 from waku.alwayson.events import Event
 
 BATCH_WAIT_SECONDS = 3.0
@@ -85,13 +85,6 @@ def _lock(handle) -> None:
         import fcntl
 
         fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-
-
-def run_id(batch: list[Event]) -> str:
-    """The name of the run a batch starts: `e` and the id of its first event.
-    A run that is replayed after a crash starts with the same first event, so
-    it gets the same name and writes the same idempotency keys."""
-    return f"e{batch[0].id}"
 
 
 def is_silent(reply: str | None) -> bool:
@@ -148,20 +141,22 @@ class AgentRun:
         self._factory, self._observer, self._log = agent_factory, observer, log
         self._agent: Any | None = None
 
-    def __call__(self, session_id: str, batch: list[Event]) -> str:
+    def __call__(self, session_id: str, batch: list[Event]) -> runs.Outcome:
         if self._agent is None:
             self._agent = self._factory()
         session = self._agent.session
+        # The row the worker started for this batch. `start` finds it again.
+        run = runs.start(self._agent.conn, session_id, [e.id for e in batch])
         if session.session_id != session_id:
             session.switch(session_id)   # load that conversation's recent turns
         text = render(batch)
         self._log(f"{session_id} › {text}")
         # send_message reads this to key its rows to the run it is called from.
-        with outbox.running(self._agent.settings.home, run_id(batch), reply_address(batch)):
+        with outbox.running(self._agent.settings.home, str(run.id), reply_address(batch)):
             result = self._agent.respond(text, observer=self._observer,
                                          source=batch[0].source)
         self._log(f"waku › {result.reply}")
-        return result.reply
+        return runs.Outcome(result.reply, turn_id=(result.receipt or {}).get("turn_id", ""))
 
     def close(self) -> None:
         if self._agent is None:
@@ -202,20 +197,25 @@ class Worker:
         if self.stop.is_set():
             events.mark(self.conn, ids, "pending")   # the next start runs them
             return False
+        run = runs.start(self.conn, first.session_id, ids, now=self._now())
         try:
-            reply = self._run(first.session_id, batch)
+            outcome = self._run(first.session_id, batch)
         except Exception as exc:
             from waku.gateway.runner import safe_exception
 
+            runs.finish(self.conn, run.id, "failed", now=self._now())
             events.mark(self.conn, ids, "failed")
             self._log(f"(serve) the run for {first.session_id} failed: {safe_exception(exc)}")
         else:
-            self._queue_reply(batch, reply)
+            if not isinstance(outcome, runs.Outcome):
+                outcome = runs.Outcome(outcome)
+            self._queue_reply(run.id, batch, outcome.reply)
+            runs.finish(self.conn, run.id, "done", outcome.turn_id, now=self._now())
             events.mark(self.conn, ids, "done")
         return True
 
-    def _queue_reply(self, batch: list[Event], reply: str | None) -> None:
-        """The run's reply becomes one outbox row. Its key is `<run>:0`."""
+    def _queue_reply(self, run_id: int, batch: list[Event], reply: str | None) -> None:
+        """The run's reply becomes one outbox row. Its key is `<run id>:0`."""
         if is_silent(reply):
             return
         address = reply_address(batch)
@@ -223,9 +223,8 @@ class Worker:
             self._log(f"(serve) the run for {batch[0].session_id} has nowhere to reply")
             return
         channel, target = address
-        run = run_id(batch)
-        outbox.insert(self.conn, run_id=run, channel=channel, target=target,
-                      body=reply.strip(), idempotency_key=f"{run}:0", now=self._now())
+        outbox.insert(self.conn, run_id=str(run_id), channel=channel, target=target,
+                      body=reply.strip(), idempotency_key=f"{run_id}:0", now=self._now())
 
     def run_forever(self, idle: float = IDLE_SECONDS) -> None:
         recovered = self.recover()
