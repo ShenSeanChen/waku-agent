@@ -452,3 +452,145 @@ def test_once_only_configured_senders_exist(tmp_path, monkeypatch):
     monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")
     assert sorted(senders.configured(Settings(home=tmp_path, telegram_token="123:abc"))) == [
         "github", "slack", "telegram"]
+
+
+# ---- D3: a run's reply is an outbox row ------------------------------------
+
+def _event(conn, external_id="1", session_id="telegram:42", text="hello", source="telegram",
+           reply_to=None):
+    from waku.alwayson import events
+
+    return events.insert(conn, source=source, external_id=external_id, session_id=session_id,
+                         payload={"text": text, "reply_to": reply_to or {"chat_id": 42}})
+
+
+def _worker(conn, reply):
+    from waku.alwayson.worker import Worker
+
+    run = reply if callable(reply) else (lambda session_id, batch: reply)
+    return Worker(conn, run, wait=lambda seconds: None, now=Clock(), log=lambda line: None)
+
+
+def _sent_rows(conn):
+    import json
+
+    return [(r["run_id"], r["channel"], json.loads(r["target"]), r["body"],
+             r["idempotency_key"], r["status"]) for r in _rows(conn)]
+
+
+def test_silent_is_not_needed_for_a_reply_to_reach_the_conversation(conn):
+    first = _event(conn, text="are you there?")
+
+    assert _worker(conn, "I am here.").step() is True
+
+    assert _sent_rows(conn) == [
+        (f"e{first}", "telegram", {"chat_id": 42}, "I am here.", f"e{first}:0", "pending")]
+
+
+def test_silent_reply_writes_no_row(conn):
+    """Acceptance 8: the Thursday run that finds issue 12 closed says nothing."""
+    for number, reply in enumerate(["SILENT", "  silent.\n", "", "   ", None]):
+        _event(conn, external_id=str(number))
+        assert _worker(conn, reply).step() is True
+    assert _rows(conn) == []
+    assert [r["status"] for r in conn.execute("SELECT status FROM events")] == ["done"] * 5
+
+
+def test_silent_inside_a_sentence_is_still_a_reply(conn):
+    _event(conn)
+    _worker(conn, "The room is silent now.").step()
+    assert [row[3] for row in _sent_rows(conn)] == ["The room is silent now."]
+
+
+def test_silent_or_not_a_slack_reply_goes_to_the_thread_and_github_to_the_issue(conn):
+    _event(conn, external_id="Ev1", session_id="slack:C1:1700.0001", source="slack",
+           reply_to={"channel": "C1", "thread_ts": "1700.0001"})
+    _event(conn, external_id="label:acme/app#12", session_id="github:acme/app#12",
+           source="github", reply_to={"repo": "acme/app", "number": 12})
+    worker = _worker(conn, "On it.")
+    while worker.step():
+        pass
+
+    assert [(row[1], row[2]) for row in _sent_rows(conn)] == [
+        ("slack", {"channel": "C1", "thread_ts": "1700.0001"}),
+        ("github", {"repo": "acme/app", "number": 12})]
+
+
+def test_silent_failed_run_writes_no_row(conn):
+    _event(conn)
+
+    def run(session_id, batch):
+        raise RuntimeError("model is down")
+
+    _worker(conn, run).step()
+    assert _rows(conn) == []
+
+
+def test_replay_of_a_run_after_a_crash_leaves_one_row(tmp_path, monkeypatch):
+    """Acceptance 7. The process dies after the reply is written and before
+    the events are marked done, so the next start runs them again."""
+    from waku.alwayson import events
+
+    class Killed(BaseException):
+        pass
+
+    def die(conn, ids, status):
+        raise Killed
+
+    first_conn = connect(tmp_path)
+    event_id = _event(first_conn, text="book a room")
+    with monkeypatch.context() as patch:
+        patch.setattr(events, "mark", die)
+        with pytest.raises(Killed):
+            _worker(first_conn, "Booked.").step()
+    assert len(_rows(first_conn)) == 1
+    first_conn.close()
+
+    second_conn = connect(tmp_path)
+    try:
+        runs = []
+
+        def run(session_id, batch):
+            runs.append(session_id)
+            return "Booked, again."
+
+        worker = _worker(second_conn, run)
+        assert worker.recover() == 1
+        while worker.step():
+            pass
+        assert runs == ["telegram:42"], "the run did happen a second time"
+        assert _sent_rows(second_conn) == [
+            (f"e{event_id}", "telegram", {"chat_id": 42}, "Booked.", f"e{event_id}:0",
+             "pending")]
+    finally:
+        second_conn.close()
+
+
+def test_silent_reply_from_the_model_reaches_no_sender(tmp_path):
+    """The whole path with waku.respond(): one conversation gets a reply and
+    one gets nothing, and the dispatcher sends exactly one message."""
+    from evals.helpers import ScriptedClient, make_waku, response, text_block
+    from waku.alwayson.worker import AgentRun
+
+    home = tmp_path / "home"
+    home.mkdir()
+    gate = response([text_block('{"retrieve": false, "query": "", "reason": "test"}')])
+    client = ScriptedClient([gate, response([text_block("Issue 12 is still open.")]),
+                             gate, response([text_block("SILENT")])])
+    run = AgentRun(lambda: make_waku(home, client=client, episodic_store="sqlite"),
+                   log=lambda line: None)
+    conn = connect(home)
+    sender = FakeSender()
+    try:
+        _event(conn, external_id="1", text="is issue 12 open?")
+        _event(conn, external_id="2", session_id="telegram:77", text="timer: check issue 12",
+               reply_to={"chat_id": 77})
+        worker = _worker(conn, run)
+        while worker.step():
+            pass
+        _dispatcher(conn, Clock(), {"telegram": sender}).step()
+    finally:
+        run.close()
+        conn.close()
+
+    assert sender.delivered == [({"chat_id": 42}, "Issue 12 is still open.")]

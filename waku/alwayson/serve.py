@@ -97,12 +97,13 @@ class Service:
     def __init__(self, settings: Settings, *, sources: Mapping[str, Source] | None = None,
                  routes: Mapping[str, Route] | None = None,
                  senders: Mapping[str, Sender] | None = None, port: int = DEFAULT_PORT,
-                 run: Callable[[str, list[Event]], None] | None = None,
+                 run: Callable[[str, list[Event]], str | None] | None = None,
                  batch_wait: float = BATCH_WAIT_SECONDS,
                  log: Callable[[str], None] = print) -> None:
         self.settings, self._log = settings, log
         self._sources, self._routes, self._port = dict(sources or {}), dict(routes or {}), port
         self._senders = dict(senders or {})
+        self.sending = list(self._senders)     # the channels a reply can go out on
         self._run, self._batch_wait = run, batch_wait
         self._lock = ServeLock(settings.home)
         self.inbox = Inbox(settings.home)
@@ -256,7 +257,7 @@ def main(argv: list[str]) -> int:
         if service.address:
             print("  webhooks: " + ", ".join(
                 "http://{}:{}{}".format(*service.address, path) for path in routes))
-        print("  A reply is printed here and kept in the chat log. It is not sent back yet.")
+        print("  replies go out on: " + ", ".join(sorted(service.sending)))
         while not stop.wait(1):
             pass
     finally:

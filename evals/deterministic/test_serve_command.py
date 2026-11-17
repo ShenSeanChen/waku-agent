@@ -113,6 +113,22 @@ def test_an_outbox_row_written_while_serving_is_sent(tmp_path):
     assert sent == [({"chat_id": 42}, "hello Sean")]
 
 
+def test_a_message_to_serve_gets_its_reply_on_the_channel_it_came_from(tmp_path):
+    """Task D3: handler, worker, outbox and dispatcher in one process."""
+    sent = []
+    service = _service(
+        tmp_path, run=lambda session_id, batch: f"You said: {batch[0].payload['text']}",
+        senders={"telegram": lambda message: sent.append((message.target, message.body))})
+    service.start()
+    try:
+        Inbox(tmp_path).add(source="telegram", external_id="1", session_id="telegram:42",
+                            payload={"text": "hello", "reply_to": {"chat_id": 42}})
+        assert _until(lambda: sent), "the reply never reached the sender"
+    finally:
+        service.stop()
+    assert sent == [({"chat_id": 42}, "You said: hello")]
+
+
 def test_stop_ends_the_worker_and_releases_the_lock(tmp_path):
     service = _service(tmp_path)
     service.start()
