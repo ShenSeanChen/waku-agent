@@ -134,3 +134,321 @@ def test_insert_migrates_a_database_from_before_the_table(tmp_path):
         assert _add(upgraded) is not None
     finally:
         upgraded.close()
+
+
+# ---- D2: the dispatcher ----------------------------------------------------
+
+class FakeSender:
+    """Records every delivery attempt and fails the first `failures` of them."""
+
+    def __init__(self, failures: int = 0) -> None:
+        self.failures, self.attempts, self.delivered = failures, 0, []
+
+    def __call__(self, message) -> None:
+        self.attempts += 1
+        if self.attempts <= self.failures:
+            raise RuntimeError(f"HTTP 502 on attempt {self.attempts}")
+        self.delivered.append((message.target, message.body))
+
+
+def _dispatcher(conn, clock, senders, **kwargs):
+    from waku.alwayson.dispatcher import Dispatcher
+
+    kwargs.setdefault("log", lambda line: None)
+    return Dispatcher(conn, senders, now=clock, **kwargs)
+
+
+def test_once_a_pending_row_is_sent_and_marked_sent(conn):
+    clock, sender = Clock(), FakeSender()
+    _add(conn, body="hello Ana")
+    dispatcher = _dispatcher(conn, clock, {"telegram": sender})
+
+    assert dispatcher.step() == 1
+    assert sender.delivered == [({"chat_id": 42}, "hello Ana")]
+    assert [r["status"] for r in _rows(conn)] == ["sent"]
+    assert dispatcher.step() == 0
+    assert sender.attempts == 1, "a sent row is never sent again"
+
+
+def test_once_a_sender_that_fails_twice_then_succeeds_delivers_once(conn):
+    """Acceptance 7."""
+    clock, sender = Clock(), FakeSender(failures=2)
+    _add(conn, body="hello Ana")
+    dispatcher = _dispatcher(conn, clock, {"telegram": sender})
+
+    dispatcher.step()                      # fails; next attempt in 10 seconds
+    clock.advance(9)
+    dispatcher.step()
+    assert sender.attempts == 1, "nothing is tried before the 10 seconds pass"
+    clock.advance(1)
+    dispatcher.step()                      # fails; next attempt in 1 minute
+    clock.advance(59)
+    dispatcher.step()
+    assert sender.attempts == 2
+    clock.advance(1)
+    dispatcher.step()                      # succeeds
+
+    assert sender.delivered == [({"chat_id": 42}, "hello Ana")]
+    (row,) = _rows(conn)
+    assert (row["status"], row["attempts"], row["last_error"]) == ("sent", 2, "")
+    clock.advance(86400)
+    dispatcher.step()
+    assert sender.attempts == 3
+
+
+def test_retry_waits_ten_seconds_a_minute_ten_minutes_then_an_hour(conn):
+    clock, sender = Clock(), FakeSender(failures=99)
+    _add(conn)
+    dispatcher = _dispatcher(conn, clock, {"telegram": sender})
+
+    waits = []
+    for _ in range(4):
+        dispatcher.step()
+        (row,) = _rows(conn)
+        due_at = datetime.fromisoformat(row["next_attempt_at"])
+        waits.append((due_at - clock.at).total_seconds())
+        clock.at = due_at
+    assert waits == [10, 60, 600, 3600]
+    assert _rows(conn)[0]["last_error"] == "RuntimeError: HTTP 502 on attempt 4"
+
+
+def test_retry_does_not_hold_back_another_row(conn):
+    clock = Clock()
+    broken, working = FakeSender(failures=99), FakeSender()
+    _add(conn, key="e1:0", channel="slack", target={"channel": "C1", "thread_ts": "1.0"})
+    _add(conn, key="e2:0", body="to Sean")
+    dispatcher = _dispatcher(conn, clock, {"slack": broken, "telegram": working})
+
+    dispatcher.step()
+
+    assert working.delivered == [({"chat_id": 42}, "to Sean")]
+    assert [r["status"] for r in _rows(conn)] == ["pending", "sent"]
+
+
+def test_dead_after_five_failures_and_never_tried_again(conn):
+    """Acceptance 7."""
+    clock, sender, logged = Clock(), FakeSender(failures=99), []
+    _add(conn)
+    dispatcher = _dispatcher(conn, clock, {"telegram": sender}, log=logged.append)
+
+    for _ in range(5):
+        dispatcher.step()
+        clock.advance(3600)
+
+    (row,) = _rows(conn)
+    assert (row["status"], row["attempts"]) == ("dead", 5)
+    clock.advance(86400)
+    assert dispatcher.step() == 0
+    assert sender.attempts == 5
+    assert any("5 attempts" in line for line in logged)
+
+
+def test_dead_row_on_a_channel_with_no_sender(conn):
+    """Slack is not configured on this machine. The row is not sent somewhere
+    else and it does not stay pending for ever."""
+    clock, telegram = Clock(), FakeSender()
+    _add(conn, channel="slack", target={"channel": "C1", "thread_ts": "1.0"})
+    dispatcher = _dispatcher(conn, clock, {"telegram": telegram})
+
+    for _ in range(5):
+        dispatcher.step()
+        clock.advance(3600)
+
+    (row,) = _rows(conn)
+    assert row["status"] == "dead"
+    assert "slack" in row["last_error"]
+    assert telegram.attempts == 0
+
+
+def test_dead_row_sends_the_owner_one_notice_on_another_channel(conn):
+    clock = Clock()
+    slack, telegram = FakeSender(failures=99), FakeSender()
+    _add(conn, channel="slack", target={"channel": "C1", "thread_ts": "1.0"},
+         body="I will check issue 12 on Thursday at 09:00")
+    dispatcher = _dispatcher(conn, clock, {"slack": slack, "telegram": telegram},
+                             owner=[("slack", {"channel": "D9"}), ("telegram", {"chat_id": 7})])
+
+    for _ in range(6):
+        dispatcher.step()
+        clock.advance(3600)
+
+    assert len(telegram.delivered) == 1, "one notice, on the channel that did not fail"
+    target, notice = telegram.delivered[0]
+    assert target == {"chat_id": 7}
+    assert "slack" in notice and "I will check issue 12" in notice
+    assert [r["status"] for r in _rows(conn)] == ["dead", "sent"]
+
+
+def test_dead_notice_that_dies_sends_no_further_notice(conn):
+    clock = Clock()
+    slack, telegram = FakeSender(failures=99), FakeSender(failures=99)
+    _add(conn, channel="slack", target={"channel": "C1", "thread_ts": "1.0"})
+    dispatcher = _dispatcher(conn, clock, {"slack": slack, "telegram": telegram},
+                             owner=[("telegram", {"chat_id": 7}), ("slack", {"channel": "D9"})])
+
+    for _ in range(12):
+        dispatcher.step()
+        clock.advance(3600)
+
+    assert [r["status"] for r in _rows(conn)] == ["dead", "dead"]
+    assert slack.attempts == 5 and telegram.attempts == 5
+
+
+def test_dead_without_an_owner_writes_no_notice(conn):
+    clock, sender = Clock(), FakeSender(failures=99)
+    _add(conn)
+    dispatcher = _dispatcher(conn, clock, {"telegram": sender})
+    for _ in range(5):
+        dispatcher.step()
+        clock.advance(3600)
+    assert len(_rows(conn)) == 1
+
+
+# ---- D2: where a message can go --------------------------------------------
+
+def test_retry_safe_address_forms():
+    assert outbox.parse_address("telegram:42") == ("telegram", {"chat_id": 42})
+    assert outbox.parse_address("telegram:-1001234") == ("telegram", {"chat_id": -1001234})
+    assert outbox.parse_address("slack:C0123ABC") == ("slack", {"channel": "C0123ABC"})
+    assert outbox.parse_address("slack:C0123ABC:1700000000.000100") == (
+        "slack", {"channel": "C0123ABC", "thread_ts": "1700000000.000100"})
+    assert outbox.parse_address("github:acme/app#12") == (
+        "github", {"repo": "acme/app", "number": 12})
+    for not_an_address in ("Alex", "telegram:sean", "slack:", "github:acme/app",
+                           "github:-x/app#1", "github:acme/app#0", "email:a@b.c", ""):
+        assert outbox.parse_address(not_an_address) is None, not_an_address
+
+
+def test_retry_owner_addresses_come_from_the_setting(monkeypatch):
+    monkeypatch.delenv("WAKU_OWNER", raising=False)
+    assert outbox.owner_addresses() == []
+    monkeypatch.setenv("WAKU_OWNER", "telegram:42, Sean ,slack:D9")
+    assert outbox.owner_addresses() == [("telegram", {"chat_id": 42}),
+                                        ("slack", {"channel": "D9"})]
+
+
+# ---- D2: the three senders -------------------------------------------------
+
+def _message(channel, target, body="hello", key="e1:0"):
+    return outbox.Message(1, "e1", channel, target, body, key, "pending", 0,
+                          "2026-11-16T12:00:00+00:00", "")
+
+
+def test_once_the_telegram_sender_posts_to_the_chat():
+    from waku.alwayson.senders import telegram
+
+    calls = []
+
+    def post(url, payload, headers):
+        calls.append((url, payload, headers))
+        return {"ok": True}
+
+    telegram.make("123:abc", post=post)(_message("telegram", {"chat_id": 42}, "hello Sean"))
+
+    assert calls == [("https://api.telegram.org/bot123:abc/sendMessage",
+                      {"chat_id": 42, "text": "hello Sean"}, {})]
+
+
+def test_once_the_telegram_sender_splits_a_long_message():
+    from waku.alwayson.senders import telegram
+
+    texts = []
+    telegram.make("123:abc", post=lambda url, payload, headers: texts.append(
+        payload["text"]) or {"ok": True})(_message("telegram", {"chat_id": 42}, "a" * 5000))
+
+    assert [len(t) for t in texts] == [4096, 904]
+
+
+def test_retry_when_telegram_refuses_and_the_error_never_carries_the_token():
+    from waku.alwayson.senders import SendFailed, telegram
+
+    def post(url, payload, headers):
+        return {"ok": False, "description": "Forbidden: bot was blocked by the user"}
+
+    with pytest.raises(SendFailed) as failed:
+        telegram.make("123:abc", post=post)(_message("telegram", {"chat_id": 42}))
+    assert "blocked" in str(failed.value)
+    assert "123:abc" not in str(failed.value)
+
+
+def test_once_the_slack_sender_replies_in_the_thread():
+    from waku.alwayson.senders import slack
+
+    calls = []
+
+    def post(url, payload, headers):
+        calls.append((url, payload, headers))
+        return {"ok": True}
+
+    slack.make("xoxb-test", post=post)(
+        _message("slack", {"channel": "C1", "thread_ts": "1700.0001"}, "hello Ana"))
+    slack.make("xoxb-test", post=post)(_message("slack", {"channel": "D9"}, "hello Sean"))
+
+    assert calls == [
+        ("https://slack.com/api/chat.postMessage",
+         {"channel": "C1", "text": "hello Ana", "thread_ts": "1700.0001"},
+         {"Authorization": "Bearer xoxb-test"}),
+        ("https://slack.com/api/chat.postMessage",
+         {"channel": "D9", "text": "hello Sean"}, {"Authorization": "Bearer xoxb-test"}),
+    ]
+
+
+def test_retry_when_slack_answers_200_with_an_error():
+    from waku.alwayson.senders import SendFailed, slack
+
+    with pytest.raises(SendFailed) as failed:
+        slack.make("xoxb-test", post=lambda *a: {"ok": False, "error": "channel_not_found"})(
+            _message("slack", {"channel": "C1"}))
+    assert "channel_not_found" in str(failed.value)
+    assert "xoxb-test" not in str(failed.value)
+
+
+def test_once_the_github_sender_comments_through_gh():
+    from waku.alwayson.senders import github
+
+    calls = []
+
+    def run(argv):
+        calls.append(argv)
+        return True, "https://github.com/acme/app/issues/12#issuecomment-1"
+
+    github.make(run=run)(_message("github", {"repo": "acme/app", "number": 12},
+                                  "--repo evil/other is only text", key="e7:0"))
+
+    (argv,) = calls
+    assert argv[:6] == ["gh", "issue", "comment", "12", "--repo", "acme/app"]
+    assert len(argv) == 7, "the body is one argument, so it cannot become a flag"
+    assert argv[6].startswith("--body=--repo evil/other is only text")
+    assert argv[6].endswith("<!-- waku:e7:0 -->"), "the comment carries its key"
+
+
+def test_retry_when_gh_fails_or_the_target_is_not_an_issue():
+    from waku.alwayson.senders import SendFailed, github
+
+    calls = []
+
+    def run(argv):
+        calls.append(argv)
+        return False, "gh is not signed in. Run `gh auth login`."
+
+    with pytest.raises(SendFailed) as failed:
+        github.make(run=run)(_message("github", {"repo": "acme/app", "number": 12}))
+    assert "gh auth login" in str(failed.value)
+
+    calls.clear()
+    for target in ({"repo": "--web", "number": 12}, {"repo": "acme/app", "number": "12; rm"},
+                   {"repo": "acme/app"}):
+        with pytest.raises(SendFailed):
+            github.make(run=run)(_message("github", target))
+    assert calls == [], "a target that is not owner/name and a number never reaches gh"
+
+
+def test_once_only_configured_senders_exist(tmp_path, monkeypatch):
+    from waku.alwayson import senders
+    from waku.config import Settings
+
+    monkeypatch.delenv("SLACK_BOT_TOKEN", raising=False)
+    assert sorted(senders.configured(Settings(home=tmp_path, telegram_token=""))) == ["github"]
+    monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")
+    assert sorted(senders.configured(Settings(home=tmp_path, telegram_token="123:abc"))) == [
+        "github", "slack", "telegram"]

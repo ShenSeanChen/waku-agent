@@ -15,6 +15,8 @@ Read the table yourself:  sqlite3 ~/.waku/state.db 'SELECT * FROM outbox'
 from __future__ import annotations
 
 import json
+import os
+import re
 import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -24,6 +26,37 @@ CHANNELS = ("telegram", "slack", "github")
 BACKOFF_SECONDS = (10, 60, 600, 3600)
 MAX_ATTEMPTS = 5
 _MAX_ERROR_CHARS = 300
+
+# An address names one place a message can go, in the form a session id has:
+#   telegram:<chat id>   slack:<channel>[:<thread>]   github:<owner>/<repo>#<number>
+_TELEGRAM_RE = re.compile(r"^telegram:(-?\d+)$")
+_SLACK_RE = re.compile(r"^slack:([A-Z0-9]+)(?::(\d+\.\d+))?$")
+_GITHUB_RE = re.compile(r"^github:([^#\s]+)#([1-9]\d*)$")
+
+
+def parse_address(text: str) -> tuple[str, dict] | None:
+    """(channel, target) for an address, or None when the text is not one."""
+    from waku.tools.github import _REPO_RE
+
+    text = (text or "").strip()
+    if found := _TELEGRAM_RE.match(text):
+        return "telegram", {"chat_id": int(found[1])}
+    if found := _SLACK_RE.match(text):
+        target = {"channel": found[1]}
+        if found[2]:
+            target["thread_ts"] = found[2]
+        return "slack", target
+    if (found := _GITHUB_RE.match(text)) and _REPO_RE.match(found[1]):
+        return "github", {"repo": found[1], "number": int(found[2])}
+    return None
+
+
+def owner_addresses() -> list[tuple[str, dict]]:
+    """WAKU_OWNER: where the person who runs this agent can be reached, as a
+    comma-separated list of addresses. A value that is not an address is
+    dropped."""
+    found = (parse_address(value) for value in os.getenv("WAKU_OWNER", "").split(","))
+    return [address for address in found if address]
 
 
 @dataclass(frozen=True)
