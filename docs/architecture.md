@@ -161,6 +161,11 @@ issue the events came from.
   channel accepted the message and before the row is marked `sent`. A GitHub
   comment cannot: each comment ends with a hidden marker that carries the
   row's key, and the sender posts nothing when the issue already has it.
+- **A run that raises sends one plain sentence** to the conversation, or to
+  the owner when other people read that conversation. The reason is in the
+  log of `waku serve` and never in a message.
+- **A run in the owner's own chat is told so.** Its prompt ends with a line
+  that says the person it talks to runs the assistant and approves its calls.
 
 A tool call that writes to a third party waits for the owner's yes
 (`approvals.py`). On Thursday the run for Ana's thread calls `send_message`

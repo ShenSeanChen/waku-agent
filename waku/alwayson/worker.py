@@ -11,7 +11,8 @@ run for each batch (spec 023, decision 2).
     A reply to a place other people read (a GitHub issue, a Slack channel)
     waits for the owner's yes like any call that writes to a third party
   close the run's row in `runs`: done, failed, or parked when it left a
-    call waiting for the owner's yes. A parked run's reply is not sent: the
+    call waiting for the owner's yes. A run that failed sends one plain
+    sentence in the reply's place. A parked run's reply is not sent: the
     request to the owner is the one message
   mark the rows done, or failed when the run raised
 
@@ -228,6 +229,20 @@ NOTHING_WAITS = ("[Nothing is waiting for approval: no call waits for a yes or a
                  "waiting for approval.]")
 
 
+# What a person reads when a run raised. The traceback and the reason are in
+# the log of `waku serve`, never in a message: a reason can quote an address
+# or a key. On 2026-11-17 a run failed after the owner approved a call, and
+# the owner heard nothing.
+FAILED = ("Something went wrong on my side and I could not finish that. Please send it "
+          "again. If it happens again, restart Waku on the computer it runs on.")
+FAILED_AFTER = ("Something went wrong on my side after that, so I cannot say more about "
+                "it. Ask me again if you need more.")
+NOT_ANSWERED = ("Something went wrong on my side and I could not answer in {where}. "
+                "Nothing was posted there.")
+# What the conversation reads as the result of an approved call that raised.
+CALL_FAILED = "Error: the call did not finish. Something went wrong on my side."
+
+
 def _text(event: Event) -> str:
     text = event.payload.get("text", "")
     if event.payload.get("nothing_waits"):
@@ -360,6 +375,7 @@ class Worker:
             runs.finish(self.conn, run.id, self._ended(run.id, "failed"), now=self._now())
             events.mark(self.conn, ids, "failed")
             self._log(f"(serve) the run for {first.session_id} failed: {safe_exception(exc)}")
+            self._queue_failed(run.id, batch)
         else:
             if not isinstance(outcome, runs.Outcome):
                 outcome = runs.Outcome(outcome)
@@ -445,9 +461,17 @@ class Worker:
         event has one external id, and a closed run is no longer parked."""
         parked_events = [e for e in (events.get(self.conn, i) for i in run.event_ids) if e]
         address = reply_address(parked_events)
-        output = ""
+        output, raised = "", False
         if approved and approvals.intact(run):
-            output = self._execute(run, address)
+            try:
+                output = self._execute(run, address)
+            except Exception as exc:
+                from waku.gateway.runner import safe_exception
+
+                # The reason stays in the log: it may quote an address or a key.
+                self._log(f"(serve) the approved call of run {run.id} failed: "
+                          f"{safe_exception(exc)}")
+                output, raised = CALL_FAILED, True
         # A reply that waited is the end of its run: once it is posted or
         # dropped, the conversation has nothing to hear about the approval.
         if not (run.pending_call or {}).get("reply"):
@@ -457,7 +481,7 @@ class Worker:
             events.insert(self.conn, source=approvals.SOURCE,
                           external_id=f"approval:{run.id}", session_id=run.session_id,
                           payload=payload, received_at=outbox._stamp(self._now()))
-        ran = approved and approvals.intact(run)
+        ran = approved and approvals.intact(run) and not raised
         runs.resolve(self.conn, run.id, "failed" if approved and not ran else "done",
                      approved=ran, now=self._now())
 
@@ -481,6 +505,29 @@ class Worker:
         outbox.insert(self.conn, run_id=str(run_id), channel=owner[0], target=owner[1],
                       body="\n".join(f"{what}. {did}" for what in arrived),
                       idempotency_key=f"{run_id}:note", now=self._now())
+
+    def _queue_failed(self, run_id: int, batch: list[Event]) -> None:
+        """A run that raised still says one plain sentence: what did not work
+        and what to do. The reason stays in the log. When the batch held the
+        outcome of a call the owner approved, the sentence follows it, so the
+        person reads what the call answered. A place other people read gets
+        nothing, and the owner is told there was no answer there."""
+        address = reply_address(batch)
+        if address is None:
+            return
+        outcomes = [e.payload.get("text", "") for e in batch if e.source == approvals.SOURCE]
+        body = "\n\n".join([*outcomes, FAILED_AFTER if outcomes else FAILED])
+        if not approvals.reply_is_free(address):
+            owner = next(iter(outbox.owner_addresses()), None)
+            if owner is None:
+                return
+            channel, target = address
+            where = (f"{target.get('repo')}#{target.get('number')}" if channel == "github"
+                     else channel.capitalize())
+            address, body = owner, NOT_ANSWERED.format(where=where)
+        outbox.insert(self.conn, run_id=str(run_id), channel=address[0], target=address[1],
+                      body=without_chat_ids(body, address),
+                      idempotency_key=f"{run_id}:failed", now=self._now())
 
     def _queue_asked(self, run_id: int, batch: list[Event]) -> None:
         """A parked run sends one message, the request (spec 024, decision 1).

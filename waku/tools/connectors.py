@@ -395,6 +395,7 @@ class SignIn:
       done    set when the sign-in ended, either way
       ok      whether the server connected
       tools   the tools the server listed, or None
+      reason  why the sign-in could not start, in words for the person, or ""
     """
 
     def __init__(self, home: Path, name: str, on_done: Callable[[SignIn], None] | None = None,
@@ -403,6 +404,7 @@ class SignIn:
         self.link: str | None = None
         self.tools: list | None = None
         self.ok = False
+        self.reason = ""
         self.done = threading.Event()
         self._has_link = threading.Event()
         self._on_done, self._make_bridge = on_done, bridge
@@ -412,14 +414,34 @@ class SignIn:
         self.link = link
         self._has_link.set()
 
+    def _port_refusal(self) -> str:
+        """Why the sign-in cannot start, or "": the port this client is
+        registered on is held by another program. The check runs before a
+        link is made, so the person is not sent to a page that leads back to
+        another program."""
+        from waku.tools.mcp_oauth import FileTokenStorage, PortBusy, check_port
+
+        servers = _read(self.home)["servers"]
+        spec = next((s for s in servers if isinstance(s, dict)
+                     and s.get("name") == self.name and s.get("oauth")), None)
+        if spec is None or signed_in(self.home, spec):
+            return ""
+        try:
+            check_port(FileTokenStorage(self.home, self.name, spec.get("url")))
+        except PortBusy as busy:
+            return str(busy)
+        return ""
+
     def _run(self) -> None:
         try:
-            self._bridge = self._make_bridge(self.home, self.name, self._open)
-            self.tools = list(self._bridge.start())
-            # A server that failed to connect is skipped by the bridge, so no
-            # tools and no session is how a failure looks from here.
-            connected = getattr(self._bridge, "connected", None)
-            self.ok = bool(self.tools) or bool(connected and connected(self.name))
+            self.reason = self._port_refusal()
+            if not self.reason:
+                self._bridge = self._make_bridge(self.home, self.name, self._open)
+                self.tools = list(self._bridge.start())
+                # A server that failed to connect is skipped by the bridge, so
+                # no tools and no session is how a failure looks from here.
+                connected = getattr(self._bridge, "connected", None)
+                self.ok = bool(self.tools) or bool(connected and connected(self.name))
         except Exception:   # noqa: BLE001  (the reason may quote a token, so it is dropped)
             self.tools, self.ok = None, False
         finally:
@@ -493,8 +515,9 @@ def signed_in(home: Path, spec: dict) -> bool:
     """Whether a sign-in has left a token for this `oauth` server."""
     from waku.tools.mcp_oauth import FileTokenStorage
 
-    storage = FileTokenStorage(Path(home), str(spec.get("name", "")), spec.get("url"))
-    return storage._path.exists() and storage.matches()
+    # The file alone is not a sign-in: it holds this client's registration
+    # before the person has opened the link.
+    return FileTokenStorage(Path(home), str(spec.get("name", "")), spec.get("url")).has_tokens()
 
 
 def needs_sign_in(home: Path, spec: dict) -> bool:
@@ -631,6 +654,8 @@ def connect(home: Path, target: str, sign_in: Callable | None = None,
         return f"{lead} {refused} Then: waku mcp login {name}"
     if flow.done.is_set() and flow.ok:
         return f"{lead} {connected_line(name, flow.tools or [], home)}"
+    if flow.done.is_set() and flow.reason:
+        return f"{lead} {flow.reason}"
     return f"{lead} {link_words(name, flow)}"
 
 

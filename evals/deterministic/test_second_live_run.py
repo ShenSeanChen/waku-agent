@@ -14,14 +14,16 @@ clock, and no network.
 from __future__ import annotations
 
 import json
+import socket
 from datetime import UTC, datetime
 
 import pytest
 
 from evals.helpers import ScriptedClient, make_waku, response, text_block, tool_block
 from waku.alwayson import approvals, events, outbox, runs, waiting
-from waku.alwayson.worker import AgentRun, Worker, render
+from waku.alwayson.worker import FAILED, AgentRun, Worker, render
 from waku.db import connect
+from waku.tools import connectors, mcp_oauth
 
 TUESDAY = datetime(2026, 11, 17, 17, 43, 0, tzinfo=UTC)
 OWNER = ("telegram", {"chat_id": 42})
@@ -343,3 +345,183 @@ def test_a_yes_to_a_call_that_waits_is_still_the_answer(home, conn):
 
     assert executed == [parked.id]
     assert all("Nothing is waiting" not in read for read in run.read)
+
+
+# ---- 6: a run that fails says so --------------------------------------------------
+
+def _raises(session_id, batch):
+    raise RuntimeError("port 41765 is in use — the sign-in redirect has nowhere to land")
+
+
+def test_a_run_that_fails_tells_the_person_in_one_plain_sentence(home, conn):
+    event_id = _message(conn, "Can we connect to Notion then")
+
+    assert _worker(conn, _raises).step() is True
+
+    assert _outbox(conn) == [(*OWNER, FAILED, "1:failed")]
+    assert "went wrong" in FAILED and "send it again" in FAILED
+    assert not any(word in FAILED for word in ("Traceback", "Error", "41765", "port"))
+    assert _runs(conn)[0]["status"] == "failed"
+    assert events.get(conn, event_id).status == "failed"
+
+
+def test_a_failed_run_after_an_approval_still_says_what_happened_to_the_call(home, conn):
+    """The live run: the owner approved "Connect Notion", the call ran and
+    answered with a sign-in link, and the run that would have said so raised."""
+    outcome = "Approved and done: Connect Notion. The tool answered: Open this link: https://x"
+    events.insert(conn, source="approval", external_id="approval:20", session_id=SESSION,
+                  payload={"text": outcome, "channel": OWNER[0], "reply_to": OWNER[1]})
+
+    _worker(conn, _raises).step()
+
+    ((channel, target, body, _),) = _outbox(conn)
+    assert (channel, target) == OWNER
+    assert body.startswith(outcome) and "went wrong" in body
+    assert "41765" not in body
+
+
+def test_a_failed_run_for_a_github_issue_posts_nothing_there_and_tells_the_owner(home, conn):
+    events.insert(conn, source="github", external_id="c1", session_id="github:acme/app#12",
+                  payload={"text": "@waku look at this", "sender": {"id": "ana"},
+                           "reply_to": {"repo": "acme/app", "number": 12}})
+
+    _worker(conn, _raises).step()
+
+    ((channel, target, body, _),) = _outbox(conn)
+    assert (channel, target) == OWNER, "a comment is under the owner's name"
+    assert "acme/app#12" in body and "went wrong" in body
+
+
+def test_an_approved_call_that_raises_does_not_stop_the_worker(home, conn):
+    event_id = _message(conn, "Connect Notion")
+    parked = runs.start(conn, SESSION, [event_id], now=TUESDAY)
+    with outbox.running(home, str(parked.id), OWNER):
+        approvals.Gate(home, conn, now=lambda: TUESDAY)("send_message", COMMENT)
+    events.mark(conn, [event_id], "done")
+    runs.finish(conn, parked.id, "parked", now=TUESDAY)
+    _message(conn, "yes", external_id="901")
+    run = Recorder()
+
+    def execute(run, address):
+        raise RuntimeError("secret-token-123 leaked in a traceback")
+
+    worker = Worker(conn, run, execute=execute, wait=lambda seconds: None,
+                    now=lambda: TUESDAY, log=lambda line: None)
+    while worker.step():
+        pass
+
+    assert runs.get(conn, parked.id).status == "failed"
+    (read,) = run.read
+    assert "Approved, and not posted" in read and "did not finish" in read
+    assert "secret-token-123" not in read
+
+
+# ---- 6: the sign-in's port ----------------------------------------------------------
+
+@pytest.fixture
+def busy_port():
+    """A port another program holds."""
+    held = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    held.bind(("127.0.0.1", 0))
+    held.listen(1)
+    yield held.getsockname()[1]
+    held.close()
+
+
+def _redirect(provider) -> str:
+    return str(provider.context.client_metadata.redirect_uris[0])
+
+
+def _register(home, name, port, url="https://mcp.notion.com/mcp"):
+    """The file a sign-in leaves once this client is registered with the
+    server and nobody has signed in yet: a registration, and no token."""
+    path = home / mcp_oauth.AUTH_DIR / f"{name}.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"url": url, "client_info": {
+        "client_id": "abc", "redirect_uris": [f"http://127.0.0.1:{port}/callback"]}}),
+        encoding="utf-8")
+    return path
+
+
+def test_the_sign_in_uses_its_usual_port_when_that_port_is_free(tmp_path, monkeypatch):
+    monkeypatch.setattr(mcp_oauth, "_port_is_free", lambda port: True)
+
+    provider = mcp_oauth.build_provider("https://mcp.notion.com/mcp", "notion", tmp_path)
+
+    assert _redirect(provider) == "http://127.0.0.1:41765/callback"
+
+
+def test_a_first_sign_in_moves_to_a_free_port_when_the_usual_one_is_busy(
+        tmp_path, monkeypatch, busy_port):
+    monkeypatch.setattr(mcp_oauth, "CALLBACK_PORT", busy_port)
+
+    provider = mcp_oauth.build_provider("https://mcp.notion.com/mcp", "notion", tmp_path)
+
+    port = int(_redirect(provider).split(":")[2].split("/")[0])
+    assert port != busy_port and mcp_oauth._port_is_free(port)
+    assert _redirect(provider) == f"http://127.0.0.1:{port}/callback"
+
+
+def test_a_registered_sign_in_keeps_its_port_and_says_why_when_it_is_busy(
+        tmp_path, busy_port):
+    """The server knows this client by the address it registered, so the port
+    cannot change. The refusal says so and holds no traceback."""
+    _register(tmp_path, "notion", busy_port)
+    storage = mcp_oauth.FileTokenStorage(tmp_path, "notion", "https://mcp.notion.com/mcp")
+
+    with pytest.raises(mcp_oauth.PortBusy) as refused:
+        mcp_oauth.check_port(storage)
+    provider = mcp_oauth.build_provider("https://mcp.notion.com/mcp", "notion", tmp_path)
+
+    assert _redirect(provider) == f"http://127.0.0.1:{busy_port}/callback", (
+        "a server that is signed in connects with its token and needs no port")
+    said = str(refused.value)
+    assert f"port {busy_port}" in said and "registered" in said
+    assert "cannot move to another port" in said and "Close" in said
+
+
+def test_a_registered_sign_in_uses_the_port_it_registered(tmp_path):
+    free = socket.socket()
+    free.bind(("127.0.0.1", 0))
+    port = free.getsockname()[1]
+    free.close()
+    _register(tmp_path, "notion", port)
+
+    provider = mcp_oauth.build_provider("https://mcp.notion.com/mcp", "notion", tmp_path)
+
+    assert _redirect(provider) == f"http://127.0.0.1:{port}/callback"
+
+
+def test_connecting_says_that_the_port_is_busy(home, busy_port):
+    """What the person reads in the chat: the reason, and no link that would
+    lead nowhere."""
+    connectors.forget_sign_ins()
+    connectors.add(home, "notion", url="https://mcp.notion.com/mcp", auth="oauth")
+    _register(home, "notion", busy_port)
+    started = []
+
+    said = connectors.connect(
+        home, "notion", sign_in=lambda h, name, **kw: connectors.SignIn(
+            h, name, bridge=lambda *a: started.append(a)).start(wait=5))
+
+    assert started == [], "no sign-in was started"
+    assert f"port {busy_port}" in said and "cannot move to another port" in said
+    assert "http" not in said.split("not signed in yet.")[1]
+
+
+def test_a_registration_without_a_token_is_not_a_sign_in(home):
+    """The live run: the file held the registration the moment the link was
+    made, the always-on agent took the server for signed in, and its own
+    connection asked for the busy port."""
+    connectors.add(home, "notion", url="https://mcp.notion.com/mcp", auth="oauth")
+    spec = connectors.find(home, "https://mcp.notion.com/mcp")
+    path = _register(home, "notion", 41765)
+
+    assert connectors.needs_sign_in(home, spec) is True
+    assert "notion" not in connectors.ready(home)
+
+    data = json.loads(path.read_text(encoding="utf-8"))
+    path.write_text(json.dumps({**data, "tokens": {"access_token": "t", "token_type": "Bearer"}}),
+                    encoding="utf-8")
+    assert connectors.needs_sign_in(home, spec) is False
+    assert "notion" in connectors.ready(home)
