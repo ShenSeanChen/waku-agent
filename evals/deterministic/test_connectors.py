@@ -273,6 +273,72 @@ def test_sign_in_that_fails_says_so_and_holds_no_link(tmp_path):
     assert flow.link is None and flow.ok is False and flow.tools is None
 
 
+def _owner_heard(home):
+    from waku.db import connect
+
+    conn = connect(home)
+    try:
+        return [row[0] for row in conn.execute("SELECT body FROM outbox ORDER BY id")]
+    finally:
+        conn.close()
+
+
+def test_the_link_says_how_long_it_works(tmp_path):
+    """The third live run: the link was opened thirteen hours later and the
+    reply had never said that it stops working."""
+    from waku.tools.mcp_oauth import SIGN_IN_TIMEOUT, sign_in_minutes
+
+    connectors.add(tmp_path, "linear", url=LINEAR)
+    flow = connectors.SignIn(tmp_path, "linear", bridge=FakeBridge).start(wait=5)
+
+    said = connectors.link_words("linear", flow)
+
+    assert SIGN_IN_TIMEOUT >= 900, "a link sent to a phone is opened at the computer later"
+    assert f"works for {sign_in_minutes()} minutes" in said and SIGN_IN_LINK in said
+
+
+def test_the_owner_hears_when_the_link_stops_working(tmp_path, monkeypatch):
+    """The third live run: the wait ran out and nothing was sent, so the
+    owner opened a dead link the next morning."""
+    from waku.tools.mcp_oauth import sign_in_minutes
+
+    monkeypatch.setenv("WAKU_OWNER", "telegram:42")
+    connectors.add(tmp_path, "linear", url=LINEAR)
+
+    class TimesOut(FakeBridge):
+        def start(self):
+            self.open_url(self.link)
+            raise RuntimeError("timed out waiting for the browser sign-in to come back")
+
+    flow = connectors.SignIn(tmp_path, "linear", bridge=TimesOut,
+                             on_done=lambda done: connectors.tell_owner(tmp_path, done))
+    flow.start(wait=5)
+    assert flow.wait(5) is True
+
+    heard = _owner_heard(tmp_path)
+    assert len(heard) == 1
+    assert "no longer works" in heard[0] and f"{sign_in_minutes()} minutes" in heard[0]
+    assert 'Say "connect linear"' in heard[0]
+    assert "http" not in heard[0] and "timed out" not in heard[0]
+
+
+def test_a_sign_in_that_never_had_a_link_sends_nothing_later(tmp_path, monkeypatch):
+    """The reply that started it already said why."""
+    monkeypatch.setenv("WAKU_OWNER", "telegram:42")
+    connectors.add(tmp_path, "linear", url=LINEAR)
+
+    class Broken(FakeBridge):
+        def start(self):
+            raise RuntimeError("could not reach the server")
+
+    flow = connectors.SignIn(tmp_path, "linear", bridge=Broken,
+                             on_done=lambda done: connectors.tell_owner(tmp_path, done))
+    flow.start(wait=5)
+    assert flow.wait(5) is True
+
+    assert _owner_heard(tmp_path) == []
+
+
 def test_sign_in_one_at_a_time_because_one_port_catches_the_redirect(tmp_path):
     connectors.add(tmp_path, "linear", url=LINEAR)
     connectors.add(tmp_path, "notion", url="https://mcp.notion.com/mcp")
