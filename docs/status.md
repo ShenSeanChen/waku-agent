@@ -29,8 +29,9 @@ GitHub issue it answers, retrying a failed delivery four times. `send_message`
 writes a row in the same table. `schedule_task` sets a one-time timer: the
 agent names a time and a note, and `waku serve` starts a run with that note in
 the same conversation within 30 seconds of that time. A tool call that writes
-to someone else waits for a yes: `send_message` to a GitHub issue or to
-another chat is stored, the owner in `WAKU_OWNER` is asked on Telegram, and
+to someone else waits for a yes, and so does a reply to a GitHub issue or a
+Slack channel and a tool from an MCP server that does not declare itself
+read-only: `send_message` to a GitHub issue or to another chat is stored, the owner in `WAKU_OWNER` is asked on Telegram, and
 the stored call runs when the owner answers "yes". The Slack and GitHub
 handlers, all three senders and the approval path have run against fake
 events, fake answers and a fake `gh` only, never against a live chat,
@@ -62,7 +63,6 @@ Nothing here is a surprise. If you hit one of these, the issue exists.
 | `waku serve` can deliver a chat reply twice when it dies after the channel accepted the reply and before the row is marked `sent` | — | — |
 | `waku serve` and the dashboard's Telegram cannot share one bot token: Telegram allows one poller, and the second one stays idle | — | — |
 | The owner can approve only in a private Telegram chat named in `WAKU_OWNER`. Without one, a call that needs a yes is refused. Slack cannot carry the answer, because `waku serve` hears no Slack direct message | — | — |
-| A tool from an MCP server runs under `waku serve` without a yes, whatever it writes, until `WAKU_APPROVE_ASK` names it | — | — |
 | A call that waits is not listed anywhere but the `runs` table; it cannot be cancelled, and it expires after 72 hours without telling anyone | — | — |
 | The model reads a call that waits for a yes as "A plugin hook stopped this call before it ran", followed by the real reason | — | — |
 | A timer `schedule_task` sets fires only while `waku serve` runs; `waku` and `waku dashboard` do not fire it, and the dashboard does not list it. A timer cannot repeat or be cancelled | — | — |

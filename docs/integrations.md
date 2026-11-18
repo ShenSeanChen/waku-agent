@@ -79,15 +79,27 @@ Two messages sent to one conversation within 3 seconds become one run.
 
 The reply goes back where the message came from: the Telegram chat, the Slack
 thread, or a comment on the GitHub issue through `gh issue comment`. Slack
-needs the bot scope `chat:write` for that. A reply that fails to send is tried
+needs the bot scope `chat:write` for that. A reply to a place other people
+read (a GitHub issue, a Slack channel, a Telegram group) waits for your yes
+first: you read the exact text on Telegram, and it is posted once you answer
+"yes". A reply to your own chat, or to a Telegram chat with one person, goes
+out at once. To let replies go out without a yes, put `reply:github` or
+`reply:slack` in `WAKU_APPROVE_ALLOW`.
+
+A new issue with the label `waku` is an event nobody sent to the agent. The
+run it starts may say nothing, and it posts nothing without your yes. Either
+way you read one line on your own channel: "New issue acme/app#12: 'Login
+fails on Safari'. I did nothing.", or "... I want to comment, see the request
+above." A reply that fails to send is tried
 again after 10 seconds, 1 minute, 10 minutes and 1 hour, and after the fifth
 failure `waku serve` gives up on it. Set `WAKU_OWNER` to where you are reached
 (`telegram:<chat id>`, `slack:<channel id>` or
 `github:<owner>/<repo>#<number>`) and it tells you there, on another channel
 than the one that failed.
 
-`send_message` uses the same path. A message to you (`WAKU_OWNER`), or back
-into the conversation it was asked in, is sent without a question.
+`send_message` uses the same path. A message to you (`WAKU_OWNER`) is sent
+without a question. So is a message back into the conversation it was asked
+in, when a reply there needs no yes.
 
 A message to anyone else waits for your yes. Ask "comment on acme/app#12 that
 Sean will review it this week", and nothing is posted. You read on Telegram:
@@ -103,8 +115,9 @@ hours. For this to work, `WAKU_OWNER` must name your private Telegram chat
 (`telegram:<chat id>`): that is where you are asked, and only a yes from that
 chat counts. One call waits per conversation. `WAKU_APPROVE_ASK` and
 `WAKU_APPROVE_ALLOW` take tool names, comma-separated, and make one tool
-always wait or never wait. A tool from an MCP server does not wait unless
-`WAKU_APPROVE_ASK` names it.
+always wait or never wait. A tool from an MCP server waits too, unless the
+server declares it read-only (`readOnlyHint`) or `WAKU_APPROVE_ALLOW` names
+it.
 
 `schedule_task` lets the agent set a follow-up. Ask "check issue 12 on Thursday
 at 09:00 and tell me if it is still open", and on Thursday at 09:00 `waku

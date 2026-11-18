@@ -153,9 +153,8 @@ issue the events came from.
   notice on another channel when `WAKU_OWNER` names one.
 - **A run may say nothing.** An empty reply, or the single word `SILENT`,
   writes no row. The prompt of a run that a timer started says so.
-- **`send_message` writes a row too.** A message to the owner, or to the
-  conversation the run came from, is queued at once. A message to anyone else
-  waits for the owner's yes.
+- **`send_message` writes a row too.** A message to the owner is queued at
+  once. A message to anyone else waits for the owner's yes.
 - **A chat delivery can happen twice** when the process dies after the
   channel accepted the message and before the row is marked `sent`. A GitHub
   comment cannot: each comment ends with a hidden marker that carries the
@@ -169,9 +168,20 @@ no.'
 
 - **Each tool has a mode, `allow` or `ask`.** A table in `approvals.py` names
   every built-in tool. `send_message` is `ask` unless the message goes to the
-  owner or back to the conversation the run came from. `WAKU_APPROVE_ASK` and
-  `WAKU_APPROVE_ALLOW` override one tool at a time. A tool from an MCP server
-  is `allow` until `WAKU_APPROVE_ASK` names it.
+  owner, or back to a conversation whose replies need no yes. `WAKU_APPROVE_ASK` and
+  `WAKU_APPROVE_ALLOW` override one tool at a time. A tool the table does
+  not know, which is a tool from an MCP server, is `ask`, unless the server
+  declares `readOnlyHint` for it.
+- **A reply other people read is a write.** The worker stores a run's reply
+  to a GitHub issue, a Slack channel or a group chat as a `send_message`
+  call, and the owner reads the exact text in the request. A reply to the
+  owner's chat or to a Telegram chat with one person is queued at once.
+  `reply:github` and `reply:slack` in `WAKU_APPROVE_ALLOW` skip the question
+  for one channel.
+- **An event nobody sent is said to the owner.** A new issue with the label
+  starts a run whose prompt says that `SILENT` is the right answer when there
+  is nothing to add. The owner gets one line on their own channel either
+  way.
 - **An `ask` call parks the run.** The loop's `before_tool` asks the approval
   gate before PreToolUse. The gate stores the tool name, the arguments and a
   SHA-256 hash of both in the run's row, writes one outbox row to the owner,
