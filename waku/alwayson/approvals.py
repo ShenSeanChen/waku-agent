@@ -235,8 +235,10 @@ def park(conn: sqlite3.Connection, run_id: int, tool: str, args: dict, now: date
     run's own reply, which the worker parks when other people would read it."""
     run = runs.get(conn, run_id)
     digest = call_hash(tool, args)
-    runs.expire(conn, now)
-    waiting = [r.pending_hash for r in runs.parked(conn, run.session_id) if r.id != run.id]
+    # A call that has waited 72 hours no longer counts. The worker marks it
+    # expired at its next step and says so.
+    waiting = [r.pending_hash for r in runs.parked(conn, run.session_id)
+               if r.id != run.id and not runs.overdue(r, now)]
     if run.pending_hash and run.pending_hash != digest:
         waiting.append(run.pending_hash)
     if waiting:
@@ -268,6 +270,13 @@ NOT_POSTED = "Approved, and not posted: {what} The reason: {output}"
 DECLINED = "Declined and discarded: {what} The owner answered no, so the call did not run."
 BROKEN = ("Approved, and not run: {what} The stored call no longer matches its hash, so it "
           "was discarded.")
+# What the owner reads 24 hours before a waiting call expires, and when it
+# does (spec 024, decision 8). Each is sent once.
+REMINDER = ("Still waiting for your answer on: {what}\n\nIt expires in 24 hours. "
+            "Approve? Reply yes or no. [{code}]")
+STOPPED = "I stopped waiting for your answer on: {what} Nothing was posted."
+EXPIRED = ("Expired and discarded: {what} The owner did not answer in 72 hours, so the "
+           "call did not run.")
 WHICH = "Several calls wait for your answer. Reply yes or no with the code of one:\n{calls}"
 
 
@@ -299,8 +308,8 @@ def is_approver(event, run: runs.Run) -> bool:
 
 def waiting_for(conn: sqlite3.Connection, event, now: datetime) -> list[runs.Run]:
     """The parked runs this event's sender may answer, oldest first."""
-    runs.expire(conn, now)
-    return [run for run in runs.parked(conn) if is_approver(event, run)]
+    return [run for run in runs.parked(conn)
+            if not runs.overdue(run, now) and is_approver(event, run)]
 
 
 def intact(run: runs.Run) -> bool:
@@ -322,6 +331,20 @@ def outcome(run: runs.Run, approved: bool, output: str = "") -> str:
         return (NOT_POSTED.format(what=what, output=output) if refused
                 else POSTED.format(what=what))
     return APPROVED.format(what=what, output=output)
+
+
+def asked_address(run: runs.Run) -> Address | None:
+    """Where the request for this run's call went."""
+    asked = (run.pending_call or {}).get("asked") or {}
+    channel, target = asked.get("channel"), asked.get("target")
+    return (channel, target) if channel in outbox.CHANNELS and isinstance(target, dict) else None
+
+
+def said(run: runs.Run, words: str) -> str:
+    """REMINDER, STOPPED or EXPIRED, filled in for one waiting call."""
+    call = run.pending_call or {}
+    return words.format(what=describe(call.get("tool", ""), call.get("args") or {}),
+                        code=run.pending_hash[:8])
 
 
 def which(waiting: list[runs.Run]) -> str:
