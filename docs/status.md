@@ -36,7 +36,7 @@ handlers, all three senders and the approval path have run against fake
 events, fake answers and a fake `gh` only, never against a live chat,
 workspace or repository.
 
-**3,715 deterministic evals pass offline**, with no API key; 60 more are live
+**3,920 deterministic evals pass offline**, with no API key; 60 more are live
 evals that skip without one. CI runs the offline tier on every PR along with
 ruff, the skills validator, and a check that `.env.example` still matches the
 integrations registry.
@@ -66,7 +66,8 @@ Nothing here is a surprise. If you hit one of these, the issue exists.
 | A call that waits is not listed anywhere but the `runs` table; it cannot be cancelled, and it expires after 72 hours without telling anyone | — | — |
 | The model reads a call that waits for a yes as "A plugin hook stopped this call before it ran", followed by the real reason | — | — |
 | A timer `schedule_task` sets fires only while `waku serve` runs, or in a hosted container; `waku` and `waku dashboard` on your own machine do not fire it, and the dashboard does not list it. A timer cannot repeat or be cancelled | — | — |
-| On hosted waku a stopped container is started for a timer, and nothing else wakes it yet: no chat, embed or Slack message is stored as an event (spec 026, groups B and C). A run a timer starts there sends nothing, because a hosted container has no sender. This path has run against a fake spawner and a fake clock only, never on the VM | — | — |
+| On hosted waku a stopped container is started for a timer or a Slack mention, and nothing else wakes it yet: no chat or embed message is stored as an event (spec 026, group B). A hosted container sends to Slack only, so a run a timer starts outside a Slack thread sends nothing. This path has run against a fake spawner, a fake clock and a fake Slack only, never on the VM | — | — |
+| The public Waku Slack app ("Add to Slack" on hosted waku) is built and has never run against Slack: the Slack app itself is not created, and `config/gateway.env` on the VM has none of its four values. One workspace maps to one tenant, and the hosted app has no channel allowlist | — | — |
 | Google Calendar sign-in has no bundled OAuth client, so `waku connect google` needs your own `~/.waku/credentials.json` | — | — |
 
 **Providers are the recurring theme.** Three of the items above are one
