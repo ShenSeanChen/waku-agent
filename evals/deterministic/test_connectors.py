@@ -339,6 +339,42 @@ def test_a_sign_in_that_never_had_a_link_sends_nothing_later(tmp_path, monkeypat
     assert _owner_heard(tmp_path) == []
 
 
+OLD_LINK = ("https://mcp.notion.com/authorize?response_type=code&client_id=abc"
+            "&redirect_uri=http%3A%2F%2F127.0.0.1%3A41765%2Fcallback&state=old")
+
+
+def test_a_reply_does_not_repeat_a_link_that_nothing_waits_for(tmp_path):
+    """The fourth live run: asked to connect Notion again, the model repeated
+    the link of the evening before without a call."""
+    reply = f"Here's the link again:\n\n{OLD_LINK}\n\nOnce you sign in, you're set."
+
+    said = connectors.without_dead_links(tmp_path, reply)
+
+    assert "http" not in said
+    assert connectors.DEAD_LINK in said and said.endswith(connectors.DEAD_LINK_NEXT)
+    assert "Once you sign in" in said, "the rest of the reply is kept"
+
+
+def test_a_reply_keeps_the_link_of_the_sign_in_that_waits(tmp_path):
+    connectors.add(tmp_path, "notion", url="https://mcp.notion.com/mcp")
+    live = OLD_LINK.replace("state=old", "state=new")
+    made = []
+    connectors.start_sign_in(
+        tmp_path, "notion", wait=5,
+        bridge=lambda *a: made.append(FakeBridge(*a, link=live)) or made[-1])
+
+    assert connectors.without_dead_links(tmp_path, f"Open this: {live}.") == f"Open this: {live}."
+    said = connectors.without_dead_links(tmp_path, f"Old: {OLD_LINK}\nNew: {live}")
+    assert OLD_LINK not in said and live in said
+    made[0].finish.set()
+
+
+def test_a_reply_with_an_ordinary_link_is_left_alone(tmp_path):
+    reply = "The docs are at https://developers.notion.com/docs/mcp and the weather is fine."
+
+    assert connectors.without_dead_links(tmp_path, reply) == reply
+
+
 def test_sign_in_one_at_a_time_because_one_port_catches_the_redirect(tmp_path):
     connectors.add(tmp_path, "linear", url=LINEAR)
     connectors.add(tmp_path, "notion", url="https://mcp.notion.com/mcp")

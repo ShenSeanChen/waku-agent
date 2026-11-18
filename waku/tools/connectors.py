@@ -653,6 +653,33 @@ def link_words(name: str, flow: SignIn | None) -> str:
     return f"Sign in on the computer Waku runs on: waku mcp login {name}"
 
 
+# A sign-in link sends the browser back to a port on this computer, and that
+# is how one is told from any other address in a reply.
+_SIGN_IN_LINK = re.compile(
+    r"https?://[^\s<>\"')\]]*redirect_uri=http(?:%3A%2F%2F|://)(?:127\.0\.0\.1|localhost)"
+    r"[^\s<>\"')\]]*", re.IGNORECASE)
+DEAD_LINK = "(a sign-in link that no longer works was here)"
+DEAD_LINK_NEXT = ("That link is an old one: nothing on this computer is waiting for it any "
+                  "more. Say \"connect <name>\" again and I will make a new one.")
+
+
+def without_dead_links(home: Path, reply: str) -> str:
+    """A reply with no sign-in link that nothing waits for. On 2026-11-18 the
+    owner asked to connect Notion a second time, and the model repeated the
+    link of the evening before from the conversation, without a call. The
+    browser came back to a closed port. The link of the sign-in that waits
+    now is left as it is."""
+    waiting = sign_in_waiting(home)
+    live = (waiting.link or "") if waiting is not None else ""
+    dead = [found for found in _SIGN_IN_LINK.findall(reply or "")
+            if not (live and live.startswith(found.rstrip(".,;:!?")))]
+    if not dead:
+        return reply
+    for found in dead:
+        reply = reply.replace(found, DEAD_LINK)
+    return f"{reply.rstrip()}\n\n{DEAD_LINK_NEXT}"
+
+
 def connect(home: Path, target: str, sign_in: Callable | None = None,
             on_done: Callable[[SignIn], None] | None = None) -> str:
     """Add the server a chat message or the card named and start its sign-in.
@@ -735,7 +762,9 @@ def make_tools(home: Path, sign_in: Callable = start_sign_in) -> list[Tool]:
                 "to connect a service. It takes a name on the starter list ("
                 + ", ".join(starter()) + ") or the server's https address, never a "
                 "command to run. The owner approves it first, and then signs in through "
-                "a link. With `writes`, it changes a connected server instead: 'allow' "
+                "a link. A sign-in link works once and for a few minutes, so never "
+                "repeat a link from earlier in the conversation: call this tool again "
+                "and it answers with the link that works now. With `writes`, it changes a connected server instead: 'allow' "
                 "when the user says to let it write without asking, 'ask' to take that "
                 "back."
             ),
