@@ -861,6 +861,69 @@ def test_public_reply_without_an_owner_to_ask_is_not_posted(home, conn, monkeypa
     assert any("WAKU_OWNER" in line for line in said)
 
 
+# ---- spec 024, decision 6: a tool the table does not know asks -------------
+
+def test_unknown_tool_asks_and_one_that_declares_read_only_is_allowed(home):
+    """Spec 024, acceptance 6. A tool from an MCP server ran without a yes."""
+    assert approvals.mode("notion_create_page", {"title": "x"}) == "ask"
+    assert approvals.mode("notion_search", {"query": "x"}, read_only=True) == "allow"
+
+
+def test_unknown_tool_parks_under_the_gate_and_a_read_only_one_runs(home, conn):
+    from waku.tools.registry import Tool, ToolRegistry
+
+    tools = ToolRegistry()
+    for name, read_only in (("notion_create_page", False), ("notion_search", True)):
+        tools.register(Tool(name=name, description="", input_schema={}, fn=lambda **kw: "ok",
+                            read_only=read_only))
+    clock = Clock()
+    event_id = _telegram(conn, "add a page")
+    run = runs.start(conn, "telegram:42", [event_id], now=clock())
+    gate = approvals.Gate(home, conn, now=clock, tools=tools)
+    with outbox.running(home, str(run.id), ("telegram", {"chat_id": 42})):
+        assert gate("notion_search", {"query": "roadmap"}) == (None, "")
+        deny, _ = gate("notion_create_page", {"title": "Roadmap"})
+
+    assert "waits for the owner's approval" in deny
+    assert runs.get(conn, run.id).pending_call["tool"] == "notion_create_page"
+    ((_, _, body, _),) = _outbox(conn)
+    assert 'Run notion_create_page with {"title": "Roadmap"}' in body
+
+
+def test_unknown_tool_the_owner_named_in_allow_runs(home, monkeypatch):
+    monkeypatch.setenv("WAKU_APPROVE_ALLOW", "notion_create_page")
+    assert approvals.mode("notion_create_page", {}) == "allow"
+    assert approvals.mode("notion_delete_page", {}) == "ask"
+
+
+def test_unknown_tool_read_only_does_not_outrank_the_owner_or_the_table(home, monkeypatch):
+    """A server's own word makes an unknown tool `allow`, and nothing more."""
+    monkeypatch.setenv("WAKU_APPROVE_ASK", "notion_search")
+    assert approvals.mode("notion_search", {}, read_only=True) == "ask"
+    assert approvals.mode("send_message", {"to": "telegram:77", "body": "hi"},
+                          read_only=True) == "ask"
+
+
+def test_unknown_tool_from_an_mcp_server_carries_its_read_only_hint():
+    from types import SimpleNamespace
+
+    from waku.tools import mcp_client
+
+    def listed(name, **annotations):
+        return SimpleNamespace(name=name, description="", inputSchema={"type": "object"},
+                               annotations=SimpleNamespace(**annotations) if annotations
+                               else None)
+
+    metas = [mcp_client.tool_meta(tool) for tool in (
+        listed("search", readOnlyHint=True), listed("create_page", readOnlyHint=False),
+        listed("delete_page"), listed("fetch", read_only_hint=True))]
+    tools = [mcp_client.as_tool("notion", meta, call=lambda *a: "ok") for meta in metas]
+
+    assert [(tool.name, tool.read_only) for tool in tools] == [
+        ("notion_search", True), ("notion_create_page", False),
+        ("notion_delete_page", False), ("notion_fetch", True)]
+
+
 # ---- the licence line ------------------------------------------------------
 
 def test_who_may_approve_is_the_one_place_that_decides(home, conn, monkeypatch):

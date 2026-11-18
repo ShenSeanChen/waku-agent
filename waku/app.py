@@ -104,7 +104,7 @@ class Waku:
         # call through.
         from waku.alwayson.approvals import Gate
 
-        self.approvals = Gate(self.settings.home, self.conn)
+        self.approvals = Gate(self.settings.home, self.conn, tools=self.tools)
         # Spec 022: with Waku Memory's remember tool on offer, one prompt line
         # keeps the model to save_note, which saves here and sends.
         # The name comes from the registry, so the line is only there while the

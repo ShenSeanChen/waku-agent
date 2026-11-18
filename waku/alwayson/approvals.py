@@ -94,11 +94,13 @@ MODES: dict[str, str | Callable[[dict, Address | None], str]] = {
 }
 
 
-def mode(tool: str, args: dict, address: Address | None = None) -> str:
+def mode(tool: str, args: dict, address: Address | None = None,
+         read_only: bool = False) -> str:
     """`allow` or `ask` for one call. WAKU_APPROVE_ASK and WAKU_APPROVE_ALLOW
     each name tools that skip the table, and `ask` wins when a tool is in
     both. A tool the table does not know, which is a tool from an MCP server,
-    is `allow` until WAKU_APPROVE_ASK names it."""
+    asks (spec 024, decision 6), unless the server declared it read-only
+    (`readOnlyHint`) or WAKU_APPROVE_ALLOW names it."""
     from waku.config import approval_overrides
 
     allow, ask = approval_overrides()
@@ -106,7 +108,7 @@ def mode(tool: str, args: dict, address: Address | None = None) -> str:
         return ASK
     if tool in allow:
         return ALLOW
-    rule = MODES.get(tool, ALLOW)
+    rule = MODES.get(tool, ALLOW if read_only else ASK)
     return rule(args if isinstance(args, dict) else {}, address) if callable(rule) else rule
 
 
@@ -193,17 +195,21 @@ class Gate:
     bring a parked call back."""
 
     def __init__(self, home: Path, conn: sqlite3.Connection,
-                 now: Callable[[], datetime] = outbox.utc_now, tz: tzinfo | None = None) -> None:
+                 now: Callable[[], datetime] = outbox.utc_now, tz: tzinfo | None = None,
+                 tools=None) -> None:
         # `tz` is for the evals: the zone a time in a request is said in.
         # None is the zone of this machine, which is the owner's.
         self.home, self.conn, self._now, self._tz = home, conn, now, tz
+        # The agent's tool registry, which knows what each tool declared.
+        self._tools = tools
 
     def __call__(self, tool: str, args: dict) -> tuple[str | None, str]:
         context = outbox.current_run(self.home)
         if context is None or not context.run_id.isdigit():
             return None, ""
         args = args if isinstance(args, dict) else {}
-        if mode(tool, args, context.address) == ALLOW:
+        known = self._tools.get(tool) if self._tools is not None else None
+        if mode(tool, args, context.address, getattr(known, "read_only", False)) == ALLOW:
             return None, ""
         return park(self.conn, int(context.run_id), tool, args, self._now(), self._tz), ""
 
