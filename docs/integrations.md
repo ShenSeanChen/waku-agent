@@ -93,7 +93,12 @@ A message to anyone else waits for your yes. Ask "comment on acme/app#12 that
 Sean will review it this week", and nothing is posted. You read on Telegram:
 'Comment on acme/app#12: "Sean will review this issue this week." Approve?
 Reply yes or no.' Answer "yes" and that exact comment is posted once. Answer
-"no" and it is discarded. Without an answer the request expires after 72
+"no" and it is discarded. The request is the only message you get about it.
+When someone else asked, in a Slack thread for example, that thread reads "I
+asked Sean to approve this. I will say here what Sean decides.", with the name
+from `WAKU_OWNER_NAME`. A request for a call you approved in the last 24 hours
+carries one more line, "The same call ran at 14:52 today.", and you still
+decide. Without an answer the request expires after 72
 hours. For this to work, `WAKU_OWNER` must name your private Telegram chat
 (`telegram:<chat id>`): that is where you are asked, and only a yes from that
 chat counts. One call waits per conversation. `WAKU_APPROVE_ASK` and

@@ -350,7 +350,7 @@ def test_once_the_telegram_sender_posts_to_the_chat():
     telegram.make("123:abc", post=post)(_message("telegram", {"chat_id": 42}, "hello Sean"))
 
     assert calls == [("https://api.telegram.org/bot123:abc/sendMessage",
-                      {"chat_id": 42, "text": "hello Sean"}, {})]
+                      {"chat_id": 42, "text": "hello Sean", "parse_mode": "HTML"}, {})]
 
 
 def test_once_the_telegram_sender_splits_a_long_message():

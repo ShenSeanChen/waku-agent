@@ -9,7 +9,8 @@ run for each batch (spec 023, decision 2).
   one run with all of them, through waku.respond()
   write the run's reply into the outbox, unless the run chose to say nothing
   close the run's row in `runs`: done, failed, or parked when it left a
-    call waiting for the owner's yes
+    call waiting for the owner's yes. A parked run's reply is not sent: the
+    request to the owner is the one message
   mark the rows done, or failed when the run raised
 
 One worker per home. Two workers on one state.db would each start a run for
@@ -76,6 +77,23 @@ class ServeLock:
         if self._file is not None:
             self._file.close()   # closing the file releases the lock
             self._file = None
+
+
+def serving(home: Path) -> bool:
+    """Whether a `waku serve` holds this home's lock right now. A tool asks,
+    so that it only tells a person a message or a timer waits when it does."""
+    lock = ServeLock(Path(home))
+    try:
+        handle = open(lock.path, "a+")  # noqa: SIM115  (closed below)
+    except OSError:
+        return False
+    try:
+        _lock(handle)
+    except OSError:
+        return True
+    finally:
+        handle.close()
+    return False
 
 
 def _lock(handle) -> None:
@@ -250,9 +268,12 @@ class Worker:
         else:
             if not isinstance(outcome, runs.Outcome):
                 outcome = runs.Outcome(outcome)
-            self._queue_reply(run.id, batch, outcome.reply)
-            runs.finish(self.conn, run.id, self._ended(run.id, "done"), outcome.turn_id,
-                        now=self._now())
+            status = self._ended(run.id, "done")
+            if status == "parked":
+                self._queue_asked(run.id, batch)
+            else:
+                self._queue_reply(run.id, batch, outcome.reply)
+            runs.finish(self.conn, run.id, status, outcome.turn_id, now=self._now())
             events.mark(self.conn, ids, "done")
         return True
 
@@ -295,12 +316,27 @@ class Worker:
         events.insert(self.conn, source=approvals.SOURCE, external_id=f"approval:{run.id}",
                       session_id=run.session_id, payload=payload,
                       received_at=outbox._stamp(self._now()))
-        runs.resolve(self.conn, run.id,
-                     "failed" if approved and not approvals.intact(run) else "done")
+        ran = approved and approvals.intact(run)
+        runs.resolve(self.conn, run.id, "failed" if approved and not ran else "done",
+                     approved=ran, now=self._now())
 
     def _ended(self, run_id: int, status: str) -> str:
         """`parked` when the run left a call waiting for the owner's yes."""
         return "parked" if runs.get(self.conn, run_id).pending_hash else status
+
+    def _queue_asked(self, run_id: int, batch: list[Event]) -> None:
+        """A parked run sends one message, the request (spec 024, decision 1).
+        Whatever the model replied is dropped. When the owner was asked
+        somewhere else, the conversation that asked reads one fixed line in
+        the reply's place, under the reply's key."""
+        address = reply_address(batch)
+        asked = (runs.get(self.conn, run_id).pending_call or {}).get("asked") or {}
+        if address is None or address == (asked.get("channel"), asked.get("target")):
+            return
+        channel, target = address
+        outbox.insert(self.conn, run_id=str(run_id), channel=channel, target=target,
+                      body=approvals.asked_line(), idempotency_key=f"{run_id}:0",
+                      now=self._now())
 
     def _queue_reply(self, run_id: int, batch: list[Event], reply: str | None) -> None:
         """The run's reply becomes one outbox row. Its key is `<run id>:0`."""

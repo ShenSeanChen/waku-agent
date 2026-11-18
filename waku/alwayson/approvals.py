@@ -4,7 +4,8 @@ Each tool has a mode. `allow` runs. `ask` does not run under `waku serve`:
 
   park     the call is stored in the run's row with a SHA-256 hash of its name
            and arguments, one outbox row asks the owner, and the run ends
-           `parked`. The model reads that the call waits.
+           `parked`. The model reads that the call waits, and the run sends
+           no reply of its own: the request is the one message.
   answer   the owner's answer arrives as an ordinary event. The worker reads
            it before it starts a run: `yes` runs the stored call exactly as
            stored, `no` discards it, anything else is an ordinary message.
@@ -25,7 +26,7 @@ import json
 import re
 import sqlite3
 from collections.abc import Callable
-from datetime import datetime
+from datetime import datetime, timedelta, tzinfo
 from pathlib import Path
 
 from waku.alwayson import outbox, runs
@@ -132,12 +133,30 @@ def can_answer(address: Address) -> bool:
     return channel == "telegram" and isinstance(chat_id, int) and chat_id > 0
 
 
+def asked_line() -> str:
+    """The line a conversation reads when its call waits for an owner who
+    answers somewhere else. WAKU_OWNER_NAME is how the owner is called."""
+    return ASKED.format(owner=outbox.owner_name() or "the owner")
+
+
 # ---- park ------------------------------------------------------------------
 
-REQUEST = "{what}\n\nApprove? Reply yes or no. [{code}]"
-WAITS = ("This call waits for the owner's approval and has not run. The owner was asked "
-         "on {where}. Do not make the call again: when the owner answers, this "
-         "conversation is told what happened.")
+REQUEST = "{what}\n\n{before}Approve? Reply yes or no. [{code}]"
+# One more line in a request for a call the owner approved in the last 24
+# hours (spec 024, decision 4). The owner still decides: the same request can
+# be meant twice, and it can be a mistake.
+RAN_BEFORE = "The same call ran at {time} {day}.\n\n"
+RAN_BEFORE_HOURS = 24
+# What the model reads in place of the tool's result. The request the owner
+# got is the one message this run sends (spec 024, decision 1), so the model
+# is told to say nothing, and it is given no address to quote.
+WAITS = ("This call waits for the owner's approval and has not run. The request is with "
+         "the owner, and it is the only message this needs. Do not make the call again, "
+         "and do not describe the request: reply with the single word SILENT. When the "
+         "owner answers, this conversation is told what happened.")
+# What a conversation other than the owner's chat reads when its run parked.
+# Code writes this line; the model's own reply is not sent.
+ASKED = "I asked {owner} to approve this. I will say here what {owner} decides."
 ALREADY_WAITS = ("Not run: another call in this conversation already waits for the owner's "
                  "approval [{code}]. One call waits at a time.")
 NOBODY = ("Not run: this call needs the owner's approval, and WAKU_OWNER names no chat "
@@ -151,8 +170,10 @@ class Gate:
     bring a parked call back."""
 
     def __init__(self, home: Path, conn: sqlite3.Connection,
-                 now: Callable[[], datetime] = outbox.utc_now) -> None:
-        self.home, self.conn, self._now = home, conn, now
+                 now: Callable[[], datetime] = outbox.utc_now, tz: tzinfo | None = None) -> None:
+        # `tz` is for the evals: the zone a time in a request is said in.
+        # None is the zone of this machine, which is the owner's.
+        self.home, self.conn, self._now, self._tz = home, conn, now, tz
 
     def __call__(self, tool: str, args: dict) -> tuple[str | None, str]:
         context = outbox.current_run(self.home)
@@ -161,10 +182,23 @@ class Gate:
         args = args if isinstance(args, dict) else {}
         if mode(tool, args, context.address) == ALLOW:
             return None, ""
-        return park(self.conn, int(context.run_id), tool, args, self._now()), ""
+        return park(self.conn, int(context.run_id), tool, args, self._now(), self._tz), ""
 
 
-def park(conn: sqlite3.Connection, run_id: int, tool: str, args: dict, now: datetime) -> str:
+def ran_before(conn: sqlite3.Connection, digest: str, now: datetime,
+               tz: tzinfo | None = None) -> str:
+    """The line that says when the same call last ran, or "" when it did not
+    run in the last 24 hours."""
+    at = runs.ran_at(conn, digest, now - timedelta(hours=RAN_BEFORE_HOURS))
+    if at is None:
+        return ""
+    at, today = at.astimezone(tz), now.astimezone(tz).date()
+    return RAN_BEFORE.format(time=f"{at:%H:%M}",
+                             day="today" if at.date() == today else "yesterday")
+
+
+def park(conn: sqlite3.Connection, run_id: int, tool: str, args: dict, now: datetime,
+         tz: tzinfo | None = None) -> str:
     """Store the call in its run's row and ask the owner. Returns what the
     model reads in place of the tool's result."""
     run = runs.get(conn, run_id)
@@ -183,9 +217,10 @@ def park(conn: sqlite3.Connection, run_id: int, tool: str, args: dict, now: date
                                     "asked": {"channel": channel, "target": target}}, digest)
     # One request per run: a replayed run asks with the same key.
     outbox.insert(conn, run_id=str(run.id), channel=channel, target=target,
-                  body=REQUEST.format(what=describe(tool, args), code=digest[:8]),
+                  body=REQUEST.format(what=describe(tool, args), code=digest[:8],
+                                      before=ran_before(conn, digest, now, tz)),
                   idempotency_key=f"{run.id}:ask", now=now)
-    return WAITS.format(where=outbox.format_address(channel, target))
+    return WAITS
 
 
 # ---- the answer ------------------------------------------------------------
@@ -193,6 +228,9 @@ def park(conn: sqlite3.Connection, run_id: int, tool: str, args: dict, now: date
 SOURCE = "approval"
 _ANSWER = re.compile(r"^(yes|approve|approved|no|deny|denied)(?:\s+\[?([0-9a-f]{8})\]?)?$")
 APPROVED = "Approved and done: {what} The tool answered: {output}"
+# A message is the one call whose result a person can be told in two words.
+POSTED = "Approved and posted: {what}"
+NOT_POSTED = "Approved, and not posted: {what} The reason: {output}"
 DECLINED = "Declined and discarded: {what} The owner answered no, so the call did not run."
 BROKEN = ("Approved, and not run: {what} The stored call no longer matches its hash, so it "
           "was discarded.")
@@ -245,6 +283,10 @@ def outcome(run: runs.Run, approved: bool, output: str = "") -> str:
         return DECLINED.format(what=what)
     if not intact(run):
         return BROKEN.format(what=what)
+    if call.get("tool") == "send_message":
+        refused = output.startswith(("Not sent", "Error"))
+        return (NOT_POSTED.format(what=what, output=output) if refused
+                else POSTED.format(what=what))
     return APPROVED.format(what=what, output=output)
 
 

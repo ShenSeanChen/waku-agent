@@ -72,6 +72,12 @@ def owner_addresses() -> list[tuple[str, dict]]:
     return [address for address in found if address]
 
 
+def owner_name() -> str:
+    """WAKU_OWNER_NAME: what other people read when the agent names the person
+    who runs it. Empty when it is not set."""
+    return os.getenv("WAKU_OWNER_NAME", "").strip()
+
+
 @dataclass(frozen=True)
 class Message:
     id: int

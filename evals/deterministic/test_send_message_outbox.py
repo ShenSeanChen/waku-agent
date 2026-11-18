@@ -46,7 +46,8 @@ def test_a_message_to_the_owner_is_one_pending_row_and_no_file(home):
         "chat", "telegram", {"chat_id": 42}, "The demo moved to Friday.", "pending")
     assert key.startswith("chat:")
     assert list((home / "outbox").iterdir()) == [], "the .txt path is gone"
-    assert "waku serve" in said and "telegram:42" in said
+    assert "not sent yet" in said and "always-on mode" in said
+    assert "waku serve" not in said and "telegram:42" not in said
     assert "Nothing was sent" not in said
 
 
@@ -119,7 +120,7 @@ def test_inside_a_run_the_keys_count_up_and_a_replay_adds_no_row(home):
 def test_the_description_says_the_message_is_sent():
     tool = messages.make_tool(None)
     assert "local outbox for the user to review" not in tool.description
-    assert "waku serve" in tool.description
+    assert "waku serve" not in tool.description and "outbox" not in tool.description
     assert set(tool.input_schema["required"]) == {"to", "body"}
 
 

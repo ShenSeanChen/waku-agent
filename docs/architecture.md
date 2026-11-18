@@ -176,6 +176,11 @@ no.'
   gate before PreToolUse. The gate stores the tool name, the arguments and a
   SHA-256 hash of both in the run's row, writes one outbox row to the owner,
   and the tool does not run. The run ends `parked`.
+- **A parked run sends one message, the request.** The worker writes no reply
+  row for it. When the run came from a conversation other than the owner's
+  chat, that conversation reads one line that code wrote: "I asked Sean to
+  approve this. I will say here what Sean decides." The name is
+  `WAKU_OWNER_NAME`, and without it the line says "the owner".
 - **The owner's answer is an event.** Before the worker starts a run it takes
   out a "yes" or "no" that came from the chat the request went to. Yes runs
   the stored call exactly as stored, without asking the model, and no
@@ -183,7 +188,7 @@ no.'
   model as an ordinary message.
 - **The conversation that parked hears the outcome.** The outcome is an event
   with `source = approval` in that session, so the next run there starts
-  with "Approved and done: ..." or "Declined and discarded: ...".
+  with "Approved and posted: ..." or "Declined and discarded: ...".
 - **One call waits per conversation**, and it expires after 72 hours.
 - **Only the owner approves.** `who_may_approve` in `approvals.py` is the one
   function that decides, and it answers with `WAKU_OWNER`. The yes counts in

@@ -224,7 +224,8 @@ def test_park_an_ask_call_stores_it_asks_the_owner_and_runs_nothing(home):
     assert json.loads(row["pending_call"])["tool"] == "send_message"
     assert json.loads(row["pending_call"])["args"] == COMMENT
     assert row["pending_hash"] == COMMENT_HASH
-    assert len(rows) == 1, "one row: the request. The run's SILENT reply writes none"
+    assert len(rows) == 2, "the request, and the fixed line in Ana's thread"
+    assert rows[1][:3] == ("slack", THREAD[1], approvals.asked_line())
     channel, target, body, key = rows[0]
     assert (channel, target) == ("telegram", {"chat_id": 42})
     assert key == f"{row['id']}:ask"
@@ -267,7 +268,7 @@ def test_park_only_happens_inside_a_run(home, conn):
 
     assert approvals.Gate(home, conn)("send_message", COMMENT) == (None, "")
     said = messages.make_tool(home).fn(**COMMENT)
-    assert "approval" in said and "waku serve" in said
+    assert "approval" in said and "cannot ask" in said
     assert _outbox(conn) == []
 
 
@@ -346,6 +347,159 @@ def test_park_the_worker_ends_the_run_as_parked(home, conn):
     assert [row["status"] for row in _run_rows(conn)] == ["parked"]
 
 
+# ---- spec 024, decision 1: a parked run sends one message ------------------
+
+OWNER_CHAT = 5441400551
+
+
+def _parked_run(home, monkeypatch, insert, reply):
+    """One run through waku.respond() whose model calls send_message for the
+    GitHub comment and then answers `reply`. Returns (outbox rows, what the
+    model read in place of the tool's result)."""
+    monkeypatch.setenv("WAKU_OWNER", f"telegram:{OWNER_CHAT}")
+    client = ScriptedClient([
+        response([text_block(GATE)]),
+        response([tool_block("send_message", COMMENT)], stop_reason="tool_use"),
+        response([text_block(reply)])])
+    seen = []
+    create = client.messages.create
+    client.messages.create = lambda **kw: (seen.append(list(kw["messages"])), create(**kw))[1]
+    run = AgentRun(lambda: make_waku(home, client=client, episodic_store="sqlite"),
+                   log=lambda line: None)
+    conn = connect(home)
+    try:
+        insert(conn)
+        _worker(conn, run, Clock()).step()
+        (row,) = _run_rows(conn)
+        assert row["status"] == "parked"
+        return _outbox(conn), json.dumps(seen[-1][-1]["content"], default=str)
+    finally:
+        run.close()
+        conn.close()
+
+
+def test_one_message_a_run_that_parks_in_the_owners_chat_sends_only_the_request(
+        home, monkeypatch):
+    """Spec 024, acceptance 1. The owner asked in his own chat. The model's
+    reply after the call parked is not sent, and nothing names the chat id."""
+    rows, told = _parked_run(
+        home, monkeypatch,
+        lambda conn: _telegram(conn, "comment on issue 12", sender=str(OWNER_CHAT),
+                               chat_id=OWNER_CHAT),
+        "Your comment is queued, but it needs the owner's approval first.")
+
+    (request,) = rows
+    channel, target, body, key = request
+    assert (channel, target) == ("telegram", {"chat_id": OWNER_CHAT})
+    assert key.endswith(":ask") and "Approve? Reply yes or no." in body
+    assert str(OWNER_CHAT) not in body
+    assert str(OWNER_CHAT) not in told, "the model is not given the owner's chat id"
+    assert "SILENT" in told
+
+
+def test_one_message_the_text_a_parked_call_returns_carries_no_address():
+    assert "{" not in approvals.WAITS
+    assert "SILENT" in approvals.WAITS
+    assert "telegram" not in approvals.WAITS.lower()
+
+
+def test_one_message_another_conversation_reads_one_fixed_line(home, monkeypatch):
+    """Ana asked in Slack and Sean approves on Telegram. Her thread gets one
+    line that code wrote, not the model's reply."""
+    monkeypatch.setenv("WAKU_OWNER_NAME", "Sean")
+    rows, _ = _parked_run(home, monkeypatch, _slack,
+                          "Queued. It will post once the outbox is processed.")
+
+    assert [(channel, key.rsplit(":", 1)[1]) for channel, _, _, key in rows] == [
+        ("telegram", "ask"), ("slack", "0")]
+    assert rows[1][1] == THREAD[1]
+    assert rows[1][2] == "I asked Sean to approve this. I will say here what Sean decides."
+
+
+def test_one_message_the_fixed_line_says_the_owner_without_a_name(home, monkeypatch):
+    monkeypatch.delenv("WAKU_OWNER_NAME", raising=False)
+    rows, _ = _parked_run(home, monkeypatch, _slack, "SILENT")
+
+    assert rows[1][2] == ("I asked the owner to approve this. I will say here what "
+                          "the owner decides.")
+
+
+# ---- spec 024, decision 4: the request says when the same call ran ---------
+
+def _ask_again(conn, home, clock, external_id, args=COMMENT):
+    """The same person asks for a call once more. Returns the request."""
+    event_id = _slack(conn, external_id=external_id)
+    run = runs.start(conn, "slack:C1:1700.0001", [event_id], now=clock())
+    with outbox.running(home, str(run.id), THREAD):
+        approvals.Gate(home, conn, now=clock, tz=UTC)("send_message", args)
+    events.mark(conn, [event_id], "done")
+    runs.finish(conn, run.id, "parked", now=clock())
+    return _outbox(conn)[-1][2]
+
+
+def test_ran_before_the_request_names_the_time_the_same_call_ran(home, conn):
+    """Spec 024, acceptance 4. Sean approved "hello from Waku" at 09:00 and
+    the same comment is asked for an hour later."""
+    clock, recorder = Clock(), Recorder()
+    first = _park(conn, home, clock)
+    assert "The same call ran" not in _outbox(conn)[0][2]
+    _telegram(conn, "yes")
+    _drain(_worker(conn, recorder, clock))
+    assert runs.get(conn, first).status == "done"
+
+    clock.advance(hours=1)
+    request = _ask_again(conn, home, clock, "Ev2")
+
+    assert request == ('Comment on acme/app#12: "Sean will review this issue this week."\n\n'
+                       "The same call ran at 09:00 today.\n\n"
+                       f"Approve? Reply yes or no. [{COMMENT_HASH[:8]}]")
+
+
+def test_ran_before_the_owner_still_decides_and_a_second_yes_posts_again(home, conn):
+    """The line informs. The key stays <run id>:<hash>, so a second yes is a
+    second call."""
+    clock, recorder = Clock(), Recorder()
+    _park(conn, home, clock)
+    _telegram(conn, "yes")
+    _drain(_worker(conn, recorder, clock))
+    clock.advance(hours=1)
+    _ask_again(conn, home, clock, "Ev2")
+
+    _telegram(conn, "yes", external_id="901")
+    _drain(_worker(conn, recorder, clock))
+
+    assert len(recorder.executed) == 2
+
+
+def test_ran_before_says_yesterday_for_a_call_that_ran_the_day_before(home, conn):
+    clock, recorder = Clock(), Recorder()
+    _park(conn, home, clock)
+    _telegram(conn, "yes")
+    _drain(_worker(conn, recorder, clock))
+
+    clock.advance(hours=23)
+    assert "The same call ran at 09:00 yesterday." in _ask_again(conn, home, clock, "Ev2")
+
+
+def test_ran_before_is_silent_about_a_declined_an_older_and_another_call(home, conn):
+    clock, recorder = Clock(), Recorder()
+    _park(conn, home, clock)
+    _telegram(conn, "no")
+    _drain(_worker(conn, recorder, clock))
+    clock.advance(hours=1)
+    assert "The same call ran" not in _ask_again(conn, home, clock, "Ev2"), "it was declined"
+
+    _telegram(conn, "yes", external_id="901")
+    _drain(_worker(conn, recorder, clock))
+    other = {**COMMENT, "body": "Another comment."}
+    assert "The same call ran" not in _ask_again(conn, home, clock, "Ev3", other), "another call"
+    _telegram(conn, "no", external_id="902")
+    _drain(_worker(conn, recorder, clock))
+
+    clock.advance(hours=24, minutes=1)
+    assert "The same call ran" not in _ask_again(conn, home, clock, "Ev4"), "over 24 hours ago"
+
+
 # ---- C4: resuming ----------------------------------------------------------
 
 def test_yes_from_the_owner_runs_only_the_stored_call(home):
@@ -394,7 +548,7 @@ def test_yes_from_the_owner_runs_only_the_stored_call(home):
     assert set(statuses) == {"done"}
     assert len(told) == 1, "Sean hears nothing more after his yes"
     first_line = seen[-1][-1]["content"].splitlines()[0]
-    assert first_line.startswith("[Approved and done: Comment on acme/app#12")
+    assert first_line.startswith("[Approved and posted: Comment on acme/app#12")
     assert client._script == [], "the model was called for two runs, not to approve"
 
 
@@ -410,7 +564,7 @@ def test_yes_executes_the_stored_arguments_and_starts_the_next_run(home, conn):
     assert runs.get(conn, run_id).status == "done"
     ((session, text),) = recorder.runs
     assert session == "slack:C1:1700.0001"
-    assert text.startswith("[Approved and done: Comment on acme/app#12")
+    assert text.startswith("[Approved and posted: Comment on acme/app#12")
 
 
 def test_yes_spelled_approve_counts(home, conn):

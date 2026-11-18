@@ -5,7 +5,8 @@ Thursday, comment on it that Sean will review it this week."
 
   Monday      the agent sets a timer and answers Ana in her thread
   Thursday    the timer wakes it; issue 12 is open; the comment needs Sean's
-              yes, so the agent asks Sean on Telegram and posts nothing
+              yes, so the agent asks Sean on Telegram, tells Ana's thread in
+              one fixed line that it asked, and posts nothing
   two hours   Sean answers "yes"; the stored comment is posted once, and the
   later       agent says nothing more
 
@@ -22,7 +23,7 @@ from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 from evals.helpers import ScriptedClient, make_waku, response, text_block, tool_block
-from waku.alwayson import timers
+from waku.alwayson import approvals, timers
 from waku.alwayson.dispatcher import Dispatcher
 from waku.alwayson.events import Inbox
 from waku.alwayson.senders import github as github_sender
@@ -143,7 +144,9 @@ def test_the_example_runs_from_mondays_message_to_thursdays_comment(tmp_path, mo
         # ---- Thursday 09:00: the timer wakes the agent
         clock.at = THURSDAY_9
         serve()
-        assert len(sent) == 2
+        assert len(sent) == 3
+        assert sent[2] == ("slack", {"channel": "C1", "thread_ts": "1700.0001"},
+                           approvals.asked_line()), "Ana reads that Sean was asked"
         channel, target, request = sent[1]
         assert (channel, target) == ("telegram", {"chat_id": 42})
         assert f'Comment on acme/app#12: "{COMMENT}"' in request
@@ -166,20 +169,20 @@ def test_the_example_runs_from_mondays_message_to_thursdays_comment(tmp_path, mo
         (posted,) = gh.comments
         assert posted[:6] == ["gh", "issue", "comment", "12", "--repo", "acme/app"]
         assert posted[6].startswith(f"--body={COMMENT}\n")
-        assert len(sent) == 2, "the agent says nothing more to Ana or to Sean"
+        assert len(sent) == 3, "the agent says nothing more to Ana or to Sean"
 
         # ---- later: every table is settled, and another pass sends nothing
         clock.at += timedelta(days=1)
         serve()
-        assert len(gh.comments) == 1 and len(sent) == 2
+        assert len(gh.comments) == 1 and len(sent) == 3
         assert client._script == [], "the model ran three times and was not asked to approve"
         assert {r["status"] for r in conn.execute("SELECT status FROM events")} == {"done"}
         assert {r["status"] for r in conn.execute("SELECT status FROM runs")} == {"done"}
         assert {r["status"] for r in conn.execute("SELECT status FROM timers")} == {"fired"}
         outgoing = [(r["channel"], r["status"]) for r in conn.execute(
             "SELECT channel, status FROM outbox ORDER BY id")]
-        assert outgoing == [("slack", "sent"), ("telegram", "sent"), ("github", "sent")], (
-            "the three outgoing messages, in order")
+        assert outgoing == [("slack", "sent"), ("telegram", "sent"), ("slack", "sent"),
+                            ("github", "sent")], "the four outgoing messages, in order"
     finally:
         run.close()
         conn.close()
