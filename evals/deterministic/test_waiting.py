@@ -212,3 +212,90 @@ def test_cancel_frees_the_conversation_for_another_call(home, conn):
     assert "already waits" not in deny
     assert json.loads(conn.execute("SELECT pending_call FROM runs WHERE id = ?",
                                    (run.id,)).fetchone()[0])["tool"] == "send_message"
+
+
+# ---- C2: `waku waiting` -----------------------------------------------------
+
+def _cli(home, monkeypatch, capsys, *argv):
+    """Run `waku waiting ...` through the real entry point. Returns (exit
+    code, what it printed)."""
+    import sys
+
+    import waku.__main__ as entry
+
+    monkeypatch.setenv("WAKU_HOME", str(home))
+    monkeypatch.setattr(waiting, "LOCAL", UTC)   # the zone the times are printed in
+    monkeypatch.setattr(sys, "argv", ["waku", "waiting", *argv])
+    with pytest.raises(SystemExit) as done:
+        entry.main()
+    return done.value.code, capsys.readouterr().out
+
+
+def test_cli_lists_one_timer_one_waiting_call_and_one_queued_message(
+        home, conn, monkeypatch, capsys):
+    """Acceptance 7."""
+    timer_id, run_id, message_id = _three(conn, home)
+
+    code, out = _cli(home, monkeypatch, capsys)
+
+    assert code == 0
+    lines = out.splitlines()
+    assert "Timers that have not fired" in lines
+    assert "Calls that wait for your yes" in lines
+    assert "Messages that are queued or could not be sent" in lines
+    (timer,) = [line for line in lines if line.strip().startswith(f"t{timer_id} ")]
+    assert "Thursday 19 November 09:00" in timer and "Check whether issue 12" in timer
+    (call,) = [line for line in lines if line.strip().startswith(f"r{run_id} ")]
+    assert 'Comment on acme/app#12: "Sean will review this issue this week."' in call
+    (message,) = [line for line in lines if line.strip().startswith(f"m{message_id} ")]
+    assert "queued" in message and "telegram:42" in message and "The demo moved" in message
+    assert "waku waiting cancel <id>" in out
+
+
+def test_cli_says_so_when_nothing_waits(home, conn, monkeypatch, capsys):
+    code, out = _cli(home, monkeypatch, capsys)
+    assert (code, out.strip()) == (0, "Nothing waits.")
+
+
+def test_cli_cancel_on_each_leaves_nothing_to_fire_run_or_send(
+        home, conn, monkeypatch, capsys):
+    """Acceptance 7."""
+    timer_id, run_id, message_id = _three(conn, home)
+
+    for item_id in (f"t{timer_id}", f"r{run_id}", f"m{message_id}"):
+        code, out = _cli(home, monkeypatch, capsys, "cancel", item_id)
+        assert code == 0 and out.startswith(f"Cancelled {item_id}: ")
+
+    assert len(waiting.listing(conn)) == 0
+    assert timers.due(conn, THURSDAY_9) == []
+    assert runs.parked(conn) == []
+    assert outbox.due(conn, THURSDAY_9) == []
+    assert _cli(home, monkeypatch, capsys)[1].strip() == "Nothing waits."
+
+
+def test_cli_cancel_of_an_unknown_id_fails_and_changes_nothing(
+        home, conn, monkeypatch, capsys):
+    _three(conn, home)
+
+    code, out = _cli(home, monkeypatch, capsys, "cancel", "t999")
+    assert code == 1 and "'t999' is not waiting" in out
+    code, out = _cli(home, monkeypatch, capsys, "cancel")
+    assert code == 1 and "waku waiting cancel <id>" in out
+    assert len(waiting.listing(conn)) == 3
+
+
+def test_cli_is_in_the_help(monkeypatch, capsys):
+    import sys
+
+    import waku.__main__ as entry
+
+    monkeypatch.setattr(sys, "argv", ["waku", "no-such-command"])
+    with pytest.raises(SystemExit):
+        entry.main()
+    assert "waku waiting" in capsys.readouterr().out
+
+
+def test_cli_prints_no_emoji(home, conn, monkeypatch, capsys):
+    _three(conn, home)
+    _, out = _cli(home, monkeypatch, capsys)
+    assert out.isascii()

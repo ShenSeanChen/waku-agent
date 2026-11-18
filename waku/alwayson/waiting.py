@@ -21,10 +21,13 @@ from __future__ import annotations
 import re
 import sqlite3
 from dataclasses import dataclass, field
+from datetime import datetime, tzinfo
 
 from waku.alwayson import approvals, outbox, runs, timers
 
 CANCELLED = "cancelled"
+# The zone `waku waiting` prints times in. None is the zone of this machine.
+LOCAL: tzinfo | None = None
 _ID = re.compile(r"^([trm])([1-9]\d*)$")
 _MAX_WORDS_CHARS = 300
 
@@ -103,3 +106,65 @@ def cancel(conn: sqlite3.Connection, item_id: str) -> Item:
     if not cursor.rowcount:
         raise NotWaiting(f"'{item_id}' is not waiting any more.")
     return item
+
+
+# ---- `waku waiting` ---------------------------------------------------------
+
+USAGE = """\
+waku waiting               list the timers, calls and messages that wait
+waku waiting cancel <id>   cancel one: t3 is a timer, r7 a waiting call, m12 a message"""
+NOTHING = "Nothing waits."
+
+
+def spoken(stamp: str, tz: tzinfo | None = None) -> str:
+    """A stored UTC time as a person reads it: "Thursday 19 November 09:00"."""
+    try:
+        moment = datetime.fromisoformat(stamp).astimezone(tz)
+    except ValueError:
+        return stamp
+    return f"{moment:%A} {moment.day} {moment:%B %H:%M}"
+
+
+def render(found: Waiting, tz: tzinfo | None = None) -> str:
+    """What `waku waiting` prints."""
+    if not len(found):
+        return NOTHING
+    lines: list[str] = []
+
+    def section(title: str, rows: list[str]) -> None:
+        if rows:
+            lines.extend([title, *rows, ""])
+
+    section("Timers that have not fired",
+            [f"  {i.id:<5} {spoken(i.when, tz)}   {i.what}" for i in found.timers])
+    section("Calls that wait for your yes",
+            [f"  {i.id:<5} asked {spoken(i.when, tz)}   {i.what}" for i in found.calls])
+    section("Messages that are queued or could not be sent",
+            [f"  {i.id:<5} {i.status}   to {i.where}   {i.what}" for i in found.messages])
+    lines.append("Cancel one with: waku waiting cancel <id>")
+    return "\n".join(lines)
+
+
+def main(argv: list[str]) -> int:
+    from waku.config import load_settings
+    from waku.db import connect
+
+    if argv and (argv[0] != "cancel" or len(argv) != 2):
+        print(USAGE)
+        return 1
+    settings = load_settings()
+    settings.ensure_home()
+    conn = connect(settings.home)
+    try:
+        if not argv:
+            print(render(listing(conn), LOCAL))
+            return 0
+        try:
+            item = cancel(conn, argv[1])
+        except NotWaiting as exc:
+            print(exc)
+            return 1
+        print(f"Cancelled {item.id}: {item.what}")
+        return 0
+    finally:
+        conn.close()
