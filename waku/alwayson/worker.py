@@ -156,10 +156,34 @@ timer. If there is nothing worth sending, reply with the single word SILENT \
 and nothing is sent.]"""
 
 
+# What a run reads when an event started it and no person asked for anything,
+# for example a new issue with the label. The last sentence says what happens
+# to a reply: it goes out, or the owner reads it first.
+UNPROMPTED_PROMPT = """\
+{text}
+
+[Nobody asked you for anything: this arrived by itself. If you have nothing \
+useful to add, reply with the single word SILENT. That is the right answer \
+most of the time, and then nothing is posted. {reply}]"""
+UNPROMPTED_ASKS = ("If you do reply, the owner reads it first and decides whether it "
+                   "is posted.")
+UNPROMPTED_POSTS = "If you do reply, your reply is posted where this came from."
+# The one line the owner gets about such an event, after the words the source
+# gave it: "New issue acme/app#12: 'Login fails on Safari'. I did nothing."
+DID_NOTHING = "I did nothing."
+WANTS_TO_COMMENT = "I want to comment, see the request above."
+COMMENTED = "I commented."
+
+
 def _text(event: Event) -> str:
     text = event.payload.get("text", "")
     if event.source == approvals.SOURCE:
         return APPROVAL_PROMPT.format(outcome=text)
+    if event.payload.get("unprompted"):
+        address = reply_address([event])
+        free = address is not None and approvals.reply_is_free(address)
+        return UNPROMPTED_PROMPT.format(
+            text=text, reply=UNPROMPTED_POSTS if free else UNPROMPTED_ASKS)
     if event.source != "timer":
         return text
     return TIMER_PROMPT.format(set_at=event.payload.get("set_at", "an earlier day"), note=text)
@@ -276,6 +300,7 @@ class Worker:
             else:
                 self._queue_reply(run.id, batch, outcome.reply)
                 status = self._ended(run.id, "done")   # the reply itself may wait
+            self._tell_owner(run.id, batch, status)
             runs.finish(self.conn, run.id, status, outcome.turn_id, now=self._now())
             events.mark(self.conn, ids, "done")
         return True
@@ -329,6 +354,23 @@ class Worker:
     def _ended(self, run_id: int, status: str) -> str:
         """`parked` when the run left a call waiting for the owner's yes."""
         return "parked" if runs.get(self.conn, run_id).pending_hash else status
+
+    def _tell_owner(self, run_id: int, batch: list[Event], status: str) -> None:
+        """One line to the owner for an event no person sent (spec 024,
+        decision 5): what arrived, and what the agent did about it. It goes
+        to the owner's own address, never to the place the event came from."""
+        arrived = [e.payload["unprompted"] for e in batch if e.payload.get("unprompted")]
+        address = reply_address(batch)
+        owner = next((a for a in outbox.owner_addresses() if a != address), None)
+        if not arrived or owner is None:
+            return
+        replied = self.conn.execute("SELECT 1 FROM outbox WHERE idempotency_key = ?",
+                                    (f"{run_id}:0",)).fetchone()
+        did = (WANTS_TO_COMMENT if status == "parked" else COMMENTED if replied
+               else DID_NOTHING)
+        outbox.insert(self.conn, run_id=str(run_id), channel=owner[0], target=owner[1],
+                      body="\n".join(f"{what}. {did}" for what in arrived),
+                      idempotency_key=f"{run_id}:note", now=self._now())
 
     def _queue_asked(self, run_id: int, batch: list[Event]) -> None:
         """A parked run sends one message, the request (spec 024, decision 1).
