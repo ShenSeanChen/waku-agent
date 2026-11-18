@@ -36,7 +36,7 @@ handlers, all three senders and the approval path have run against fake
 events, fake answers and a fake `gh` only, never against a live chat,
 workspace or repository.
 
-**3,920 deterministic evals pass offline**, with no API key; 60 more are live
+**3,932 deterministic evals pass offline**, with no API key; 60 more are live
 evals that skip without one. CI runs the offline tier on every PR along with
 ruff, the skills validator, and a check that `.env.example` still matches the
 integrations registry.
