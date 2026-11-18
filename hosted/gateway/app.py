@@ -39,7 +39,7 @@ from aiohttp import web
 
 from hosted import log
 from hosted.core import policy, quota
-from hosted.gateway import answers, embed, guards, sessions
+from hosted.gateway import answers, embed, guards, sessions, slack
 from hosted.gateway.config import GatewayConfig
 from hosted.gateway.identity import NotSignedIn
 from hosted.gateway.launch import (
@@ -242,8 +242,12 @@ class Gateway:
                  turns: quota.TurnWindow | None = None,
                  plans: dict[str, quota.Plan] | None = None,
                  memory_keys: MemoryKeys | None = None,
+                 slack: slack.SlackRoutes | None = None,
                  now: Callable[[], float] = time.time) -> None:
         self._config = config
+        # Spec 026 C: None when config/gateway.env lacks one of the four Slack
+        # values. Every Slack route then answers 503 with config.slack_problem.
+        self._slack = slack
         self._memory_keys = memory_keys
         # tenant id -> when its Waku Memory key was last minted or checked (A7).
         self._key_checked: dict[str, float] = {}
@@ -402,9 +406,42 @@ class Gateway:
             return await self._sign_in(request)
         if request.method == "POST" and path == "/auth/logout":
             return self._sign_out(request)
+        if request.method == "GET" and path == slack.INSTALL_PATH:
+            return self._slack_install(request)
+        if request.method == "GET" and path == slack.CALLBACK_PATH:
+            return await self._slack_callback(request)
         if request.method == "GET" and path == "/":
             return answers.redirect("/login")
         return answers.refusal(request, 404, answers.NOT_FOUND)
+
+    # --- "Add to Slack" (spec 026 C1) -----------------------------------
+
+    def _apex_tenant(self, request: web.Request) -> Tenant | None:
+        """The active tenant this browser's apex session names, or None."""
+        value = request.cookies.get(sessions.APEX_COOKIE, "")
+        tenant_id = self._resolve(sessions.apex_key(value)) if value else None
+        tenant = self._store.tenant_by_id(tenant_id) if tenant_id else None
+        return tenant if tenant is not None and tenant.status == "active" else None
+
+    def _slack_install(self, request: web.Request) -> web.Response:
+        """GET /slack/install: the "Add to Slack" link. A GET, because it is a
+        link a person follows; it changes nothing but the state it issues, and
+        Slack's own page asks the person before anything is installed."""
+        if self._slack is None:
+            return slack.not_configured(self._config.slack_problem)
+        tenant = self._apex_tenant(request)
+        if tenant is None:
+            return answers.redirect(f"https://{self._config.apex_host}/login")
+        return self._slack.start(tenant.id)
+
+    async def _slack_callback(self, request: web.Request) -> web.Response:
+        """GET /slack/oauth/callback: Slack sends the browser back here. The
+        session cookie is SameSite=Lax, so it rides this top-level navigation
+        from slack.com, and the callback checks it against the state."""
+        if self._slack is None:
+            return slack.not_configured(self._config.slack_problem)
+        tenant = self._apex_tenant(request)
+        return await self._slack.callback(request, tenant.id if tenant else None)
 
     def _login_page(self) -> web.Response:
         """The sign-in page, with its own strict policy and Clear-Site-Data.

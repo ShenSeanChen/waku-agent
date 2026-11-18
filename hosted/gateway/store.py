@@ -1,13 +1,17 @@
 """control.db -- tenants, sessions, proxy tokens, and each tenant's waiting
-events and next wakeup (spec 026). The gateway's alone.
+events and next wakeup, and the Slack workspace each tenant connected (spec
+026). The gateway's alone.
 
 On the VM, control/ is owned by UID 10002 with mode 0700, so the one-writer
 rule is enforced by file ownership rather than by convention. The proxy never
 opens this file: it asks over run/gateway/gateway.sock (internal.py) and gets
 back a tenant id and a status, and nothing else.
 
-Neither a cookie value nor a token plaintext is stored. A stolen copy of this
-file is a list of hashes, not a set of live credentials.
+Neither a cookie value nor a proxy token's plaintext is stored: those are
+hashes. Two credentials are stored. A tenant's Waku Memory key is in
+plaintext (set_memory_key says why). A workspace's Slack bot token is sealed
+with a key that is not in this file (hosted/gateway/secretbox.py), so a copy
+of this file cannot post to anybody's Slack.
 """
 
 from __future__ import annotations
@@ -28,7 +32,7 @@ from hosted.core.tenant import (
     normalise_timezone,
     token_hash,
 )
-from hosted.ports.control import Tenant, TenantEvent
+from hosted.ports.control import SlackInstall, Tenant, TenantEvent
 
 SESSION_TTL_SECONDS = 30 * 24 * 3600
 
@@ -103,6 +107,17 @@ CREATE TABLE IF NOT EXISTS tenant_wakeups (
   tenant_id   TEXT PRIMARY KEY,
   due_at      REAL NOT NULL,
   updated_at  REAL NOT NULL
+);
+-- Spec 026 C1: the workspace the public Waku Slack app was added to, and
+-- whose tenant it wakes. One workspace has one tenant and one tenant has one
+-- workspace. token_sealed is the bot token encrypted by SecretBox.
+CREATE TABLE IF NOT EXISTS slack_install (
+  team_id       TEXT PRIMARY KEY,
+  tenant_id     TEXT NOT NULL UNIQUE,
+  team_name     TEXT NOT NULL,
+  bot_user_id   TEXT NOT NULL,
+  token_sealed  BLOB NOT NULL,
+  installed_at  REAL NOT NULL
 );
 """
 
@@ -448,6 +463,52 @@ class ControlDb:
                 "ORDER BY due_at, tenant_id", (now,)).fetchall()
         return [row[0] for row in rows]
 
+    def set_slack_install(self, tenant_id: str, *, team_id: str, team_name: str,
+                          bot_user_id: str, token_sealed: bytes) -> bool:
+        """Record that this tenant added the Slack app to this workspace.
+
+        False, and nothing changes, when the workspace already belongs to
+        another tenant: the first tenant keeps it, so a second member of the
+        workspace cannot move its mentions to their own agent. A tenant has
+        one workspace, so its earlier row, for this workspace or another, is
+        replaced in the same transaction."""
+        self._require_tenant_id(tenant_id)
+        with self._lock:
+            owner = self._conn.execute(
+                "SELECT tenant_id FROM slack_install WHERE team_id = ?",
+                (team_id,)).fetchone()
+            if owner is not None and owner[0] != tenant_id:
+                return False
+            self._conn.execute("DELETE FROM slack_install WHERE tenant_id = ?",
+                               (tenant_id,))
+            self._conn.execute(
+                "INSERT INTO slack_install (team_id, tenant_id, team_name, bot_user_id, "
+                "token_sealed, installed_at) VALUES (?, ?, ?, ?, ?, ?)",
+                (team_id, tenant_id, team_name, bot_user_id, token_sealed, self._now()))
+            self._conn.commit()
+            return True
+
+    def slack_tenant(self, team_id: str) -> str | None:
+        """The tenant a workspace's mentions go to, or None."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT tenant_id FROM slack_install WHERE team_id = ?",
+                (team_id,)).fetchone()
+        return row[0] if row else None
+
+    def slack_install(self, tenant_id: str) -> SlackInstall | None:
+        """The workspace this tenant connected, or None."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT team_id, tenant_id, team_name, bot_user_id, token_sealed "
+                "FROM slack_install WHERE tenant_id = ?", (tenant_id,)).fetchone()
+        return SlackInstall(row[0], row[1], row[2], row[3], bytes(row[4])) if row else None
+
+    def delete_slack_install(self, team_id: str) -> None:
+        with self._lock:
+            self._conn.execute("DELETE FROM slack_install WHERE team_id = ?", (team_id,))
+            self._conn.commit()
+
     def delete_tenant(self, tenant_id: str) -> None:
         """The row goes; the archive keeps the files for 30 days.
 
@@ -467,5 +528,6 @@ class ControlDb:
             self._conn.execute("DELETE FROM memory_key WHERE tenant_id = ?", (tenant_id,))
             self._conn.execute("DELETE FROM tenant_events WHERE tenant_id = ?", (tenant_id,))
             self._conn.execute("DELETE FROM tenant_wakeups WHERE tenant_id = ?", (tenant_id,))
+            self._conn.execute("DELETE FROM slack_install WHERE tenant_id = ?", (tenant_id,))
             self._conn.execute("DELETE FROM tenant WHERE id = ?", (tenant_id,))
             self._conn.commit()

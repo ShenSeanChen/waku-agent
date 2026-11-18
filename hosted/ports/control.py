@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Protocol
 
 
@@ -32,6 +32,18 @@ class TenantEvent:
     received_at: float
 
 
+@dataclass(frozen=True)
+class SlackInstall:
+    """One workspace the public Waku Slack app was added to (spec 026 C1).
+    `token_sealed` is the bot token as SecretBox sealed it: the store never
+    sees the token itself."""
+    team_id: str
+    tenant_id: str
+    team_name: str
+    bot_user_id: str
+    token_sealed: bytes = field(repr=False)
+
+
 class ControlStore(Protocol):
     def create_tenant(self, *, sub: str, email: str, timezone: str) -> Tenant: ...
     def tenant_by_sub(self, sub: str) -> Tenant | None: ...
@@ -58,4 +70,9 @@ class ControlStore(Protocol):
     def clear_wakeup(self, tenant_id: str) -> None: ...
     def wakeup(self, tenant_id: str) -> float | None: ...
     def due_wakeups(self, now: float) -> list[str]: ...
+    def set_slack_install(self, tenant_id: str, *, team_id: str, team_name: str,
+                          bot_user_id: str, token_sealed: bytes) -> bool: ...
+    def slack_tenant(self, team_id: str) -> str | None: ...
+    def slack_install(self, tenant_id: str) -> SlackInstall | None: ...
+    def delete_slack_install(self, team_id: str) -> None: ...
     def delete_tenant(self, tenant_id: str) -> None: ...
