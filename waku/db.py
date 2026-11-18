@@ -140,6 +140,15 @@ CREATE TABLE IF NOT EXISTS runs (
     turn_id TEXT NOT NULL DEFAULT ''         -- spec 011: joins the receipt and the trace
 );
 CREATE INDEX IF NOT EXISTS runs_session ON runs(session_id, status);
+
+-- Approval rules the owner stored (spec 025). One row lets every tool of one
+-- connector run without a question: `linear_*` for the server named linear.
+-- waku/alwayson/approvals.py reads it after WAKU_APPROVE_ASK and _ALLOW.
+CREATE TABLE IF NOT EXISTS approvals (
+    pattern TEXT PRIMARY KEY,      -- `<server>_*`
+    mode TEXT NOT NULL,            -- 'allow'
+    created_at TEXT NOT NULL       -- UTC, ISO 8601
+);
 """
 
 

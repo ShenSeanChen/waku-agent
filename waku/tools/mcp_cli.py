@@ -263,7 +263,7 @@ def _add(home: Path, args: list[str]) -> int:
     if not flow.wait(SIGN_IN_TIMEOUT + 60.0) or not flow.ok:
         print(f"'{added.name}' is added and not signed in yet. {added.next}")
         return 0
-    print(connectors.connected_line(added.name, flow.tools or []))
+    print(connectors.connected_line(added.name, flow.tools or [], home))
     print("Restart Waku to load its tools.")
     return 0
 

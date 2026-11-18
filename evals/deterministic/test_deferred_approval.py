@@ -926,6 +926,319 @@ def test_unknown_tool_from_an_mcp_server_carries_its_read_only_hint():
         ("notion_delete_page", False), ("notion_fetch", True)]
 
 
+# ---- spec 025, decision 4: reads run, writes ask, per connector --------------
+
+LINEAR_URL = "https://mcp.linear.app/mcp"
+
+
+def _connected(home, *servers):
+    """mcp.json with these servers, and a registry holding each one's tools
+    as the bridge would list them. A server is (name, address, tools), and a
+    tool is (its name on the server, whether the server marks it read-only)."""
+    from waku.tools import mcp_client
+    from waku.tools.registry import ToolRegistry
+
+    (home / "mcp.json").write_text(json.dumps({"servers": [
+        {"name": name, "url": url, "oauth": True} for name, url, _ in servers]}),
+        encoding="utf-8")
+    tools = ToolRegistry()
+    for name, _, listed in servers:
+        for tool, read_only in listed:
+            tools.register(mcp_client.as_tool(
+                name, {"name": tool, "description": "", "readOnly": read_only},
+                call=lambda *a: "ok"))
+    return tools
+
+
+def _gate_says(home, conn, tools, tool, args=None):
+    """What the gate answers for one call in a run in the owner's own chat:
+    None when the call runs, the text the model reads when it parks."""
+    clock = Clock()
+    count = conn.execute("SELECT COUNT(*) FROM events").fetchone()[0]
+    event_id = _telegram(conn, "go", external_id=f"c{count}")
+    run = runs.start(conn, "telegram:42", [event_id], now=clock())
+    with outbox.running(home, str(run.id), ("telegram", {"chat_id": 42})):
+        deny, _ = approvals.Gate(home, conn, now=clock, tools=tools)(tool, args or {})
+    events.mark(conn, [event_id], "done")
+    # Each call here is its own question, so the run is closed either way.
+    runs.finish(conn, run.id, "done", now=clock())
+    return deny
+
+
+def test_connector_modes_on_a_starter_server_a_write_parks_and_a_read_runs(home, conn):
+    """Spec 025, acceptance 4, first half. The list decides, not the server's
+    own hints: create_issue is marked read-only here and still asks."""
+    tools = _connected(home, ("linear", LINEAR_URL, [
+        ("list_issues", False), ("get_issue", False), ("create_issue", True),
+        ("save_comment", False)]))
+
+    assert _gate_says(home, conn, tools, "linear_list_issues") is None
+    assert _gate_says(home, conn, tools, "linear_get_issue") is None
+    assert "waits for the owner's approval" in _gate_says(
+        home, conn, tools, "linear_create_issue", {"title": "Login fails"})
+    assert "waits for the owner's approval" in _gate_says(home, conn, tools,
+                                                          "linear_save_comment")
+
+
+def test_connector_modes_on_a_server_added_by_address_a_tool_without_the_hint_parks(
+        home, conn):
+    """Spec 025, acceptance 4, second half."""
+    tools = _connected(home, ("example", "https://mcp.example.com/mcp", [
+        ("search", True), ("list_things", False), ("create_thing", False)]))
+
+    assert _gate_says(home, conn, tools, "example_search") is None
+    assert "waits for the owner's approval" in _gate_says(home, conn, tools,
+                                                          "example_list_things")
+    assert "waits for the owner's approval" in _gate_says(home, conn, tools,
+                                                          "example_create_thing")
+
+
+def test_connector_modes_a_server_named_like_a_starter_one_is_not_on_the_list(home, conn):
+    """A server counts as a starter one by its address. Anyone can name a
+    server 'linear'."""
+    tools = _connected(home, ("linear", "https://mcp.not-linear.example/mcp", [
+        ("list_issues", False)]))
+
+    assert "waits for the owner's approval" in _gate_says(home, conn, tools,
+                                                          "linear_list_issues")
+
+
+def test_connector_modes_waku_memory_saves_and_recalls_without_a_question(home, conn):
+    """Spec 024 made every MCP tool without the hint ask, which stopped the
+    agent saving a memory. Waku Memory's own tools run."""
+    tools = _connected(home, ("waku_memory", "https://api.waku.one/mcp", [
+        ("memory.remember", False), ("memory.recall", False), ("memory.forget", False)]))
+
+    for tool in ("waku_memory_memory_remember", "waku_memory_memory_recall",
+                 "waku_memory_memory_forget"):
+        assert _gate_says(home, conn, tools, tool, {"text": "x"}) is None, tool
+
+
+def test_connector_modes_the_environment_still_wins_over_the_list(home, conn, monkeypatch):
+    tools = _connected(home, ("linear", LINEAR_URL, [
+        ("list_issues", False), ("create_issue", False)]),
+        ("waku_memory", "https://api.waku.one/mcp", [("memory.remember", False)]))
+    monkeypatch.setenv("WAKU_APPROVE_ASK", "linear_list_issues, waku_memory_memory_remember")
+    monkeypatch.setenv("WAKU_APPROVE_ALLOW", "linear_create_issue")
+
+    assert _gate_says(home, conn, tools, "linear_list_issues") is not None
+    assert _gate_says(home, conn, tools, "waku_memory_memory_remember") is not None
+    assert _gate_says(home, conn, tools, "linear_create_issue") is None
+
+
+def test_connector_modes_the_four_steps_in_order(home):
+    from waku.tools.connectors import Connector
+
+    starter = Connector("linear", "starter", ("create_*", "save_*"))
+    own = Connector("example", "own", ())
+    memory = Connector("waku_memory", "memory", ())
+
+    def mode(tool, **kw):
+        return approvals.mode(tool, {}, **kw)
+
+    # 2. the starter list: a write asks, any other tool runs
+    assert mode("linear_create_issue", connector=starter, own_name="create_issue") == "ask"
+    assert mode("linear_list_issues", connector=starter, own_name="list_issues") == "allow"
+    assert mode("linear_create_issue", connector=starter, own_name="create_issue",
+                read_only=True) == "ask", "a starter server's hint is not read"
+    # 3. and 4. a server the owner added: the hint, or ask
+    assert mode("example_search", connector=own, own_name="search", read_only=True) == "allow"
+    assert mode("example_search", connector=own, own_name="search") == "ask"
+    # Waku Memory
+    assert mode("waku_memory_memory_remember", connector=memory,
+                own_name="memory.remember") == "allow"
+    # a built-in tool is not a connector's, whatever is passed with it
+    assert mode("send_message", connector=memory) == "ask"
+
+
+def test_connector_modes_every_starter_entry_asks_for_its_writes():
+    """The verbs in connectors.toml, against tool names each vendor's server
+    listed on 2026-11-17."""
+    from waku.tools import connectors
+
+    listed = connectors.starter()
+    cases = {
+        "linear": (["save_issue", "save_comment", "create_issue_label", "delete_comment",
+                    "create_attachment", "update_diff", "merge_diff", "mark_notification"],
+                   ["list_issues", "get_issue", "list_teams", "search_documentation",
+                    "get_user", "list_comments"]),
+        "notion": (["notion-create-pages", "notion-update-page", "notion-move-pages",
+                    "notion-duplicate-page", "notion-create-comment", "notion-delete-pages",
+                    "notion-calendar-create-events"],
+                   ["notion-search", "notion-fetch", "notion-get-comments", "notion-get-users",
+                    "notion-calendar-list-events"]),
+        "github": (["create_pull_request", "merge_pull_request", "issue_write",
+                    "add_issue_comment", "push_files", "create_or_update_file",
+                    "delete_file", "fork_repository", "update_pull_request",
+                    "pull_request_review_write", "request_copilot_review",
+                    "actions_run_trigger", "label_write"],
+                   ["get_file_contents", "list_issues", "search_code", "issue_read",
+                    "pull_request_read", "get_me", "list_commits", "search_repositories"]),
+    }
+    assert set(cases) == set(listed)
+    for key, (writes, reads) in cases.items():
+        connector = connectors.Connector(key, "starter", tuple(listed[key]["writes"]))
+        for tool in writes:
+            assert approvals.mode(f"{key}_{tool}", {}, connector=connector,
+                                  own_name=tool) == "ask", (key, tool)
+        for tool in reads:
+            assert approvals.mode(f"{key}_{tool}", {}, connector=connector,
+                                  own_name=tool) == "allow", (key, tool)
+
+
+# ---- spec 025, decision 4: the owner lets one connector write ----------------
+
+def _owner_says(home, conn, tools, args, answer="yes"):
+    """The agent calls connect_tool with `args` in the owner's chat, the
+    owner answers, and the worker runs the stored call. Returns (the request
+    the owner read, what the tool answered)."""
+    from waku.tools import connectors
+
+    for tool in connectors.make_tools(home):
+        tools.register(tool)
+    assert "waits for the owner's approval" in _gate_says_parked(home, conn, tools, args)
+    request = _outbox(conn)[-1][2]
+    (run,) = runs.parked(conn)
+    if answer != "yes":
+        runs.resolve(conn, run.id, "done", approved=False)
+        return request, ""
+    with outbox.running(home, str(run.id), ("telegram", {"chat_id": 42}),
+                        approved_key=f"{run.id}:{run.pending_hash}"):
+        said = tools.execute(run.pending_call["tool"], run.pending_call["args"])
+    runs.resolve(conn, run.id, "done", approved=True)
+    return request, said
+
+
+def _gate_says_parked(home, conn, tools, args):
+    clock = Clock()
+    count = conn.execute("SELECT COUNT(*) FROM events").fetchone()[0]
+    event_id = _telegram(conn, "let it write", external_id=f"c{count}")
+    run = runs.start(conn, "telegram:42", [event_id], now=clock())
+    with outbox.running(home, str(run.id), ("telegram", {"chat_id": 42})):
+        deny, _ = approvals.Gate(home, conn, now=clock, tools=tools)("connect_tool", args)
+    events.mark(conn, [event_id], "done")
+    runs.finish(conn, run.id, "parked", now=clock())
+    return deny
+
+
+def test_stored_rule_lets_the_next_write_run_and_survives_a_restart(home):
+    """Spec 025, acceptance 5: "let Linear write without asking"."""
+    tools = _connected(home, ("linear", LINEAR_URL, [
+        ("list_issues", False), ("create_issue", False)]),
+        ("example", "https://mcp.example.com/mcp", [("create_thing", False)]))
+    conn = connect(home)
+    try:
+        assert _gate_says(home, conn, tools, "linear_create_issue") is not None
+
+        request, said = _owner_says(home, conn, tools,
+                                    {"name_or_url": "linear", "writes": "allow"})
+
+        assert "Let linear's tools write without asking first." in request
+        assert said.startswith("linear's tools now run without asking first.")
+        assert _gate_says(home, conn, tools, "linear_create_issue") is None
+        assert [tuple(r) for r in conn.execute("SELECT pattern, mode FROM approvals")] == [
+            ("linear_*", "allow")]
+    finally:
+        conn.close()
+
+    conn = connect(home)   # a restart: a new connection and a new gate
+    try:
+        assert _gate_says(home, conn, tools, "linear_create_issue") is None
+        assert _gate_says(home, conn, tools, "linear_list_issues") is None
+        # the rule is one connector's, and nothing else's
+        assert _gate_says(home, conn, tools, "example_create_thing") is not None
+        assert _gate_says(home, conn, tools, "send_message",
+                          {"to": "github:acme/app#12", "body": "hi"}) is not None
+        assert _gate_says(home, conn, tools, "connect_tool",
+                          {"name_or_url": "https://mcp.other.example/mcp"}) is not None
+    finally:
+        conn.close()
+
+
+def test_stored_rule_is_not_stored_when_the_owner_says_no(home, conn):
+    tools = _connected(home, ("linear", LINEAR_URL, [("create_issue", False)]))
+
+    _owner_says(home, conn, tools, {"name_or_url": "linear", "writes": "allow"}, answer="no")
+
+    assert conn.execute("SELECT COUNT(*) FROM approvals").fetchone()[0] == 0
+    assert _gate_says(home, conn, tools, "linear_create_issue") is not None
+
+
+def test_stored_rule_the_owner_takes_it_back(home, conn):
+    tools = _connected(home, ("linear", LINEAR_URL, [("create_issue", False)]))
+    _owner_says(home, conn, tools, {"name_or_url": "linear", "writes": "allow"})
+
+    request, said = _owner_says(home, conn, tools,
+                                {"name_or_url": "linear", "writes": "ask"})
+
+    assert "ask first again" in request and "ask first again" in said
+    assert _gate_says(home, conn, tools, "linear_create_issue") is not None
+
+
+def test_stored_rule_the_environment_still_wins(home, conn, monkeypatch):
+    tools = _connected(home, ("linear", LINEAR_URL, [("create_issue", False),
+                                                     ("delete_issue", False)]))
+    _owner_says(home, conn, tools, {"name_or_url": "linear", "writes": "allow"})
+    monkeypatch.setenv("WAKU_APPROVE_ASK", "linear_delete_issue")
+
+    assert _gate_says(home, conn, tools, "linear_create_issue") is None
+    assert _gate_says(home, conn, tools, "linear_delete_issue") is not None
+
+
+def test_stored_rule_works_for_a_server_the_owner_added_by_address(home, conn):
+    tools = _connected(home, ("example", "https://mcp.example.com/mcp",
+                              [("create_thing", False)]))
+
+    _owner_says(home, conn, tools, {"name_or_url": "example", "writes": "allow"})
+
+    assert _gate_says(home, conn, tools, "example_create_thing") is None
+
+
+def test_stored_rule_for_a_connector_that_is_not_there_changes_nothing(home, conn):
+    tools = _connected(home, ("linear", LINEAR_URL, [("create_issue", False)]))
+
+    _, said = _owner_says(home, conn, tools, {"name_or_url": "jira", "writes": "allow"})
+
+    assert said.startswith("Not changed:") and "jira" in said
+    assert conn.execute("SELECT COUNT(*) FROM approvals").fetchone()[0] == 0
+
+
+def test_stored_rule_goes_when_the_connector_is_removed(home, conn):
+    """A server added later under the same name starts by asking."""
+    from waku.tools import connectors
+
+    tools = _connected(home, ("linear", LINEAR_URL, [("create_issue", False)]))
+    _owner_says(home, conn, tools, {"name_or_url": "linear", "writes": "allow"})
+
+    connectors.remove(home, "linear")
+    connectors.add(home, "linear", url="https://mcp.not-linear.example/mcp")
+
+    assert conn.execute("SELECT COUNT(*) FROM approvals").fetchone()[0] == 0
+    assert _gate_says(home, conn, tools, "linear_create_issue") is not None
+
+
+def test_stored_rule_from_the_card_is_one_switch(home, conn, monkeypatch):
+    from hosted.core import policy
+    from waku.ops import dashboard
+
+    monkeypatch.setenv("WAKU_HOME", str(home))
+    monkeypatch.setenv("WAKU_PROVIDER", "anthropic")
+    tools = _connected(home, ("linear", LINEAR_URL, [("create_issue", False)]))
+    row = dashboard.connectors_data()["servers"][0]
+    assert (row["name"], row["writes"]) == ("linear", "ask")
+
+    assert dashboard.connectors_approve({"name": "linear", "allow": True}) == {
+        "ok": True, "name": "linear", "writes": "allow"}
+    assert dashboard.connectors_data()["servers"][0]["writes"] == "allow"
+    assert _gate_says(home, conn, tools, "linear_create_issue") is None
+
+    assert dashboard.connectors_approve({"name": "linear", "allow": False})["writes"] == "ask"
+    assert _gate_says(home, conn, tools, "linear_create_issue") is not None
+    assert "error" in dashboard.connectors_approve({"name": "jira", "allow": True})
+    assert "error" in dashboard.connectors_approve({"name": "linear", "allow": "yes"})
+    assert policy.decide("POST", "/api/connectors/approve", {}).verdict == "block"
+
+
 # ---- spec 024, decision 8: an expiry is said once --------------------------
 
 def test_expiry_said_one_reminder_at_48_hours_and_one_message_at_72(home, conn):

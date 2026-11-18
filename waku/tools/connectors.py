@@ -141,6 +141,46 @@ def starter_for(spec: dict) -> dict | None:
                 None)
 
 
+MEMORY, STARTER, OWN = "memory", "starter", "own"
+
+
+@dataclass(frozen=True)
+class Connector:
+    """What the approval rules need to know about the server a tool comes
+    from (alwayson/approvals.py, `mode`).
+
+      memory    Waku Memory: its tools run without a question
+      starter   a server on the starter list: `writes` says which tools ask
+      own       any other server: a tool asks unless the server marks it
+                read-only
+    """
+    name: str
+    kind: str
+    writes: tuple[str, ...] = ()
+
+
+def connector_of(home: Path, server: str) -> Connector | None:
+    """The connector a server in mcp.json, or one a plugin brings, is. None
+    when no such server is configured."""
+    from waku.tools.mcp_client import merge
+    from waku.tools.waku_memory import is_waku_memory
+
+    try:
+        config = _read(home)["servers"]
+    except Refused:
+        config = []
+    spec = next((s for s in merge(config, _plugin_servers(home))[0]
+                 if s.get("name") == server), None)
+    if spec is None:
+        return None
+    if is_waku_memory(spec):
+        return Connector(server, MEMORY)
+    listed = starter_for(spec)
+    if listed is not None:
+        return Connector(server, STARTER, tuple(listed["writes"]))
+    return Connector(server, OWN)
+
+
 def _next(name: str, auth: str) -> str:
     if auth == OAUTH:
         return f"Sign in on the computer Waku runs on: waku mcp login {name}"
@@ -235,13 +275,93 @@ def remove(home: Path, name: str) -> dict:
     from waku.tools.mcp_oauth import AUTH_DIR, _sanitise
 
     (Path(home) / AUTH_DIR / f"{_sanitise(name)}.json").unlink(missing_ok=True)
+    # The rule that let this connector write goes with it: a server added
+    # later under the same name starts by asking.
+    if (Path(home) / "state.db").exists():
+        _store_rule(home, name, allow=False)
     return found
 
 
-def connected_line(name: str, tools: list) -> str:
-    """What the person reads when a server has connected."""
-    count = len(tools)
-    return f"{name} is connected: {count} tool{'' if count == 1 else 's'}."
+# ---- the owner lets one connector write (decision 4) ---------------------------
+
+def _store_rule(home: Path, name: str, allow: bool) -> None:
+    from waku.alwayson import approvals
+    from waku.db import connect as open_db
+
+    conn = open_db(Path(home))
+    try:
+        approvals.store(conn, name, allow)
+    finally:
+        conn.close()
+
+
+def writes_allowed(home: Path) -> frozenset[str]:
+    """The names of the connectors the owner let write without asking."""
+    from waku.alwayson import approvals
+    from waku.db import connect as open_db
+
+    if not (Path(home) / "state.db").exists():
+        return frozenset()
+    conn = open_db(Path(home))
+    try:
+        rules = approvals.stored(conn)
+    finally:
+        conn.close()
+    return frozenset(rule[:-2] for rule in rules if rule.endswith("_*"))
+
+
+def set_writes(home: Path, name: str, allow: bool) -> str:
+    """Let every tool of one connector run without a question, or make its
+    writes ask again. Returns what the person reads."""
+    name = (name or "").strip()
+    listed = starter().get(name.lower())
+    if connector_of(home, name) is None and listed is not None:
+        name = listed["name"]   # "Linear" for the server named linear
+    if connector_of(home, name) is None:
+        raise Refused(f"no connector called '{name}' is connected.")
+    _store_rule(home, name, allow)
+    if allow:
+        return (f"{name}'s tools now run without asking first. To take that back, "
+                f"say: make {name} ask before it writes.")
+    return f"{name}'s tools that write ask first again."
+
+
+def asking(home: Path, name: str, tools: list) -> int:
+    """How many of a server's tools ask the owner first, by the rules the
+    always-on agent applies (alwayson/approvals.py, `mode`)."""
+    from waku.alwayson import approvals
+
+    connector = connector_of(home, name)
+    allowed = tuple(approvals.rule_for(server) for server in writes_allowed(home))
+    count = 0
+    for tool in tools:
+        own = (getattr(tool, "mcp", None) or ("", str(getattr(tool, "name", tool))))[1]
+        if approvals.mode(str(getattr(tool, "name", tool)), {}, connector=connector,
+                          own_name=own, read_only=bool(getattr(tool, "read_only", False)),
+                          allowed=allowed) == approvals.ASK:
+            count += 1
+    return count
+
+
+def connected_line(name: str, tools: list, home: Path) -> str:
+    """What the person reads when a server has connected: how many tools it
+    has, and how many of them ask first."""
+    connector = connector_of(home, name)
+    listed = starter_for(next((s for s in _read(home)["servers"]
+                               if isinstance(s, dict) and s.get("name") == name), {}))
+    total, asks = len(tools), asking(home, name, tools)
+    line = f"{listed['title'] if listed else name} is connected: "
+    line += f"{total} tool{'' if total == 1 else 's'}"
+    if not asks:
+        line += ", and it does not ask first." if total == 1 else ", and none of them asks first."
+    elif connector is not None and connector.kind == STARTER:
+        line += f", {asks} of them write{'s' if asks == 1 else ''} and will ask first."
+    else:
+        line += f", {asks} of them will ask first."
+    if connector is not None and connector.kind == OWN and asks:
+        line += (" This server is not on the starter list, so a tool asks first unless "
+                 "the server marks it read-only, until you say otherwise.")
+    return line
 
 
 # ---- the sign-in link ------------------------------------------------------
@@ -472,7 +592,7 @@ def tell_owner(home: Path, flow: SignIn) -> None:
         stamp = outbox.utc_now().isoformat(timespec="seconds")
         for channel, target in outbox.owner_addresses():
             outbox.insert(conn, run_id="", channel=channel, target=target,
-                          body=connected_line(flow.name, flow.tools or []),
+                          body=connected_line(flow.name, flow.tools or [], home),
                           idempotency_key=f"connector:{flow.name}:{channel}:{stamp}")
     finally:
         conn.close()
@@ -510,7 +630,7 @@ def connect(home: Path, target: str, sign_in: Callable | None = None,
     except Refused as refused:
         return f"{lead} {refused} Then: waku mcp login {name}"
     if flow.done.is_set() and flow.ok:
-        return f"{lead} {connected_line(name, flow.tools or [])}"
+        return f"{lead} {connected_line(name, flow.tools or [], home)}"
     return f"{lead} {link_words(name, flow)}"
 
 
@@ -524,7 +644,19 @@ def _approved(home: Path) -> bool:
 
 
 def make_tools(home: Path, sign_in: Callable = start_sign_in) -> list[Tool]:
-    def connect_tool(name_or_url: str = "") -> str:
+    def connect_tool(name_or_url: str = "", writes: str = "") -> str:
+        writes = (writes or "").strip().lower()
+        if writes:
+            if writes not in ("ask", "allow"):
+                return "Not changed: `writes` is 'ask' or 'allow'."
+            if not _approved(home):
+                return ("Not changed: this needs the owner's yes, and this conversation "
+                        "cannot ask for it. Use the switch on the Connectors card on "
+                        "the dashboard.")
+            try:
+                return set_writes(home, name_or_url, allow=writes == "allow")
+            except Refused as refused:
+                return f"Not changed: {refused}"
         try:
             resolve(name_or_url)
             if not _approved(home):
@@ -554,14 +686,21 @@ def make_tools(home: Path, sign_in: Callable = start_sign_in) -> list[Tool]:
                 "to connect a service. It takes a name on the starter list ("
                 + ", ".join(starter()) + ") or the server's https address, never a "
                 "command to run. The owner approves it first, and then signs in through "
-                "a link."
+                "a link. With `writes`, it changes a connected server instead: 'allow' "
+                "when the user says to let it write without asking, 'ask' to take that "
+                "back."
             ),
             input_schema={
                 "type": "object",
                 "properties": {"name_or_url": {
                     "type": "string",
                     "description": ("A starter name, e.g. linear, or the server's address, "
-                                    "e.g. https://mcp.example.com/mcp")}},
+                                    "e.g. https://mcp.example.com/mcp")},
+                    "writes": {
+                        "type": "string", "enum": ["ask", "allow"],
+                        "description": ("Only to change a connected server: 'allow' lets "
+                                        "its tools write without asking first, 'ask' "
+                                        "makes them ask again. Give the server's name.")}},
                 "required": ["name_or_url"],
             },
             fn=connect_tool,

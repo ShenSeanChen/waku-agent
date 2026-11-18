@@ -126,6 +126,7 @@ def as_tool(server: str, meta: dict, call) -> Tool:
         # the wire.
         fn=(lambda srv=server, tname=meta["name"], **kw: call(srv, tname, kw)),
         read_only=bool(meta.get("readOnly")),
+        mcp=(server, meta["name"]),
     )
 
 

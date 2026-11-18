@@ -28,6 +28,10 @@ class Tool:
     # Under `waku serve` such a tool runs without the owner's yes; any other
     # tool the approval table does not know asks (spec 024, decision 6).
     read_only: bool = False
+    # For a tool from an MCP server: (the server's name in mcp.json, the
+    # tool's own name there). The approval rules of spec 025 read it: which
+    # connector a tool belongs to decides whether it asks.
+    mcp: tuple[str, str] | None = None
 
     def to_api(self) -> dict[str, Any]:
         """The shape the Messages API expects in its `tools=` parameter."""

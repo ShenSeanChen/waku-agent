@@ -281,6 +281,7 @@ NETWORK_CALLERS = {
     ("waiting.js", "cancelWaiting"): "user",   # the Cancel button on a row of the Waiting card
     ("connectors.js", "addConnector"): "user",      # the Add button of the Connectors card (spec 025)
     ("connectors.js", "removeConnector"): "user",   # the Remove button on a row of that card
+    ("connectors.js", "setConnectorWrites"): "user",   # the switch on a row of that card
     ("models.js", "saveSettings"): "user",
     ("models.js", "loadModelList"): "user",
     ("models.js", "switchModel"): "user",
