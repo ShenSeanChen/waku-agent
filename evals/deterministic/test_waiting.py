@@ -378,3 +378,70 @@ def test_tool_both_are_core_tools_with_a_mode(home):
     assert "list_waiting" in names and "cancel_waiting" in names
     assert approvals.mode("list_waiting", {}) == "allow"
     assert approvals.mode("cancel_waiting", {"id": "t1"}) == "allow"
+
+
+# ---- C4: the dashboard card "Waiting" and its two routes --------------------
+
+STATIC = __import__("pathlib").Path(__file__).resolve().parents[2] / "waku" / "ops" / "static"
+
+
+def test_dashboard_data_carries_the_same_three_lists(home, conn, monkeypatch):
+    from waku.ops import dashboard
+
+    monkeypatch.setenv("WAKU_HOME", str(home))
+    timer_id, run_id, message_id = _three(conn, home)
+
+    data = dashboard.waiting_data()
+
+    assert [row["id"] for row in data["timers"]] == [f"t{timer_id}"]
+    assert [row["id"] for row in data["calls"]] == [f"r{run_id}"]
+    assert [row["id"] for row in data["messages"]] == [f"m{message_id}"]
+    assert data["timers"][0] == {
+        "id": f"t{timer_id}", "when": "2026-11-19T09:00:00+00:00",
+        "what": "Check whether issue 12 is still open.", "where": "telegram:42",
+        "status": "pending"}
+    json.dumps(data)   # the route sends it as JSON
+
+
+def test_dashboard_cancel_takes_a_row_off_the_card(home, conn, monkeypatch):
+    from waku.ops import dashboard
+
+    monkeypatch.setenv("WAKU_HOME", str(home))
+    timer_id, _, _ = _three(conn, home)
+
+    out = dashboard.waiting_cancel({"id": f"t{timer_id}"})
+
+    assert out["ok"] is True and out["cancelled"]["id"] == f"t{timer_id}"
+    assert dashboard.waiting_data()["timers"] == []
+    assert timers.get(conn, timer_id).status == "cancelled"
+    again = dashboard.waiting_cancel({"id": f"t{timer_id}"})
+    assert "error" in again and "not waiting" in again["error"]
+    assert "error" in dashboard.waiting_cancel({})
+
+
+def test_dashboard_serves_the_two_routes_and_each_has_a_hosted_policy_entry():
+    import inspect
+
+    from hosted.core import policy
+    from waku.ops import dashboard
+
+    source = inspect.getsource(dashboard)
+    assert '"/api/waiting"' in source and '"/api/waiting/cancel"' in source
+    assert policy.DECISIONS["/api/waiting"] == policy.PASS
+    assert policy.DECISIONS["/api/waiting/cancel"] == policy.PASS
+    assert policy.match("/api/waiting/cancel") == "/api/waiting/cancel"
+
+
+def test_dashboard_card_is_on_overview_with_a_cancel_button_on_each_row():
+    script = (STATIC / "js" / "waiting.js").read_text(encoding="utf-8")
+    index = (STATIC / "index.html").read_text(encoding="utf-8")
+    views = (STATIC / "js" / "views.js").read_text(encoding="utf-8")
+
+    assert "function waitingCard(" in script and "function cancelWaiting(" in script
+    assert 'title: "Waiting"' in script
+    assert '"/api/waiting/cancel"' in script
+    assert "cancelWaiting(" in script and "Cancel" in script
+    assert "waitingCard(d)" in views, "Overview shows the card"
+    assert index.index("/static/js/waiting.js") < index.index("/static/js/main.js")
+    assert script.isascii(), "no emoji in the dashboard"
+    assert script.count("esc(") >= 3, "a note and a message are text someone else wrote"

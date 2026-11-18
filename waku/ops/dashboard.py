@@ -549,6 +549,8 @@ def collect() -> dict:
         "key_locations": model_key_locations(),
         # The first-run Waku Memory question (spec 020): {pending, what}.
         "memory_choice": memory_choice_card(settings),
+        # What waits (spec 024): timers, calls that wait for a yes, messages.
+        "waiting": waiting_data(),
         "connections": [asdict(view) for view in list_connections()],
         # MCP servers that sign in on their own page rather than through an
         # .env field (spec 007 E). Files only: no browser, no network.
@@ -558,6 +560,43 @@ def collect() -> dict:
         "waku_memory": waku_memory_info(settings),
         "usage": usage_summary(home),
     }
+
+
+def waiting_data() -> dict:
+    """The "Waiting" card (spec 024): the timers that have not fired, the
+    calls that wait for a yes, and the messages that are queued or dead. The
+    same three lists `waku waiting` prints."""
+    from dataclasses import asdict as as_dict
+
+    from waku.alwayson import waiting
+
+    settings = load_settings()
+    settings.ensure_home()
+    conn = connect(settings.home)
+    try:
+        found = waiting.listing(conn)
+    finally:
+        conn.close()
+    return {name: [as_dict(item) for item in getattr(found, name)]
+            for name in ("timers", "calls", "messages")}
+
+
+def waiting_cancel(payload: dict) -> dict:
+    """Cancel one row of the "Waiting" card by its id (t3, r7 or m12)."""
+    from dataclasses import asdict as as_dict
+
+    from waku.alwayson import waiting
+
+    settings = load_settings()
+    settings.ensure_home()
+    conn = connect(settings.home)
+    try:
+        item = waiting.cancel(conn, str(payload.get("id") or ""))
+    except waiting.NotWaiting as exc:
+        return {"error": str(exc)}
+    finally:
+        conn.close()
+    return {"ok": True, "cancelled": as_dict(item)}
 
 
 def observability_data(window: str = "7d") -> dict:
@@ -1282,6 +1321,9 @@ class Handler(BaseHTTPRequestHandler):
             window = parse_qs(urlparse(self.path).query).get("window", ["7d"])[0]
             self._send(json.dumps(observability_data(window), default=str).encode(),
                        "application/json")
+        elif self.path == "/api/waiting":
+            # Spec 024: what waits in this home, the lists `waku waiting` prints.
+            self._send(json.dumps(waiting_data()).encode(), "application/json")
         elif self.path == "/api/judgment-arena":
             from waku.ops import judgment_arena, judgment_cases  # noqa: PLC0415
             self._send(json.dumps({"suites": judgment_cases.suite_list(),
@@ -1555,7 +1597,8 @@ class Handler(BaseHTTPRequestHandler):
                   "/api/providers": None,
                   "/api/compare/clear": compare_clear,
                   "/api/compare/regrade": compare_regrade, "/api/compare/delete_run": compare_delete_run,
-                  "/api/turn-evals/judge": judge_turn}
+                  "/api/turn-evals/judge": judge_turn,
+                  "/api/waiting/cancel": waiting_cancel}
         if self.path not in routes:
             self.send_response(404)
             self.end_headers()

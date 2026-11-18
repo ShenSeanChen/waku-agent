@@ -139,6 +139,10 @@ DECISIONS: dict[str, str] = {
     # spends through the tenant's own provider, so on the free tier the
     # metering proxy charges it in credits; one call per click, 300 tokens out
     "/api/turn-evals/judge": PASS,
+    # spec 024: the timers, waiting calls and queued messages of this tenant's
+    # own home, and cancelling one of them. Per-tenant like /api/data
+    "/api/waiting": PASS,
+    "/api/waiting/cancel": PASS,
     # filtered: the payload decides
     "/api/providers": FILTER,
     "/api/settings": FILTER,
