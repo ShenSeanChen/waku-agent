@@ -8,8 +8,8 @@ What runs:
 
   one worker     claims events and starts runs (worker.py)
   a dispatcher   sends each row of the outbox (dispatcher.py)
-  a timer loop   every 30 seconds, writes each due timer into the inbox
-                 (timers.py)
+  a timer loop   writes each due timer into the inbox, and sleeps until the
+                 next one is due (timers.py)
   the sources    each configured source inserts events (sources/)
   a listener     only when a source receives webhooks; on 127.0.0.1 unless
                  WAKU_SERVE_HOST says otherwise

@@ -28,7 +28,7 @@ table, and a dispatcher sends it to the Telegram chat, the Slack thread or the
 GitHub issue it answers, retrying a failed delivery four times. `send_message`
 writes a row in the same table. `schedule_task` sets a one-time timer: the
 agent names a time and a note, and `waku serve` starts a run with that note in
-the same conversation within 30 seconds of that time. A tool call that writes
+the same conversation within about 5 seconds of that time. A tool call that writes
 to someone else waits for a yes, and so does a reply to a GitHub issue or a
 Slack channel and a tool from an MCP server that does not declare itself
 read-only: `send_message` to a GitHub issue or to another chat is stored, the owner in `WAKU_OWNER` is asked on Telegram, and

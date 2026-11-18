@@ -122,7 +122,9 @@ it.
 
 `schedule_task` lets the agent set a follow-up. Ask "check issue 12 on Thursday
 at 09:00 and tell me if it is still open", and on Thursday at 09:00 `waku
-serve` starts a run with that note, within 30 seconds of that time. The run
+serve` writes that note into its inbox within 2 seconds of that time, and the
+run starts 3 seconds later, as for any message. A timer set in `waku` or the
+dashboard while `waku serve` runs can be up to 30 seconds late. The run
 answers in the conversation that set the timer. A timer set in `waku` or the
 dashboard answers `WAKU_OWNER`. A run that finds nothing worth sending sends
 nothing. A timer fires once, and a timer that comes due while `waku serve` is

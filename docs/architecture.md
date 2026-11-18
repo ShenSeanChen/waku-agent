@@ -128,9 +128,11 @@ A run sets its own follow-up with `schedule_task(when, note)`, which writes
 one row into the `timers` table. Ana writes "@waku check issue 12 on Thursday
 at 09:00", and the run answers "I will check issue 12 on Thursday at 09:00".
 
-- **A timer is an event that arrives later.** Every 30 seconds a loop in
-  `waku serve` writes each due timer into `events` with `source = timer`, the
-  session that set it and its note. The run that follows reads the note as
+- **A timer is an event that arrives later.** A loop in `waku serve` writes
+  each due timer into `events` with `source = timer`, the session that set it
+  and its note. The loop sleeps until the earliest timer is due, or for 30
+  seconds, whichever is shorter, and `schedule_task` wakes it when it sets a
+  timer, so a timer fires within 2 seconds of its time. The run that follows reads the note as
   the reason it woke, and replies in the conversation that set the timer.
 - **A timer fires once.** The event's external id is `timer:<id>`, so a
   process that dies between writing the event and marking the timer `fired`
