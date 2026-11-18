@@ -15,11 +15,13 @@ from __future__ import annotations
 import asyncio
 import logging
 
+import aiohttp
 import pytest
-from gatewaylib import Clock, FakeSpawner, ops, signed_in_on_the_tenant_host
+from gatewaylib import AlwaysOnContainer, Clock, FakeSpawner, ops, signed_in_on_the_tenant_host
 
 from hosted.core import idle
 from hosted.gateway.config import config_from_env, idle_seconds_from
+from hosted.gateway.container_api import ContainerApi
 from hosted.gateway.launch import Launcher
 from hosted.gateway.store import ControlDb
 from hosted.gateway.sweep import IdleLoop
@@ -336,3 +338,206 @@ def test_the_disk_warning_is_logged_once_per_level_not_once_a_minute(made, tmp_p
     warnings = [r.getMessage() for r in caplog.records if "full" in r.getMessage()]
     assert len(warnings) == 2
     assert "85%" in warnings[0] and "90%" in warnings[1]
+
+
+# --- spec 026, task A4: ask the container before stopping it ----------------
+
+FRIDAY_ISO, FRIDAY_EPOCH = "2026-11-20T09:00:00+00:00", 1_795_165_200.0
+QUIET = {"next_timer_at": None, "events": 0, "outbox": 0, "running": 0}
+
+
+@pytest.fixture
+def container():
+    fake = AlwaysOnContainer()
+    fake.start()
+    yield fake
+    fake.stop()
+
+
+class Asking:
+    """A Launcher that asks its containers what work they have left, on a
+    real ControlDb, a FakeSpawner and a hand-moved clock. The aiohttp session
+    needs a running loop, so a test builds this inside its coroutine."""
+
+    def __init__(self, tmp_path, port: int) -> None:
+        self.clock = Clock()
+        self.store = ControlDb(tmp_path / "asking.db", now=self.clock)
+        self.spawner = FakeSpawner()
+        self.spawner.address, self.spawner.port = "127.0.0.1", port
+        self.fleet = idle.Fleet(self.clock, max_running=4)
+        self.session = aiohttp.ClientSession()
+        self.launcher = Launcher(store=self.store, spawner=self.spawner, fleet=self.fleet,
+                                 now=self.clock, containers=ContainerApi(self.session))
+
+    async def started(self, sub: str = "sub-ana"):
+        return await _started(self.store, self.launcher, sub)
+
+    async def sweep(self, tmp_path) -> list[str]:
+        return await IdleLoop(self.launcher, disk_path=tmp_path,
+                              disk_usage=_quiet_disk).sweep()
+
+    async def close(self) -> None:
+        await self.session.close()
+        self.store.close()
+
+
+def test_a_container_with_a_pending_outbox_row_is_not_stopped_by_the_sweep(
+        tmp_path, container):
+    """Acceptance 4. The reply is written and not yet sent; the sweep leaves
+    the container alone, and stops it once the row has gone out."""
+    container.work = {**QUIET, "outbox": 1}
+
+    async def run():
+        made = Asking(tmp_path, container.port)
+        ana = await made.started()
+        made.clock.t += idle.IDLE_SECONDS + 60
+        while_sending = await made.sweep(tmp_path)
+        still_running = made.fleet.running()
+        container.work = dict(QUIET)
+        made.clock.t += 60
+        after = await made.sweep(tmp_path)
+        stops = ops(made.spawner, "stop")
+        await made.close()
+        return ana.id, while_sending, still_running, after, stops
+
+    ana, while_sending, still_running, after, stops = asyncio.run(run())
+    assert while_sending == []
+    assert still_running == [ana]
+    assert after == [ana]
+    assert stops == [{"op": "stop", "tenant_id": ana}]
+
+
+def test_a_run_in_progress_keeps_the_container_from_the_sweep(tmp_path, container):
+    container.work = {**QUIET, "running": 1}
+
+    async def run():
+        made = Asking(tmp_path, container.port)
+        await made.started()
+        made.clock.t += idle.IDLE_SECONDS + 60
+        stopped = await made.sweep(tmp_path)
+        await made.close()
+        return stopped
+
+    assert asyncio.run(run()) == []
+
+
+def test_the_sweep_records_the_wakeup_the_container_reports_before_stopping_it(
+        tmp_path, container):
+    """Acceptance 3's first half: the container says its next timer is Friday
+    09:00, and that is in tenant_wakeups when the container is gone."""
+    container.work = {**QUIET, "next_timer_at": FRIDAY_ISO}
+
+    async def run():
+        made = Asking(tmp_path, container.port)
+        ana = await made.started()
+        made.clock.t += idle.IDLE_SECONDS + 60
+        stopped = await made.sweep(tmp_path)
+        wakeup = made.store.wakeup(ana.id)
+        await made.close()
+        return ana.id, stopped, wakeup
+
+    ana, stopped, wakeup = asyncio.run(run())
+    assert stopped == [ana]
+    assert wakeup == FRIDAY_EPOCH
+
+
+def test_a_container_with_no_timer_left_clears_an_older_wakeup(tmp_path, container):
+    async def run():
+        made = Asking(tmp_path, container.port)
+        ana = await made.started()
+        made.store.set_wakeup(ana.id, FRIDAY_EPOCH)
+        made.clock.t += idle.IDLE_SECONDS + 60
+        stopped = await made.sweep(tmp_path)
+        wakeup = made.store.wakeup(ana.id)
+        await made.close()
+        return ana.id, stopped, wakeup
+
+    ana, stopped, wakeup = asyncio.run(run())
+    assert stopped == [ana]
+    assert wakeup is None
+
+
+@pytest.mark.parametrize("answer", ["no such route", "not listening", "not the agreed shape"])
+def test_a_container_that_gives_no_report_is_stopped_and_its_wakeup_is_kept(
+        tmp_path, container, answer):
+    """An image older than spec 026 answers 404. It must still stop, or it
+    would never be replaced by the new image. What the gateway already knew
+    about its next timer is all it has, so the wakeup row stays."""
+    port = container.port
+    if answer == "no such route":
+        container.work = None
+    elif answer == "not the agreed shape":
+        container.work = {"outbox": "plenty"}
+
+    async def run():
+        made = Asking(tmp_path, port)
+        ana = await made.started()
+        made.store.set_wakeup(ana.id, FRIDAY_EPOCH)
+        if answer == "not listening":
+            container.stop()
+        made.clock.t += idle.IDLE_SECONDS + 60
+        stopped = await made.sweep(tmp_path)
+        wakeup = made.store.wakeup(ana.id)
+        await made.close()
+        return ana.id, stopped, wakeup
+
+    ana, stopped, wakeup = asyncio.run(run())
+    assert stopped == [ana]
+    assert wakeup == FRIDAY_EPOCH
+
+
+def test_a_request_that_arrives_while_the_container_is_asked_stops_the_stop(
+        tmp_path, container):
+    """Asking is an await, and the tenant can send a message during it. The
+    fleet is asked again after the answer, before anything is stopped."""
+    box = {}
+    container.on_ask = lambda: box["fleet"].touch(box["tenant"])
+
+    async def run():
+        made = Asking(tmp_path, container.port)
+        ana = await made.started()
+        box["fleet"], box["tenant"] = made.fleet, ana.id
+        made.clock.t += idle.IDLE_SECONDS + 60
+        stopped = await made.sweep(tmp_path)
+        stops = ops(made.spawner, "stop")
+        await made.close()
+        return stopped, stops
+
+    stopped, stops = asyncio.run(run())
+    assert container.asked == 1
+    assert (stopped, stops) == ([], [])
+
+
+def test_a_container_that_reports_outbox_work_for_ever_is_stopped_in_the_end(
+        tmp_path, container):
+    container.work = {**QUIET, "outbox": 1, "next_timer_at": FRIDAY_ISO}
+
+    async def run():
+        made = Asking(tmp_path, container.port)
+        ana = await made.started()
+        made.clock.t += idle.IDLE_SECONDS + idle.WORK_LIMIT_SECONDS - 60
+        before = await made.sweep(tmp_path)
+        made.clock.t += 60
+        after = await made.sweep(tmp_path)
+        wakeup = made.store.wakeup(ana.id)
+        await made.close()
+        return ana.id, before, after, wakeup
+
+    ana, before, after, wakeup = asyncio.run(run())
+    assert before == []
+    assert after == [ana]
+    assert wakeup == FRIDAY_EPOCH
+
+
+def test_a_fresh_container_is_not_asked_anything(tmp_path, container):
+    """Only a container the fleet already calls idle is asked."""
+    async def run():
+        made = Asking(tmp_path, container.port)
+        await made.started()
+        made.clock.t += idle.IDLE_SECONDS - 60
+        stopped = await made.sweep(tmp_path)
+        await made.close()
+        return stopped
+
+    assert asyncio.run(run()) == []
+    assert container.asked == 0

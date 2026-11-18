@@ -38,6 +38,7 @@ from gatewaylib import (
 from hosted.core import idle, policy, quota
 from hosted.gateway import __main__ as gateway_main
 from hosted.gateway.config import REQUIRED_ENV_NAMES
+from hosted.gateway.container_api import ContainerApi
 from hosted.gateway.forward import ContainerForwarder
 from hosted.gateway.spawner_client import SpawnerError
 from hosted.ports.runtime import RunningContainer
@@ -1549,6 +1550,55 @@ def test_the_gateway_process_serves_with_the_access_log_off(
     assert answer[0] == 302, "the request never reached the gateway"
     assert built["kwargs"].get("access_log", "NOT PASSED") is None
     assert code not in caplog.text
+
+
+def test_the_gateway_process_runs_the_scheduler_and_asks_containers_before_a_stop(
+        monkeypatch, sock_dir):
+    """Spec 026. The scheduler and the idle rule have their own evals, built
+    by hand. This one runs the real main() and reads what IT built: a
+    Scheduler whose loop was started, on the same Launcher the idle loop
+    uses, and that Launcher holding the ContainerApi it asks before a stop.
+    Take either line out of main() and every other eval stays green."""
+    for name, value in _gateway_env(sock_dir).items():
+        monkeypatch.setenv(name, value)
+    built: dict = {}
+
+    class RecordingLauncher(gateway_main.Launcher):
+        def __init__(self, **kwargs):
+            built["launcher_containers"] = kwargs.get("containers")
+            super().__init__(**kwargs)
+            built["launcher"] = self
+
+    class RecordingScheduler(gateway_main.Scheduler):
+        def __init__(self, **kwargs):
+            built["scheduler"] = kwargs
+            super().__init__(**kwargs)
+
+        async def run(self):
+            built["scheduler_ran"] = True
+            await asyncio.Event().wait()
+
+    monkeypatch.setattr(gateway_main, "Launcher", RecordingLauncher)
+    monkeypatch.setattr(gateway_main, "Scheduler", RecordingScheduler)
+
+    async def run():
+        task = asyncio.create_task(gateway_main.main())
+        for _ in range(500):
+            if built.get("scheduler_ran"):
+                break
+            await asyncio.sleep(0.01)
+        task.cancel()
+        try:
+            await asyncio.wait_for(task, timeout=10)
+        except (asyncio.CancelledError, TimeoutError):
+            pass
+
+    asyncio.run(run())
+    assert built.get("scheduler_ran") is True
+    assert isinstance(built["launcher_containers"], ContainerApi)
+    assert built["scheduler"]["launcher"] is built["launcher"]
+    assert built["scheduler"]["containers"] is built["launcher_containers"]
+    assert type(built["scheduler"]["store"]).__name__ == "ControlDb"
 
 
 @pytest.mark.parametrize("sent, passed_on", [
