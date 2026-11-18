@@ -128,9 +128,11 @@ A run sets its own follow-up with `schedule_task(when, note)`, which writes
 one row into the `timers` table. Ana writes "@waku check issue 12 on Thursday
 at 09:00", and the run answers "I will check issue 12 on Thursday at 09:00".
 
-- **A timer is an event that arrives later.** Every 30 seconds a loop in
-  `waku serve` writes each due timer into `events` with `source = timer`, the
-  session that set it and its note. The run that follows reads the note as
+- **A timer is an event that arrives later.** A loop in `waku serve` writes
+  each due timer into `events` with `source = timer`, the session that set it
+  and its note. The loop sleeps until the earliest timer is due, or for 30
+  seconds, whichever is shorter, and `schedule_task` wakes it when it sets a
+  timer, so a timer fires within 2 seconds of its time. The run that follows reads the note as
   the reason it woke, and replies in the conversation that set the timer.
 - **A timer fires once.** The event's external id is `timer:<id>`, so a
   process that dies between writing the event and marking the timer `fired`
@@ -188,13 +190,17 @@ issue the events came from.
   notice on another channel when `WAKU_OWNER` names one.
 - **A run may say nothing.** An empty reply, or the single word `SILENT`,
   writes no row. The prompt of a run that a timer started says so.
-- **`send_message` writes a row too.** A message to the owner, or to the
-  conversation the run came from, is queued at once. A message to anyone else
-  waits for the owner's yes.
+- **`send_message` writes a row too.** A message to the owner is queued at
+  once. A message to anyone else waits for the owner's yes.
 - **A chat delivery can happen twice** when the process dies after the
   channel accepted the message and before the row is marked `sent`. A GitHub
   comment cannot: each comment ends with a hidden marker that carries the
   row's key, and the sender posts nothing when the issue already has it.
+- **A run that raises sends one plain sentence** to the conversation, or to
+  the owner when other people read that conversation. The reason is in the
+  log of `waku serve` and never in a message.
+- **A run in the owner's own chat is told so.** Its prompt ends with a line
+  that says the person it talks to runs the assistant and approves its calls.
 
 A tool call that writes to a third party waits for the owner's yes
 (`approvals.py`). On Thursday the run for Ana's thread calls `send_message`
@@ -204,13 +210,35 @@ no.'
 
 - **Each tool has a mode, `allow` or `ask`.** A table in `approvals.py` names
   every built-in tool. `send_message` is `ask` unless the message goes to the
-  owner or back to the conversation the run came from. `WAKU_APPROVE_ASK` and
-  `WAKU_APPROVE_ALLOW` override one tool at a time. A tool from an MCP server
-  is `allow` until `WAKU_APPROVE_ASK` names it.
+  owner, or back to a conversation whose replies need no yes. `WAKU_APPROVE_ASK` and
+  `WAKU_APPROVE_ALLOW` override one tool at a time. A tool the table does
+  not know is a tool from an MCP server, and its connector decides
+  (`connector_of` in `waku/tools/connectors.py`): a Waku Memory tool is
+  `allow`; a tool of a server on the starter list (`waku/connectors.toml`)
+  is `ask` when it matches the entry's `writes`; a tool of any other server
+  is `ask` unless the server declares `readOnlyHint` for it. The owner can
+  store one rule per connector in the `approvals` table, which makes every
+  tool of that connector `allow`. `connect_tool` and `disconnect_tool` are
+  `ask` whatever the environment says.
+- **A reply other people read is a write.** The worker stores a run's reply
+  to a GitHub issue, a Slack channel or a group chat as a `send_message`
+  call, and the owner reads the exact text in the request. A reply to the
+  owner's chat or to a Telegram chat with one person is queued at once.
+  `reply:github` and `reply:slack` in `WAKU_APPROVE_ALLOW` skip the question
+  for one channel.
+- **An event nobody sent is said to the owner.** A new issue with the label
+  starts a run whose prompt says that `SILENT` is the right answer when there
+  is nothing to add. The owner gets one line on their own channel either
+  way.
 - **An `ask` call parks the run.** The loop's `before_tool` asks the approval
   gate before PreToolUse. The gate stores the tool name, the arguments and a
   SHA-256 hash of both in the run's row, writes one outbox row to the owner,
   and the tool does not run. The run ends `parked`.
+- **A parked run sends one message, the request.** The worker writes no reply
+  row for it. When the run came from a conversation other than the owner's
+  chat, that conversation reads one line that code wrote: "I asked Sean to
+  approve this. I will say here what Sean decides." The name is
+  `WAKU_OWNER_NAME`, and without it the line says "the owner".
 - **The owner's answer is an event.** Before the worker starts a run it takes
   out a "yes" or "no" that came from the chat the request went to. Yes runs
   the stored call exactly as stored, without asking the model, and no
@@ -218,8 +246,15 @@ no.'
   model as an ordinary message.
 - **The conversation that parked hears the outcome.** The outcome is an event
   with `source = approval` in that session, so the next run there starts
-  with "Approved and done: ..." or "Declined and discarded: ...".
-- **One call waits per conversation**, and it expires after 72 hours.
+  with "Approved and posted: ..." or "Declined and discarded: ...".
+- **One call waits per conversation**, and it expires after 72 hours. The
+  owner gets one reminder at 48 hours and one message at the expiry, and the
+  conversation that asked gets the outcome as an event.
+- **What waits can be listed and cancelled.** `waiting.py` reads the pending
+  timers, the parked runs and the pending or dead outbox rows, and cancels
+  one by its id (`t3`, `r7`, `m12`). `waku waiting`, the tools `list_waiting`
+  and `cancel_waiting`, and the dashboard's "Waiting" card all call it. A
+  cancelled row keeps its record with the status `cancelled`.
 - **Only the owner approves.** `who_may_approve` in `approvals.py` is the one
   function that decides, and it answers with `WAKU_OWNER`. The yes counts in
   a private Telegram chat, where one person writes.
@@ -459,9 +494,11 @@ shows those instead. A proxy that does not know the turn leaves the estimate.
   (every run is a row), `approvals.py` (tool modes, parking a call, the
   owner's answer), `outbox.py` (every outgoing message is a row),
   `dispatcher.py` (sends each row and retries), `senders/` (Telegram, Slack
-  and `gh`), `timers.py` (the timers table and the loop that fires each due
-  timer), `serve.py` (`waku serve`), `handover.py` (the same parts inside a
-  hosted container's dashboard, and the two routes its gateway calls)
+  and `gh`, and `format.py`, which turns the model's Markdown into what each
+  channel reads), `timers.py` (the timers table and the loop that fires each
+  due timer), `waiting.py` (lists what waits and cancels one), `serve.py`
+  (`waku serve`), `handover.py` (the same parts inside a hosted container's
+  dashboard, and the two routes its gateway calls)
   and `sources/` (Telegram, Slack and GitHub handlers that only insert a
   row).
 - `waku/runtime/session.py` — working memory for one turn: SOUL.md, memory

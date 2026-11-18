@@ -6,6 +6,10 @@ and the worker starts a run in the conversation that set it. That run reads
 the note as the reason it woke. Without `waku serve` running the timer waits,
 and it fires at the next start.
 
+What the tool answers is for the person: "Timer 1 is set for Tuesday 14:09."
+It names no process and no table, because the model repeats what it is given
+(spec 024, decision 3).
+
 `when` is an absolute time. A time without an offset is read in the time zone
 of this machine, which is the person's. The tool refuses a time in the past
 and a time more than one year away. A timer fires once: a run that wants to
@@ -48,6 +52,16 @@ def _one_year_after(moment: datetime) -> datetime:
         return moment.replace(year=moment.year + 1, day=28)
 
 
+def _spoken(due: datetime, current: datetime) -> str:
+    """The time as a person says it: "Tuesday 14:09" within the next six days,
+    and with the date after that."""
+    current = current.astimezone(due.tzinfo)
+    if (due.date() - current.date()).days < 7:
+        return f"{due:%A %H:%M}"
+    year = f" {due.year}" if due.year != current.year else ""
+    return f"{due:%A} {due.day} {due:%B}{year} {due:%H:%M}"
+
+
 def make_tool(home: Path, session_id: Callable[[], str] | None = None,
               now: Callable[[], datetime] | None = None, tz: tzinfo | None = None) -> Tool:
     """`now` and `tz` are for the evals: a clock that a test moves, and a time
@@ -55,6 +69,7 @@ def make_tool(home: Path, session_id: Callable[[], str] | None = None,
 
     def schedule_task(when: str = "", note: str = "") -> str:
         from waku.alwayson import outbox, timers
+        from waku.alwayson.worker import serving
         from waku.db import connect
 
         note = (note or "").strip()
@@ -84,21 +99,21 @@ def make_tool(home: Path, session_id: Callable[[], str] | None = None,
                 note=note, address=address, idempotency_key=key, now=current)
         finally:
             conn.close()
-        at = f"{due:%A %Y-%m-%d %H:%M} (UTC{due:%z})"
+        at = _spoken(due, current)
         if timer_id is None:
             return f"The timer for {at} was already set by an earlier attempt of this run."
-        if address:
-            where = f"My reply then goes to {outbox.format_address(*address)}."
-        else:
-            where = ("My reply then has nowhere to go: WAKU_OWNER is not set, so Waku does "
+        said = f"Timer {timer_id} is set for {at}."
+        if not address:
+            said += (" My reply then has nowhere to go: WAKU_OWNER is not set, so Waku does "
                      "not know where the owner is reached.")
-        return (f"Timer {timer_id} is set for {at}. `waku serve` wakes me then with this "
-                "note; while `waku serve` is not running the timer waits. " + where)
+        if run is None and not serving(home):
+            said += " It waits until Waku's always-on mode is running, and fires then."
+        return said
 
     return Tool(
         name="schedule_task",
         description=(
-            "Set a timer for yourself: at `when`, `waku serve` wakes you in this "
+            "Set a timer for yourself: at `when` you are woken in this "
             "conversation with `note` as the reason. Use when you or the user want "
             "something done or checked later ('on Thursday', 'in two hours', 'tomorrow "
             "morning'). " + _FORM + ", in the user's time zone; work it out from the "

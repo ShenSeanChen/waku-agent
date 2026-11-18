@@ -65,7 +65,7 @@ It listens to whichever of these three you configure in `.env`:
 | Source | Set | What is heard |
 |---|---|---|
 | Telegram | `TELEGRAM_BOT_TOKEN`, `TELEGRAM_ALLOWED_USER` | every message from an allowed user |
-| Slack | `SLACK_APP_TOKEN`, `SLACK_BOT_TOKEN`, `SLACK_ALLOWED_CHANNELS`, and `pip install 'waku-agent[slack]'` | an @mention in an allowed channel of your workspace |
+| Slack | `SLACK_APP_TOKEN`, `SLACK_BOT_TOKEN`, `SLACK_ALLOWED_CHANNELS`, and `pip install 'waku-agent[slack]'`. The app comes from a manifest: see "Slack from a manifest" below | an @mention in an allowed channel of your workspace |
 | GitHub | `WAKU_GITHUB_REPOS`, and `gh auth login` once | an open issue with the label `waku`; with `WAKU_GITHUB_LOGIN`, a comment that mentions that login, from an owner, member or collaborator |
 
 Slack uses Socket Mode and GitHub is polled through the `gh` CLI every 60
@@ -74,46 +74,121 @@ seconds, so a laptop needs no public address. On a server, set
 `POST /webhooks/github`: `waku serve` then listens on `127.0.0.1:7780`, checks
 GitHub's signature on every delivery, and stops polling.
 
+### Slack from a manifest
+
+You create your own Slack app once, from
+[`waku/alwayson/sources/slack-app-manifest.yaml`](../waku/alwayson/sources/slack-app-manifest.yaml).
+The manifest turns Socket Mode on and asks for two bot scopes,
+`app_mentions:read` and `chat:write`, and one event, `app_mention`.
+
+1. **Create the app.** At <https://api.slack.com/apps> choose "Create New
+   App", then "From a manifest", pick your workspace and paste the file.
+2. **Install it.** On the app's "Install App" page, install it to your
+   workspace.
+3. **Copy the two tokens into `.env`.** `SLACK_BOT_TOKEN` is the "Bot User
+   OAuth Token" on the "Install App" page, and it starts `xoxb-`.
+   `SLACK_APP_TOKEN` is an app-level token: on "Basic Information", under
+   "App-Level Tokens", generate one with the scope `connections:write`. It
+   starts `xapp-`.
+4. **Invite the bot to a channel.** Write `/invite @waku` in the channel, and
+   put that channel's id in `SLACK_ALLOWED_CHANNELS`.
+
+`waku connections` then checks both tokens with Slack and prints one line. A
+token Slack refuses is named, and so is a scope that is missing: "the bot
+token is missing the scope chat:write". Each person who runs their own agent
+creates their own app. One public Waku app that a team installs with a click
+needs a server Waku runs, and is not built here.
+
 Each Telegram chat, Slack thread and GitHub issue is its own conversation.
 Two messages sent to one conversation within 3 seconds become one run.
 
 The reply goes back where the message came from: the Telegram chat, the Slack
 thread, or a comment on the GitHub issue through `gh issue comment`. Slack
-needs the bot scope `chat:write` for that. A reply that fails to send is tried
+needs the bot scope `chat:write` for that. A reply to a place other people
+read (a GitHub issue, a Slack channel, a Telegram group) waits for your yes
+first: you read the exact text on Telegram, and it is posted once you answer
+"yes". A reply to your own chat, or to a Telegram chat with one person, goes
+out at once. To let replies go out without a yes, put `reply:github` or
+`reply:slack` in `WAKU_APPROVE_ALLOW`.
+
+A new issue with the label `waku` is an event nobody sent to the agent. The
+run it starts may say nothing, and it posts nothing without your yes. Either
+way you read one line on your own channel: "New issue acme/app#12: 'Login
+fails on Safari'. I did nothing.", or "... I want to comment, see the request
+above." A reply that fails to send is tried
 again after 10 seconds, 1 minute, 10 minutes and 1 hour, and after the fifth
 failure `waku serve` gives up on it. Set `WAKU_OWNER` to where you are reached
 (`telegram:<chat id>`, `slack:<channel id>` or
 `github:<owner>/<repo>#<number>`) and it tells you there, on another channel
 than the one that failed.
 
-`send_message` uses the same path. A message to you (`WAKU_OWNER`), or back
-into the conversation it was asked in, is sent without a question.
+`send_message` uses the same path. A message to you (`WAKU_OWNER`) is sent
+without a question. So is a message back into the conversation it was asked
+in, when a reply there needs no yes.
 
 A message to anyone else waits for your yes. Ask "comment on acme/app#12 that
 Sean will review it this week", and nothing is posted. You read on Telegram:
 'Comment on acme/app#12: "Sean will review this issue this week." Approve?
 Reply yes or no.' Answer "yes" and that exact comment is posted once. Answer
-"no" and it is discarded. Without an answer the request expires after 72
-hours. For this to work, `WAKU_OWNER` must name your private Telegram chat
+"no" and it is discarded. The request is the only message you get about it.
+When someone else asked, in a Slack thread for example, that thread reads "I
+asked Sean to approve this. I will say here what Sean decides.", with the name
+from `WAKU_OWNER_NAME`. A request for a call you approved in the last 24 hours
+carries one more line, "The same call ran at 14:52 today.", and you still
+decide. Without an answer you get one reminder after 48 hours, and after 72
+hours the request expires: you read "I stopped waiting for your answer on:
+... Nothing was posted.", and the conversation that asked hears it too. For this to work, `WAKU_OWNER` must name your private Telegram chat
 (`telegram:<chat id>`): that is where you are asked, and only a yes from that
 chat counts. One call waits per conversation. `WAKU_APPROVE_ASK` and
 `WAKU_APPROVE_ALLOW` take tool names, comma-separated, and make one tool
-always wait or never wait. A tool from an MCP server does not wait unless
-`WAKU_APPROVE_ASK` names it.
+always wait or never wait.
+
+A tool from an MCP server follows its connector: reads run, writes ask.
+
+| The server | Which of its tools wait for your yes |
+|---|---|
+| Waku Memory | none: the agent saves and recalls memories without a question |
+| on the starter list (Linear, Notion, GitHub) | the ones matching the entry's `writes` in `waku/connectors.toml`, for example `create_*` |
+| any other server you added | every tool the server does not declare read-only (`readOnlyHint`) |
+
+A server counts as a starter one by its address, not by its name. To let a
+whole connector write without a question, write "let Linear write without
+asking": the agent asks you once more, and after your yes the rule is stored
+in `state.db` and survives a restart. "Make Linear ask before it writes" takes
+it back, and so does removing the connector. The "Connectors" card has the
+same switch on each row. `WAKU_APPROVE_ASK` and `WAKU_APPROVE_ALLOW` still win
+over all of this. Connecting and disconnecting a server always wait for your
+yes, whatever those two lists say.
 
 `schedule_task` lets the agent set a follow-up. Ask "check issue 12 on Thursday
 at 09:00 and tell me if it is still open", and on Thursday at 09:00 `waku
-serve` starts a run with that note, within 30 seconds of that time. The run
+serve` writes that note into its inbox within 2 seconds of that time, and the
+run starts 3 seconds later, as for any message. A timer set in `waku` or the
+dashboard while `waku serve` runs can be up to 30 seconds late. The run
 answers in the conversation that set the timer. A timer set in `waku` or the
 dashboard answers `WAKU_OWNER`. A run that finds nothing worth sending sends
 nothing. A timer fires once, and a timer that comes due while `waku serve` is
 stopped fires at the next start.
+
+`waku waiting` lists what waits: the timers that have not fired, the calls
+that wait for your yes, and the messages that are queued or could not be
+sent. `waku waiting cancel t3` cancels one by the id in the list (`t3` a
+timer, `r7` a waiting call, `m12` a message). The "Waiting" card on the
+dashboard's Overview shows the same three lists with a Cancel button on each
+row, and "what reminders do I have?" and "cancel the Thursday one" work from
+chat. A cancelled row keeps its record with the status `cancelled`.
 
 Two limits today:
 
 - One `waku serve` runs per Waku home. A second one refuses to start.
 - Telegram allows one poller per bot token, so stop `waku telegram` and the
   dashboard's Telegram before starting `waku serve` with the same token.
+  While another program reads the bot, the line that lists the sources says
+  so: "sources: github; telegram is blocked: another program is reading this
+  bot (waku dashboard, waku telegram or a second waku serve). Stop it and
+  this one takes over." `waku serve` prints the line again when that
+  changes, and tells you once on another channel when `WAKU_OWNER` names
+  one.
 
 ## Brief me on my week (Apple Calendar + Mail)
 
@@ -272,13 +347,50 @@ TypeSafe card on Connections sets both.
 pip install -e '.[mcp]'
 ```
 
-Create `~/.waku/mcp.json` and any Model Context Protocol server's tools appear to
+One command adds any Model Context Protocol server, and its tools appear to
 the agent, namespaced `<server>_<tool>` (and in the dashboard's Tools ▸ MCP tab):
+
+```bash
+waku mcp add linear                                  # a name on the starter list: prints the sign-in link and opens your browser
+waku mcp add myserver https://mcp.example.com/mcp    # any other remote server, by its address
+waku mcp add myserver https://mcp.example.com/mcp --key-env MYSERVER_API_KEY   # one whose key is in .env
+waku mcp add fs -- npx -y @modelcontextprotocol/server-filesystem /tmp    # a server this machine runs
+waku mcp remove linear                               # deletes the entry and its sign-in
+```
+
+The starter list is `waku/connectors.toml`: Linear and Notion, which you sign
+in to on their own page, and GitHub, which reads a personal access token from
+`GITHUB_PERSONAL_ACCESS_TOKEN` in `.env`. Each entry is the vendor's own hosted
+MCP server. Slack, Gmail and Google Drive have one too, and they are not on
+the list yet: each takes sign-in only from a client registered with the vendor
+beforehand, and Waku registers itself at sign-in. The list changes by pull
+request. Waku runs no marketplace.
+
+There are two more ways to add a remote server, and both take a starter name
+or an address, never a command:
+
+- **The dashboard.** Tools ▸ MCP has a "Connectors" card with one button for
+  each starter entry, an address field, the sign-in link while one waits, and
+  a Remove button on each server.
+- **Chat, under `waku serve`.** Write "connect Linear" or "connect
+  https://mcp.example.com/mcp".
+  The agent asks the owner first (see "Always-on: waku serve" above), and after the yes it
+  answers with the sign-in link. Open that link on the computer Waku runs on:
+  the server sends the browser back to a port on that computer, so the link
+  does not work from a phone. The owner gets one message when the server is
+  connected: "Linear is connected: 14 tools, 6 of them write and will ask
+  first." In the terminal chat and the dashboard chat the agent cannot ask
+  for a yes, so it points at the command and the card instead.
+
+The command writes `~/.waku/mcp.json`, which you can also edit by hand:
 
 ```json
 {"servers": [{"name": "fs", "command": "npx",
   "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]}]}
 ```
+
+Restart Waku after adding a server from the command line or the card. `waku
+serve` loads a server's tools by itself once it is signed in.
 
 **Node-free demo** — a tiny self-contained Python MCP server ships in the repo:
 
@@ -301,6 +413,7 @@ HTTP+SSE transport is deprecated and is not supported.
               "auth_env": "WAKU_MEMORY_API_KEY"}]}
 ```
 
+`waku mcp add <name> <address> --key-env VAR` writes this entry.
 `auth_env` names an **environment variable**; its value is sent as
 `Authorization: Bearer <value>`. The credential never goes in `mcp.json` —
 that file gets pasted into bug reports, and a bearer token in one is a leaked
@@ -314,8 +427,9 @@ the session gone at the same moment share one new session.
 
 ### Signing in instead of holding a key
 
-A server that speaks MCP's authorization spec needs no key at all. Say so, and
-Waku opens your browser on first use:
+A server that speaks MCP's authorization spec needs no key at all. `waku mcp
+add <name> <address>` writes this entry and signs in at once. Written by hand,
+it opens your browser on first use:
 
 ```json
 {"servers": [{"name": "waku_memory",
@@ -328,6 +442,11 @@ itself with the server, catches the redirect on `127.0.0.1:41765`, and keeps
 the result in `~/.waku/mcp-auth/<server>.json`, written `0600` — one file per
 server, so a corrupt one costs a single connection rather than all of them.
 Delete that file to sign out.
+
+When another program holds port 41765 at the first sign-in to a server, Waku
+registers on another free port and keeps that port for that server. A server
+Waku is already registered with keeps its port: when that port is held, the
+sign-in does not start, and Waku says which port to free.
 
 `oauth` and `auth_env` are two answers to one question, so naming both is
 refused rather than resolved by precedence.
@@ -356,7 +475,7 @@ Try it against the demo server, no remote host required:
 
 ```bash
 python evals/fixtures/mcp_demo_server.py --http --port 8931
-# .waku/mcp.json → {"servers": [{"name": "demo", "url": "http://127.0.0.1:8931/mcp"}]}
+waku mcp add demo http://127.0.0.1:8931/mcp --no-auth
 ```
 
 Requires `mcp>=2.1` (`pip install -e '.[mcp]'`). The 1.x SDK spelled this

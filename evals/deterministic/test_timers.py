@@ -148,7 +148,8 @@ def test_tool_sets_a_timer_at_an_absolute_time_in_the_persons_time_zone(home):
     (timer,) = _timers(home)
     assert timer.due_at == "2026-11-19T17:00:00+00:00"
     assert (timer.session_id, timer.note, timer.status) == ("telegram:42", NOTE, "pending")
-    assert "Thursday" in said and "09:00" in said and "waku serve" in said
+    assert "Thursday 09:00" in said and "always-on mode" in said
+    assert "waku serve" not in said, "the model repeats what it is given (spec 024)"
 
 
 def test_tool_keeps_the_offset_a_time_carries(home):
@@ -165,7 +166,7 @@ def test_tool_inside_a_run_sends_the_woken_runs_reply_to_that_conversation(home)
     (timer,) = _timers(home)
     assert timer.address == THREAD
     assert timer.session_id == "slack:C1:1700.0001"
-    assert "slack:C1:1700.0001" in said
+    assert said == "Timer 1 is set for Thursday 09:00."
 
 
 def test_tool_outside_a_run_sends_the_woken_runs_reply_to_the_owner(home, monkeypatch):
@@ -173,7 +174,7 @@ def test_tool_outside_a_run_sends_the_woken_runs_reply_to_the_owner(home, monkey
     said = _tool(home).fn(when="2026-11-19T09:00", note=NOTE)
 
     assert _timers(home)[0].address == ("telegram", {"chat_id": 42})
-    assert "telegram:42" in said
+    assert "telegram:42" not in said, "the owner's chat id is not handed to the model"
 
 
 def test_tool_outside_a_run_without_an_owner_says_the_reply_has_nowhere_to_go(home):
@@ -361,7 +362,10 @@ def _outbox(conn):
             for r in conn.execute("SELECT * FROM outbox ORDER BY id")]
 
 
-def test_a_run_a_timer_fires_once_replies_to_the_conversation_that_set_it(conn):
+def test_a_run_a_timer_fires_once_replies_to_the_conversation_that_set_it(conn, monkeypatch):
+    # Spec 024: a reply to a Slack thread or a GitHub issue waits for a yes
+    # unless the owner allows it. These rows are about delivery, so it is on.
+    monkeypatch.setenv("WAKU_APPROVE_ALLOW", "reply:slack")
     _add(conn)
     _loop(conn, Clock(THURSDAY_9)).step()
     seen = []
@@ -479,3 +483,100 @@ def test_serve_fires_once_a_timer_that_comes_due_while_it_runs(tmp_path):
     assert runs == [("telegram:42", [("timer", NOTE)])]
     assert statuses == ["fired", "pending"]
     assert service.timer_thread is not None and not service.timer_thread.is_alive()
+
+
+# ---- spec 024, decision 9: the loop sleeps until the next timer -------------
+
+def _run_loop(conn, clock, rounds):
+    """Run the loop with a wait that moves the fake clock by what the loop
+    asked to sleep, for `rounds` waits. Returns the seconds it asked for."""
+    loop = timers.TimerLoop(conn, now=clock, log=lambda line: None)
+    waits = []
+
+    def wait(seconds):
+        waits.append(seconds)
+        clock.advance(seconds=seconds)
+        if len(waits) >= rounds:
+            loop.stop.set()
+
+    loop.run_forever(wait=wait)
+    return waits
+
+
+def test_on_time_a_timer_due_in_5_seconds_fires_within_2_seconds_of_its_time(conn):
+    """Spec 024, acceptance 9. The stretch reminder set for 2:09:00 arrived
+    at 2:09:29, because the loop looked every 30 seconds."""
+    clock = Clock(MONDAY_NOON)
+    due_at = MONDAY_NOON + timedelta(seconds=5)
+    _add(conn, due_at=due_at)
+
+    waits = _run_loop(conn, clock, rounds=2)
+
+    assert waits[0] == 5, "the loop sleeps until the timer, not for 30 seconds"
+    ((_, _, _, payload, _),) = _events(conn)
+    fired_at = conn.execute("SELECT received_at FROM events").fetchone()[0]
+    late = datetime.fromisoformat(fired_at) - due_at
+    assert timedelta(0) <= late <= timedelta(seconds=2)
+    assert payload["text"] == NOTE
+
+
+def test_on_time_the_loop_sleeps_30_seconds_at_most(conn):
+    """Without a timer, and with one that is far away, the loop still looks
+    every 30 seconds: a timer set by another process is found then."""
+    clock = Clock(MONDAY_NOON)
+    assert _run_loop(conn, clock, rounds=2) == [30, 30]
+
+    _add(conn, due_at=clock() + timedelta(seconds=45))
+    assert _run_loop(conn, clock, rounds=2) == [30, 15]
+    assert len(_events(conn)) == 0
+    assert timers.TimerLoop(conn, now=clock, log=lambda line: None).step() == 1
+
+
+def test_on_time_two_timers_each_fire_at_their_own_time(conn):
+    clock = Clock(MONDAY_NOON)
+    _add(conn, due_at=MONDAY_NOON + timedelta(seconds=5), key="e1:t1", note="first")
+    _add(conn, due_at=MONDAY_NOON + timedelta(seconds=12), key="e1:t2", note="second")
+
+    assert _run_loop(conn, clock, rounds=3)[:2] == [5, 7]
+    stamps = [r["received_at"] for r in conn.execute("SELECT received_at FROM events ORDER BY id")]
+    assert stamps == ["2026-11-16T12:00:05+00:00", "2026-11-16T12:00:12+00:00"]
+
+
+def test_on_time_a_timer_set_while_the_loop_sleeps_wakes_it_at_once(tmp_path):
+    """schedule_task inserts a row while the loop is in its 30-second sleep.
+    The loop wakes for it and does not finish the sleep. Real seconds: the
+    test fails if the timer takes two of them."""
+    import threading
+    import time
+
+    connect(tmp_path).close()   # the tables exist before two threads open the file
+    loop = timers.TimerLoop(None, log=lambda line: None)
+
+    def run():
+        loop.conn = connect(tmp_path)   # SQLite keeps a connection on its thread
+        try:
+            loop.run_forever()
+        finally:
+            loop.conn.close()
+
+    thread = threading.Thread(target=run, daemon=True)
+    thread.start()
+    other = connect(tmp_path)
+    try:
+        time.sleep(0.2)   # the loop found nothing and went to sleep
+        started = time.monotonic()
+        timers.insert(other, due_at=datetime.now(UTC), session_id="telegram:42", note=NOTE,
+                      address=None, idempotency_key="e1:t1")
+        while time.monotonic() - started < 5:
+            if other.execute("SELECT COUNT(*) FROM events").fetchone()[0]:
+                break
+            time.sleep(0.01)
+        took = time.monotonic() - started
+        fired = other.execute("SELECT COUNT(*) FROM events").fetchone()[0]
+    finally:
+        loop.stop.set()
+        thread.join(5)
+        other.close()
+
+    assert fired == 1 and took < 2
+    assert not thread.is_alive(), "stop wakes the loop out of its sleep too"

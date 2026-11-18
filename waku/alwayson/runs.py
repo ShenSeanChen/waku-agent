@@ -10,6 +10,7 @@ a run joins its receipt and its trace.
   parked    it ended with one tool call waiting for the owner's yes
             (approvals.py); `pending_call` holds that call
   expired   nobody answered for 72 hours
+  cancelled the owner cancelled the waiting call (waiting.py)
 
 A run that is replayed after a crash starts with the same first event, so
 `start` returns the row the first attempt wrote. The run's id is the same, and
@@ -27,8 +28,10 @@ from datetime import datetime, timedelta
 
 from waku.alwayson import outbox
 
-STATUSES = ("running", "done", "failed", "parked", "expired")
+STATUSES = ("running", "done", "failed", "parked", "expired", "cancelled")
 EXPIRE_HOURS = 72
+# The owner is reminded once, this long before a waiting call expires.
+REMIND_HOURS_BEFORE = 24
 
 
 @dataclass(frozen=True)
@@ -107,12 +110,28 @@ def set_pending(conn: sqlite3.Connection, run_id: int, call: dict, call_hash: st
     conn.commit()
 
 
-def resolve(conn: sqlite3.Connection, run_id: int, status: str) -> None:
+def resolve(conn: sqlite3.Connection, run_id: int, status: str, *, approved: bool = False,
+            now: datetime | None = None) -> None:
     """Close a parked run once the owner answered. The stored call stays in
-    the row as a record of what was asked."""
-    conn.execute("UPDATE runs SET status = ? WHERE id = ? AND status = 'parked'",
-                 (status, run_id))
+    the row as a record of what was asked, with the answer and its time."""
+    answered = json.dumps({"approved": approved,
+                           "at": outbox._stamp(now or outbox.utc_now())})
+    conn.execute(
+        "UPDATE runs SET status = ?, pending_call = json_set(pending_call, '$.answered', "
+        "json(?)) WHERE id = ? AND status = 'parked'", (status, answered, run_id))
     conn.commit()
+
+
+def ran_at(conn: sqlite3.Connection, call_hash: str, since: datetime) -> datetime | None:
+    """When the owner last approved a call with this hash, if that was after
+    `since` and the call ran. None otherwise."""
+    row = conn.execute(
+        "SELECT json_extract(pending_call, '$.answered.at') AS at FROM runs "
+        "WHERE pending_hash = ? AND status = 'done' "
+        "AND json_extract(pending_call, '$.answered.approved') = 1 "
+        "AND json_extract(pending_call, '$.answered.at') >= ? "
+        "ORDER BY at DESC LIMIT 1", (call_hash, outbox._stamp(since))).fetchone()
+    return datetime.fromisoformat(row["at"]) if row else None
 
 
 def parked(conn: sqlite3.Connection, session_id: str | None = None) -> list[Run]:
@@ -123,12 +142,32 @@ def parked(conn: sqlite3.Connection, session_id: str | None = None) -> list[Run]
     return [_run(row) for row in rows]
 
 
-def expire(conn: sqlite3.Connection, now: datetime) -> int:
-    """Mark every run that has been parked for 72 hours `expired`, and say how
-    many. Its call can no longer be approved."""
-    cutoff = outbox._stamp(now - timedelta(hours=EXPIRE_HOURS))
-    cursor = conn.execute(
-        "UPDATE runs SET status = 'expired' WHERE status = 'parked' AND ended_at <= ?",
-        (cutoff,))
+def overdue(run: Run, now: datetime, hours: int = EXPIRE_HOURS) -> bool:
+    """Whether a parked run has waited `hours` or longer."""
+    return run.ended_at <= outbox._stamp(now - timedelta(hours=hours))
+
+
+def expire(conn: sqlite3.Connection, now: datetime) -> list[Run]:
+    """Mark every run that has been parked for 72 hours `expired`, and return
+    those runs as they were. Their calls can no longer be approved. The worker
+    is the one caller: it tells the owner and the conversation that asked
+    (spec 024, decision 8)."""
+    found = [run for run in parked(conn) if overdue(run, now)]
+    for run in found:
+        conn.execute("UPDATE runs SET status = 'expired' WHERE id = ? AND status = 'parked'",
+                     (run.id,))
     conn.commit()
-    return cursor.rowcount
+    return found
+
+
+def to_remind(conn: sqlite3.Connection, now: datetime) -> list[Run]:
+    """The parked runs that have waited 48 hours and are not yet reminded."""
+    return [run for run in parked(conn)
+            if overdue(run, now, EXPIRE_HOURS - REMIND_HOURS_BEFORE)
+            and not (run.pending_call or {}).get("reminded")]
+
+
+def mark_reminded(conn: sqlite3.Connection, run_id: int) -> None:
+    conn.execute("UPDATE runs SET pending_call = json_set(pending_call, '$.reminded', "
+                 "json('true')) WHERE id = ?", (run_id,))
+    conn.commit()

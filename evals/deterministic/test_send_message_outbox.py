@@ -46,7 +46,8 @@ def test_a_message_to_the_owner_is_one_pending_row_and_no_file(home):
         "chat", "telegram", {"chat_id": 42}, "The demo moved to Friday.", "pending")
     assert key.startswith("chat:")
     assert list((home / "outbox").iterdir()) == [], "the .txt path is gone"
-    assert "waku serve" in said and "telegram:42" in said
+    assert "not sent yet" in said and "always-on mode" in said
+    assert "waku serve" not in said and "telegram:42" not in said
     assert "Nothing was sent" not in said
 
 
@@ -92,7 +93,10 @@ def test_an_empty_body_writes_nothing(home):
     assert "empty" in said.lower()
 
 
-def test_inside_a_run_the_message_can_go_to_the_runs_own_conversation(home):
+def test_inside_a_run_the_message_can_go_to_the_runs_own_conversation(home, monkeypatch):
+    # Spec 024: a reply to a Slack thread or a GitHub issue waits for a yes
+    # unless the owner allows it. These rows are about delivery, so it is on.
+    monkeypatch.setenv("WAKU_APPROVE_ALLOW", "reply:slack")
     thread = ("slack", {"channel": "C1", "thread_ts": "1700.0001"})
     with outbox.running(home, "e7", thread):
         _send(home, "slack:C1:1700.0001", "Started; I will report here.")
@@ -119,7 +123,7 @@ def test_inside_a_run_the_keys_count_up_and_a_replay_adds_no_row(home):
 def test_the_description_says_the_message_is_sent():
     tool = messages.make_tool(None)
     assert "local outbox for the user to review" not in tool.description
-    assert "waku serve" in tool.description
+    assert "waku serve" not in tool.description and "outbox" not in tool.description
     assert set(tool.input_schema["required"]) == {"to", "body"}
 
 
@@ -131,6 +135,8 @@ def test_the_worker_gives_the_tool_its_run(tmp_path, monkeypatch):
     from waku.alwayson.worker import AgentRun, Worker
 
     monkeypatch.setenv("WAKU_OWNER", "telegram:42")
+    # Spec 024: a reply to a Slack thread waits for a yes unless this is set.
+    monkeypatch.setenv("WAKU_APPROVE_ALLOW", "reply:slack")
     home = tmp_path / "home"
     home.mkdir()
     client = ScriptedClient([

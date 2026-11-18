@@ -350,7 +350,7 @@ def test_once_the_telegram_sender_posts_to_the_chat():
     telegram.make("123:abc", post=post)(_message("telegram", {"chat_id": 42}, "hello Sean"))
 
     assert calls == [("https://api.telegram.org/bot123:abc/sendMessage",
-                      {"chat_id": 42, "text": "hello Sean"}, {})]
+                      {"chat_id": 42, "text": "hello Sean", "parse_mode": "HTML"}, {})]
 
 
 def test_once_the_telegram_sender_splits_a_long_message():
@@ -571,7 +571,11 @@ def test_silent_inside_a_sentence_is_still_a_reply(conn):
     assert [row[3] for row in _sent_rows(conn)] == ["The room is silent now."]
 
 
-def test_silent_or_not_a_slack_reply_goes_to_the_thread_and_github_to_the_issue(conn):
+def test_silent_or_not_a_slack_reply_goes_to_the_thread_and_github_to_the_issue(
+        conn, monkeypatch):
+    # Spec 024: a reply to a Slack thread or a GitHub issue waits for a yes
+    # unless the owner allows it. These rows are about delivery, so it is on.
+    monkeypatch.setenv("WAKU_APPROVE_ALLOW", "reply:slack,reply:github")
     _event(conn, external_id="Ev1", session_id="slack:C1:1700.0001", source="slack",
            reply_to={"channel": "C1", "thread_ts": "1700.0001"})
     _event(conn, external_id="label:acme/app#12", session_id="github:acme/app#12",
@@ -585,14 +589,19 @@ def test_silent_or_not_a_slack_reply_goes_to_the_thread_and_github_to_the_issue(
         ("github", {"repo": "acme/app", "number": 12})]
 
 
-def test_silent_failed_run_writes_no_row(conn):
+def test_failed_run_writes_one_plain_sentence_and_no_reason(conn):
+    """A run that raised said nothing until the second live run (2026-11-17)."""
+    from waku.alwayson.worker import FAILED
+
     _event(conn)
 
     def run(session_id, batch):
         raise RuntimeError("model is down")
 
     _worker(conn, run).step()
-    assert _rows(conn) == []
+    (row,) = _rows(conn)
+    assert row["body"] == FAILED and "model is down" not in row["body"]
+    assert row["idempotency_key"].endswith(":failed")
 
 
 def test_replay_of_a_run_after_a_crash_leaves_one_row(tmp_path, monkeypatch):

@@ -965,6 +965,13 @@ snapshot carries none and needs none: it holds two SQLite files, and a single
 SQLite file carries its own completeness check, which both `backup.sh` and
 `restore.sh` run as `PRAGMA integrity_check`.
 
+A tenant's `state.db` is copied with SQLite's own `.backup`, inside the
+tenant's task container, and `state.db`, `state.db-wal` and `state.db-shm`
+are left out of the file copy that follows. `state.db` runs in WAL mode, so a
+row that was just written sits in `state.db-wal` until SQLite moves it into
+`state.db`, and a file copy of `state.db` alone would miss it. The staged file
+is a whole database, so `restore.sh` copies it back as a file.
+
 `backup.sh` and `restore.sh` share one `flock` on the staging directory, so a
 backup and a restore never run at once. List what is in the repository with
 restic's own environment, which is exactly what `config/backup.env` holds:

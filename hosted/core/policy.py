@@ -80,6 +80,11 @@ GATEWAY_ONLY = "Only the gateway may call this."
 # and a tenant can change the provider.
 PLUGIN_REFUSED = ("Plugins are not available on hosted Waku. A hosted container's "
                   "servers and memory are set up when you sign in.")
+# waku-agent spec 025: the same holds for a server a tenant would add from the
+# "Connectors" card. Whether a tenant gets the card is the hosted spec's
+# decision, so its routes are blocked until it is made.
+CONNECTORS_BLOCKED = ("Connectors are not available on hosted Waku. A hosted "
+                      "container's servers are set up when you sign in.")
 PLUGIN_COMMAND = "/plugin"
 CHAT_ROUTES = ("/api/chat", "/api/chat/stream")
 PLATFORM_FIELDS_REFUSED = ("The hosted free tier's key and endpoint are set by the "
@@ -148,6 +153,10 @@ DECISIONS: dict[str, str] = {
     # spends through the tenant's own provider, so on the free tier the
     # metering proxy charges it in credits; one call per click, 300 tokens out
     "/api/turn-evals/judge": PASS,
+    # spec 024: the timers, waiting calls and queued messages of this tenant's
+    # own home, and cancelling one of them. Per-tenant like /api/data
+    "/api/waiting": PASS,
+    "/api/waiting/cancel": PASS,
     # filtered: the payload decides
     "/api/providers": FILTER,
     "/api/settings": FILTER,
@@ -170,6 +179,12 @@ DECISIONS: dict[str, str] = {
     "/api/reveal": BLOCK,
     # spec 026: what work a container has left, asked by the gateway only
     "/api/alwayson/next": BLOCK,
+    # spec 025: listing, adding and removing a server of the tenant's own, and
+    # the switch that lets one write without asking
+    "/api/connectors": BLOCK,
+    "/api/connectors/add": BLOCK,
+    "/api/connectors/remove": BLOCK,
+    "/api/connectors/approve": BLOCK,
 }
 
 BLOCK_MESSAGES: dict[str, str] = {
@@ -188,6 +203,10 @@ BLOCK_MESSAGES: dict[str, str] = {
     "/api/voice": VOICE_BLOCKED,
     "/api/reveal": REVEAL_BLOCKED,
     "/api/alwayson/next": GATEWAY_ONLY,
+    "/api/connectors": CONNECTORS_BLOCKED,
+    "/api/connectors/add": CONNECTORS_BLOCKED,
+    "/api/connectors/remove": CONNECTORS_BLOCKED,
+    "/api/connectors/approve": CONNECTORS_BLOCKED,
 }
 
 # Substrings no path may contain. The query is split off first, so a percent

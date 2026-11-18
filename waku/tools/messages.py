@@ -11,6 +11,9 @@ the run came from. A message to anyone else needs the owner's yes. Under
 runs (waku/alwayson/approvals.py); it runs when the owner answers yes. In the
 terminal and the dashboard nothing can ask, so the tool refuses and writes no
 row.
+
+What the tool answers names no process and no table, because the model
+repeats what it is given (spec 024, decision 3).
 """
 
 from __future__ import annotations
@@ -26,6 +29,7 @@ _FORMS = "telegram:<chat id>, slack:<channel id> or github:<owner>/<repo>#<numbe
 def make_tool(home: Path) -> Tool:
     def send_message(to: str, body: str) -> str:
         from waku.alwayson import approvals, outbox
+        from waku.alwayson.worker import serving
         from waku.db import connect
 
         to, body = (to or "").strip(), (body or "").strip()
@@ -47,10 +51,9 @@ def make_tool(home: Path) -> Tool:
             asks = approvals.mode("send_message", {"to": to, "body": body},
                                   run.address if run else None) == approvals.ASK
             if asks and not approved:
-                return (f"Not sent: a message to {to} needs the owner's approval. `waku "
-                        "serve` asks the owner and sends it after a yes; here nothing can "
-                        "ask. Without a yes Waku messages the owner and the conversation "
-                        "this request came from.")
+                return (f"Not sent: a message to {to} needs the owner's approval, and this "
+                        "chat cannot ask for it. Without a yes Waku messages the owner and "
+                        "the conversation this request came from.")
         channel, target = address
         key = run.next_key() if run else f"chat:{uuid.uuid4().hex}"
         conn = connect(home)
@@ -59,16 +62,22 @@ def make_tool(home: Path) -> Tool:
                                     target=target, body=body, idempotency_key=key)
         finally:
             conn.close()
-        where = outbox.format_address(channel, target)
+        # In the owner's own chat the message comes back to the person the
+        # model talks to, so the answer does not call them "the owner".
+        where = ("this chat" if run is not None and address == run.address
+                 else "the owner" if to.lower() in ("owner", "me")
+                 else outbox.format_address(channel, target))
         if written is None:
             return f"The message to {where} was already queued by an earlier attempt of this run."
-        return (f"Queued for {where}. `waku serve` sends it; while `waku serve` is not "
-                "running the message waits in the outbox.")
+        if run is None and not serving(home):
+            return (f"The message to {where} is saved and not sent yet. Waku sends it when "
+                    "its always-on mode is running.")
+        return f"The message to {where} is on its way."
 
     return Tool(
         name="send_message",
         description=(
-            "Send a message through the outbox: it is queued, and `waku serve` delivers it. "
+            "Send a message to the owner or to an address. "
             "`to` is 'owner', or an address: " + _FORMS + ". Use when the user asks you to "
             "message, tell, or remind someone."
         ),
