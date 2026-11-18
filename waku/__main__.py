@@ -2,6 +2,7 @@
 
   waku                       chat in the terminal (default)
   waku dashboard             the browser cockpit → localhost:7777 (+ Telegram if configured)
+  waku serve                 always-on: store every incoming message, then answer it
   waku connections           list configured integrations and their health
   waku connect google        sign in to Google Calendar (opens your browser)
   waku connect waku-memory   one memory shared with your other agents (opens your browser)
@@ -49,6 +50,10 @@ def main() -> None:
         from waku.ops.dashboard import main as dash_main
 
         dash_main()
+    elif args[0] == "serve":
+        from waku.alwayson.serve import main as serve_main
+
+        sys.exit(serve_main(args[1:]))
     elif args[0] == "connections":
         from waku.integrations import cli_main
 

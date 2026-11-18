@@ -49,6 +49,42 @@ make telegram
 Text your bot from anywhere and your laptop runs the turn — long-polling, so no
 public URL or webhook. Set `TELEGRAM_ALLOWED_USER` to lock it to just you.
 
+## Always-on: waku serve
+
+```bash
+waku serve          # Ctrl-C or SIGTERM stops it
+```
+
+`waku serve` stores every incoming message in `state.db` before it answers.
+A message that arrives while a run is busy, or just before a restart, is
+answered after the restart. `waku telegram` runs the turn while the message is
+still in memory, so a crash at that moment loses the message.
+
+It listens to whichever of these three you configure in `.env`:
+
+| Source | Set | What is heard |
+|---|---|---|
+| Telegram | `TELEGRAM_BOT_TOKEN`, `TELEGRAM_ALLOWED_USER` | every message from an allowed user |
+| Slack | `SLACK_APP_TOKEN`, `SLACK_BOT_TOKEN`, `SLACK_ALLOWED_CHANNELS`, and `pip install 'waku-agent[slack]'` | an @mention in an allowed channel of your workspace |
+| GitHub | `WAKU_GITHUB_REPOS`, and `gh auth login` once | an open issue with the label `waku`; with `WAKU_GITHUB_LOGIN`, a comment that mentions that login, from an owner, member or collaborator |
+
+Slack uses Socket Mode and GitHub is polled through the `gh` CLI every 60
+seconds, so a laptop needs no public address. On a server, set
+`GITHUB_WEBHOOK_SECRET` and point the repository's webhook at
+`POST /webhooks/github`: `waku serve` then listens on `127.0.0.1:7780`, checks
+GitHub's signature on every delivery, and stops polling.
+
+Each Telegram chat, Slack thread and GitHub issue is its own conversation.
+Two messages sent to one conversation within 3 seconds become one run.
+
+Three limits today:
+
+- The reply is printed in the `waku serve` terminal and kept in the chat log.
+  It is not sent back to Telegram, Slack or GitHub yet.
+- One `waku serve` runs per Waku home. A second one refuses to start.
+- Telegram allows one poller per bot token, so stop `waku telegram` and the
+  dashboard's Telegram before starting `waku serve` with the same token.
+
 ## Brief me on my week (Apple Calendar + Mail)
 
 ```bash

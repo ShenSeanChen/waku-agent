@@ -11,6 +11,7 @@ targets are aliases for the same things, plus the eval and tracing tools.
 | `waku dashboard` | the live cockpit at localhost:7777 (+ Telegram if `TELEGRAM_BOT_TOKEN` is set) |
 | `waku voice` | talk to it — the "waku waku" wake word, or push-to-talk (needs the `[voice]` extra) |
 | `waku telegram` | message it from your phone (needs `TELEGRAM_BOT_TOKEN`) |
+| `waku serve` | always-on: store each Telegram, Slack and GitHub message, then answer it ([integrations](integrations.md#always-on-waku-serve)) |
 | `waku discord` | answer in a Discord server (needs `DISCORD_BOT_TOKEN`) |
 | `waku whatsapp` | answer WhatsApp messages (needs `WHATSAPP_TOKEN` and a public URL) |
 | `waku brief` | a morning briefing from calendar + mail + memory, run as a loop |

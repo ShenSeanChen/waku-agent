@@ -49,22 +49,31 @@ def _new_runner() -> GatewayAgentRunner:
     )
 
 
-def _build_app(token: str, allowed: str = "", runner: GatewayAgentRunner | None = None):
+def _build_app(token: str, allowed: str = "", runner: GatewayAgentRunner | None = None,
+               on_message=None):
     """Build the polling app + message handler. Shared by the standalone
-    gateway and the background poller `waku dashboard` starts.
+    gateway, the background poller `waku dashboard` starts, and `waku serve`.
 
     `allowed` is accepted for backwards compatibility; the allowlist is read
     from the environment so a single id and a comma-separated list behave the
-    same way."""
+    same way.
+
+    `on_message` is `waku serve`'s case (spec 023): an allowed message is
+    handed to it and nothing else happens here. No runner is built and no turn
+    runs: the handler stores the message, and the worker answers it."""
     allowed_ids = _allowed_ids() | ({allowed.strip()} if allowed.strip() else set())
     from telegram import Update
     from telegram.ext import Application, ContextTypes, MessageHandler, filters
 
-    runner = runner or _new_runner()
+    if on_message is None:
+        runner = runner or _new_runner()
 
     async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if allowed_ids and str(update.effective_user.id) not in allowed_ids:
             await update.message.reply_text("This Waku serves someone else. Run your own!")
+            return
+        if on_message is not None:
+            on_message(update)
             return
         await run_gateway_turn(runner, update.message.text, update.message.reply_text)
 
@@ -94,27 +103,33 @@ def main() -> None:
         runner.close()
 
 
+def stop_polling(loop, app, thread) -> None:
+    """Stop a poller that poll_in_thread started, and wait for its thread."""
+    async def shutdown():
+        if app.updater.running:
+            await app.updater.stop()
+        if app.running:
+            await app.stop()
+        await app.shutdown()
+
+    if thread.is_alive() and loop.is_running():
+        try:
+            asyncio.run_coroutine_threadsafe(shutdown(), loop).result(timeout=10)
+        finally:
+            if loop.is_running():
+                loop.call_soon_threadsafe(loop.stop)
+    if thread.is_alive():
+        thread.join(timeout=10)
+
+
 class TelegramHandle:
     def __init__(self, loop, app, thread, conflict, runner: GatewayAgentRunner) -> None:
         self.loop, self.app, self.thread, self._conflict = loop, app, thread, conflict
         self.runner = runner
 
     def stop(self) -> None:
-        async def shutdown():
-            if self.app.updater.running:
-                await self.app.updater.stop()
-            if self.app.running:
-                await self.app.stop()
-            await self.app.shutdown()
         try:
-            if self.thread.is_alive() and self.loop.is_running():
-                try:
-                    asyncio.run_coroutine_threadsafe(shutdown(), self.loop).result(timeout=10)
-                finally:
-                    if self.loop.is_running():
-                        self.loop.call_soon_threadsafe(self.loop.stop)
-            if self.thread.is_alive():
-                self.thread.join(timeout=10)
+            stop_polling(self.loop, self.app, self.thread)
         finally:
             self.runner.close()
 
@@ -148,32 +163,41 @@ def start_in_background() -> TelegramHandle | None:
     print("(telegram) starting:")
     print(posture())
 
-    import logging
-
     warned = {"conflict": False}
-
-    def on_poll_error(exc: Exception) -> None:
-        # Runs on every polling error. The common one is Conflict: another bot
-        # instance is already polling this token. Say it ONCE, plainly, and never
-        # dump a traceback into the dashboard terminal.
-        from telegram.error import Conflict
-
-        if isinstance(exc, Conflict) and not warned["conflict"]:
-            warned["conflict"] = True
-            print("(telegram) another instance is already running this bot — the dashboard's "
-                  "Telegram stays idle. Stop the other `waku telegram` and restart to use it here.")
-
-    loop = asyncio.new_event_loop()
     runner = _new_runner()
     try:
         app = _build_app(token, runner=runner)
     except Exception:
         runner.close()
         raise
+    loop, thread = poll_in_thread(
+        app, warned, "the dashboard's Telegram stays idle. Stop the other `waku telegram` "
+                     "and restart to use it here.")
+    return TelegramHandle(loop, app, thread, warned, runner)
+
+
+def poll_in_thread(app, warned: dict, idle: str):
+    """Long-poll `app` on a daemon thread with its own event loop. Returns
+    (loop, thread). `warned["conflict"]` turns True when another process is
+    already polling this token; `idle` is the sentence that says what that
+    means for the caller and what to do."""
+    import logging
+
+    def on_poll_error(exc: Exception) -> None:
+        # Runs on every polling error. The common one is Conflict: another bot
+        # instance is already polling this token. Say it ONCE, plainly, and never
+        # dump a traceback into the terminal.
+        from telegram.error import Conflict
+
+        if isinstance(exc, Conflict) and not warned["conflict"]:
+            warned["conflict"] = True
+            print(f"(telegram) another instance is already running this bot — {idle}")
+
+    loop = asyncio.new_event_loop()
 
     def run() -> None:
-        # keep PTB's own error logging out of the dashboard terminal; we report
-        # the one error that matters (Conflict) cleanly via on_poll_error.
+        # keep PTB's own error logging out of the terminal; we report the one
+        # error that matters (Conflict) cleanly via on_poll_error.
         logging.getLogger("telegram").setLevel(logging.CRITICAL)
         logging.getLogger("httpx").setLevel(logging.WARNING)
         # its own event loop on this thread; start_polling is non-blocking, then
@@ -189,7 +213,7 @@ def start_in_background() -> TelegramHandle | None:
 
     thread = threading.Thread(target=run, daemon=True, name="telegram-poll")
     thread.start()
-    return TelegramHandle(loop, app, thread, warned, runner)
+    return loop, thread
 
 
 if __name__ == "__main__":
