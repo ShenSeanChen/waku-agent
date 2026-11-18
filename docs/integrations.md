@@ -65,7 +65,7 @@ It listens to whichever of these three you configure in `.env`:
 | Source | Set | What is heard |
 |---|---|---|
 | Telegram | `TELEGRAM_BOT_TOKEN`, `TELEGRAM_ALLOWED_USER` | every message from an allowed user |
-| Slack | `SLACK_APP_TOKEN`, `SLACK_BOT_TOKEN`, `SLACK_ALLOWED_CHANNELS`, and `pip install 'waku-agent[slack]'` | an @mention in an allowed channel of your workspace |
+| Slack | `SLACK_APP_TOKEN`, `SLACK_BOT_TOKEN`, `SLACK_ALLOWED_CHANNELS`, and `pip install 'waku-agent[slack]'`. The app comes from a manifest: see "Slack from a manifest" below | an @mention in an allowed channel of your workspace |
 | GitHub | `WAKU_GITHUB_REPOS`, and `gh auth login` once | an open issue with the label `waku`; with `WAKU_GITHUB_LOGIN`, a comment that mentions that login, from an owner, member or collaborator |
 
 Slack uses Socket Mode and GitHub is polled through the `gh` CLI every 60
@@ -73,6 +73,31 @@ seconds, so a laptop needs no public address. On a server, set
 `GITHUB_WEBHOOK_SECRET` and point the repository's webhook at
 `POST /webhooks/github`: `waku serve` then listens on `127.0.0.1:7780`, checks
 GitHub's signature on every delivery, and stops polling.
+
+### Slack from a manifest
+
+You create your own Slack app once, from
+[`waku/alwayson/sources/slack-app-manifest.yaml`](../waku/alwayson/sources/slack-app-manifest.yaml).
+The manifest turns Socket Mode on and asks for two bot scopes,
+`app_mentions:read` and `chat:write`, and one event, `app_mention`.
+
+1. **Create the app.** At <https://api.slack.com/apps> choose "Create New
+   App", then "From a manifest", pick your workspace and paste the file.
+2. **Install it.** On the app's "Install App" page, install it to your
+   workspace.
+3. **Copy the two tokens into `.env`.** `SLACK_BOT_TOKEN` is the "Bot User
+   OAuth Token" on the "Install App" page, and it starts `xoxb-`.
+   `SLACK_APP_TOKEN` is an app-level token: on "Basic Information", under
+   "App-Level Tokens", generate one with the scope `connections:write`. It
+   starts `xapp-`.
+4. **Invite the bot to a channel.** Write `/invite @waku` in the channel, and
+   put that channel's id in `SLACK_ALLOWED_CHANNELS`.
+
+`waku connections` then checks both tokens with Slack and prints one line. A
+token Slack refuses is named, and so is a scope that is missing: "the bot
+token is missing the scope chat:write". Each person who runs their own agent
+creates their own app. One public Waku app that a team installs with a click
+needs a server Waku runs, and is not built here.
 
 Each Telegram chat, Slack thread and GitHub issue is its own conversation.
 Two messages sent to one conversation within 3 seconds become one run.
