@@ -605,6 +605,9 @@ def connectors_data() -> dict:
         row["writes"] = ("allow" if kind == connectors.MEMORY or row["name"] in allowed
                          else "ask")
         row["switch"] = kind != connectors.MEMORY
+        # How many of its tools ask first, once an agent has listed them.
+        own = [t for t in tools if (getattr(t, "mcp", None) or ("",))[0] == row["name"]]
+        row["asks"] = connectors.asking(home, row["name"], own) if own else None
         rows.append(row)
     waiting = connectors.sign_in_waiting(home)
     added = {str(spec.get("url", "")).rstrip("/") for spec in mcp_servers(home)}

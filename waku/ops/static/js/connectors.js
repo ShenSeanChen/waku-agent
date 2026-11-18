@@ -29,7 +29,8 @@ function connectorRows(c){
   if (!c.servers.length) return `<div class="meta">No server yet.</div>`;
   return c.servers.map(r => uiRow(uiBadge(esc(r.name), "value"),
     `${esc(r.address)}${r.account ? `<div class="meta">${esc(r.account)}</div>` : ""}`,
-    (r.tools === null ? "" : `<span class="meta">${r.tools} tool${r.tools === 1 ? "" : "s"}</span> `) +
+    (r.tools === null ? "" : `<span class="meta">${r.tools} tool${r.tools === 1 ? "" : "s"}${
+      r.asks ? ", " + r.asks + " ask first" : ""}</span> `) +
     (r.switch ? uiButton(r.writes === "allow" ? "Writes run without asking" : "Writes ask first",
         {level: "tertiary", size: "sm",
          onclick: `setConnectorWrites('${esc(r.name)}', ${r.writes !== "allow"})`,

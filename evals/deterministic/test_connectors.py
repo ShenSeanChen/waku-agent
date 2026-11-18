@@ -336,7 +336,7 @@ def test_cli_add_writes_one_entry_and_prints_a_sign_in_link(cli):
     assert _servers(cli.home) == [{"name": "linear", "url": LINEAR, "oauth": True}]
     assert SIGN_IN_LINK in out
     assert cli.opened == [SIGN_IN_LINK], "the command line opens the browser too"
-    assert "linear is connected" in out
+    assert "Linear is connected: 1 tool" in out
 
 
 def test_cli_a_second_add_of_the_same_name_is_refused(cli):
@@ -914,3 +914,66 @@ def test_chat_a_server_from_chat_never_takes_a_name_waku_reserves(tmp_path):
         sign_in=lambda home, name, **kw: connectors.SignIn(home, name, bridge=FakeBridge))
     assert "waku_memory_2" in message
     assert [s["name"] for s in _servers(tmp_path)] == ["waku_memory_2"]
+
+
+# ---- C3: the "connected" message counts the tools that ask -------------------
+
+def _listed(server, *tools):
+    """Tools as the bridge lists them: (name on the server, read-only mark)."""
+    from waku.tools import mcp_client
+
+    return [mcp_client.as_tool(server, {"name": name, "description": "", "readOnly": mark},
+                               call=lambda *a: "ok") for name, mark in tools]
+
+
+def test_connected_line_counts_the_writes_of_a_starter_server(tmp_path):
+    connectors.add(tmp_path, "linear")
+    tools = _listed("linear", ("list_issues", False), ("get_issue", False),
+                    ("create_issue", False), ("save_comment", False), ("delete_comment", False))
+
+    assert connectors.connected_line("linear", tools, tmp_path) == (
+        "Linear is connected: 5 tools, 3 of them write and will ask first.")
+
+
+def test_connected_line_for_a_server_off_the_list_says_why_its_tools_ask(tmp_path):
+    connectors.add(tmp_path, "example", url=EXAMPLE)
+    tools = _listed("example", ("search", True), ("create_thing", False), ("list", False))
+
+    assert connectors.connected_line("example", tools, tmp_path) == (
+        "example is connected: 3 tools, 2 of them will ask first. This server is not on "
+        "the starter list, so a tool asks first unless the server marks it read-only, "
+        "until you say otherwise.")
+
+
+def test_connected_line_says_so_when_nothing_asks(tmp_path):
+    from waku.alwayson import approvals
+    from waku.db import connect
+
+    connectors.add(tmp_path, "linear")
+    tools = _listed("linear", ("list_issues", False), ("create_issue", False))
+    conn = connect(tmp_path)
+    try:
+        approvals.store(conn, "linear", allow=True)
+    finally:
+        conn.close()
+
+    assert connectors.connected_line("linear", tools, tmp_path) == (
+        "Linear is connected: 2 tools, and none of them asks first.")
+    assert connectors.connected_line("linear", tools[:1], tmp_path) == (
+        "Linear is connected: 1 tool, and it does not ask first.")
+
+
+def test_connected_line_reaches_the_owner_after_the_sign_in(chat):
+    _, run_id = _ask(chat, "connect_tool", {"name_or_url": "linear"})
+    _approve(chat, run_id)
+    chat.bridges[0].tools = _listed("linear", ("list_issues", False), ("create_issue", False))
+    chat.bridges[0].finish.set()
+    connectors.sign_in_waiting(chat.home).wait(5)
+
+    told = chat.conn.execute("SELECT body FROM outbox ORDER BY id DESC").fetchone()[0]
+    assert told == "Linear is connected: 2 tools, 1 of them writes and will ask first."
+
+
+def test_connected_line_is_printed_by_the_command_line(cli):
+    _, out = cli("add", "linear")
+    assert "Linear is connected: 1 tool, and it does not ask first." in out

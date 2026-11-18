@@ -326,10 +326,42 @@ def set_writes(home: Path, name: str, allow: bool) -> str:
     return f"{name}'s tools that write ask first again."
 
 
-def connected_line(name: str, tools: list) -> str:
-    """What the person reads when a server has connected."""
-    count = len(tools)
-    return f"{name} is connected: {count} tool{'' if count == 1 else 's'}."
+def asking(home: Path, name: str, tools: list) -> int:
+    """How many of a server's tools ask the owner first, by the rules the
+    always-on agent applies (alwayson/approvals.py, `mode`)."""
+    from waku.alwayson import approvals
+
+    connector = connector_of(home, name)
+    allowed = tuple(approvals.rule_for(server) for server in writes_allowed(home))
+    count = 0
+    for tool in tools:
+        own = (getattr(tool, "mcp", None) or ("", str(getattr(tool, "name", tool))))[1]
+        if approvals.mode(str(getattr(tool, "name", tool)), {}, connector=connector,
+                          own_name=own, read_only=bool(getattr(tool, "read_only", False)),
+                          allowed=allowed) == approvals.ASK:
+            count += 1
+    return count
+
+
+def connected_line(name: str, tools: list, home: Path) -> str:
+    """What the person reads when a server has connected: how many tools it
+    has, and how many of them ask first."""
+    connector = connector_of(home, name)
+    listed = starter_for(next((s for s in _read(home)["servers"]
+                               if isinstance(s, dict) and s.get("name") == name), {}))
+    total, asks = len(tools), asking(home, name, tools)
+    line = f"{listed['title'] if listed else name} is connected: "
+    line += f"{total} tool{'' if total == 1 else 's'}"
+    if not asks:
+        line += ", and it does not ask first." if total == 1 else ", and none of them asks first."
+    elif connector is not None and connector.kind == STARTER:
+        line += f", {asks} of them write{'s' if asks == 1 else ''} and will ask first."
+    else:
+        line += f", {asks} of them will ask first."
+    if connector is not None and connector.kind == OWN and asks:
+        line += (" This server is not on the starter list, so a tool asks first unless "
+                 "the server marks it read-only, until you say otherwise.")
+    return line
 
 
 # ---- the sign-in link ------------------------------------------------------
@@ -560,7 +592,7 @@ def tell_owner(home: Path, flow: SignIn) -> None:
         stamp = outbox.utc_now().isoformat(timespec="seconds")
         for channel, target in outbox.owner_addresses():
             outbox.insert(conn, run_id="", channel=channel, target=target,
-                          body=connected_line(flow.name, flow.tools or []),
+                          body=connected_line(flow.name, flow.tools or [], home),
                           idempotency_key=f"connector:{flow.name}:{channel}:{stamp}")
     finally:
         conn.close()
@@ -598,7 +630,7 @@ def connect(home: Path, target: str, sign_in: Callable | None = None,
     except Refused as refused:
         return f"{lead} {refused} Then: waku mcp login {name}"
     if flow.done.is_set() and flow.ok:
-        return f"{lead} {connected_line(name, flow.tools or [])}"
+        return f"{lead} {connected_line(name, flow.tools or [], home)}"
     return f"{lead} {link_words(name, flow)}"
 
 
