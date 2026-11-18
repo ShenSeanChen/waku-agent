@@ -6,7 +6,7 @@
 Read this before opening a PR or filing an issue: most of what is already
 known-broken is below, and half of it already has a fix in flight.
 
-**Last updated:** 2026-11-16
+**Last updated:** 2026-11-17
 
 ---
 
@@ -41,7 +41,10 @@ handlers, all three senders and the approval path have run against fake
 events, fake answers and a fake `gh` only, never against a live chat,
 workspace or repository.
 
-**3,715 deterministic evals pass offline**, with no API key; 60 more are live
+A person connects an MCP server of their own in one step (spec 025): `waku mcp add`, the "Connectors" card on Tools ▸ MCP, or "connect Linear" in chat under `waku serve`, which asks the owner first. The starter list holds Linear, Notion and GitHub, and `waku connections` checks the Slack tokens and names a missing scope.
+The sign-in to a vendor's server, the three starter servers and a Slack app made from the manifest have run against a stub sign-in and a fake Slack only, never against the live services.
+
+**3,944 deterministic evals pass offline**, with no API key; 60 more are live
 evals that skip without one. CI runs the offline tier on every PR along with
 ruff, the skills validator, and a check that `.env.example` still matches the
 integrations registry.
@@ -66,6 +69,8 @@ Nothing here is a surprise. If you hit one of these, the issue exists.
 | A message `send_message` queues waits until `waku serve` runs; `waku` and `waku dashboard` do not send it | — | — |
 | `waku serve` can deliver a chat reply twice when it dies after the channel accepted the reply and before the row is marked `sent` | — | — |
 | `waku serve` and the dashboard's Telegram cannot share one bot token: Telegram allows one poller, and the second one stays idle. `waku serve` says "telegram is blocked" on the line that lists its sources; the dashboard does not | — | — |
+| The sign-in link that `connect_tool` and the "Connectors" card give works only on the computer Waku runs on, because the server sends the browser back to `127.0.0.1:41765`. The card is not available on hosted Waku | — | — |
+| Slack, Gmail and Google Drive are not on the starter list: each vendor's server takes sign-in only from a client registered with it beforehand, and Waku registers itself at sign-in | — | — |
 | The owner can approve only in a private Telegram chat named in `WAKU_OWNER`. Without one, a call that needs a yes is refused. Slack cannot carry the answer, because `waku serve` hears no Slack direct message | — | — |
 | The model reads a call that waits for a yes as "A plugin hook stopped this call before it ran", followed by the real reason | — | — |
 | A timer `schedule_task` sets fires only while `waku serve` runs; `waku` and `waku dashboard` do not fire it. A timer cannot repeat | — | — |
