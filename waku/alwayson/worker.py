@@ -203,10 +203,24 @@ class AgentRun:
                  log: Callable[[str], None] = print) -> None:
         self._factory, self._observer, self._log = agent_factory, observer, log
         self._agent: Any | None = None
+        self._connectors: frozenset[str] | None = None
+
+    def _build(self) -> None:
+        """Build the agent on first use, and build it again when the servers
+        that connect without a browser have changed (spec 025): the owner
+        signed in to one, or added or removed one."""
+        from waku.tools import connectors
+
+        if self._agent is not None:
+            if connectors.ready(self._agent.settings.home) == self._connectors:
+                return
+            self._log("(serve) the connected servers changed; loading their tools")
+            self.close()
+        self._agent = self._factory()
+        self._connectors = connectors.ready(self._agent.settings.home)
 
     def __call__(self, session_id: str, batch: list[Event]) -> runs.Outcome:
-        if self._agent is None:
-            self._agent = self._factory()
+        self._build()
         session = self._agent.session
         # The row the worker started for this batch.
         run = (runs.find(self._agent.conn, session_id, batch[0].id)
@@ -227,8 +241,7 @@ class AgentRun:
         what the tool answered. The model is not asked. The row the call
         writes carries the run's id and the call's hash as its key, so
         running it twice sends one message."""
-        if self._agent is None:
-            self._agent = self._factory()
+        self._build()
         call = run.pending_call
         self._log(f"(serve) the owner approved {call['tool']} for {run.session_id}")
         with outbox.running(self._agent.settings.home, str(run.id), address,

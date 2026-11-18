@@ -320,9 +320,14 @@ def sources_line(service: Service) -> str:
 
 
 def _agent_run(settings: Settings, log: Callable[[str], None]) -> AgentRun:
+    import dataclasses
+
     from waku.app import Waku
     from waku.gateway.cli import _observer  # mirror gate and tool activity here
 
+    # No browser opens under `waku serve`: a server that still needs its
+    # sign-in is left out until the owner has signed in (spec 025).
+    settings = dataclasses.replace(settings, mcp_sign_in=False)
     return AgentRun(lambda: Waku(settings=settings), observer=_observer, log=log)
 
 

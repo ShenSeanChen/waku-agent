@@ -28,6 +28,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlparse
 
+from waku.tools.registry import Tool
+
 OAUTH, NONE = "oauth", "none"
 # A server's name becomes the prefix of its tools (`linear_create_issue`) and
 # the name of its token file, so it is one short plain word.
@@ -279,10 +281,12 @@ class SignIn:
                     pass
             if not self.ok:
                 self.link = None
-            self.done.set()
-            self._has_link.set()
-            if self._on_done is not None:
-                self._on_done(self)
+            try:
+                if self._on_done is not None:
+                    self._on_done(self)
+            finally:
+                self.done.set()
+                self._has_link.set()
 
     def start(self, wait: float = LINK_WAIT) -> SignIn:
         """Start the sign-in and return once it has a link, has ended, or
@@ -332,3 +336,201 @@ def forget_sign_ins() -> None:
     """Drop every sign-in this process remembers. For the evals."""
     with _SIGN_INS_LOCK:
         _SIGN_INS.clear()
+
+
+# ---- which servers connect without a browser ---------------------------------
+
+def signed_in(home: Path, spec: dict) -> bool:
+    """Whether a sign-in has left a token for this `oauth` server."""
+    from waku.tools.mcp_oauth import FileTokenStorage
+
+    storage = FileTokenStorage(Path(home), str(spec.get("name", "")), spec.get("url"))
+    return storage._path.exists() and storage.matches()
+
+
+def needs_sign_in(home: Path, spec: dict) -> bool:
+    """Whether connecting this server would open a browser first."""
+    return bool(isinstance(spec, dict) and spec.get("oauth")) and not signed_in(home, spec)
+
+
+def ready(home: Path) -> frozenset[str]:
+    """The names of the servers in mcp.json that connect without a browser:
+    every server but an `oauth` one nobody has signed in to. The always-on
+    agent is built again when this set changes, so a server the owner just
+    signed in to has its tools in the next run."""
+    try:
+        servers = _read(home)["servers"]
+    except Refused:
+        return frozenset()
+    return frozenset(str(s.get("name")) for s in servers
+                     if isinstance(s, dict) and s.get("name") and not needs_sign_in(home, s))
+
+
+# ---- chat: connect_tool and disconnect_tool ----------------------------------
+
+# A label a host starts with that says nothing about whose server it is.
+_HOST_NOISE = ("mcp", "api", "www", "app")
+
+
+def name_for(url: str) -> str:
+    """A name for a server nobody named: `example` for mcp.example.com."""
+    host = urlparse(url).hostname or ""
+    labels = [part for part in host.split(".") if part]
+    while len(labels) > 1 and labels[0] in _HOST_NOISE:
+        labels.pop(0)
+    word = labels[0] if len(labels) < 3 else labels[-2]
+    if len(labels) == 2:
+        word = labels[0]
+    word = re.sub(r"[^A-Za-z0-9_-]", "_", word).strip("_-")[:32]
+    return word if _NAME.match(word or "") else "server"
+
+
+COMMAND_REFUSED = ("this takes the address of an MCP server (https://...). A server that "
+                   "is a program on this machine is added from the command line only: "
+                   "waku mcp add <name> -- <command>")
+NEEDS_YES = ("{done}: this needs the owner's yes, and this conversation cannot ask for it. "
+             "On the computer Waku runs on, run `{command}`, or use the Connectors card "
+             "on the dashboard.")
+
+
+def resolve(target: str) -> tuple[str, str, str]:
+    """(name, address, auth) for what a chat message asked to connect: an
+    https address. Anything else is refused, a command above all."""
+    target = (target or "").strip()
+    if "://" not in target or any(c.isspace() for c in target):
+        raise Refused(COMMAND_REFUSED)
+    url = check_url(target)
+    return name_for(url), url, OAUTH
+
+
+def find(home: Path, url: str) -> dict | None:
+    """The entry in mcp.json at this address, under any name."""
+    return next((s for s in _read(home)["servers"]
+                 if isinstance(s, dict) and _same(s.get("url")) == _same(url)), None)
+
+
+def _free_name(home: Path, name: str) -> str:
+    taken = {s.get("name") for s in _read(home)["servers"] if isinstance(s, dict)}
+    taken |= {s.get("name") for s in _plugin_servers(home)}
+    if name not in taken:
+        return name
+    return next(f"{name[:29]}_{n}" for n in range(2, 100) if f"{name[:29]}_{n}" not in taken)
+
+
+def tell_owner(home: Path, flow: SignIn) -> None:
+    """One message to the owner when a sign-in that chat started is done."""
+    if not flow.ok:
+        return
+    from waku.alwayson import outbox
+    from waku.db import connect
+
+    conn = connect(Path(home))
+    try:
+        stamp = outbox.utc_now().isoformat(timespec="seconds")
+        for channel, target in outbox.owner_addresses():
+            outbox.insert(conn, run_id="", channel=channel, target=target,
+                          body=connected_line(flow.name, flow.tools or []),
+                          idempotency_key=f"connector:{flow.name}:{channel}:{stamp}")
+    finally:
+        conn.close()
+
+
+def link_words(name: str, flow: SignIn | None) -> str:
+    """What the person does to sign in, for a chat reply and the card."""
+    if flow is not None and flow.link:
+        return ("Open this link on the computer Waku runs on, in its browser. It does "
+                f"not work from another device:\n{flow.link}")
+    return f"Sign in on the computer Waku runs on: waku mcp login {name}"
+
+
+def connect(home: Path, target: str, sign_in: Callable | None = None,
+            on_done: Callable[[SignIn], None] | None = None) -> str:
+    """Add the server a chat message or the card named and start its sign-in.
+    Returns what the person reads. `on_done` hears when the sign-in ends."""
+    sign_in = sign_in or start_sign_in
+    name, url, auth = resolve(target)
+    spec = find(home, url)
+    if spec is None:
+        added = add(home, _free_name(home, name), url=url, auth=auth)
+        spec, lead = added.spec, f"Added '{added.name}'."
+        if added.auth != OAUTH:
+            return f"{lead} {added.next}"
+    elif not needs_sign_in(home, spec):
+        return f"{url} is already connected as '{spec.get('name')}'."
+    else:
+        lead = f"'{spec.get('name')}' is added and not signed in yet."
+    name = str(spec["name"])
+    try:
+        flow = sign_in(home, name, on_done=on_done)
+    except Refused as refused:
+        return f"{lead} {refused} Then: waku mcp login {name}"
+    if flow.done.is_set() and flow.ok:
+        return f"{lead} {connected_line(name, flow.tools or [])}"
+    return f"{lead} {link_words(name, flow)}"
+
+
+def _approved(home: Path) -> bool:
+    """Whether the call in flight is one the owner said yes to. Only the
+    worker runs such a call (alwayson/worker.py, `execute`)."""
+    from waku.alwayson import outbox
+
+    run = outbox.current_run(Path(home))
+    return run is not None and bool(run.approved_key)
+
+
+def make_tools(home: Path, sign_in: Callable = start_sign_in) -> list[Tool]:
+    def connect_tool(name_or_url: str = "") -> str:
+        try:
+            resolve(name_or_url)
+            if not _approved(home):
+                return NEEDS_YES.format(done="Not connected",
+                                        command="waku mcp add <name> <address>")
+            return connect(home, name_or_url, sign_in=sign_in,
+                           on_done=lambda done: tell_owner(home, done))
+        except Refused as refused:
+            return f"Not connected: {refused}"
+
+    def disconnect_tool(name: str = "") -> str:
+        name = (name or "").strip()
+        try:
+            if not _approved(home):
+                return NEEDS_YES.format(done="Not disconnected",
+                                        command=f"waku mcp remove {name or '<name>'}")
+            remove(home, name)
+        except Refused as refused:
+            return f"Not disconnected: {refused}"
+        return f"Disconnected '{name}' and forgot its sign-in."
+
+    return [
+        Tool(
+            name="connect_tool",
+            description=(
+                "Connect an MCP server by its https address, so its tools can be used. "
+                "Use when the user asks to connect a service and gives its address. It "
+                "takes an address only, never a command to run. The owner approves it "
+                "first, and then signs in through a link."
+            ),
+            input_schema={
+                "type": "object",
+                "properties": {"name_or_url": {
+                    "type": "string",
+                    "description": "The server's address, e.g. https://mcp.example.com/mcp"}},
+                "required": ["name_or_url"],
+            },
+            fn=connect_tool,
+        ),
+        Tool(
+            name="disconnect_tool",
+            description=(
+                "Disconnect an MCP server the user connected and forget its sign-in. Use "
+                "when the user asks to disconnect or remove a connected service."
+            ),
+            input_schema={
+                "type": "object",
+                "properties": {"name": {"type": "string",
+                                        "description": "The connector's name, e.g. linear"}},
+                "required": ["name"],
+            },
+            fn=disconnect_tool,
+        ),
+    ]

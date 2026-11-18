@@ -395,3 +395,269 @@ def test_cli_help_names_add_and_remove():
 
     assert "waku mcp add <name> <url>" in entry.__doc__
     assert "waku mcp remove <name>" in entry.__doc__
+
+
+# ---- A3: connect_tool and disconnect_tool, from chat ------------------------
+
+EXAMPLE = "https://mcp.example.com/mcp"
+OWNER = ("telegram", {"chat_id": 42})
+
+
+@pytest.fixture
+def chat(tmp_path, monkeypatch):
+    """A home with an owner on Telegram, a state.db, and the two tools with a
+    stub sign-in. Yields a namespace: home, conn, tools, bridges."""
+    from types import SimpleNamespace
+
+    from waku.db import connect
+    from waku.tools.registry import ToolRegistry
+
+    monkeypatch.setenv("WAKU_OWNER", "telegram:42")
+    monkeypatch.delenv("WAKU_APPROVE_ALLOW", raising=False)
+    monkeypatch.delenv("WAKU_APPROVE_ASK", raising=False)
+    bridges = []
+
+    def bridge(*a):
+        bridges.append(FakeBridge(*a))
+        return bridges[-1]
+
+    tools = ToolRegistry()
+    for tool in connectors.make_tools(
+            tmp_path, sign_in=lambda home, name, **kw: connectors.start_sign_in(
+                home, name, bridge=bridge, wait=5, **kw)):
+        tools.register(tool)
+    conn = connect(tmp_path)
+    yield SimpleNamespace(home=tmp_path, conn=conn, tools=tools, bridges=bridges)
+    conn.close()
+
+
+def _ask(chat, tool, args):
+    """One call under the gate, in a run in the owner's own chat. Returns
+    (what the gate said, the run's id)."""
+    from datetime import UTC, datetime
+
+    from waku.alwayson import approvals, events, outbox, runs
+
+    now = datetime(2026, 11, 19, 9, 0, tzinfo=UTC)
+    count = chat.conn.execute("SELECT COUNT(*) FROM events").fetchone()[0]
+    event_id = events.insert(chat.conn, source="telegram", external_id=f"m{count}",
+                             session_id="telegram:42",
+                             payload={"text": "connect it", "sender": {"id": "42"},
+                                      "reply_to": {"chat_id": 42}})
+    run = runs.start(chat.conn, "telegram:42", [event_id], now=now)
+    gate = approvals.Gate(chat.home, chat.conn, now=lambda: now, tools=chat.tools)
+    with outbox.running(chat.home, str(run.id), OWNER):
+        deny, _ = gate(tool, args)
+        if deny is None:
+            deny = chat.tools.execute(tool, args)
+    events.mark(chat.conn, [event_id], "done")
+    runs.finish(chat.conn, run.id, "parked" if runs.get(chat.conn, run.id).pending_hash
+                else "done", now=now)
+    return deny, run.id
+
+
+def _approve(chat, run_id):
+    """The owner said yes: run the stored call exactly as the worker does."""
+    from waku.alwayson import outbox, runs
+
+    run = runs.get(chat.conn, run_id)
+    with outbox.running(chat.home, str(run.id), OWNER,
+                        approved_key=f"{run.id}:{run.pending_hash}"):
+        return chat.tools.execute(run.pending_call["tool"], run.pending_call["args"])
+
+
+def _requests(chat):
+    return [row["body"] for row in chat.conn.execute("SELECT body FROM outbox ORDER BY id")]
+
+
+def test_chat_connect_with_an_address_parks_and_writes_nothing_until_the_yes(chat):
+    said, run_id = _ask(chat, "connect_tool", {"name_or_url": EXAMPLE})
+
+    assert "waits for the owner's approval" in said
+    assert not (chat.home / "mcp.json").exists(), "nothing is written before the yes"
+    assert chat.bridges == [], "and no sign-in starts"
+    (request,) = _requests(chat)
+    assert EXAMPLE in request and "Approve? Reply yes or no." in request
+
+    answer = _approve(chat, run_id)
+
+    assert _servers(chat.home) == [{"name": "example", "url": EXAMPLE, "oauth": True}]
+    assert SIGN_IN_LINK in answer
+    assert "on the computer Waku runs on" in answer
+
+
+def test_chat_connect_with_a_command_is_refused_and_the_owner_is_not_asked(chat):
+    for command in ("npx -y @modelcontextprotocol/server-filesystem /tmp",
+                    "python server.py", "/usr/local/bin/server", "linear; rm -rf ~"):
+        said, _ = _ask(chat, "connect_tool", {"name_or_url": command})
+        assert said.startswith("Not connected:"), command
+        assert "waku mcp add" in said, "the command line is where a command is added"
+
+    assert not (chat.home / "mcp.json").exists()
+    assert _requests(chat) == [] and chat.bridges == []
+
+
+def test_chat_connect_takes_no_other_argument_that_could_carry_a_command(chat):
+    schema = chat.tools.get("connect_tool").input_schema
+    assert not {"command", "args", "env"} & set(schema["properties"])
+    said, _ = _ask(chat, "connect_tool", {"name_or_url": EXAMPLE, "command": "npx"})
+    assert not (chat.home / "mcp.json").exists()
+    assert "Error" in said or "Not connected" in said or "waits" in said
+
+
+def test_chat_connect_asks_whatever_the_owner_allowed_in_the_environment(chat, monkeypatch):
+    from waku.alwayson import approvals
+
+    monkeypatch.setenv("WAKU_APPROVE_ALLOW", "connect_tool, disconnect_tool")
+
+    assert approvals.mode("connect_tool", {"name_or_url": EXAMPLE}) == "ask"
+    assert approvals.mode("disconnect_tool", {"name": "example"}) == "ask"
+
+
+def test_chat_connect_outside_a_run_writes_nothing_and_names_the_two_other_ways(chat):
+    """The terminal chat and the dashboard chat cannot ask for a yes. A web
+    page the agent read there could ask for a server as well as the person."""
+    said = chat.tools.execute("connect_tool", {"name_or_url": EXAMPLE})
+
+    assert said.startswith("Not connected:")
+    assert "waku mcp add" in said and "dashboard" in said
+    assert not (chat.home / "mcp.json").exists()
+
+
+def test_chat_connect_again_gives_the_link_again_and_adds_nothing_twice(chat):
+    _, first = _ask(chat, "connect_tool", {"name_or_url": EXAMPLE})
+    _approve(chat, first)
+    chat.conn.execute("UPDATE runs SET status = 'done', pending_hash = '' WHERE id = ?",
+                      (first,))
+    chat.conn.commit()
+
+    _, second = _ask(chat, "connect_tool", {"name_or_url": EXAMPLE + "/"})
+    answer = _approve(chat, second)
+
+    assert len(_servers(chat.home)) == 1
+    assert SIGN_IN_LINK in answer and len(chat.bridges) == 1
+
+
+def test_chat_the_owner_is_told_once_when_the_sign_in_is_done(chat):
+    _, run_id = _ask(chat, "connect_tool", {"name_or_url": EXAMPLE})
+    _approve(chat, run_id)
+    before = len(_requests(chat))
+
+    chat.bridges[0].finish.set()
+    connectors.sign_in_waiting(chat.home).wait(5)
+
+    rows = chat.conn.execute("SELECT channel, target, body FROM outbox ORDER BY id").fetchall()
+    assert len(rows) == before + 1
+    assert (rows[-1]["channel"], json.loads(rows[-1]["target"])) == OWNER
+    assert rows[-1]["body"].startswith("example is connected: 1 tool")
+
+
+def test_chat_disconnect_parks_and_then_removes_the_entry_and_the_token(chat):
+    connectors.add(chat.home, "linear", url=LINEAR)
+    token = _token(chat.home, "linear")
+
+    said, run_id = _ask(chat, "disconnect_tool", {"name": "linear"})
+    assert "waits for the owner's approval" in said
+    assert token.exists() and len(_servers(chat.home)) == 1
+    assert "linear" in _requests(chat)[0]
+
+    answer = _approve(chat, run_id)
+
+    assert _servers(chat.home) == [] and not token.exists()
+    assert "linear" in answer
+
+
+def test_chat_both_tools_are_registered_and_have_a_mode(tmp_path):
+    from evals.helpers import ScriptedClient, make_waku
+    from waku.alwayson import approvals
+
+    waku = make_waku(tmp_path, client=ScriptedClient([]), episodic_store="sqlite")
+    try:
+        names = [schema["name"] for schema in waku.tools.schemas()]
+    finally:
+        waku.close()
+        waku.conn.close()
+
+    assert "connect_tool" in names and "disconnect_tool" in names
+    assert approvals.mode("disconnect_tool", {"name": "x"}) == "ask"
+
+
+def test_chat_ready_names_the_servers_that_connect_without_a_browser(tmp_path):
+    connectors.add(tmp_path, "linear", url=LINEAR)
+    connectors.add(tmp_path, "github", url="https://api.githubcopilot.com/mcp/",
+                   auth="GITHUB_PERSONAL_ACCESS_TOKEN")
+    assert connectors.ready(tmp_path) == frozenset({"github"})
+
+    _token(tmp_path, "linear")
+    assert connectors.ready(tmp_path) == frozenset({"github", "linear"})
+
+
+def test_chat_the_always_on_agent_is_built_again_when_a_connector_is_ready(tmp_path):
+    """The owner signs in while the agent runs. Its next run has the tools."""
+    from types import SimpleNamespace
+
+    from waku.alwayson import events
+    from waku.alwayson.worker import AgentRun
+    from waku.db import connect
+
+    built, closed = [], []
+
+    def factory():
+        conn = connect(tmp_path)
+        agent = SimpleNamespace(
+            conn=conn, settings=SimpleNamespace(home=tmp_path),
+            session=SimpleNamespace(session_id="telegram:42", switch=lambda s: None),
+            respond=lambda text, **kw: SimpleNamespace(reply="ok", receipt={}),
+            close=lambda: closed.append(1))
+        built.append(agent)
+        return agent
+
+    conn = connect(tmp_path)
+    run = AgentRun(factory, log=lambda line: None)
+
+    def turn(n):
+        event_id = events.insert(conn, source="telegram", external_id=str(n),
+                                 session_id="telegram:42",
+                                 payload={"text": "hi", "reply_to": {"chat_id": 42}})
+        run("telegram:42", [events.get(conn, event_id)])
+        events.mark(conn, [event_id], "done")
+
+    try:
+        connectors.add(tmp_path, "linear", url=LINEAR)
+        turn(1)
+        turn(2)
+        assert len(built) == 1, "an entry that is not signed in changes nothing"
+
+        _token(tmp_path, "linear")
+        turn(3)
+        assert len(built) == 2 and closed == [1]
+
+        turn(4)
+        assert len(built) == 2
+    finally:
+        run.close()
+        conn.close()
+
+
+def test_chat_the_always_on_agent_opens_no_browser_for_a_server_not_signed_in(
+        tmp_path, monkeypatch):
+    """`waku serve` runs where nobody may be looking. A server that still
+    needs its sign-in is left out there, and the build does not wait for it."""
+    import webbrowser
+
+    from evals.helpers import ScriptedClient, make_waku
+
+    opened = []
+    monkeypatch.setattr(webbrowser, "open_new_tab", opened.append)
+    connectors.add(tmp_path, "linear", url="http://127.0.0.1:9/mcp")
+
+    waku = make_waku(tmp_path, client=ScriptedClient([]), episodic_store="sqlite",
+                     mcp_sign_in=False)
+    try:
+        bridge = waku.tools.mcp_bridge
+        assert not bridge.connected("linear") and bridge.servers == []
+    finally:
+        waku.close()
+        waku.conn.close()
+    assert opened == []
+

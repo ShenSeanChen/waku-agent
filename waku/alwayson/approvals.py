@@ -70,6 +70,22 @@ def _send_message(args: dict, address: Address | None) -> str:
     return ASK
 
 
+def _connect_tool(args: dict, address: Address | None) -> str:
+    """A call the tool would refuse anyway (a command, not an address) runs,
+    so the tool says why and the owner is not asked. Every other call asks."""
+    from waku.tools import connectors
+
+    try:
+        connectors.resolve(str(args.get("name_or_url", "")))
+    except connectors.Refused:
+        return ALLOW
+    return ASK
+
+
+# The tools whose mode nothing in the environment changes (spec 025, decision
+# 1): adding or removing a server always takes the owner's yes.
+ALWAYS_ASK = frozenset({"connect_tool", "disconnect_tool"})
+
 # The built-in table. A tool that reads, or that writes only to the person's
 # own machine and accounts, is `allow`. A tool that writes to a third party is
 # `ask`. A rule that depends on the arguments is a function of them.
@@ -93,6 +109,8 @@ MODES: dict[str, str | Callable[[dict, Address | None], str]] = {
     "create_reminder": ALLOW,
     "create_note": ALLOW,
     "send_message": _send_message,
+    "connect_tool": _connect_tool,
+    "disconnect_tool": ASK,
 }
 
 
@@ -105,13 +123,17 @@ def mode(tool: str, args: dict, address: Address | None = None,
     (`readOnlyHint`) or WAKU_APPROVE_ALLOW names it."""
     from waku.config import approval_overrides
 
+    args = args if isinstance(args, dict) else {}
+    if tool in ALWAYS_ASK:
+        rule = MODES[tool]
+        return rule(args, address) if callable(rule) else rule
     allow, ask = approval_overrides()
     if tool in ask:
         return ASK
     if tool in allow:
         return ALLOW
     rule = MODES.get(tool, ALLOW if read_only else ASK)
-    return rule(args if isinstance(args, dict) else {}, address) if callable(rule) else rule
+    return rule(args, address) if callable(rule) else rule
 
 
 def who_may_approve(tool: str, args: dict) -> list[Address]:
@@ -132,8 +154,21 @@ def _describe_send_message(args: dict) -> str:
     return f'Send to {to}: "{body}"'
 
 
+def _describe_connect_tool(args: dict) -> str:
+    return (f"Connect the MCP server at {str(args.get('name_or_url', '')).strip()}. "
+            "Waku will be able to call its tools.")
+
+
+def _describe_disconnect_tool(args: dict) -> str:
+    return f"Disconnect '{str(args.get('name', '')).strip()}' and forget its sign-in."
+
+
 # What a call will do, in the tool's own words. The owner reads this.
-DESCRIBE: dict[str, Callable[[dict], str]] = {"send_message": _describe_send_message}
+DESCRIBE: dict[str, Callable[[dict], str]] = {
+    "send_message": _describe_send_message,
+    "connect_tool": _describe_connect_tool,
+    "disconnect_tool": _describe_disconnect_tool,
+}
 _MAX_DESCRIPTION_CHARS = 1500
 
 
