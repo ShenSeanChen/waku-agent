@@ -147,7 +147,7 @@ def install_plugin(home: Path) -> tuple[bool, str]:
     Returns whether the plugin is installed, and one line for the person."""
     from waku.plugins import cli, manifest, store
     from waku.plugins.marketplace import MarketplaceError
-    from waku.tools.mcp_cli import _auth_file, _identity, sign_in
+    from waku.tools.mcp_cli import _auth_file, _identity, has_token, sign_in
     from waku.tools.waku_memory import captured_by
 
     try:
@@ -167,7 +167,8 @@ def install_plugin(home: Path) -> tuple[bool, str]:
         return False, ("the Waku plugin in the marketplace does not send Waku Agent's turns "
                        "to Waku Memory yet")
     token = _auth_file(home, WAKU_SERVER)
-    if not token.exists():
+    # a file with no token is a sign-in that never finished, not a sign-in
+    if not has_token(token):
         ok, line = sign_in(home, WAKU_SERVER)
         if not ok:
             return True, ("Installed the Waku plugin. The sign-in did not finish: "
