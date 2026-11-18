@@ -42,7 +42,11 @@ waku                                    # talk to your Waku in the terminal
 waku dashboard                          # …or the browser cockpit → localhost:7777
 ```
 
-It will tell you which key to set the first time. Want to **read the code** (the
+It will tell you which key to set the first time. **No paid key?** With OpenRouter, Waku
+uses free models by default: make a key at [openrouter.ai/keys](https://openrouter.ai/keys), then run
+`WAKU_PROVIDER=openrouter OPENROUTER_API_KEY=<your-key> waku`. Free models are rate-limited.
+
+Want to **read the code** (the
 point of this repo) or contribute — clone it instead:
 
 ```bash
@@ -51,6 +55,14 @@ uv venv && uv pip install -e .          # create the env + install the `waku` co
 cp .env.example .env                    # pick a provider, paste ONE key
 uv run waku                             # talk to your Waku in the terminal
 uv run waku dashboard                   # …or the browser cockpit → localhost:7777
+```
+
+To run the evals, install the test extras first. `make eval` then runs the offline checks
+with no API key:
+
+```bash
+uv pip install -e ".[dev,eval,hosted]"
+make eval
 ```
 
 **Now try it.** *"Remember that Alex prefers morning meetings."* Quit. Restart.
