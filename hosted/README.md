@@ -505,7 +505,7 @@ container --POST /slack/send--> proxy --gateway.sock--> gateway --chat.postMessa
 | `GET /slack/install` | the apex | sends a signed-in person to Slack's approval page, with a `state` bound to their tenant that works once, for 10 minutes |
 | `GET /slack/oauth/callback` | the apex | checks the `state` and the browser's own session, exchanges Slack's code for the workspace's bot token, and stores it |
 | `POST /v1/triggers/slack` | the apex | takes every workspace's events. It checks Slack's signature over the raw body, refuses a timestamp more than 5 minutes from now, and stores a mention as one row in `tenant_events` under Slack's event id |
-| `POST /slack/send` | the proxy, on the tenant network | takes a container's outgoing message with the container's platform token, and has the gateway post it |
+| `POST /slack/send` | the proxy, on the tenant network | takes a container's outgoing message with the container's platform token, and has the gateway post it. A tenant may send 30 a minute; one more answers 429, and the container tries it again after 10 seconds and then a minute |
 
 A bad signature answers 403 and writes nothing. A workspace no tenant
 connected answers 200 and writes nothing. A stored mention asks the scheduler

@@ -38,7 +38,7 @@ from hosted.proxy.app import MeteringProxy
 from hosted.proxy.config import ProxyConfig
 from hosted.proxy.gateway_client import TokenCache
 from hosted.proxy.ledger import Ledger
-from hosted.proxy.slack import MAX_TEXT_CHARS, SEND_PATH, SlackSend
+from hosted.proxy.slack import MAX_TEXT_CHARS, SEND_PATH, SENDS_PER_MINUTE, SlackSend
 from waku.alwayson.outbox import Message
 from waku.alwayson.senders import SendFailed, post_json
 from waku.alwayson.senders import slack as slack_sender
@@ -70,6 +70,8 @@ class Rig:
         self.box = SecretBox.from_hex(SLACK_TOKEN_KEY)
         # Everything the container's side was sent back, for acceptance 7.
         self.container_saw: list[str] = []
+        # The proxy's clock for its per-minute limit. A test moves it by hand.
+        self.proxy_clock = 1000.0
 
     async def __aenter__(self):
         self.store = ControlDb(self.tmp_path / "control.db")
@@ -86,7 +88,8 @@ class Rig:
             global_concurrent_calls=16, max_tokens_ceiling=8192,
             max_body_bytes=4 * 1024 * 1024, upstream_base_url="https://api.anthropic.com")
         self.ledger = Ledger(config.ledger_db)
-        route = SlackSend(resolve=TokenCache(self.sock).resolve, gateway_socket=self.sock)
+        route = SlackSend(resolve=TokenCache(self.sock).resolve, gateway_socket=self.sock,
+                          monotonic=lambda: self.proxy_clock)
         proxy = MeteringProxy(config=config, ledger=self.ledger,
                               resolve=TokenCache(self.sock).resolve, upstream=None,
                               slack=route.handle)
@@ -360,6 +363,98 @@ def test_the_gateway_being_down_is_a_503_and_not_a_bad_token(tmp_path, sock_dir,
     assert _run(tmp_path, sock_dir, slack, body) == (
         503, {"ok": False, "error": "relay_unreachable"})
     assert len(slack.calls("/chat.postMessage")) == 1
+
+
+# --- the limit: 30 sends a tenant a minute ---------------------------------
+
+def test_a_tenant_may_send_thirty_messages_a_minute_and_no_more(tmp_path, sock_dir, slack):
+    assert SENDS_PER_MINUTE == 30
+
+    async def body(rig):
+        _ana, ana_token = rig.tenant("sub-ana", "T0ANA")
+        _bob, bob_token = rig.tenant("sub-bob", "T0BOB", BOB_BOT_TOKEN)
+        message = {"channel": "C0DEMO", "text": "x"}
+        ana = [await rig.raw(ana_token, message) for _ in range(32)]
+        # Ana at her limit does not hold Bob back.
+        bob = await rig.raw(bob_token, message)
+        # The window is the last 60 seconds, so her first send leaves it then.
+        rig.proxy_clock += 59
+        early = await rig.raw(ana_token, message)
+        rig.proxy_clock += 1
+        later = [await rig.raw(ana_token, message) for _ in range(31)]
+        return ana, bob, early, later
+
+    ana, bob, early, later = _run(tmp_path, sock_dir, slack, body)
+    refused = (429, {"ok": False, "error": "rate_limited"})
+    assert ana[:30] == [(200, {"ok": True})] * 30
+    assert ana[30:] == [refused, refused]
+    assert bob == (200, {"ok": True})
+    assert early == refused
+    assert later == [(200, {"ok": True})] * 30 + [refused]
+    posts = [call["authorization"] for call in slack.calls("/chat.postMessage")]
+    assert posts.count(f"Bearer {SLACK_BOT_TOKEN}") == 60
+    assert posts.count(f"Bearer {BOB_BOT_TOKEN}") == 1
+
+
+def test_a_request_that_is_refused_for_another_reason_does_not_use_the_limit(
+        tmp_path, sock_dir, slack):
+    async def body(rig):
+        _ana, token = rig.tenant("sub-ana", "T0ANA")
+        for _ in range(40):
+            await rig.raw(token, {"channel": "#general"})        # no text: 400
+            await rig.raw("x" * 43, {"channel": "C0DEMO", "text": "x"})     # 401
+        return await rig.raw(token, {"channel": "C0DEMO", "text": "x"})
+
+    assert _run(tmp_path, sock_dir, slack, body) == (200, {"ok": True})
+
+
+def test_a_send_refused_at_the_limit_is_retried_and_delivered_once(tmp_path, sock_dir,
+                                                                    slack):
+    """The container's side, whole: the outbox, the dispatcher and the hosted
+    sender from waku/. The 31st message of the minute is refused, the
+    dispatcher keeps the row and tries it again ten seconds later, and after
+    the minute has passed it is delivered. Slack receives it once."""
+    from datetime import UTC, datetime, timedelta
+
+    from waku.alwayson import outbox
+    from waku.alwayson.dispatcher import Dispatcher
+    from waku.db import connect
+
+    home = tmp_path / "home"
+    home.mkdir()
+    at = [datetime(2026, 11, 20, 9, 0, tzinfo=UTC)]
+
+    async def body(rig):
+        _ana, token = rig.tenant("sub-ana", "T0ANA")
+        for _ in range(30):
+            await rig.raw(token, {"channel": "C0DEMO", "text": "earlier"})
+
+        def container():
+            conn = connect(home, check_same_thread=False)
+            outbox.insert(conn, run_id="r1", channel="slack", target=TARGET,
+                          body="The demo is at 10.", idempotency_key="e1:0", now=at[0])
+            dispatcher = Dispatcher(
+                conn, {"slack": slack_sender.make_hosted(rig.base, token)},
+                now=lambda: at[0], log=lambda line: None)
+            statuses = []
+            for seconds in (0, 10, 60):       # at once, after 10 s, after 1 min
+                at[0] += timedelta(seconds=seconds)
+                rig.proxy_clock += seconds
+                dispatcher.step()
+                statuses.append(tuple(conn.execute(
+                    "SELECT status, attempts, last_error FROM outbox").fetchone()))
+            assert dispatcher.step() == 0     # sent: nothing is left to try
+            conn.close()
+            return statuses
+
+        return await asyncio.to_thread(container)
+
+    statuses = _run(tmp_path, sock_dir, slack, body)
+    assert [(status, attempts) for status, attempts, _ in statuses] == [
+        ("pending", 1), ("pending", 2), ("sent", 2)]
+    assert "rate_limited" in statuses[0][2]
+    texts = [call["body"]["text"] for call in slack.calls("/chat.postMessage")]
+    assert texts.count("The demo is at 10.") == 1 and len(texts) == 31
 
 
 # --- gateway.sock ---------------------------------------------------------

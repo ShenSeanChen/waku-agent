@@ -13,7 +13,12 @@ PER REQUEST, IN ORDER:
   2. What. A JSON object with `channel` and `text`, and `thread_ts` or not.
      Any other field is refused: nothing in a request names a tenant, a
      workspace or a token.
-  3. The gateway is asked over run/gateway/gateway.sock to post it for that
+  3. How many. A tenant may send SENDS_PER_MINUTE messages in any 60 seconds.
+     One more is a 429, `rate_limited`. The container's sender reads that as
+     a failed send, so its dispatcher keeps the message and tries again after
+     10 seconds and then a minute, and nothing is lost. The limit is per
+     tenant, so one container in a loop cannot hold back another's replies.
+  4. The gateway is asked over run/gateway/gateway.sock to post it for that
      tenant. The gateway holds each workspace's bot token and calls Slack;
      this process never sees a Slack token, and neither does the container.
 
@@ -24,6 +29,9 @@ shape, so the container's sender reads both setups the same way.
 from __future__ import annotations
 
 import json
+import time
+from collections import defaultdict, deque
+from collections.abc import Callable
 from pathlib import Path
 
 from aiohttp import web
@@ -39,6 +47,11 @@ FIELDS = frozenset({"channel", "text", "thread_ts"})
 # characters. The limit also keeps the request the gateway is sent under
 # jsonsock.MAX_LINE: 8,000 characters are at most 48,000 bytes of JSON.
 MAX_TEXT_CHARS = 8000
+# The most messages one tenant sends in RATE_WINDOW_SECONDS. Slack itself
+# allows about one message a second in a channel; half of that leaves room
+# for a long reply sent in parts and stops a run that posts in a loop.
+SENDS_PER_MINUTE = 30
+RATE_WINDOW_SECONDS = 60.0
 # Slack is given ten seconds by the gateway; the socket waits a little longer.
 GATEWAY_TIMEOUT_SECONDS = 15.0
 
@@ -54,9 +67,26 @@ def _bearer(request: web.Request) -> str:
 
 
 class SlackSend:
-    def __init__(self, *, resolve: Resolve, gateway_socket: Path) -> None:
+    def __init__(self, *, resolve: Resolve, gateway_socket: Path,
+                 monotonic: Callable[[], float] = time.monotonic) -> None:
         self._resolve = resolve
         self._socket = gateway_socket
+        self._monotonic = monotonic
+        # tenant id -> when each of its sends in the last minute was taken.
+        self._recent: dict[str, deque[float]] = defaultdict(deque)
+
+    def _take(self, tenant: str) -> bool:
+        """Count one send for this tenant, or answer False at the limit. The
+        dict holds one short queue per tenant that ever sent, at most
+        SENDS_PER_MINUTE entries long."""
+        now = self._monotonic()
+        recent = self._recent[tenant]
+        while recent and now - recent[0] >= RATE_WINDOW_SECONDS:
+            recent.popleft()
+        if len(recent) >= SENDS_PER_MINUTE:
+            return False
+        recent.append(now)
+        return True
 
     async def handle(self, request: web.Request) -> web.Response:
         if request.method != "POST":
@@ -79,6 +109,10 @@ class SlackSend:
         if not (isinstance(channel, str) and isinstance(text, str)
                 and isinstance(thread_ts, str) and 0 < len(text) <= MAX_TEXT_CHARS):
             return _answer(400, "bad_request")
+        # After the checks above, so only a message that would be sent counts.
+        if not self._take(tenant):
+            _LOG.info("tenant=%s: over %s Slack messages a minute", tenant, SENDS_PER_MINUTE)
+            return _answer(429, "rate_limited")
         try:
             answer = await jsonsock.ask(
                 self._socket, {"op": "slack_send", "tenant": tenant, "channel": channel,
