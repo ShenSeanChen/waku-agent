@@ -82,6 +82,41 @@ def test_install_plugin_installs_from_the_marketplace_and_signs_in(tmp_path, mon
     assert memory_choice.already_connected(home)
 
 
+def test_a_sign_in_that_never_finished_is_not_called_connected(tmp_path, monkeypatch):
+    """The token file is first written when the client registers, before the
+    browser step. On 2026-11-13 a sign-in that failed in the browser left
+    that file, and the first-run answer read "connected to Waku Memory as
+    unknown account". A file with no token is asked to sign in again, and a
+    sign-in that fails says so."""
+    from evals.deterministic.plugin_fixtures import marketplace, official
+    from waku.tools import mcp_cli
+
+    home = tmp_path / "home"
+    official(monkeypatch, marketplace(tmp_path / "market"))
+    auth = home / "mcp-auth" / "waku_memory.json"
+    auth.parent.mkdir(parents=True)
+    auth.write_text('{"url": "https://api.waku.one/mcp", "client_info": {"client_id": "c1"}}',
+                    encoding="utf-8")
+    assert not mcp_cli.has_token(auth)
+    assert mcp_cli._identity(auth) == "not signed in"
+
+    asked = []
+
+    def failed_sign_in(h, name):
+        asked.append(name)
+        return False, "Sign-in did not complete."
+
+    monkeypatch.setattr(mcp_cli, "sign_in", failed_sign_in)
+    installed, message = memory_choice.install_plugin(home)
+    assert asked == ["waku_memory"]
+    assert installed and "The sign-in did not finish" in message and "connected" not in message
+
+    auth.write_text('{"tokens": {"access_token": "opaque"}}', encoding="utf-8")
+    assert mcp_cli.has_token(auth)
+    auth.write_text("{not json", encoding="utf-8")
+    assert not mcp_cli.has_token(auth)
+
+
 def test_s3_keep_local_only_opens_no_connection_and_is_not_asked_again(home, monkeypatch):
     """S3: the answer is saved as off, nothing signs in, and the next run is silent."""
     connected = []
