@@ -600,7 +600,12 @@ def connectors_data() -> dict:
         row["removable"] = not row["plugin"]
         rows.append(row)
     waiting = connectors.sign_in_waiting(home)
+    added = {str(spec.get("url", "")).rstrip("/") for spec in mcp_servers(home)}
     return {
+        # The starter list as buttons; one that is connected is marked.
+        "starter": [{"name": entry["name"], "title": entry["title"], "docs": entry["docs"],
+                     "added": entry["url"].rstrip("/") in added}
+                    for entry in connectors.starter().values()],
         # A hosted container's servers are set when the person signs in, and
         # the hosted gateway blocks the three routes (hosted/core/policy.py).
         "available": settings.provider != "waku-platform",
@@ -611,17 +616,19 @@ def connectors_data() -> dict:
 
 
 def connectors_add(payload: dict) -> dict:
-    """Add the server at the address the card's field holds, and start its
-    sign-in. The card takes an address only: a web page that makes Waku run a
+    """Add the server a starter button names or the card's field holds, and
+    start its sign-in. The card takes a starter name or an address only: a web page that makes Waku run a
     program is the attack spec 025 names, so a command is added from the
     command line."""
     from waku.tools import connectors
 
-    if set(payload) - {"url"}:
-        return {"error": "The card takes the address of a server only."}
+    if len(payload) != 1 or set(payload) - {"url", "name"}:
+        return {"error": "The card takes a starter name or the address of a server."}
     home = load_settings().ensure_home()
     try:
-        _, url, _ = connectors.resolve(str(payload.get("url") or ""))
+        if "name" in payload and str(payload["name"]).lower() not in connectors.starter():
+            raise connectors.Refused(f"'{payload['name']}' is not on the starter list.")
+        _, url, _ = connectors.resolve(str(payload.get("url") or payload.get("name") or ""))
         message = connectors.connect(home, url)
         spec = connectors.find(home, url) or {}
     except connectors.Refused as refused:

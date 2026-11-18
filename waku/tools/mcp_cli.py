@@ -16,6 +16,7 @@ Switching is the easy part once you can see there is something to switch.
 Adding a server is one command (spec 025), and it writes the entry in
 mcp.json that this file reads:
 
+    waku mcp add <name>                                a name on the starter list: linear, notion, github
     waku mcp add <name> <https address>                a remote server, signed in to in your browser
     waku mcp add <name> <https address> --key-env VAR  a remote server whose key is in $VAR
     waku mcp add <name> <https address> --no-auth      a remote server with no sign-in
@@ -220,10 +221,7 @@ def _add(home: Path, args: list[str]) -> int:
     if "--no-auth" in args:
         args.remove("--no-auth")
         auth = connectors.NONE
-    # Group B resolves a lone name from the starter list; until a name is on
-    # it, an address or a command has to come with the name.
-    if not args or len(args) > 2 or (len(args) == 2 and command) or (
-            len(args) == 1 and not command):
+    if not args or len(args) > 2 or (len(args) == 2 and command):
         print(ADD_USAGE)
         return 1
     try:
