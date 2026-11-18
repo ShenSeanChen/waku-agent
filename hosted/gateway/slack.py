@@ -278,6 +278,8 @@ class SlackRelay:
         except Unreadable:
             _LOG.error("tenant=%s: the stored token for Slack team=%s does not open "
                        "with WAKU_SLACK_TOKEN_KEY", tenant_id, install.team_id)
+            # The setup page now tells the person to reconnect.
+            self._store.set_slack_reconnect(install.team_id, True)
             return _refused("token_unreadable")
         payload = {"channel": channel, "text": text}
         if thread_ts:
@@ -324,6 +326,47 @@ class SlackRoutes:
     def relay(self) -> SlackRelay:
         """The relay that posts with the tokens these routes stored."""
         return SlackRelay(store=self._store, box=self._box, api=self._api)
+
+    def check_tokens(self) -> list[str]:
+        """Find the workspaces whose stored token this gateway's key does not
+        open, mark each one, and return their team ids. Called once at start.
+
+        The key is in config/gateway.env and in no backup, so a control.db
+        restored onto another VM, or a gateway.env whose key line changed,
+        leaves tokens nothing can open. That must not be silent, and it must
+        not stop the gateway: Slack is one feature, and the gateway serves
+        every tenant. So this logs one line for the operator, each marked
+        workspace's person sees "Reconnect Slack" on the setup page, and no
+        failure in here is raised. A workspace whose token opens is unmarked,
+        so putting the old key back needs nothing from anybody.
+        """
+        try:
+            installs = self._store.slack_installs()
+            unreadable = []
+            for install in installs:
+                try:
+                    self._box.open(install.token_sealed,
+                                   bound_to=seal_binding(install.team_id))
+                    needed = False
+                except Unreadable:
+                    needed = True
+                    unreadable.append(install.team_id)
+                if needed != install.needs_reconnect:
+                    self._store.set_slack_reconnect(install.team_id, needed)
+        except Exception:  # noqa: BLE001 -- see the docstring: never raised
+            _LOG.exception("could not check the stored Slack tokens")
+            return []
+        if unreadable:
+            _LOG.error(
+                "WAKU_SLACK_TOKEN_KEY in config/gateway.env does not open the stored "
+                "Slack token of %s of %s workspaces (%s). Each of their people sees "
+                '"Reconnect Slack" on /setup. If control.db came from another VM, copy '
+                "that VM's WAKU_SLACK_TOKEN_KEY line into config/gateway.env and "
+                "recreate the gateway: nobody then has to reconnect.",
+                len(unreadable), len(installs), ", ".join(unreadable))
+        else:
+            _LOG.info("Slack: the key opens all %s stored tokens", len(installs))
+        return unreadable
 
     @property
     def redirect_uri(self) -> str:

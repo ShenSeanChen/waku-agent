@@ -117,11 +117,14 @@ CREATE TABLE IF NOT EXISTS slack_install (
   team_name     TEXT NOT NULL,
   bot_user_id   TEXT NOT NULL,
   token_sealed  BLOB NOT NULL,
-  installed_at  REAL NOT NULL
+  installed_at  REAL NOT NULL,
+  -- 1 when the gateway's key does not open token_sealed (slack.check_tokens).
+  needs_reconnect INTEGER NOT NULL DEFAULT 0
 );
 """
 
 _COLUMNS = "id, sub, email, timezone, status, project_id, created_at"
+_SLACK_COLUMNS = "team_id, tenant_id, team_name, bot_user_id, token_sealed, needs_reconnect"
 _EVENT_COLUMNS = ("id, tenant_id, source, external_id, session_id, payload, status, "
                   "received_at")
 
@@ -496,13 +499,32 @@ class ControlDb:
                 (team_id,)).fetchone()
         return row[0] if row else None
 
+    @staticmethod
+    def _install(row: sqlite3.Row) -> SlackInstall:
+        return SlackInstall(row[0], row[1], row[2], row[3], bytes(row[4]), bool(row[5]))
+
     def slack_install(self, tenant_id: str) -> SlackInstall | None:
         """The workspace this tenant connected, or None."""
         with self._lock:
             row = self._conn.execute(
-                "SELECT team_id, tenant_id, team_name, bot_user_id, token_sealed "
-                "FROM slack_install WHERE tenant_id = ?", (tenant_id,)).fetchone()
-        return SlackInstall(row[0], row[1], row[2], row[3], bytes(row[4])) if row else None
+                f"SELECT {_SLACK_COLUMNS} FROM slack_install WHERE tenant_id = ?",
+                (tenant_id,)).fetchone()
+        return self._install(row) if row else None
+
+    def slack_installs(self) -> list[SlackInstall]:
+        """Every connected workspace, in team id order."""
+        with self._lock:
+            rows = self._conn.execute(
+                f"SELECT {_SLACK_COLUMNS} FROM slack_install ORDER BY team_id").fetchall()
+        return [self._install(row) for row in rows]
+
+    def set_slack_reconnect(self, team_id: str, needed: bool) -> None:
+        """Mark, or clear, that this workspace's stored token cannot be
+        opened. A new install replaces the row, which clears it too."""
+        with self._lock:
+            self._conn.execute("UPDATE slack_install SET needs_reconnect = ? "
+                               "WHERE team_id = ?", (int(needed), team_id))
+            self._conn.commit()
 
     def delete_slack_install(self, team_id: str) -> None:
         with self._lock:

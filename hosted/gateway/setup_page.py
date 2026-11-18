@@ -1,7 +1,9 @@
 """GET /setup on the apex: the three steps, and which are done (spec 026 C4).
 
   1. Sign in          done when the browser holds an active tenant's session
-  2. Add to Slack     done when that tenant connected a workspace
+  2. Add to Slack     done when that tenant connected a workspace. It goes
+                      back to "to do", with "Reconnect Slack", when the
+                      gateway cannot open the workspace's stored token
   3. Mention @Waku    done with step 2: nothing is left to set up
 
 The gateway renders the page for the person asking, so the page has no
@@ -59,7 +61,10 @@ def _step(number: int, name: str, state: str, title: str, detail: str,
 
 def render(*, signed_in: bool, slack_on: bool, install: SlackInstall | None,
            outcome: str, login_url: str, dashboard_url: str) -> web.Response:
-    connected = signed_in and install is not None
+    # A workspace whose stored token cannot be opened is not connected: it
+    # hears mentions and cannot answer. slack.check_tokens marks it.
+    lost = signed_in and install is not None and install.needs_reconnect
+    connected = signed_in and install is not None and not lost
     steps = _step(
         1, "sign-in", "done" if signed_in else "todo", "Sign in",
         "You are signed in." if signed_in
@@ -67,6 +72,12 @@ def render(*, signed_in: bool, slack_on: bool, install: SlackInstall | None,
         "" if signed_in else _button(login_url, "Sign in"))
     if not slack_on:
         steps += _step(2, "slack", "off", "Add to Slack", SLACK_OFF)
+    elif lost:
+        steps += _step(
+            2, "slack", "todo", "Add to Slack",
+            f"Waku lost its connection to {install.team_name}. Reconnect it, and "
+            "Waku answers there again.",
+            _button(slack.INSTALL_PATH, "Reconnect Slack"))
     elif connected:
         steps += _step(
             2, "slack", "done", "Add to Slack",

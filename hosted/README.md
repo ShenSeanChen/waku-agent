@@ -581,8 +581,9 @@ with the same names.
 - **Replies need the free tier.** `POST /slack/send` is a route on the
   metering proxy, and a container knows the proxy's address only on a
   deployment installed with `--free-model`.
-- **A restore onto a new VM loses the Slack connections** unless
-  `WAKU_SLACK_TOKEN_KEY` is carried over by hand with `config/gateway.env`.
+- **A restore onto a new VM needs `WAKU_SLACK_TOKEN_KEY` carried over by
+  hand**, because no backup holds it. Without it each person is asked to
+  reconnect ([Restoring](#restoring)).
 - **Slack reviews a public app** before more than a handful of workspaces
   can add it.
 - **None of this has run against Slack.** The evals use a fake Slack on
@@ -1072,6 +1073,13 @@ snapshot carries none and needs none: it holds two SQLite files, and a single
 SQLite file carries its own completeness check, which both `backup.sh` and
 `restore.sh` run as `PRAGMA integrity_check`.
 
+**One thing is left out on purpose: `WAKU_SLACK_TOKEN_KEY`.** `control.db` is
+backed up and holds each workspace's Slack token encrypted. The key that opens
+them is a line in `/srv/waku/config/gateway.env`, and `config/` is never backed
+up, so a copy of the repository holds no Slack token that works. Keep a copy
+of that one line somewhere other than the VM and the repository. `backup.sh
+--all` prints a line saying so every night.
+
 `backup.sh` and `restore.sh` share one `flock` on the staging directory, so a
 backup and a restore never run at once. List what is in the repository with
 restic's own environment, which is exactly what `config/backup.env` holds:
@@ -1090,6 +1098,15 @@ tenant container, stop the gateway and the proxy, replace `control.db` and
 `ledger.db`, start both services, then restore every tenant one at a time. It
 checks the control snapshot before it stops anything, so a repository that is
 empty or unreachable costs a refusal and no downtime.
+
+**After a restore onto another VM, Slack needs its key.** The restored
+`control.db` holds Slack tokens that open only with the old VM's
+`WAKU_SLACK_TOKEN_KEY`. Copy that line into the new VM's
+`/srv/waku/config/gateway.env` and recreate the gateway, and every workspace
+stays connected. Without it the gateway still starts, logs how many tokens it
+cannot open, and shows each affected person "Reconnect Slack" on `/setup`;
+adding the app again stores a new token. `restore.sh --all` prints a line
+saying so.
 
 Two refusals you may meet, and what each one means:
 

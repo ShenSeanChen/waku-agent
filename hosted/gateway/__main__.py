@@ -103,6 +103,10 @@ async def main() -> None:
             slack = SlackRoutes(settings=config.slack, apex_host=config.apex_host,
                                 store=store, api=SlackApi(session), wake=scheduler.kick)
             _LOG.info("Slack: on. Events at https://%s%s", config.apex_host, EVENTS_PATH)
+            # Says in the log, and on each person's setup page, when the key
+            # in gateway.env does not open the tokens control.db holds. It
+            # never raises.
+            slack.check_tokens()
         else:
             _LOG.warning("Slack: off, its routes answer 503: %s", config.slack_problem)
         gateway = Gateway(config=config, store=store, launcher=launcher,
