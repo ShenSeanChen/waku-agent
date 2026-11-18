@@ -52,6 +52,19 @@ def _claims(access_token: str) -> dict:
         return {}
 
 
+def has_token(auth_file: Path) -> bool:
+    """Whether this file holds an access token. The file alone does not show
+    a sign-in: it is first written when the client registers, before the
+    browser step, so a sign-in the person never finished leaves a file with
+    no token in it."""
+    try:
+        stored = json.loads(auth_file.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    tokens = stored.get("tokens") if isinstance(stored, dict) else None
+    return isinstance(tokens, dict) and bool(tokens.get("access_token"))
+
+
 def _identity(auth_file: Path) -> str:
     """One line describing whose token this is, or why there is not one."""
     if not auth_file.exists():
@@ -63,6 +76,9 @@ def _identity(auth_file: Path) -> str:
         # parse costs a sign-in, not an explanation.
         return "unreadable — will sign in again"
 
+    if not has_token(auth_file):
+        # registered with the server, and the browser step never finished
+        return "not signed in"
     claims = _claims(stored.get("tokens", {}).get("access_token", ""))
     who = claims.get("email") or claims.get("sub") or "unknown account"
 
@@ -188,7 +204,7 @@ def sign_in(home: Path, name: str) -> tuple[bool, str]:
     finally:
         bridge.close()
 
-    if not path.exists():
+    if not has_token(path):
         return False, f"\n  Sign-in did not complete — '{name}' has no token."
     return True, f"\n  {name} — {_identity(path)}"
 
