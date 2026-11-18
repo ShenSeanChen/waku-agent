@@ -439,6 +439,32 @@ def test_blocked_is_not_said_on_the_channel_that_is_blocked(tmp_path, monkeypatc
         service.stop()
 
 
+def test_blocked_ends_when_telegram_stops_refusing(tmp_path, monkeypatch):
+    """The fourth live run: the other program was gone and the line said
+    `blocked` for hours, because only a message cleared it."""
+    import time
+
+    from waku.alwayson.sources import telegram as source
+
+    service, state = _telegram_and_github(tmp_path, monkeypatch)
+    service.start()
+    try:
+        _conflict(state)
+        assert service.watch() == BLOCKED_LINE
+
+        state["conflict_at"] = time.monotonic() - source.QUIET_SECONDS + 30
+        assert service.watch() is None, "the other program may still be reading"
+
+        state["conflict_at"] = time.monotonic() - source.QUIET_SECONDS - 1
+        assert service.watch() == "  sources: github, telegram"
+        assert service.states()["telegram"] == ("listening", "")
+
+        _conflict(state)
+        assert service.watch() == BLOCKED_LINE, "a new refusal blocks it again"
+    finally:
+        service.stop()
+
+
 def test_blocked_ends_when_a_message_arrives(tmp_path, monkeypatch):
     """The other program stopped and this one took over."""
     from types import SimpleNamespace
