@@ -27,6 +27,7 @@ import re
 import sqlite3
 from collections.abc import Callable
 from datetime import datetime, timedelta, tzinfo
+from fnmatch import fnmatchcase
 from pathlib import Path
 
 from waku.alwayson import outbox, runs
@@ -115,12 +116,26 @@ MODES: dict[str, str | Callable[[dict, Address | None], str]] = {
 
 
 def mode(tool: str, args: dict, address: Address | None = None,
-         read_only: bool = False) -> str:
-    """`allow` or `ask` for one call. WAKU_APPROVE_ASK and WAKU_APPROVE_ALLOW
-    each name tools that skip the table, and `ask` wins when a tool is in
-    both. A tool the table does not know, which is a tool from an MCP server,
-    asks (spec 024, decision 6), unless the server declared it read-only
-    (`readOnlyHint`) or WAKU_APPROVE_ALLOW names it."""
+         read_only: bool = False, connector=None, own_name: str = "") -> str:
+    """`allow` or `ask` for one call, decided in this order:
+
+      1. connect_tool and disconnect_tool ask, whatever comes next.
+      2. WAKU_APPROVE_ASK or WAKU_APPROVE_ALLOW names the tool: that wins, and
+         `ask` wins when a tool is in both.
+      3. The built-in table knows the tool.
+
+    Every other tool comes from an MCP server (spec 024, decision 6, and spec
+    025, decision 4). `connector` says which kind of server, and `own_name` is
+    the tool's name there:
+
+      4. Waku Memory: the tool runs. Saving a memory is the agent's own job.
+      5. A server on the starter list: a tool matching the entry's `writes`
+         asks, and every other tool runs. The list decides, not the server.
+      6. Any other server: a tool the server marks read-only (`readOnlyHint`)
+         runs. The mark is the server's own claim, so it counts only for a
+         server the owner added themselves.
+      7. Otherwise it asks.
+    """
     from waku.config import approval_overrides
 
     args = args if isinstance(args, dict) else {}
@@ -132,8 +147,16 @@ def mode(tool: str, args: dict, address: Address | None = None,
         return ASK
     if tool in allow:
         return ALLOW
-    rule = MODES.get(tool, ALLOW if read_only else ASK)
-    return rule(args, address) if callable(rule) else rule
+    if tool in MODES:
+        rule = MODES[tool]
+        return rule(args, address) if callable(rule) else rule
+    kind = getattr(connector, "kind", "")
+    if kind == "memory":
+        return ALLOW
+    if kind == "starter":
+        writes = any(fnmatchcase(own_name or tool, pattern) for pattern in connector.writes)
+        return ASK if writes else ALLOW
+    return ALLOW if read_only else ASK
 
 
 def who_may_approve(tool: str, args: dict) -> list[Address]:
@@ -252,9 +275,22 @@ class Gate:
             return None, ""
         args = args if isinstance(args, dict) else {}
         known = self._tools.get(tool) if self._tools is not None else None
-        if mode(tool, args, context.address, getattr(known, "read_only", False)) == ALLOW:
+        if self.mode(tool, args, context.address, known) == ALLOW:
             return None, ""
         return park(self.conn, int(context.run_id), tool, args, self._now(), self._tz), ""
+
+
+    def mode(self, tool: str, args: dict, address: Address | None, known) -> str:
+        """`mode` for a tool of this agent: the registry says which MCP
+        server it comes from, and mcp.json says which kind of server that is."""
+        server, own_name = getattr(known, "mcp", None) or ("", "")
+        connector = None
+        if server:
+            from waku.tools import connectors
+
+            connector = connectors.connector_of(self.home, server)
+        return mode(tool, args, address, getattr(known, "read_only", False),
+                    connector=connector, own_name=own_name)
 
 
 def ran_before(conn: sqlite3.Connection, digest: str, now: datetime,

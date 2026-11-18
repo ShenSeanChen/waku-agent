@@ -141,6 +141,46 @@ def starter_for(spec: dict) -> dict | None:
                 None)
 
 
+MEMORY, STARTER, OWN = "memory", "starter", "own"
+
+
+@dataclass(frozen=True)
+class Connector:
+    """What the approval rules need to know about the server a tool comes
+    from (alwayson/approvals.py, `mode`).
+
+      memory    Waku Memory: its tools run without a question
+      starter   a server on the starter list: `writes` says which tools ask
+      own       any other server: a tool asks unless the server marks it
+                read-only
+    """
+    name: str
+    kind: str
+    writes: tuple[str, ...] = ()
+
+
+def connector_of(home: Path, server: str) -> Connector | None:
+    """The connector a server in mcp.json, or one a plugin brings, is. None
+    when no such server is configured."""
+    from waku.tools.mcp_client import merge
+    from waku.tools.waku_memory import is_waku_memory
+
+    try:
+        config = _read(home)["servers"]
+    except Refused:
+        config = []
+    spec = next((s for s in merge(config, _plugin_servers(home))[0]
+                 if s.get("name") == server), None)
+    if spec is None:
+        return None
+    if is_waku_memory(spec):
+        return Connector(server, MEMORY)
+    listed = starter_for(spec)
+    if listed is not None:
+        return Connector(server, STARTER, tuple(listed["writes"]))
+    return Connector(server, OWN)
+
+
 def _next(name: str, auth: str) -> str:
     if auth == OAUTH:
         return f"Sign in on the computer Waku runs on: waku mcp login {name}"
