@@ -13,6 +13,10 @@ nobody is talking to it.
   serve.py       `waku serve`: the handlers, the worker, the timer loop and
                  the dispatcher in one process
   sources/       one handler per source; each only inserts a row
+  handover.py    a hosted container (WAKU_HOSTED=1) takes events from a
+                 gateway outside it, reports the work it has left, and runs
+                 the worker, the timer loop and the dispatcher inside the
+                 dashboard process (spec 026)
 
 A handler never calls `waku.respond()`. It writes a row and returns, so a
 message that arrives while a run is busy, or just before a crash, is on disk.

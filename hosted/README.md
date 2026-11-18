@@ -40,7 +40,7 @@ which carries them. Neither license grants any right in them.
 |---|---|
 | `core/` | pure logic: tenant ids, route policy, quota, idle, provisioning, request validation |
 | `ports/` | the four replaceable seams, as Protocols and nothing else. The implementations live beside the service that owns each one |
-| `gateway/` | the front door: login, sessions, routing by host, `control.db` |
+| `gateway/` | the front door: login, sessions, routing by host, `control.db`, the idle loop, and the scheduler that wakes a stopped tenant for an event or a timer |
 | `proxy/` | the metering proxy in front of the model API, and `ledger.db` |
 | `spawner/` | the one process that talks to Docker |
 | `image/` | the tenant and services Dockerfiles, their allowlist ignore files, and the seccomp profile every container runs under |
@@ -818,10 +818,45 @@ the container, from before it reaches the container until the last byte of a
 streamed answer, so a container is never stopped mid-turn. Background requests
 (the dashboard's timers, sent with `X-Waku-Background: 1`) never reset the idle
 clock and never start a stopped container: they get `paused`, and the page
-waits for the next user action. Two cases the gateway cannot see: a turn that
-keeps running inside the container after the browser closed the tab, and work
-the container starts on its own. Both stop with the container once the window
-has passed since the last real request.
+waits for the next user action.
+
+**A container that is still working is not idle.** Before the gateway stops a
+container that has passed the window, it asks the container what work it has
+left (`GET /api/alwayson/next`). The container is kept while it reports a run
+in progress, an event no run has finished with, or an outgoing message not yet
+sent. A run that waits for the owner's yes does not keep it: the yes arrives
+as an event. A container that still reports work 2 hours past the window
+(`WORK_LIMIT_SECONDS` in `hosted/core/idle.py`) is stopped anyway, and so is
+one that does not answer, which includes every container on an image older
+than this rule. One case the gateway still cannot see: a chat turn that keeps
+running inside the container after the browser closed the tab. It stops with
+the container once the window has passed since the last real request.
+
+**What still works while a container is stopped.** The gateway keeps two
+tables in `control.db` for a tenant whose container is not running, and a
+scheduler reads both every 30 seconds (`hosted/gateway/scheduler.py`).
+
+| Table | Holds | What the scheduler does |
+|---|---|---|
+| `tenant_events` | one row per event for a tenant, unique on tenant, source and the sender's own id | starts the tenant's container, posts the rows to it (`POST /api/events`), and marks them `handed` when the container answers 200 |
+| `tenant_wakeups` | the time of the tenant's earliest timer, as the container reported it before it was stopped | starts the container at that time; the container's own timer loop then fires the timer |
+
+A wake goes through the same running cap as a request, so at the cap it stops
+the container idle longest, and it waits when none can be stopped. An event
+that could not be handed over stays `pending` and is offered again 30 seconds
+later. The container stores each event once, so an event offered twice is one
+run. A browser cannot call either route: the gateway refuses `POST
+/api/events` and `/api/alwayson/next` from a signed-in person, and the
+container answers them only when it was started with `WAKU_HOSTED=1`, which
+the spawner sets on a tenant container and not on an inspect container.
+
+Three limits as of this change. Nothing writes a row into `tenant_events`
+yet: chat, the embed and Slack arrive in later groups of spec 026. A hosted
+container has no sender, so a run that a timer starts answers in its
+conversation's history and sends nothing. And a wakeup is stored only at an
+idle stop: a container stopped by an eviction at the cap, by `upgrade.sh
+--now` or by a VM reboot keeps the wakeup stored at its last idle stop, so a
+timer set after that fires when the tenant next opens the dashboard.
 
 **Changing the window.** Set `WAKU_IDLE_MINUTES` in `config/gateway.env` to a
 whole number of minutes, at least 1, and restart the gateway; it reads the
