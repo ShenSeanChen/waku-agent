@@ -1,9 +1,10 @@
 // The "Connectors" card on Tools > MCP (spec 025): every MCP server Waku
 // would connect, with its account and its tool count, a field that adds one
-// by its address, and a Remove button on each server a person added.
+// by its address, one button for each entry of the starter list, and a
+// Remove button on each server a person added.
 //
-// The rows come from `connectors` in /api/data. The card takes an address
-// only. A server that is a program on this machine is added from the command
+// The rows come from `connectors` in /api/data. The card takes a starter name
+// or an address only. A server that is a program on this machine is added from the command
 // line (`waku mcp add <name> -- <command>`), never from a page.
 //
 // A name, an address, an account and a sign-in link are text from outside,
@@ -35,11 +36,20 @@ function connectorRows(c){
       : `<span class="meta">from the ${esc(r.plugin)} plugin</span>`))).join("");
 }
 
+function connectorStarter(c){
+  const rest = (c.starter || []).filter(s => !s.added);
+  if (!rest.length) return "";
+  return `<div class="meta" style="margin:var(--space-3) 0 calc(var(--spacing) * 1)">Add one from the starter list</div>
+    <div style="display:flex;gap:var(--space-2);flex-wrap:wrap">${rest.map(s =>
+      uiButton(esc(s.title), {level: "secondary", size: "sm",
+        onclick: `addConnector('${esc(s.name)}')`, title: "Connect " + s.title})).join("")}</div>`;
+}
+
 function connectorsCard(d){
-  const c = d.connectors || {available: false, servers: [], sign_in: null};
+  const c = d.connectors || {available: false, starter: [], servers: [], sign_in: null};
   if (!c.available) return "";
   const note = connectorNote ? `<div class="meta" style="margin-bottom:var(--space-2)">${esc(connectorNote)}</div>` : "";
-  return uiCard(note + connectorSignIn(c) + connectorRows(c) + `
+  return uiCard(note + connectorSignIn(c) + connectorRows(c) + connectorStarter(c) + `
     <div class="meta" style="margin:var(--space-3) 0 calc(var(--spacing) * 1)">Add a server by its address</div>
     <div style="display:flex;gap:var(--space-2);align-items:center">
       <input id="connector-url" type="url" placeholder="https://mcp.example.com/mcp"
@@ -53,12 +63,13 @@ function connectorsCard(d){
     {title: "Connectors"});
 }
 
-async function addConnector(){
+// With a name: a starter button. Without one: the address in the field.
+async function addConnector(name){
   const field = document.getElementById("connector-url");
   const url = field ? field.value.trim() : "";
-  if (!url) return;
-  const r = await postJSON("/api/connectors/add", {url});
-  connectorNote = r.error ? ("Not added: " + r.error) : ("Added " + r.name + ".");
+  if (!name && !url) return;
+  const r = await postJSON("/api/connectors/add", name ? {name} : {url});
+  connectorNote = r.error ? ("Not added: " + r.error) : (r.message || ("Added " + r.name + "."));
   editing = false;
   await refresh();
 }

@@ -155,8 +155,14 @@ def _describe_send_message(args: dict) -> str:
 
 
 def _describe_connect_tool(args: dict) -> str:
-    return (f"Connect the MCP server at {str(args.get('name_or_url', '')).strip()}. "
-            "Waku will be able to call its tools.")
+    from waku.tools import connectors
+
+    target = str(args.get("name_or_url", "")).strip()
+    listed = connectors.starter().get(target.lower())
+    if listed is not None:
+        return (f"Connect {listed['title']} ({listed['url']}). Waku will be able to "
+                "call its tools.")
+    return f"Connect the MCP server at {target}. Waku will be able to call its tools."
 
 
 def _describe_disconnect_tool(args: dict) -> str:

@@ -23,6 +23,7 @@ import json
 import os
 import re
 import threading
+import tomllib
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -124,6 +125,22 @@ def check_url(url: str) -> str:
     return url
 
 
+def starter() -> dict[str, dict]:
+    """The starter list, waku/connectors.toml: one table per connector, by
+    name. The file says what each field holds."""
+    path = Path(__file__).resolve().parents[1] / "connectors.toml"
+    with path.open("rb") as handle:
+        return tomllib.load(handle)
+
+
+def starter_for(spec: dict) -> dict | None:
+    """The starter entry a server in mcp.json is, or None. A server counts by
+    its address, never by its name: a person may name any server 'linear'."""
+    url = _same(spec.get("url")) if isinstance(spec, dict) else ""
+    return next((entry for entry in starter().values() if url and _same(entry["url"]) == url),
+                None)
+
+
 def _next(name: str, auth: str) -> str:
     if auth == OAUTH:
         return f"Sign in on the computer Waku runs on: waku mcp login {name}"
@@ -142,6 +159,15 @@ def add(home: Path, name: str, url: str | None = None, command: str | None = Non
     the name of the environment variable that holds its key. A name or an
     address that is already there is refused, and nothing is written.
     """
+    listed = None
+    if not url and not command:
+        # A name alone is a name on the starter list.
+        listed = starter().get((name or "").strip().lower())
+        if listed is None:
+            raise Refused(f"'{(name or '').strip()}' is not on the starter list "
+                          f"({', '.join(starter())}). Give its address: "
+                          f"waku mcp add {(name or '').strip() or '<name>'} <https address>")
+        name, url, auth = listed["name"], listed["url"], auth or listed["auth"]
     name = check_name(name)
     if bool(url) == bool(command):
         raise Refused("Give one of the two: an address (https://...) for a remote server, "
@@ -182,7 +208,10 @@ def add(home: Path, name: str, url: str | None = None, command: str | None = Non
 
     data["servers"].append(spec)
     _write(home, data)
-    return Added(name, spec, auth, _next(name, auth))
+    step = _next(name, auth)
+    if listed is not None and auth not in (OAUTH, NONE):
+        step += f" Where the key comes from: {listed['docs']}"
+    return Added(name, spec, auth, step)
 
 
 def remove(home: Path, name: str) -> dict:
@@ -373,32 +402,46 @@ _HOST_NOISE = ("mcp", "api", "www", "app")
 
 
 def name_for(url: str) -> str:
-    """A name for a server nobody named: `example` for mcp.example.com."""
+    """A name for a server nobody named: `example` for mcp.example.com,
+    `local` for one on this machine."""
     host = urlparse(url).hostname or ""
+    if host in _LOCAL_HOSTS:
+        return "local"
     labels = [part for part in host.split(".") if part]
-    while len(labels) > 1 and labels[0] in _HOST_NOISE:
+    if not labels or all(part.isdigit() for part in labels) or ":" in host:
+        return "server"   # an address made of numbers names nobody
+    while len(labels) > 2 and labels[0] in _HOST_NOISE:
         labels.pop(0)
-    word = labels[0] if len(labels) < 3 else labels[-2]
-    if len(labels) == 2:
-        word = labels[0]
+    # `example` of example.com, and of anything.example.com.
+    word = labels[-2] if len(labels) >= 2 else labels[0]
     word = re.sub(r"[^A-Za-z0-9_-]", "_", word).strip("_-")[:32]
     return word if _NAME.match(word or "") else "server"
 
 
-COMMAND_REFUSED = ("this takes the address of an MCP server (https://...). A server that "
-                   "is a program on this machine is added from the command line only: "
-                   "waku mcp add <name> -- <command>")
+# Names Waku gives a meaning of its own (waku_memory.py, treg.py). A server
+# added from chat or from the card never takes one: only the command line
+# and the person's own edit of mcp.json can.
+RESERVED = frozenset({"waku_memory", "treg"})
+
+
+COMMAND_REFUSED = ("this takes the address of an MCP server (https://...) or a name on "
+                   "the starter list ({names}). A server that is a program on this machine "
+                   "is added from the command line only: waku mcp add <name> -- <command>")
 NEEDS_YES = ("{done}: this needs the owner's yes, and this conversation cannot ask for it. "
              "On the computer Waku runs on, run `{command}`, or use the Connectors card "
              "on the dashboard.")
 
 
 def resolve(target: str) -> tuple[str, str, str]:
-    """(name, address, auth) for what a chat message asked to connect: an
-    https address. Anything else is refused, a command above all."""
+    """(name, address, auth) for what a chat message or the card asked to
+    connect: a name on the starter list, or an https address. Anything else
+    is refused, a command above all."""
     target = (target or "").strip()
+    listed = starter().get(target.lower())
+    if listed is not None:
+        return listed["name"], listed["url"], listed["auth"]
     if "://" not in target or any(c.isspace() for c in target):
-        raise Refused(COMMAND_REFUSED)
+        raise Refused(COMMAND_REFUSED.format(names=", ".join(starter())))
     url = check_url(target)
     return name_for(url), url, OAUTH
 
@@ -411,7 +454,7 @@ def find(home: Path, url: str) -> dict | None:
 
 def _free_name(home: Path, name: str) -> str:
     taken = {s.get("name") for s in _read(home)["servers"] if isinstance(s, dict)}
-    taken |= {s.get("name") for s in _plugin_servers(home)}
+    taken |= {s.get("name") for s in _plugin_servers(home)} | RESERVED
     if name not in taken:
         return name
     return next(f"{name[:29]}_{n}" for n in range(2, 100) if f"{name[:29]}_{n}" not in taken)
@@ -451,10 +494,12 @@ def connect(home: Path, target: str, sign_in: Callable | None = None,
     name, url, auth = resolve(target)
     spec = find(home, url)
     if spec is None:
+        listed = starter_for({"url": url})
         added = add(home, _free_name(home, name), url=url, auth=auth)
         spec, lead = added.spec, f"Added '{added.name}'."
         if added.auth != OAUTH:
-            return f"{lead} {added.next}"
+            where = f" Where the key comes from: {listed['docs']}" if listed else ""
+            return f"{lead} {added.next}{where}"
     elif not needs_sign_in(home, spec):
         return f"{url} is already connected as '{spec.get('name')}'."
     else:
@@ -505,16 +550,18 @@ def make_tools(home: Path, sign_in: Callable = start_sign_in) -> list[Tool]:
         Tool(
             name="connect_tool",
             description=(
-                "Connect an MCP server by its https address, so its tools can be used. "
-                "Use when the user asks to connect a service and gives its address. It "
-                "takes an address only, never a command to run. The owner approves it "
-                "first, and then signs in through a link."
+                "Connect an MCP server, so its tools can be used. Use when the user asks "
+                "to connect a service. It takes a name on the starter list ("
+                + ", ".join(starter()) + ") or the server's https address, never a "
+                "command to run. The owner approves it first, and then signs in through "
+                "a link."
             ),
             input_schema={
                 "type": "object",
                 "properties": {"name_or_url": {
                     "type": "string",
-                    "description": "The server's address, e.g. https://mcp.example.com/mcp"}},
+                    "description": ("A starter name, e.g. linear, or the server's address, "
+                                    "e.g. https://mcp.example.com/mcp")}},
                 "required": ["name_or_url"],
             },
             fn=connect_tool,

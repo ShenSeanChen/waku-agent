@@ -383,10 +383,11 @@ def test_cli_remove_deletes_the_entry_and_the_token_file(cli):
 
 
 def test_cli_add_without_enough_to_go_on_prints_the_usage(cli):
-    code, out = cli("add", "linear")
+    code, out = cli("add")
+    assert code == 1 and "waku mcp add <name> <https address>" in out
 
-    assert code == 1
-    assert "waku mcp add <name> <https address>" in out
+    code, out = cli("add", "jira")
+    assert code == 1 and "waku mcp add jira <https address>" in out
     assert not (cli.home / "mcp.json").exists()
 
 
@@ -774,3 +775,142 @@ def test_dashboard_card_has_an_address_field_and_a_remove_button_on_each_row():
     assert index.index("/static/js/connectors.js") < index.index("/static/js/main.js")
     assert script.isascii(), "no emoji in the dashboard"
     assert script.count("esc(") >= 5, "a name, an address and a link are text from outside"
+
+
+# ---- B: the starter list ----------------------------------------------------
+
+FIELDS = {"name", "title", "url", "auth", "docs", "writes"}
+
+
+def test_starter_list_every_entry_has_its_six_fields_and_an_https_address():
+    """Spec 025, acceptance 3."""
+    import re
+    from urllib.parse import urlparse
+
+    listed = connectors.starter()
+
+    assert listed, "the starter list is not empty"
+    for key, entry in listed.items():
+        assert set(entry) == FIELDS, key
+        assert entry["name"] == key and re.fullmatch(r"[a-z][a-z0-9_]{1,31}", key), key
+        assert entry["title"].strip(), key
+        for field in ("url", "docs"):
+            parts = urlparse(entry[field])
+            assert parts.scheme == "https" and parts.hostname, (key, field)
+        assert entry["auth"] == "oauth" or re.fullmatch(r"[A-Z][A-Z0-9_]+", entry["auth"]), key
+        assert isinstance(entry["writes"], list) and entry["writes"], key
+        assert all(isinstance(p, str) and p.strip() for p in entry["writes"]), key
+
+
+def test_starter_list_names_each_vendors_own_server():
+    listed = connectors.starter()
+
+    assert {key: (entry["url"], entry["auth"]) for key, entry in listed.items()} == {
+        "linear": ("https://mcp.linear.app/mcp", "oauth"),
+        "notion": ("https://mcp.notion.com/mcp", "oauth"),
+        "github": ("https://api.githubcopilot.com/mcp/", "GITHUB_PERSONAL_ACCESS_TOKEN"),
+    }
+
+
+def test_starter_list_ships_inside_the_package():
+    import tomllib
+    from pathlib import Path
+
+    import waku
+
+    root = Path(waku.__file__).resolve().parent
+    assert (root / "connectors.toml").is_file()
+    wheel = tomllib.loads((root.parent / "pyproject.toml").read_text(encoding="utf-8"))[
+        "tool"]["hatch"]["build"]["targets"]["wheel"]
+    assert wheel["packages"] == ["waku"], "the wheel ships every file under waku/"
+
+
+def test_starter_list_a_name_alone_is_enough_to_add_it(tmp_path):
+    added = connectors.add(tmp_path, "linear")
+    assert added.spec == {"name": "linear", "url": LINEAR, "oauth": True}
+
+    github = connectors.add(tmp_path, "GitHub")
+    assert github.spec == {"name": "github", "url": "https://api.githubcopilot.com/mcp/",
+                           "auth_env": "GITHUB_PERSONAL_ACCESS_TOKEN"}
+    assert "GITHUB_PERSONAL_ACCESS_TOKEN" in github.next
+    assert "https://" in github.next, "where the key comes from is one link away"
+
+
+def test_starter_list_a_name_that_is_not_on_it_is_refused_with_the_names(tmp_path):
+    with pytest.raises(connectors.Refused) as refused:
+        connectors.add(tmp_path, "jira")
+
+    assert "linear" in str(refused.value) and "waku mcp add jira <https address>" in str(
+        refused.value)
+    assert not (tmp_path / "mcp.json").exists()
+
+
+def test_starter_list_cli_add_linear_writes_one_entry_and_prints_a_sign_in_link(cli):
+    """Spec 025, acceptance 1."""
+    code, out = cli("add", "linear")
+    assert code == 0 and SIGN_IN_LINK in out
+    assert _servers(cli.home) == [{"name": "linear", "url": LINEAR, "oauth": True}]
+
+    code, out = cli("add", "linear")
+    assert code == 1 and "already" in out
+    assert len(_servers(cli.home)) == 1
+
+    token = cli.home / "mcp-auth" / "linear.json"
+    assert token.exists()
+    code, _ = cli("remove", "linear")
+    assert code == 0 and _servers(cli.home) == [] and not token.exists()
+
+
+def test_starter_list_chat_connects_by_name_and_the_request_says_which_server(chat):
+    said, run_id = _ask(chat, "connect_tool", {"name_or_url": "Linear"})
+
+    assert "waits for the owner's approval" in said
+    assert "Connect Linear (https://mcp.linear.app/mcp)" in _requests(chat)[0]
+
+    answer = _approve(chat, run_id)
+
+    assert _servers(chat.home) == [{"name": "linear", "url": LINEAR, "oauth": True}]
+    assert SIGN_IN_LINK in answer
+
+
+def test_starter_list_dashboard_lists_it_and_adds_one_by_its_name(dash):
+    before = dash.connectors_data()["starter"]
+    assert [(row["name"], row["title"], row["added"]) for row in before] == [
+        (key, entry["title"], False) for key, entry in connectors.starter().items()]
+
+    out = dash.connectors_add({"name": "linear"})
+
+    assert out["ok"] is True and out["name"] == "linear" and out["link"] == SIGN_IN_LINK
+    after = {row["name"]: row["added"] for row in dash.connectors_data()["starter"]}
+    assert after["linear"] is True and after["notion"] is False
+    assert "error" in dash.connectors_add({"name": "jira"})
+    assert "error" in dash.connectors_add({"name": "linear", "url": EXAMPLE})
+
+
+def test_starter_list_card_draws_one_button_for_each_entry():
+    script = (STATIC / "js" / "connectors.js").read_text(encoding="utf-8")
+    assert "c.starter" in script and "addConnector(" in script
+    assert "{name" in script, "a button posts the entry's name"
+
+
+@pytest.mark.parametrize("url, name", [
+    ("https://mcp.linear.app/mcp", "linear"),
+    ("https://mcp.example.com/mcp", "example"),
+    ("https://api.githubcopilot.com/mcp/", "githubcopilot"),
+    ("https://example.com/mcp", "example"),
+    ("http://127.0.0.1:9/mcp", "local"),       # was "0" until the card was tried in a browser
+    ("http://localhost:8931/mcp", "local"),
+    ("https://10.0.0.5/mcp", "server"),
+])
+def test_chat_a_server_nobody_named_is_named_after_its_host(url, name):
+    assert connectors.name_for(url) == name
+
+
+def test_chat_a_server_from_chat_never_takes_a_name_waku_reserves(tmp_path):
+    """Waku Memory's tools run without a question, and the server counts as
+    Waku Memory by its name too. A host that spells that name gets another."""
+    message = connectors.connect(
+        tmp_path, "https://mcp.waku_memory.io/mcp",
+        sign_in=lambda home, name, **kw: connectors.SignIn(home, name, bridge=FakeBridge))
+    assert "waku_memory_2" in message
+    assert [s["name"] for s in _servers(tmp_path)] == ["waku_memory_2"]

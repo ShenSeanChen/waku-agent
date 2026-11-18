@@ -311,18 +311,29 @@ One command adds any Model Context Protocol server, and its tools appear to
 the agent, namespaced `<server>_<tool>` (and in the dashboard's Tools ▸ MCP tab):
 
 ```bash
-waku mcp add linear https://mcp.linear.app/mcp      # a remote server: prints its sign-in link and opens your browser
-waku mcp add github https://api.githubcopilot.com/mcp/ --key-env GITHUB_PERSONAL_ACCESS_TOKEN
+waku mcp add linear                                  # a name on the starter list: prints the sign-in link and opens your browser
+waku mcp add myserver https://mcp.example.com/mcp    # any other remote server, by its address
+waku mcp add myserver https://mcp.example.com/mcp --key-env MYSERVER_API_KEY   # one whose key is in .env
 waku mcp add fs -- npx -y @modelcontextprotocol/server-filesystem /tmp    # a server this machine runs
 waku mcp remove linear                               # deletes the entry and its sign-in
 ```
 
-There are two more ways to add a remote server, and both take an address
-only, never a command:
+The starter list is `waku/connectors.toml`: Linear and Notion, which you sign
+in to on their own page, and GitHub, which reads a personal access token from
+`GITHUB_PERSONAL_ACCESS_TOKEN` in `.env`. Each entry is the vendor's own hosted
+MCP server. Slack, Gmail and Google Drive have one too, and they are not on
+the list yet: each takes sign-in only from a client registered with the vendor
+beforehand, and Waku registers itself at sign-in. The list changes by pull
+request. Waku runs no marketplace.
 
-- **The dashboard.** Tools ▸ MCP has a "Connectors" card with an address
-  field, the sign-in link while one waits, and a Remove button on each server.
-- **Chat, under `waku serve`.** Write "connect https://mcp.example.com/mcp".
+There are two more ways to add a remote server, and both take a starter name
+or an address, never a command:
+
+- **The dashboard.** Tools ▸ MCP has a "Connectors" card with one button for
+  each starter entry, an address field, the sign-in link while one waits, and
+  a Remove button on each server.
+- **Chat, under `waku serve`.** Write "connect Linear" or "connect
+  https://mcp.example.com/mcp".
   The agent asks the owner first (see "Always-on: waku serve" above), and after the yes it
   answers with the sign-in link. Open that link on the computer Waku runs on:
   the server sends the browser back to a port on that computer, so the link
