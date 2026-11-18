@@ -44,6 +44,8 @@ POST_ROUTES = {
     "/api/compare/delete_run",
     # spec 015: judge one stored turn, on demand
     "/api/turn-evals/judge",
+    # spec 024: cancel one timer, waiting call or queued message
+    "/api/waiting/cancel",
 }
 
 # Paths served on GET, either exactly or as a prefix.
@@ -59,6 +61,8 @@ GET_PATHS = {
     "/embed/chat",
     # spec 012: the Observability page's turns, tools, memory, spend, evals
     "/api/observability",
+    # spec 024: the three lists of the "Waiting" card
+    "/api/waiting",
 }
 
 # Streaming endpoints. These are what the dashboard actually uses for chat and

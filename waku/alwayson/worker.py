@@ -268,7 +268,7 @@ class Worker:
 
     def step(self) -> bool:
         """Run one batch. False when there was nothing to run."""
-        runs.expire(self.conn, self._now())
+        self._remind_and_expire()
         first = events.claim_next(self.conn)
         if first is None:
             return False
@@ -304,6 +304,42 @@ class Worker:
             runs.finish(self.conn, run.id, status, outcome.turn_id, now=self._now())
             events.mark(self.conn, ids, "done")
         return True
+
+    def _remind_and_expire(self) -> None:
+        """Say once that a call still waits, and say once that it stopped
+        waiting (spec 024, decision 8). At 48 hours the owner gets a reminder
+        where the request went. At 72 hours the owner reads that nothing was
+        posted, and the conversation that asked gets the outcome as an event.
+        Every row has its own key, so a step that is repeated says nothing
+        twice."""
+        now = self._now()
+        for run in runs.to_remind(self.conn, now):
+            if runs.overdue(run, now):
+                continue   # it expires in this step; the expiry says enough
+            self._tell_asked(run, approvals.REMINDER, f"remind:{run.id}")
+            runs.mark_reminded(self.conn, run.id)
+        for run in runs.expire(self.conn, now):
+            self._tell_asked(run, approvals.STOPPED, f"expired:{run.id}")
+            asked_in = [e for e in (events.get(self.conn, i) for i in run.event_ids) if e]
+            address = reply_address(asked_in)
+            # The owner's own chat has read it, and a reply that waited has no
+            # conversation to tell.
+            if (address == approvals.asked_address(run)
+                    or (run.pending_call or {}).get("reply")):
+                continue
+            payload: dict = {"text": approvals.said(run, approvals.EXPIRED)}
+            if address:
+                payload["channel"], payload["reply_to"] = address
+            events.insert(self.conn, source=approvals.SOURCE,
+                          external_id=f"approval:{run.id}", session_id=run.session_id,
+                          payload=payload, received_at=outbox._stamp(now))
+
+    def _tell_asked(self, run: runs.Run, words: str, key: str) -> None:
+        asked = approvals.asked_address(run)
+        if asked is not None:
+            outbox.insert(self.conn, run_id=str(run.id), channel=asked[0], target=asked[1],
+                          body=approvals.said(run, words), idempotency_key=key,
+                          now=self._now())
 
     def _read_answers(self, batch: list[Event]) -> list[Event]:
         """Take the owner's answers out of a batch and act on each (spec 023,

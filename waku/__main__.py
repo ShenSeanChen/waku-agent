@@ -3,6 +3,8 @@
   waku                       chat in the terminal (default)
   waku dashboard             the browser cockpit → localhost:7777 (+ Telegram if configured)
   waku serve                 always-on: store every incoming message, then answer it
+  waku waiting               timers, calls that wait for your yes, and queued messages
+  waku waiting cancel <id>   cancel one of them
   waku connections           list configured integrations and their health
   waku connect google        sign in to Google Calendar (opens your browser)
   waku connect waku-memory   one memory shared with your other agents (opens your browser)
@@ -54,6 +56,10 @@ def main() -> None:
         from waku.alwayson.serve import main as serve_main
 
         sys.exit(serve_main(args[1:]))
+    elif args[0] == "waiting":
+        from waku.alwayson.waiting import main as waiting_main
+
+        sys.exit(waiting_main(args[1:]))
     elif args[0] == "connections":
         from waku.integrations import cli_main
 

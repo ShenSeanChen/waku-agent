@@ -110,8 +110,9 @@ When someone else asked, in a Slack thread for example, that thread reads "I
 asked Sean to approve this. I will say here what Sean decides.", with the name
 from `WAKU_OWNER_NAME`. A request for a call you approved in the last 24 hours
 carries one more line, "The same call ran at 14:52 today.", and you still
-decide. Without an answer the request expires after 72
-hours. For this to work, `WAKU_OWNER` must name your private Telegram chat
+decide. Without an answer you get one reminder after 48 hours, and after 72
+hours the request expires: you read "I stopped waiting for your answer on:
+... Nothing was posted.", and the conversation that asked hears it too. For this to work, `WAKU_OWNER` must name your private Telegram chat
 (`telegram:<chat id>`): that is where you are asked, and only a yes from that
 chat counts. One call waits per conversation. `WAKU_APPROVE_ASK` and
 `WAKU_APPROVE_ALLOW` take tool names, comma-separated, and make one tool
@@ -126,6 +127,14 @@ answers in the conversation that set the timer. A timer set in `waku` or the
 dashboard answers `WAKU_OWNER`. A run that finds nothing worth sending sends
 nothing. A timer fires once, and a timer that comes due while `waku serve` is
 stopped fires at the next start.
+
+`waku waiting` lists what waits: the timers that have not fired, the calls
+that wait for your yes, and the messages that are queued or could not be
+sent. `waku waiting cancel t3` cancels one by the id in the list (`t3` a
+timer, `r7` a waiting call, `m12` a message). The "Waiting" card on the
+dashboard's Overview shows the same three lists with a Cancel button on each
+row, and "what reminders do I have?" and "cancel the Thursday one" work from
+chat. A cancelled row keeps its record with the status `cancelled`.
 
 Two limits today:
 

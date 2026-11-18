@@ -69,6 +69,8 @@ EXPECTED = {
     "/embed/chat": "pass",
     "/api/observability": "pass",
     "/api/turn-evals/judge": "pass",
+    "/api/waiting": "pass",
+    "/api/waiting/cancel": "pass",
     # filter: the payload decides
     "/api/providers": "filter",
     "/api/settings": "filter",

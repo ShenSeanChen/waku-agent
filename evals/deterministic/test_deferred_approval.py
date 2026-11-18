@@ -670,7 +670,9 @@ def test_expire_after_72_hours_a_yes_runs_nothing(home, conn):
 
     assert recorder.executed == []
     assert runs.get(conn, run_id).status == "expired"
-    assert recorder.runs == [("telegram:42", "yes")]
+    assert recorder.runs[0] == ("telegram:42", "yes")
+    # spec 024: Ana's thread hears that the call expired
+    assert [session for session, _ in recorder.runs[1:]] == ["slack:C1:1700.0001"]
 
 
 def test_yes_with_two_calls_waiting_needs_the_code(home, conn):
@@ -922,6 +924,96 @@ def test_unknown_tool_from_an_mcp_server_carries_its_read_only_hint():
     assert [(tool.name, tool.read_only) for tool in tools] == [
         ("notion_search", True), ("notion_create_page", False),
         ("notion_delete_page", False), ("notion_fetch", True)]
+
+
+# ---- spec 024, decision 8: an expiry is said once --------------------------
+
+def test_expiry_said_one_reminder_at_48_hours_and_one_message_at_72(home, conn):
+    """Spec 024, acceptance 8. A waiting call expired and nobody was told."""
+    clock, recorder = Clock(), Recorder()
+    run_id = _park(conn, home, clock)
+    worker = _worker(conn, recorder, clock)
+    request, line = _outbox(conn)[0], 'Comment on acme/app#12: "Sean will review'
+
+    clock.advance(hours=47, minutes=59)
+    worker.step()
+    assert len(_outbox(conn)) == 1, "nothing before 48 hours"
+
+    clock.advance(minutes=1)
+    worker.step()
+    worker.step()
+    (reminder,) = _outbox(conn)[1:]
+    assert reminder[:2] == request[:2], "it goes where the request went"
+    assert line in reminder[2] and "24 hours" in reminder[2]
+    assert f"[{COMMENT_HASH[:8]}]" in reminder[2], "the same code"
+
+    clock.advance(hours=23, minutes=59)
+    worker.step()
+    assert len(_outbox(conn)) == 2 and runs.get(conn, run_id).status == "parked"
+
+    clock.advance(minutes=1)
+    _drain(worker)
+    _drain(worker)
+    (expired,) = _outbox(conn)[2:]
+    assert expired[:2] == request[:2]
+    assert expired[2].startswith("I stopped waiting for your answer on: " + line)
+    assert expired[2].endswith("Nothing was posted.")
+    assert runs.get(conn, run_id).status == "expired"
+
+
+def test_expiry_said_to_the_conversation_that_asked_as_one_outcome(home, conn):
+    """Ana's thread parked the call. Its next run starts with the outcome."""
+    clock, recorder = Clock(), Recorder()
+    _park(conn, home, clock)
+    worker = _worker(conn, recorder, clock)
+
+    clock.advance(hours=72)
+    _drain(worker)
+    _drain(worker)
+
+    ((session, text),) = recorder.runs
+    assert session == "slack:C1:1700.0001"
+    assert text.startswith("[Expired and discarded: Comment on acme/app#12")
+    assert "72 hours" in text.splitlines()[0]
+
+
+def test_expiry_said_once_when_the_owner_asked_in_their_own_chat(home, conn):
+    """The owner reads the expiry message. No run starts to say it again."""
+    clock, recorder = Clock(), Recorder()
+    event_id = _telegram(conn, "comment on issue 12")
+    run = runs.start(conn, "telegram:42", [event_id], now=clock())
+    with outbox.running(home, str(run.id), ("telegram", {"chat_id": 42})):
+        approvals.Gate(home, conn, now=clock)("send_message", COMMENT)
+    events.mark(conn, [event_id], "done")
+    runs.finish(conn, run.id, "parked", now=clock())
+    worker = _worker(conn, recorder, clock)
+
+    clock.advance(hours=72)
+    _drain(worker)
+
+    assert recorder.runs == []
+    assert [row[2].split(":")[0] for row in _outbox(conn)] == [
+        "Comment on acme/app#12", "I stopped waiting for your answer on"], (
+        "the worker was down at 48 hours, so the expiry is the one thing said")
+
+
+def test_expiry_said_nothing_about_a_call_that_was_answered_or_cancelled(home, conn):
+    from waku.alwayson import waiting
+
+    clock, recorder = Clock(), Recorder()
+    _park(conn, home, clock)
+    _telegram(conn, "no")
+    worker = _worker(conn, recorder, clock)
+    _drain(worker)
+    cancelled = _park(conn, home, clock, external_id="Ev2")
+    waiting.cancel(conn, f"r{cancelled}")
+    before = len(_outbox(conn))
+
+    clock.advance(hours=80)
+    _drain(worker)
+
+    assert len(_outbox(conn)) == before
+    assert runs.get(conn, cancelled).status == "cancelled"
 
 
 # ---- the licence line ------------------------------------------------------

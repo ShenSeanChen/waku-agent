@@ -10,6 +10,7 @@ a run joins its receipt and its trace.
   parked    it ended with one tool call waiting for the owner's yes
             (approvals.py); `pending_call` holds that call
   expired   nobody answered for 72 hours
+  cancelled the owner cancelled the waiting call (waiting.py)
 
 A run that is replayed after a crash starts with the same first event, so
 `start` returns the row the first attempt wrote. The run's id is the same, and
@@ -27,8 +28,10 @@ from datetime import datetime, timedelta
 
 from waku.alwayson import outbox
 
-STATUSES = ("running", "done", "failed", "parked", "expired")
+STATUSES = ("running", "done", "failed", "parked", "expired", "cancelled")
 EXPIRE_HOURS = 72
+# The owner is reminded once, this long before a waiting call expires.
+REMIND_HOURS_BEFORE = 24
 
 
 @dataclass(frozen=True)
@@ -139,12 +142,32 @@ def parked(conn: sqlite3.Connection, session_id: str | None = None) -> list[Run]
     return [_run(row) for row in rows]
 
 
-def expire(conn: sqlite3.Connection, now: datetime) -> int:
-    """Mark every run that has been parked for 72 hours `expired`, and say how
-    many. Its call can no longer be approved."""
-    cutoff = outbox._stamp(now - timedelta(hours=EXPIRE_HOURS))
-    cursor = conn.execute(
-        "UPDATE runs SET status = 'expired' WHERE status = 'parked' AND ended_at <= ?",
-        (cutoff,))
+def overdue(run: Run, now: datetime, hours: int = EXPIRE_HOURS) -> bool:
+    """Whether a parked run has waited `hours` or longer."""
+    return run.ended_at <= outbox._stamp(now - timedelta(hours=hours))
+
+
+def expire(conn: sqlite3.Connection, now: datetime) -> list[Run]:
+    """Mark every run that has been parked for 72 hours `expired`, and return
+    those runs as they were. Their calls can no longer be approved. The worker
+    is the one caller: it tells the owner and the conversation that asked
+    (spec 024, decision 8)."""
+    found = [run for run in parked(conn) if overdue(run, now)]
+    for run in found:
+        conn.execute("UPDATE runs SET status = 'expired' WHERE id = ? AND status = 'parked'",
+                     (run.id,))
     conn.commit()
-    return cursor.rowcount
+    return found
+
+
+def to_remind(conn: sqlite3.Connection, now: datetime) -> list[Run]:
+    """The parked runs that have waited 48 hours and are not yet reminded."""
+    return [run for run in parked(conn)
+            if overdue(run, now, EXPIRE_HOURS - REMIND_HOURS_BEFORE)
+            and not (run.pending_call or {}).get("reminded")]
+
+
+def mark_reminded(conn: sqlite3.Connection, run_id: int) -> None:
+    conn.execute("UPDATE runs SET pending_call = json_set(pending_call, '$.reminded', "
+                 "json('true')) WHERE id = ?", (run_id,))
+    conn.commit()
