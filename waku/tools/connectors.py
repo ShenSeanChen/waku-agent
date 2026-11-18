@@ -402,6 +402,10 @@ class SignIn:
                  bridge: Callable = _bridge) -> None:
         self.home, self.name = Path(home), name
         self.link: str | None = None
+        # Whether the person was ever handed a link. `link` is cleared when
+        # the sign-in fails, and this is how the end knows somebody may still
+        # be holding one that no longer works.
+        self.had_link = False
         self.tools: list | None = None
         self.ok = False
         self.reason = ""
@@ -412,6 +416,7 @@ class SignIn:
 
     def _open(self, link: str) -> None:
         self.link = link
+        self.had_link = True
         self._has_link.set()
 
     def _port_refusal(self) -> str:
@@ -490,8 +495,9 @@ def start_sign_in(home: Path, name: str, on_done: Callable[[SignIn], None] | Non
             return _SIGN_INS[key]
         if _SIGN_INS:
             waiting = next(iter(_SIGN_INS))[1]
+            from waku.tools.mcp_oauth import sign_in_minutes
             raise Refused(f"The sign-in to '{waiting}' is still waiting. Finish it, or "
-                          "try again in five minutes.")
+                          f"try again in {sign_in_minutes()} minutes.")
         flow = _SIGN_INS[key] = SignIn(home, name, on_done=on_done, bridge=bridge)
     return flow.start(wait)
 
@@ -604,8 +610,14 @@ def _free_name(home: Path, name: str) -> str:
 
 
 def tell_owner(home: Path, flow: SignIn) -> None:
-    """One message to the owner when a sign-in that chat started is done."""
-    if not flow.ok:
+    """One message to the owner when a sign-in that chat started ends: the
+    server is connected, or the link they were sent no longer works. A
+    sign-in that never had a link said why in the reply that started it."""
+    if flow.ok:
+        body = connected_line(flow.name, flow.tools or [], home)
+    elif flow.had_link:
+        body = expired_line(flow.name)
+    else:
         return
     from waku.alwayson import outbox
     from waku.db import connect
@@ -615,17 +627,29 @@ def tell_owner(home: Path, flow: SignIn) -> None:
         stamp = outbox.utc_now().isoformat(timespec="seconds")
         for channel, target in outbox.owner_addresses():
             outbox.insert(conn, run_id="", channel=channel, target=target,
-                          body=connected_line(flow.name, flow.tools or [], home),
+                          body=body,
                           idempotency_key=f"connector:{flow.name}:{channel}:{stamp}")
     finally:
         conn.close()
 
 
+def expired_line(name: str) -> str:
+    """What the owner reads when a sign-in ended without connecting. It does
+    not say why: the reason may quote a token, and the next step is the same."""
+    from waku.tools.mcp_oauth import sign_in_minutes
+
+    return (f"The sign-in to '{name}' did not finish, so the link I sent no longer works. "
+            f"A link lasts {sign_in_minutes()} minutes. Say \"connect {name}\" for a new one.")
+
+
 def link_words(name: str, flow: SignIn | None) -> str:
     """What the person does to sign in, for a chat reply and the card."""
     if flow is not None and flow.link:
+        from waku.tools.mcp_oauth import sign_in_minutes
+
         return ("Open this link on the computer Waku runs on, in its browser. It does "
-                f"not work from another device:\n{flow.link}")
+                f"not work from another device, and it works for {sign_in_minutes()} "
+                f"minutes:\n{flow.link}")
     return f"Sign in on the computer Waku runs on: waku mcp login {name}"
 
 
