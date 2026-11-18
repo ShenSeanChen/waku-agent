@@ -458,7 +458,8 @@ class Waku:
             result.iterations += first.iterations
         # Only Waku writes the note, and only into history: the reply a person
         # reads never carries one.
-        result.reply = tool_note.strip(result.reply)
+        if tool_note.PREFIX in result.reply:
+            result.reply = tool_note.strip(result.reply)
         result.read_first, result.used = known.calls, known.used
         result.recalled = "\n".join(p for p in (self.session.retrieved, known.context) if p)
         return result
