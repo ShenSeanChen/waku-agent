@@ -22,6 +22,8 @@ from __future__ import annotations
 import json
 import os
 import re
+import threading
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlparse
@@ -203,3 +205,130 @@ def remove(home: Path, name: str) -> dict:
 
     (Path(home) / AUTH_DIR / f"{_sanitise(name)}.json").unlink(missing_ok=True)
     return found
+
+
+def connected_line(name: str, tools: list) -> str:
+    """What the person reads when a server has connected."""
+    count = len(tools)
+    return f"{name} is connected: {count} tool{'' if count == 1 else 's'}."
+
+
+# ---- the sign-in link ------------------------------------------------------
+
+# How long `start` waits for the server to hand over its sign-in link: the
+# server is found, this client registers, and the link comes back.
+LINK_WAIT = 20.0
+
+
+def _bridge(home: Path, name: str, open_url: Callable[[str], None]):
+    """The MCP bridge of one sign-in: it connects the one server, and hands
+    the sign-in link to `open_url` where it would open a browser."""
+    from waku.plugins import store
+    from waku.tools.mcp_client import MCPBridge
+
+    return MCPBridge(_config(home), skip=lambda spec: spec.get("name") != name,
+                     extra_servers=store.servers(Path(home)), open_url=open_url)
+
+
+class SignIn:
+    """One sign-in to a server that uses `oauth`, started without a browser.
+
+    `waku mcp login` opens a browser on this machine. A chat reply and the
+    dashboard card cannot, so this hands back the link (spec 025, decision
+    2). The person opens it on the computer Waku runs on, because the server
+    sends the browser back to a port on that computer. The sign-in then
+    finishes on a thread of its own, and `on_done` hears about it.
+
+      link    the address to open, or None: the server asked for no sign-in,
+              or the sign-in failed before it had a link
+      done    set when the sign-in ended, either way
+      ok      whether the server connected
+      tools   the tools the server listed, or None
+    """
+
+    def __init__(self, home: Path, name: str, on_done: Callable[[SignIn], None] | None = None,
+                 bridge: Callable = _bridge) -> None:
+        self.home, self.name = Path(home), name
+        self.link: str | None = None
+        self.tools: list | None = None
+        self.ok = False
+        self.done = threading.Event()
+        self._has_link = threading.Event()
+        self._on_done, self._make_bridge = on_done, bridge
+        self._bridge = None
+
+    def _open(self, link: str) -> None:
+        self.link = link
+        self._has_link.set()
+
+    def _run(self) -> None:
+        try:
+            self._bridge = self._make_bridge(self.home, self.name, self._open)
+            self.tools = list(self._bridge.start())
+            # A server that failed to connect is skipped by the bridge, so no
+            # tools and no session is how a failure looks from here.
+            connected = getattr(self._bridge, "connected", None)
+            self.ok = bool(self.tools) or bool(connected and connected(self.name))
+        except Exception:   # noqa: BLE001  (the reason may quote a token, so it is dropped)
+            self.tools, self.ok = None, False
+        finally:
+            if self._bridge is not None:
+                try:
+                    self._bridge.close()
+                except Exception:   # noqa: BLE001
+                    pass
+            if not self.ok:
+                self.link = None
+            self.done.set()
+            self._has_link.set()
+            if self._on_done is not None:
+                self._on_done(self)
+
+    def start(self, wait: float = LINK_WAIT) -> SignIn:
+        """Start the sign-in and return once it has a link, has ended, or
+        `wait` seconds have passed."""
+        threading.Thread(target=self._run, daemon=True, name=f"sign-in-{self.name}").start()
+        self._has_link.wait(wait)
+        return self
+
+    def wait(self, timeout: float | None = None) -> bool:
+        """Wait for the sign-in to end. True when it did."""
+        return self.done.wait(timeout)
+
+
+# The redirect comes back to one fixed port (mcp_oauth.CALLBACK_PORT), so one
+# sign-in is in flight at a time in this process.
+_SIGN_INS: dict[tuple[str, str], SignIn] = {}
+_SIGN_INS_LOCK = threading.Lock()
+
+
+def start_sign_in(home: Path, name: str, on_done: Callable[[SignIn], None] | None = None,
+                  bridge: Callable = _bridge, wait: float = LINK_WAIT) -> SignIn:
+    """The sign-in for this server: a new one, or the one already waiting for
+    the person, which carries the same link."""
+    key = (str(Path(home)), name)
+    with _SIGN_INS_LOCK:
+        for other, flow in list(_SIGN_INS.items()):
+            if flow.done.is_set():
+                del _SIGN_INS[other]
+        if key in _SIGN_INS:
+            return _SIGN_INS[key]
+        if _SIGN_INS:
+            waiting = next(iter(_SIGN_INS))[1]
+            raise Refused(f"The sign-in to '{waiting}' is still waiting. Finish it, or "
+                          "try again in five minutes.")
+        flow = _SIGN_INS[key] = SignIn(home, name, on_done=on_done, bridge=bridge)
+    return flow.start(wait)
+
+
+def sign_in_waiting(home: Path) -> SignIn | None:
+    """The sign-in in this home that still waits for the person, if any."""
+    with _SIGN_INS_LOCK:
+        return next((flow for (where, _), flow in _SIGN_INS.items()
+                     if where == str(Path(home)) and not flow.done.is_set()), None)
+
+
+def forget_sign_ins() -> None:
+    """Drop every sign-in this process remembers. For the evals."""
+    with _SIGN_INS_LOCK:
+        _SIGN_INS.clear()

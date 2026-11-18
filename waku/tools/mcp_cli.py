@@ -12,6 +12,15 @@ Switching is the easy part once you can see there is something to switch.
     waku mcp                 what is configured, and who each server knows you as
     waku mcp login <name>    sign in again — as someone else, or after expiry
     waku mcp logout <name>   forget the token; the next run signs in fresh
+
+Adding a server is one command (spec 025), and it writes the entry in
+mcp.json that this file reads:
+
+    waku mcp add <name> <https address>                a remote server, signed in to in your browser
+    waku mcp add <name> <https address> --key-env VAR  a remote server whose key is in $VAR
+    waku mcp add <name> <https address> --no-auth      a remote server with no sign-in
+    waku mcp add <name> -- <command> [arguments]       a server this machine runs
+    waku mcp remove <name>                             delete the entry and its sign-in
 """
 
 from __future__ import annotations
@@ -19,6 +28,7 @@ from __future__ import annotations
 import base64
 import json
 import sys
+import webbrowser
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -96,7 +106,7 @@ def _auth_file(home: Path, name: str) -> Path:
 def _list(home: Path) -> int:
     servers = _servers(home)
     if not servers:
-        print(f"No MCP servers configured. See docs/integrations.md, or write {home}/mcp.json")
+        print("No MCP servers configured. Add one: waku mcp add <name> <https address>")
         return 0
 
     for spec in servers:
@@ -182,6 +192,80 @@ def sign_in(home: Path, name: str) -> tuple[bool, str]:
     return True, f"\n  {name} — {_identity(path)}"
 
 
+# What opens the sign-in link on this machine. A name of its own so an eval
+# replaces it and no test ever opens a browser.
+_open_browser = webbrowser.open_new_tab
+
+ADD_USAGE = __doc__.split("mcp.json that this file reads:", 1)[1].strip("\n")
+
+
+def _add(home: Path, args: list[str]) -> int:
+    """`waku mcp add`: write the entry, then sign in when the server signs in
+    on its own page."""
+    from waku.tools import connectors
+    from waku.tools.mcp_oauth import SIGN_IN_TIMEOUT
+
+    command: list[str] = []
+    if "--" in args:
+        cut = args.index("--")
+        args, command = args[:cut], args[cut + 1:]
+    auth = None
+    if "--key-env" in args:
+        at = args.index("--key-env")
+        if at + 1 >= len(args):
+            print(ADD_USAGE)
+            return 1
+        auth = args[at + 1]
+        del args[at:at + 2]
+    if "--no-auth" in args:
+        args.remove("--no-auth")
+        auth = connectors.NONE
+    # Group B resolves a lone name from the starter list; until a name is on
+    # it, an address or a command has to come with the name.
+    if not args or len(args) > 2 or (len(args) == 2 and command) or (
+            len(args) == 1 and not command):
+        print(ADD_USAGE)
+        return 1
+    try:
+        added = connectors.add(home, args[0], url=args[1] if len(args) == 2 else None,
+                               command=command[0] if command else None,
+                               args=command[1:] or None, auth=auth)
+    except connectors.Refused as refused:
+        print(refused)
+        return 1
+    print(f"Added '{added.name}' to {home / 'mcp.json'}.")
+    if added.auth != connectors.OAUTH:
+        print(added.next)
+        return 0
+
+    try:
+        flow = connectors.start_sign_in(home, added.name)
+    except connectors.Refused as refused:
+        print(f"{refused}\n{added.next}")
+        return 0
+    if flow.link:
+        print(f"Sign in here:\n  {flow.link}\nWaiting for you to finish in the browser.")
+        _open_browser(flow.link)
+    if not flow.wait(SIGN_IN_TIMEOUT + 60.0) or not flow.ok:
+        print(f"'{added.name}' is added and not signed in yet. {added.next}")
+        return 0
+    print(connectors.connected_line(added.name, flow.tools or []))
+    print("Restart Waku to load its tools.")
+    return 0
+
+
+def _remove(home: Path, name: str) -> int:
+    from waku.tools import connectors
+
+    try:
+        connectors.remove(home, name)
+    except connectors.Refused as refused:
+        print(refused)
+        return 1
+    print(f"Removed '{name}' and its sign-in. Restart Waku to drop its tools.")
+    return 0
+
+
 def cli_main(argv: list[str] | None = None) -> int:
     args = list(sys.argv[2:] if argv is None else argv)
     from waku.config import load_settings
@@ -192,7 +276,12 @@ def cli_main(argv: list[str] | None = None) -> int:
         return _list(home)
     if args[0] in {"login", "logout"} and len(args) == 2:
         return (_login if args[0] == "login" else _logout)(home, args[1])
+    if args[0] == "add":
+        return _add(home, args[1:])
+    if args[0] == "remove" and len(args) == 2:
+        return _remove(home, args[1])
 
     print(__doc__.split("    waku mcp ", 1)[0].strip())
     print("\n    waku mcp\n    waku mcp login <name>\n    waku mcp logout <name>")
+    print(ADD_USAGE)
     return 1
