@@ -172,8 +172,14 @@ no.'
   every built-in tool. `send_message` is `ask` unless the message goes to the
   owner, or back to a conversation whose replies need no yes. `WAKU_APPROVE_ASK` and
   `WAKU_APPROVE_ALLOW` override one tool at a time. A tool the table does
-  not know, which is a tool from an MCP server, is `ask`, unless the server
-  declares `readOnlyHint` for it.
+  not know is a tool from an MCP server, and its connector decides
+  (`connector_of` in `waku/tools/connectors.py`): a Waku Memory tool is
+  `allow`; a tool of a server on the starter list (`waku/connectors.toml`)
+  is `ask` when it matches the entry's `writes`; a tool of any other server
+  is `ask` unless the server declares `readOnlyHint` for it. The owner can
+  store one rule per connector in the `approvals` table, which makes every
+  tool of that connector `allow`. `connect_tool` and `disconnect_tool` are
+  `ask` whatever the environment says.
 - **A reply other people read is a write.** The worker stores a run's reply
   to a GitHub issue, a Slack channel or a group chat as a `send_message`
   call, and the owner reads the exact text in the request. A reply to the

@@ -116,9 +116,24 @@ hours the request expires: you read "I stopped waiting for your answer on:
 (`telegram:<chat id>`): that is where you are asked, and only a yes from that
 chat counts. One call waits per conversation. `WAKU_APPROVE_ASK` and
 `WAKU_APPROVE_ALLOW` take tool names, comma-separated, and make one tool
-always wait or never wait. A tool from an MCP server waits too, unless the
-server declares it read-only (`readOnlyHint`) or `WAKU_APPROVE_ALLOW` names
-it.
+always wait or never wait.
+
+A tool from an MCP server follows its connector: reads run, writes ask.
+
+| The server | Which of its tools wait for your yes |
+|---|---|
+| Waku Memory | none: the agent saves and recalls memories without a question |
+| on the starter list (Linear, Notion, GitHub) | the ones matching the entry's `writes` in `waku/connectors.toml`, for example `create_*` |
+| any other server you added | every tool the server does not declare read-only (`readOnlyHint`) |
+
+A server counts as a starter one by its address, not by its name. To let a
+whole connector write without a question, write "let Linear write without
+asking": the agent asks you once more, and after your yes the rule is stored
+in `state.db` and survives a restart. "Make Linear ask before it writes" takes
+it back, and so does removing the connector. The "Connectors" card has the
+same switch on each row. `WAKU_APPROVE_ASK` and `WAKU_APPROVE_ALLOW` still win
+over all of this. Connecting and disconnecting a server always wait for your
+yes, whatever those two lists say.
 
 `schedule_task` lets the agent set a follow-up. Ask "check issue 12 on Thursday
 at 09:00 and tell me if it is still open", and on Thursday at 09:00 `waku
@@ -338,7 +353,8 @@ or an address, never a command:
   answers with the sign-in link. Open that link on the computer Waku runs on:
   the server sends the browser back to a port on that computer, so the link
   does not work from a phone. The owner gets one message when the server is
-  connected. In the terminal chat and the dashboard chat the agent cannot ask
+  connected: "Linear is connected: 14 tools, 6 of them write and will ask
+  first." In the terminal chat and the dashboard chat the agent cannot ask
   for a yes, so it points at the command and the card instead.
 
 The command writes `~/.waku/mcp.json`, which you can also edit by hand:

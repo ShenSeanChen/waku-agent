@@ -30,8 +30,9 @@ writes a row in the same table. `schedule_task` sets a one-time timer: the
 agent names a time and a note, and `waku serve` starts a run with that note in
 the same conversation within about 5 seconds of that time. A tool call that writes
 to someone else waits for a yes, and so does a reply to a GitHub issue or a
-Slack channel and a tool from an MCP server that does not declare itself
-read-only: `send_message` to a GitHub issue or to another chat is stored, the owner in `WAKU_OWNER` is asked on Telegram, and
+Slack channel and a write through an MCP server (spec 025: a server on the
+starter list asks for its writes, any other server for every tool it does
+not declare read-only, and Waku Memory never asks): `send_message` to a GitHub issue or to another chat is stored, the owner in `WAKU_OWNER` is asked on Telegram, and
 the stored call runs when the owner answers "yes". `waku waiting`, the tools
 `list_waiting` and `cancel_waiting`, and the "Waiting" card on the dashboard's
 Overview list the timers, the waiting calls and the queued messages, and
