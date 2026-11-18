@@ -305,7 +305,12 @@ class AgentRun:
             result = self._agent.respond(text, observer=self._observer,
                                          source=batch[0].source)
         self._log(f"waku › {result.reply}")
-        return runs.Outcome(result.reply, turn_id=(result.receipt or {}).get("turn_id", ""))
+        from waku.tools import connectors
+
+        reply = connectors.without_dead_links(self._agent.settings.home, result.reply)
+        if reply != result.reply:
+            self._log("(serve) took a sign-in link that nothing waits for out of the reply")
+        return runs.Outcome(reply, turn_id=(result.receipt or {}).get("turn_id", ""))
 
     def execute(self, run: runs.Run, address: tuple[str, dict] | None) -> str:
         """Run the call a parked run stored, exactly as stored, and return

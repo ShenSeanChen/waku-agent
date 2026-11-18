@@ -52,12 +52,19 @@ CALLBACK_PORT = 41765
 CALLBACK_PATH = "/callback"
 
 # How long the callback server waits for the browser to come back. This is
-# human time — reading a consent screen, picking between two Google accounts —
-# so it is minutes, not seconds. Exported because the caller that waits on the
-# connection has to wait longer than this, and two independently-chosen
-# numbers is how the CLI came to give up at 60s while this sat patiently for
-# five minutes.
-SIGN_IN_TIMEOUT = 300.0
+# human time — reading a consent screen, picking between two Google accounts,
+# or walking from the phone that got the link to the computer that can open
+# it — so it is minutes, not seconds. Exported because the caller that waits
+# on the connection has to wait longer than this, and two independently-chosen
+# numbers is how the CLI came to give up at 60s while this sat patiently.
+# Every sentence that tells the person how long a link lasts reads it through
+# `sign_in_minutes`, so the words cannot drift from the wait.
+SIGN_IN_TIMEOUT = 900.0
+
+
+def sign_in_minutes() -> int:
+    """How long a sign-in link works, in whole minutes, for the person."""
+    return max(1, round(SIGN_IN_TIMEOUT / 60))
 
 
 def _sanitise(name: str) -> str:
@@ -232,8 +239,8 @@ def check_port(storage: FileTokenStorage) -> None:
         raise PortBusy(
             f"The sign-in cannot start: another program on the computer Waku runs on "
             f"uses port {registered}. This sign-in is registered with the server on that "
-            "port, so it cannot move to another port. Close that program, or wait five "
-            "minutes if another sign-in is still open, and ask again.")
+            "port, so it cannot move to another port. Close that program, or wait "
+            f"{sign_in_minutes()} minutes if another sign-in is still open, and ask again.")
 
 
 def build_provider(server_url: str, server_name: str, home: Path,
