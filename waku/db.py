@@ -84,7 +84,7 @@ CREATE TABLE IF NOT EXISTS chat_log (
 CREATE TABLE IF NOT EXISTS events (
     id INTEGER PRIMARY KEY,
     received_at TEXT NOT NULL,     -- UTC, ISO 8601: when the handler saw it
-    source TEXT NOT NULL,          -- 'telegram' | 'slack' | 'github' | 'timer'
+    source TEXT NOT NULL,          -- 'telegram' | 'slack' | 'github' | 'timer' | 'approval'
     external_id TEXT NOT NULL,     -- the sender's own id for this message
     session_id TEXT NOT NULL,      -- the conversation, e.g. 'telegram:<chat id>'
     payload TEXT NOT NULL,         -- JSON: the text, the sender, where a reply goes
@@ -124,6 +124,22 @@ CREATE TABLE IF NOT EXISTS timers (
     status TEXT NOT NULL DEFAULT 'pending'   -- pending | fired
 );
 CREATE INDEX IF NOT EXISTS timers_due ON timers(status, due_at);
+
+-- Runs (spec 023). The worker in `waku serve` writes one row per run. A run
+-- that called a tool whose mode is `ask` ends `parked`, with that call in
+-- pending_call until the owner answers.
+CREATE TABLE IF NOT EXISTS runs (
+    id INTEGER PRIMARY KEY,
+    session_id TEXT NOT NULL,      -- the conversation the run answered
+    started_at TEXT NOT NULL,      -- UTC, ISO 8601
+    ended_at TEXT NOT NULL DEFAULT '',       -- '' while the run is in flight
+    status TEXT NOT NULL DEFAULT 'running',  -- running | done | failed | parked | expired
+    event_ids TEXT NOT NULL,       -- JSON list: the events the run read
+    pending_call TEXT NOT NULL DEFAULT '',   -- JSON: the tool call that waits, or ''
+    pending_hash TEXT NOT NULL DEFAULT '',   -- SHA-256 of the tool name and arguments
+    turn_id TEXT NOT NULL DEFAULT ''         -- spec 011: joins the receipt and the trace
+);
+CREATE INDEX IF NOT EXISTS runs_session ON runs(session_id, status);
 """
 
 

@@ -99,6 +99,12 @@ class Waku:
         if remember_tool is not None:
             remember_tool.fn = reports.guard_remember(remember_tool.fn)
         self.session = Session(self.settings, memory=self.memory)
+        # Spec 023: under `waku serve`, a tool call that writes to a third
+        # party waits for the owner's yes. Outside a run the gate lets every
+        # call through.
+        from waku.alwayson.approvals import Gate
+
+        self.approvals = Gate(self.settings.home, self.conn)
         # Spec 022: with Waku Memory's remember tool on offer, one prompt line
         # keeps the model to save_note, which saves here and sends.
         # The name comes from the registry, so the line is only there while the
@@ -324,14 +330,19 @@ class Waku:
         return [CAPTURE_PAUSED_LINE] if state == "paused" else []
 
     def _before_tool(self, notify):
-        """PreToolUse for this turn's loop, or None when no hook wants it.
-        `command` and `file_path` are read from the tool's input when it has
-        them, the two fields Waku Memory's act channel reads."""
-        if self.hooks is None or self._turn_vars is None or not self.hooks.has("PreToolUse"):
-            return None
+        """What the loop asks before each tool call. Under `waku serve` the
+        approval gate answers first (spec 023): a call whose mode is `ask` is
+        stored for the owner and does not run. Then PreToolUse, when a hook
+        wants it. `command` and `file_path` are read from the tool's input
+        when it has them, the two fields Waku Memory's act channel reads."""
+        hooked = (self.hooks is not None and self._turn_vars is not None
+                  and self.hooks.has("PreToolUse"))
         variables = self._turn_vars
 
         def before(name: str, args: dict) -> tuple[str | None, str]:
+            waits, _ = self.approvals(name, args)
+            if waits is not None or not hooked:
+                return waits, ""
             given = args if isinstance(args, dict) else {}
             result = self.hooks.run("PreToolUse", {
                 **variables, "tool_name": name, "tool_input": given,
