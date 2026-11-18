@@ -46,6 +46,9 @@ POST_ROUTES = {
     "/api/turn-evals/judge",
     # spec 024: cancel one timer, waiting call or queued message
     "/api/waiting/cancel",
+    # spec 025: add or remove an MCP server of the person's own
+    "/api/connectors/add",
+    "/api/connectors/remove",
 }
 
 # Paths served on GET, either exactly or as a prefix.
@@ -63,6 +66,8 @@ GET_PATHS = {
     "/api/observability",
     # spec 024: the three lists of the "Waiting" card
     "/api/waiting",
+    # spec 025: the servers and the waiting sign-in of the "Connectors" card
+    "/api/connectors",
 }
 
 # Streaming endpoints. These are what the dashboard actually uses for chat and

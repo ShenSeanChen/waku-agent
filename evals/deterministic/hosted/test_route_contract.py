@@ -91,6 +91,9 @@ EXPECTED = {
     "/api/judgment-arena/stream": "block",
     "/api/voice": "block",
     "/api/reveal": "block",
+    "/api/connectors": "block",
+    "/api/connectors/add": "block",
+    "/api/connectors/remove": "block",
 }
 
 

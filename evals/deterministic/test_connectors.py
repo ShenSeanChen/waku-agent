@@ -661,3 +661,116 @@ def test_chat_the_always_on_agent_opens_no_browser_for_a_server_not_signed_in(
         waku.conn.close()
     assert opened == []
 
+
+# ---- A4: the dashboard card "Connectors" and its routes ----------------------
+
+STATIC = __import__("pathlib").Path(__file__).resolve().parents[2] / "waku" / "ops" / "static"
+
+
+@pytest.fixture
+def dash(tmp_path, monkeypatch):
+    """The dashboard's three handlers in a temporary home, with a stub
+    sign-in."""
+    from types import SimpleNamespace
+
+    from waku.ops import dashboard
+
+    monkeypatch.setenv("WAKU_HOME", str(tmp_path))
+    monkeypatch.setenv("WAKU_PROVIDER", "anthropic")
+    real = connectors.start_sign_in
+    monkeypatch.setattr(
+        connectors, "start_sign_in",
+        lambda home, name, **kw: real(home, name, bridge=FakeBridge, wait=5, **kw))
+    return SimpleNamespace(home=tmp_path, connectors_data=dashboard.connectors_data,
+                           connectors_add=dashboard.connectors_add,
+                           connectors_remove=dashboard.connectors_remove)
+
+
+def test_dashboard_add_writes_the_entry_and_hands_back_the_sign_in_link(dash):
+    out = dash.connectors_add({"url": EXAMPLE})
+
+    assert out["ok"] is True and out["name"] == "example"
+    assert out["link"] == SIGN_IN_LINK
+    assert "on the computer Waku runs on" in out["message"]
+    assert _servers(dash.home) == [{"name": "example", "url": EXAMPLE, "oauth": True}]
+    json.dumps(out)
+
+
+def test_dashboard_add_never_takes_a_command(dash):
+    for payload in ({"url": "npx -y some-server"}, {"command": "npx", "args": ["-y", "x"]},
+                    {"url": EXAMPLE, "command": "npx"}, {}):
+        out = dash.connectors_add(payload)
+        assert "error" in out, payload
+    assert not (dash.home / "mcp.json").exists()
+
+
+def test_dashboard_data_lists_each_server_with_its_account_and_whether_it_can_go(
+        dash, monkeypatch):
+    from waku.plugins import store
+
+    connectors.add(dash.home, "linear", url=LINEAR)
+    connectors.add(dash.home, "fs", command="npx", args=["x"])
+    monkeypatch.setattr(store, "servers", lambda home: [
+        {"name": "waku_memory", "url": "https://api.waku.one/mcp", "oauth": True,
+         "plugin": "waku"}])
+
+    data = dash.connectors_data()
+
+    assert data["available"] is True
+    rows = {row["name"]: row for row in data["servers"]}
+    assert list(rows) == ["linear", "fs", "waku_memory"]
+    assert rows["linear"]["address"] == LINEAR and rows["linear"]["account"] == "not signed in"
+    assert rows["linear"]["removable"] is True and rows["fs"]["removable"] is True
+    assert rows["waku_memory"]["removable"] is False, "a plugin's server goes with the plugin"
+    assert rows["linear"]["tools"] is None, "no agent is running, so no count is known"
+    assert data["sign_in"] is None
+    json.dumps(data)
+
+
+def test_dashboard_data_carries_the_link_while_a_sign_in_waits(dash):
+    dash.connectors_add({"url": EXAMPLE})
+
+    assert dash.connectors_data()["sign_in"] == {"name": "example", "link": SIGN_IN_LINK}
+
+
+def test_dashboard_remove_takes_the_server_off_the_card(dash):
+    connectors.add(dash.home, "linear", url=LINEAR)
+    token = _token(dash.home, "linear")
+
+    out = dash.connectors_remove({"name": "linear"})
+
+    assert out == {"ok": True, "removed": "linear"}
+    assert dash.connectors_data()["servers"] == [] and not token.exists()
+    assert "error" in dash.connectors_remove({"name": "linear"})
+    assert "error" in dash.connectors_remove({})
+
+
+def test_dashboard_card_is_hidden_where_the_platform_sets_the_servers(dash, monkeypatch):
+    monkeypatch.setenv("WAKU_PROVIDER", "waku-platform")
+    assert dash.connectors_data()["available"] is False
+
+
+def test_dashboard_routes_are_blocked_on_hosted_with_a_sentence(dash):
+    from hosted.core import policy
+
+    for method, path in (("GET", "/api/connectors"), ("POST", "/api/connectors/add"),
+                         ("POST", "/api/connectors/remove")):
+        outcome = policy.decide(method, path, {"url": EXAMPLE})
+        assert (outcome.verdict, outcome.status) == ("block", 403), path
+        assert outcome.message == ("Connectors are not available on hosted Waku. A hosted "
+                                   "container's servers are set up when you sign in.")
+
+
+def test_dashboard_card_has_an_address_field_and_a_remove_button_on_each_row():
+    script = (STATIC / "js" / "connectors.js").read_text(encoding="utf-8")
+    index = (STATIC / "index.html").read_text(encoding="utf-8")
+    views = (STATIC / "js" / "views.js").read_text(encoding="utf-8")
+
+    assert "function connectorsCard(" in script and 'title: "Connectors"' in script
+    assert "function addConnector(" in script and "function removeConnector(" in script
+    assert '"/api/connectors/add"' in script and '"/api/connectors/remove"' in script
+    assert 'type="url"' in script
+    assert "connectorsCard(" in views, "Tools > MCP shows the card"
+    assert index.index("/static/js/connectors.js") < index.index("/static/js/main.js")
+    assert script.isascii(), "no emoji in the dashboard"
+    assert script.count("esc(") >= 5, "a name, an address and a link are text from outside"

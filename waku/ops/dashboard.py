@@ -551,6 +551,8 @@ def collect() -> dict:
         "memory_choice": memory_choice_card(settings),
         # What waits (spec 024): timers, calls that wait for a yes, messages.
         "waiting": waiting_data(),
+        # The servers a person connected themselves, and adding one (spec 025).
+        "connectors": connectors_data(),
         "connections": [asdict(view) for view in list_connections()],
         # MCP servers that sign in on their own page rather than through an
         # .env field (spec 007 E). Files only: no browser, no network.
@@ -579,6 +581,66 @@ def waiting_data() -> dict:
         conn.close()
     return {name: [as_dict(item) for item in getattr(found, name)]
             for name in ("timers", "calls", "messages")}
+
+
+def connectors_data() -> dict:
+    """The "Connectors" card (spec 025): every MCP server Waku would connect,
+    with its account and its tool count, and the sign-in link while one
+    waits. Reads files and this process's own state; opens nothing."""
+    from waku.tools import connectors
+
+    settings = load_settings()
+    home = settings.home
+    live = browser_agent.current()
+    tools = list(live.tools._tools.values()) if live is not None else []
+    rows = []
+    for spec in mcp_servers(home):
+        row = _mcp_row(home, spec, live, tools)
+        # A plugin's server goes when the plugin goes (`waku plugin`).
+        row["removable"] = not row["plugin"]
+        rows.append(row)
+    waiting = connectors.sign_in_waiting(home)
+    return {
+        # A hosted container's servers are set when the person signs in, and
+        # the hosted gateway blocks the three routes (hosted/core/policy.py).
+        "available": settings.provider != "waku-platform",
+        "servers": rows,
+        "sign_in": ({"name": waiting.name, "link": waiting.link}
+                    if waiting is not None and waiting.link else None),
+    }
+
+
+def connectors_add(payload: dict) -> dict:
+    """Add the server at the address the card's field holds, and start its
+    sign-in. The card takes an address only: a web page that makes Waku run a
+    program is the attack spec 025 names, so a command is added from the
+    command line."""
+    from waku.tools import connectors
+
+    if set(payload) - {"url"}:
+        return {"error": "The card takes the address of a server only."}
+    home = load_settings().ensure_home()
+    try:
+        _, url, _ = connectors.resolve(str(payload.get("url") or ""))
+        message = connectors.connect(home, url)
+        spec = connectors.find(home, url) or {}
+    except connectors.Refused as refused:
+        return {"error": str(refused)}
+    waiting = connectors.sign_in_waiting(home)
+    return {"ok": True, "name": str(spec.get("name", "")), "message": message,
+            "link": waiting.link if waiting is not None else None}
+
+
+def connectors_remove(payload: dict) -> dict:
+    """Remove one server of the card by its name, and its sign-in."""
+    from waku.tools import connectors
+
+    name = str(payload.get("name") or "")
+    try:
+        connectors.remove(load_settings().home, name)
+    except connectors.Refused as refused:
+        return {"error": str(refused)}
+    return {"ok": True, "removed": name}
 
 
 def waiting_cancel(payload: dict) -> dict:
@@ -1324,6 +1386,9 @@ class Handler(BaseHTTPRequestHandler):
         elif self.path == "/api/waiting":
             # Spec 024: what waits in this home, the lists `waku waiting` prints.
             self._send(json.dumps(waiting_data()).encode(), "application/json")
+        elif self.path == "/api/connectors":
+            # Spec 025: the "Connectors" card's servers and waiting sign-in.
+            self._send(json.dumps(connectors_data()).encode(), "application/json")
         elif self.path == "/api/judgment-arena":
             from waku.ops import judgment_arena, judgment_cases  # noqa: PLC0415
             self._send(json.dumps({"suites": judgment_cases.suite_list(),
@@ -1598,7 +1663,9 @@ class Handler(BaseHTTPRequestHandler):
                   "/api/compare/clear": compare_clear,
                   "/api/compare/regrade": compare_regrade, "/api/compare/delete_run": compare_delete_run,
                   "/api/turn-evals/judge": judge_turn,
-                  "/api/waiting/cancel": waiting_cancel}
+                  "/api/waiting/cancel": waiting_cancel,
+                  "/api/connectors/add": connectors_add,
+                  "/api/connectors/remove": connectors_remove}
         if self.path not in routes:
             self.send_response(404)
             self.end_headers()

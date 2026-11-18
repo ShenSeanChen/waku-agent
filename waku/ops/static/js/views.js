@@ -233,14 +233,11 @@ function toolsMCP(t){
       + (r.tools ? ` <span class="meta">${r.tools} tool${r.tools===1?"":"s"}</span>` : "")
       + (r.account ? `<div class="meta">${esc(r.account)}</div>` : ""),
   ]), {empty: "No server yet. Add one below."});
-  h += `<h2>Add one</h2>` + uiCard(`
+  h += `<h2>Add one</h2>` + connectorsCard(D || {}) + uiCard(`
     <div class="meta">A plugin brings its server and its ${uiLink("hooks", "#tools/hooks")} with it:
       <code>waku plugin install &lt;name&gt;@&lt;marketplace&gt;</code>, or <code>/plugin install …</code> in the chat.</div>
-    <div class="meta" style="margin-top:var(--space-2)">Or name a server yourself in ${reveal("","the .waku folder")}<code>/mcp.json</code>:</div>
-    <pre style="font-family:var(--face-mono);font-size:var(--text-xs);color:var(--text-muted);white-space:pre-wrap;margin-top:var(--space-2)">{"servers": [
-  {"name": "fs", "command": "npx",
-   "args": ["-y", "@modelcontextprotocol/server-filesystem", "${esc(D&&D.home||"")}"]}
-]}</pre>
+    <div class="meta" style="margin-top:var(--space-2)">From the command line, <code>waku mcp add &lt;name&gt; &lt;https address&gt;</code>
+      writes the same entry in ${reveal("","the .waku folder")}<code>/mcp.json</code>.</div>
     <div class="meta" style="margin-top:var(--space-2)">Then restart the dashboard. The server's tools appear under
       ${uiLink("Available ▸ MCP servers", "#tools/available")}.</div>`);
   return h;
