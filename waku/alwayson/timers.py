@@ -7,6 +7,7 @@ and the worker starts a run for it like for any other message.
 
   pending   waiting for its time (due_at)
   fired     its event is in the inbox
+  cancelled someone cancelled it before its time (waiting.py)
 
 v1 has no recurring timer. A run that wants to check again sets a new one.
 

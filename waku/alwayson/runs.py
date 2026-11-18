@@ -10,6 +10,7 @@ a run joins its receipt and its trace.
   parked    it ended with one tool call waiting for the owner's yes
             (approvals.py); `pending_call` holds that call
   expired   nobody answered for 72 hours
+  cancelled the owner cancelled the waiting call (waiting.py)
 
 A run that is replayed after a crash starts with the same first event, so
 `start` returns the row the first attempt wrote. The run's id is the same, and
@@ -27,7 +28,7 @@ from datetime import datetime, timedelta
 
 from waku.alwayson import outbox
 
-STATUSES = ("running", "done", "failed", "parked", "expired")
+STATUSES = ("running", "done", "failed", "parked", "expired", "cancelled")
 EXPIRE_HOURS = 72
 
 

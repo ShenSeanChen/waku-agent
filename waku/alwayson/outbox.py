@@ -8,6 +8,7 @@ row is dropped: the person gets one reply.
   pending   waiting for its next attempt (next_attempt_at)
   sent      delivered
   dead      failed 5 times; the dispatcher stops trying
+  cancelled someone cancelled it before it was sent (waiting.py)
 
 Read the table yourself:  sqlite3 ~/.waku/state.db 'SELECT * FROM outbox'
 """
