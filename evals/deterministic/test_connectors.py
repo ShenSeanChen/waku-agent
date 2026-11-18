@@ -891,3 +891,26 @@ def test_starter_list_card_draws_one_button_for_each_entry():
     script = (STATIC / "js" / "connectors.js").read_text(encoding="utf-8")
     assert "c.starter" in script and "addConnector(" in script
     assert "{name" in script, "a button posts the entry's name"
+
+
+@pytest.mark.parametrize("url, name", [
+    ("https://mcp.linear.app/mcp", "linear"),
+    ("https://mcp.example.com/mcp", "example"),
+    ("https://api.githubcopilot.com/mcp/", "githubcopilot"),
+    ("https://example.com/mcp", "example"),
+    ("http://127.0.0.1:9/mcp", "local"),       # was "0" until the card was tried in a browser
+    ("http://localhost:8931/mcp", "local"),
+    ("https://10.0.0.5/mcp", "server"),
+])
+def test_chat_a_server_nobody_named_is_named_after_its_host(url, name):
+    assert connectors.name_for(url) == name
+
+
+def test_chat_a_server_from_chat_never_takes_a_name_waku_reserves(tmp_path):
+    """Waku Memory's tools run without a question, and the server counts as
+    Waku Memory by its name too. A host that spells that name gets another."""
+    message = connectors.connect(
+        tmp_path, "https://mcp.waku_memory.io/mcp",
+        sign_in=lambda home, name, **kw: connectors.SignIn(home, name, bridge=FakeBridge))
+    assert "waku_memory_2" in message
+    assert [s["name"] for s in _servers(tmp_path)] == ["waku_memory_2"]

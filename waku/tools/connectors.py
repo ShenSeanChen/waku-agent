@@ -402,16 +402,26 @@ _HOST_NOISE = ("mcp", "api", "www", "app")
 
 
 def name_for(url: str) -> str:
-    """A name for a server nobody named: `example` for mcp.example.com."""
+    """A name for a server nobody named: `example` for mcp.example.com,
+    `local` for one on this machine."""
     host = urlparse(url).hostname or ""
+    if host in _LOCAL_HOSTS:
+        return "local"
     labels = [part for part in host.split(".") if part]
-    while len(labels) > 1 and labels[0] in _HOST_NOISE:
+    if not labels or all(part.isdigit() for part in labels) or ":" in host:
+        return "server"   # an address made of numbers names nobody
+    while len(labels) > 2 and labels[0] in _HOST_NOISE:
         labels.pop(0)
-    word = labels[0] if len(labels) < 3 else labels[-2]
-    if len(labels) == 2:
-        word = labels[0]
+    # `example` of example.com, and of anything.example.com.
+    word = labels[-2] if len(labels) >= 2 else labels[0]
     word = re.sub(r"[^A-Za-z0-9_-]", "_", word).strip("_-")[:32]
     return word if _NAME.match(word or "") else "server"
+
+
+# Names Waku gives a meaning of its own (waku_memory.py, treg.py). A server
+# added from chat or from the card never takes one: only the command line
+# and the person's own edit of mcp.json can.
+RESERVED = frozenset({"waku_memory", "treg"})
 
 
 COMMAND_REFUSED = ("this takes the address of an MCP server (https://...) or a name on "
@@ -444,7 +454,7 @@ def find(home: Path, url: str) -> dict | None:
 
 def _free_name(home: Path, name: str) -> str:
     taken = {s.get("name") for s in _read(home)["servers"] if isinstance(s, dict)}
-    taken |= {s.get("name") for s in _plugin_servers(home)}
+    taken |= {s.get("name") for s in _plugin_servers(home)} | RESERVED
     if name not in taken:
         return name
     return next(f"{name[:29]}_{n}" for n in range(2, 100) if f"{name[:29]}_{n}" not in taken)
