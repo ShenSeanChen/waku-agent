@@ -299,8 +299,8 @@ WAITS_YOU = ("This call waits for approval and has not run. The person you are t
 # What a conversation other than the owner's chat reads when its run parked.
 # Code writes this line; the model's own reply is not sent.
 ASKED = "I asked {owner} to approve this. I will say here what {owner} decides."
-ALREADY_WAITS = ("Not run: another call in this conversation already waits for the owner's "
-                 "approval [{code}]. One call waits at a time.")
+ALREADY_WAITS = ("Not run: another call in this conversation already waits for approval "
+                 "[{code}]. One call waits at a time.")
 NOBODY = ("Not run: this call needs the owner's approval, and WAKU_OWNER names no chat "
           "where the owner can answer. Set WAKU_OWNER in .env to telegram:<chat id>.")
 
@@ -399,7 +399,8 @@ APPROVED = "Approved and done: {what} The tool answered: {output}"
 # A message is the one call whose result a person can be told in two words.
 POSTED = "Approved and posted: {what}"
 NOT_POSTED = "Approved, and not posted: {what} The reason: {output}"
-DECLINED = "Declined and discarded: {what} The owner answered no, so the call did not run."
+# The outcomes name nobody: the run that reads one may be talking to the owner.
+DECLINED = "Declined and discarded: {what} The answer was no, so the call did not run."
 BROKEN = ("Approved, and not run: {what} The stored call no longer matches its hash, so it "
           "was discarded.")
 # What the owner reads 24 hours before a waiting call expires, and when it
@@ -407,8 +408,8 @@ BROKEN = ("Approved, and not run: {what} The stored call no longer matches its h
 REMINDER = ("Still waiting for your answer on: {what}\n\nIt expires in 24 hours. "
             "Approve? Reply yes or no. [{code}]")
 STOPPED = "I stopped waiting for your answer on: {what} Nothing was posted."
-EXPIRED = ("Expired and discarded: {what} The owner did not answer in 72 hours, so the "
-           "call did not run.")
+EXPIRED = ("Expired and discarded: {what} Nobody answered in 72 hours, so the call did "
+           "not run.")
 WHICH = "Several calls wait for your answer. Reply yes or no with the code of one:\n{calls}"
 
 

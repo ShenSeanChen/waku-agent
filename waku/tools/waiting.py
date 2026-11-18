@@ -53,7 +53,7 @@ def make_tools(home: Path, session_id: Callable[[], str] | None = None,
             lines.append("Timers:")
             lines += [f"  {i.id}: {spoken(i.when, tz)}. {i.what}" for i in found.timers]
         if found.calls:
-            lines.append("Calls that wait for the owner's yes:")
+            lines.append("Calls that wait for a yes:")
             lines += [f"  {i.id}: {i.what} (asked {spoken(i.when, tz)})" for i in found.calls]
         if found.messages:
             lines.append("Messages that are not sent:")

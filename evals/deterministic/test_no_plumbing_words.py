@@ -31,6 +31,7 @@ from waku.alwayson import approvals, outbox, runs, worker
 from waku.db import connect
 from waku.runtime.session import DEFAULT_SOUL
 from waku.tools import messages, schedule
+from waku.tools import waiting as waiting_tool
 
 WORDS = re.compile(r"waku serve|outbox|inbox|dispatcher|idempoten", re.IGNORECASE)
 ROOT = Path(waku.__file__).parent
@@ -119,7 +120,7 @@ def test_what_send_message_answers_names_no_process(tmp_path, monkeypatch):
 
     assert [_found(answer) for answer in answers] == [[], [], [], [], []]
     assert "not sent yet" in answers[0], "in the terminal nothing sends the message"
-    assert answers[4] == "The message to the owner is on its way."
+    assert answers[4] == "The message to this chat is on its way."
 
 
 def test_an_approved_message_is_reported_as_posted(tmp_path, monkeypatch):
@@ -140,3 +141,91 @@ def test_the_words_a_person_reads_from_a_timer_are_about_the_time(tmp_path):
     """The run a timer starts is told about the note, not about a loop."""
     prompt = worker.TIMER_PROMPT.format(set_at=str(NOW - timedelta(hours=1)), note="Stretch.")
     assert _found(prompt) == [] and "Stretch." in prompt
+
+
+# ---- tool names, and "the owner" said to the owner ---------------------------
+#
+# The second live run (2026-11-17): a person read "You can connect these via
+# `connect_tool`", and the owner read "the owner approves it first" in their
+# own chat.
+
+# The names of the tools Waku ships. A person has no use for one.
+TOOL_NAMES = re.compile(r"\b(" + "|".join(sorted(approvals.MODES)) + r")\b")
+OWNER = ("telegram", {"chat_id": 42})
+
+
+def _owner_run(conn, text="Comment hello on acme/app#12", external_id="900"):
+    """A run in the owner's own chat."""
+    from waku.alwayson import events
+
+    event_id = events.insert(conn, source="telegram", external_id=external_id,
+                             session_id="telegram:42",
+                             payload={"text": text, "sender": {"id": "42"},
+                                      "reply_to": OWNER[1]})
+    return runs.start(conn, "telegram:42", [event_id], now=NOW), events.get(conn, event_id)
+
+
+def test_the_shipped_tool_names_are_the_ones_the_rule_looks_for():
+    assert {"send_message", "connect_tool", "schedule_task", "list_waiting"} <= set(
+        approvals.MODES)
+    assert TOOL_NAMES.findall("use `connect_tool`, then send_message") == [
+        "connect_tool", "send_message"]
+
+
+@pytest.mark.parametrize("module", [approvals, worker])
+def test_no_text_the_model_reads_about_a_run_names_a_tool(module):
+    texts = {name: value for name, value in vars(module).items()
+             if name.isupper() and isinstance(value, str)}
+    assert {name: TOOL_NAMES.findall(text) for name, text in texts.items()
+            if TOOL_NAMES.findall(text)} == {}
+
+
+def test_every_turn_is_told_not_to_name_a_tool_to_the_person(tmp_path):
+    """A harness rule, so an assistant with an older SOUL.md has it too."""
+    from evals.helpers import ScriptedClient, make_waku
+
+    (tmp_path / "SOUL.md").write_text("You are Waku. An older soul.", encoding="utf-8")
+    agent = make_waku(tmp_path, client=ScriptedClient([]), episodic_store="sqlite")
+    try:
+        agent.memory = None   # no retrieval: the rule is read from the prompt alone
+        agent.session.memory = None
+        system = agent.session.build_system("What connectors can I add?")
+    finally:
+        agent.close()
+        agent.conn.close()
+
+    assert "Never say the name of a tool to the user" in system
+    assert "I can connect Notion" in system
+
+
+def test_what_a_run_in_the_owners_chat_reads_never_says_the_owner(tmp_path, monkeypatch):
+    """Every text a run in the owner's own chat can read about a call that
+    waits: the prompt, the gate's two answers, each outcome, and the tools."""
+    monkeypatch.setenv("WAKU_OWNER", "telegram:42")
+    monkeypatch.delenv("WAKU_OWNER_NAME", raising=False)
+    args = {"to": "github:acme/app#12", "body": "hello"}
+    conn = connect(tmp_path)
+    try:
+        run, event = _owner_run(conn)
+        gate = approvals.Gate(tmp_path, conn, now=lambda: NOW)
+        with outbox.running(tmp_path, str(run.id), OWNER):
+            waits, _ = gate("send_message", args)
+            second, _ = gate("send_message", {**args, "body": "another"})
+            to_self = messages.make_tool(tmp_path).fn(to="owner", body="note to self")
+            listed = waiting_tool.make_tools(tmp_path)[0].fn()
+        parked = runs.get(conn, run.id)
+    finally:
+        conn.close()
+    outcomes = [approvals.outcome(parked, True, "The message is on its way."),
+                approvals.outcome(parked, True, "Not sent: the message is empty."),
+                approvals.outcome(parked, False),
+                approvals.said(parked, approvals.EXPIRED)]
+    read = {"prompt": worker.render([event]),
+            "waits": waits, "a second call": second, "send to self": to_self,
+            "what waits": listed,
+            **{f"outcome {n}": worker.APPROVAL_PROMPT.format(outcome=text)
+               for n, text in enumerate(outcomes)}}
+
+    assert "Comment on acme/app#12" in listed, "the call was listed"
+    assert "already waits" in second
+    assert {name: text for name, text in read.items() if "owner" in text.lower()} == {}

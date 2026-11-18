@@ -141,15 +141,15 @@ INTERNAL = ("timer", approvals.SOURCE)
 APPROVAL_PROMPT = """\
 [{outcome}]
 
-[Nobody sent this message. A call from this conversation waited for the \
-owner's approval, and the line above says what happened to it. Your reply is \
+[Nobody sent this message. A call from this conversation waited for \
+approval, and the line above says what happened to it. Your reply is \
 sent to this conversation. If it does not need to hear the outcome, reply \
 with the single word SILENT and nothing is sent.]"""
 
 # What a run reads when a timer woke it. Nobody is waiting for an answer, so
 # the model is told that it may end the run without sending one.
 TIMER_PROMPT = """\
-[A timer you set with schedule_task on {set_at} is due now. Nobody sent this \
+[A timer you set on {set_at} is due now. Nobody sent this \
 message. Your note to yourself was:]
 
 {note}
