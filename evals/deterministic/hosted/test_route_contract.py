@@ -94,6 +94,7 @@ EXPECTED = {
     "/api/connectors": "block",
     "/api/connectors/add": "block",
     "/api/connectors/remove": "block",
+    "/api/connectors/approve": "block",
 }
 
 

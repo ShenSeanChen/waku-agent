@@ -275,7 +275,55 @@ def remove(home: Path, name: str) -> dict:
     from waku.tools.mcp_oauth import AUTH_DIR, _sanitise
 
     (Path(home) / AUTH_DIR / f"{_sanitise(name)}.json").unlink(missing_ok=True)
+    # The rule that let this connector write goes with it: a server added
+    # later under the same name starts by asking.
+    if (Path(home) / "state.db").exists():
+        _store_rule(home, name, allow=False)
     return found
+
+
+# ---- the owner lets one connector write (decision 4) ---------------------------
+
+def _store_rule(home: Path, name: str, allow: bool) -> None:
+    from waku.alwayson import approvals
+    from waku.db import connect as open_db
+
+    conn = open_db(Path(home))
+    try:
+        approvals.store(conn, name, allow)
+    finally:
+        conn.close()
+
+
+def writes_allowed(home: Path) -> frozenset[str]:
+    """The names of the connectors the owner let write without asking."""
+    from waku.alwayson import approvals
+    from waku.db import connect as open_db
+
+    if not (Path(home) / "state.db").exists():
+        return frozenset()
+    conn = open_db(Path(home))
+    try:
+        rules = approvals.stored(conn)
+    finally:
+        conn.close()
+    return frozenset(rule[:-2] for rule in rules if rule.endswith("_*"))
+
+
+def set_writes(home: Path, name: str, allow: bool) -> str:
+    """Let every tool of one connector run without a question, or make its
+    writes ask again. Returns what the person reads."""
+    name = (name or "").strip()
+    listed = starter().get(name.lower())
+    if connector_of(home, name) is None and listed is not None:
+        name = listed["name"]   # "Linear" for the server named linear
+    if connector_of(home, name) is None:
+        raise Refused(f"no connector called '{name}' is connected.")
+    _store_rule(home, name, allow)
+    if allow:
+        return (f"{name}'s tools now run without asking first. To take that back, "
+                f"say: make {name} ask before it writes.")
+    return f"{name}'s tools that write ask first again."
 
 
 def connected_line(name: str, tools: list) -> str:
@@ -564,7 +612,19 @@ def _approved(home: Path) -> bool:
 
 
 def make_tools(home: Path, sign_in: Callable = start_sign_in) -> list[Tool]:
-    def connect_tool(name_or_url: str = "") -> str:
+    def connect_tool(name_or_url: str = "", writes: str = "") -> str:
+        writes = (writes or "").strip().lower()
+        if writes:
+            if writes not in ("ask", "allow"):
+                return "Not changed: `writes` is 'ask' or 'allow'."
+            if not _approved(home):
+                return ("Not changed: this needs the owner's yes, and this conversation "
+                        "cannot ask for it. Use the switch on the Connectors card on "
+                        "the dashboard.")
+            try:
+                return set_writes(home, name_or_url, allow=writes == "allow")
+            except Refused as refused:
+                return f"Not changed: {refused}"
         try:
             resolve(name_or_url)
             if not _approved(home):
@@ -594,14 +654,21 @@ def make_tools(home: Path, sign_in: Callable = start_sign_in) -> list[Tool]:
                 "to connect a service. It takes a name on the starter list ("
                 + ", ".join(starter()) + ") or the server's https address, never a "
                 "command to run. The owner approves it first, and then signs in through "
-                "a link."
+                "a link. With `writes`, it changes a connected server instead: 'allow' "
+                "when the user says to let it write without asking, 'ask' to take that "
+                "back."
             ),
             input_schema={
                 "type": "object",
                 "properties": {"name_or_url": {
                     "type": "string",
                     "description": ("A starter name, e.g. linear, or the server's address, "
-                                    "e.g. https://mcp.example.com/mcp")}},
+                                    "e.g. https://mcp.example.com/mcp")},
+                    "writes": {
+                        "type": "string", "enum": ["ask", "allow"],
+                        "description": ("Only to change a connected server: 'allow' lets "
+                                        "its tools write without asking first, 'ask' "
+                                        "makes them ask again. Give the server's name.")}},
                 "required": ["name_or_url"],
             },
             fn=connect_tool,

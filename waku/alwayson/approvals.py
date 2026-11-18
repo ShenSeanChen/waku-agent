@@ -73,9 +73,12 @@ def _send_message(args: dict, address: Address | None) -> str:
 
 def _connect_tool(args: dict, address: Address | None) -> str:
     """A call the tool would refuse anyway (a command, not an address) runs,
-    so the tool says why and the owner is not asked. Every other call asks."""
+    so the tool says why and the owner is not asked. Every other call asks,
+    and so does every call that changes whether a connector's writes ask."""
     from waku.tools import connectors
 
+    if str(args.get("writes") or "").strip():
+        return ASK
     try:
         connectors.resolve(str(args.get("name_or_url", "")))
     except connectors.Refused:
@@ -115,8 +118,34 @@ MODES: dict[str, str | Callable[[dict, Address | None], str]] = {
 }
 
 
+def rule_for(server: str) -> str:
+    """The stored rule that covers every tool of one connector."""
+    return f"{server}_*"
+
+
+def stored(conn: sqlite3.Connection) -> tuple[str, ...]:
+    """The rules the owner stored: patterns of tools that run without a
+    question (spec 025, decision 4)."""
+    return tuple(row[0] for row in conn.execute(
+        "SELECT pattern FROM approvals WHERE mode = ? ORDER BY pattern", (ALLOW,)))
+
+
+def store(conn: sqlite3.Connection, server: str, allow: bool,
+          now: datetime | None = None) -> None:
+    """Let every tool of one connector run without a question, or take that
+    back."""
+    if allow:
+        conn.execute("INSERT OR REPLACE INTO approvals (pattern, mode, created_at) "
+                     "VALUES (?, ?, ?)", (rule_for(server), ALLOW,
+                                          outbox._stamp(now or outbox.utc_now())))
+    else:
+        conn.execute("DELETE FROM approvals WHERE pattern = ?", (rule_for(server),))
+    conn.commit()
+
+
 def mode(tool: str, args: dict, address: Address | None = None,
-         read_only: bool = False, connector=None, own_name: str = "") -> str:
+         read_only: bool = False, connector=None, own_name: str = "",
+         allowed: tuple[str, ...] = ()) -> str:
     """`allow` or `ask` for one call, decided in this order:
 
       1. connect_tool and disconnect_tool ask, whatever comes next.
@@ -125,16 +154,17 @@ def mode(tool: str, args: dict, address: Address | None = None,
       3. The built-in table knows the tool.
 
     Every other tool comes from an MCP server (spec 024, decision 6, and spec
-    025, decision 4). `connector` says which kind of server, and `own_name` is
-    the tool's name there:
+    025, decision 4). `connector` says which kind of server, `own_name` is
+    the tool's name there, and `allowed` holds the rules the owner stored:
 
-      4. Waku Memory: the tool runs. Saving a memory is the agent's own job.
-      5. A server on the starter list: a tool matching the entry's `writes`
+      4. The owner let this connector write without asking: the tool runs.
+      5. Waku Memory: the tool runs. Saving a memory is the agent's own job.
+      6. A server on the starter list: a tool matching the entry's `writes`
          asks, and every other tool runs. The list decides, not the server.
-      6. Any other server: a tool the server marks read-only (`readOnlyHint`)
+      7. Any other server: a tool the server marks read-only (`readOnlyHint`)
          runs. The mark is the server's own claim, so it counts only for a
          server the owner added themselves.
-      7. Otherwise it asks.
+      8. Otherwise it asks.
     """
     from waku.config import approval_overrides
 
@@ -151,6 +181,8 @@ def mode(tool: str, args: dict, address: Address | None = None,
         rule = MODES[tool]
         return rule(args, address) if callable(rule) else rule
     kind = getattr(connector, "kind", "")
+    if connector is not None and rule_for(connector.name) in allowed:
+        return ALLOW
     if kind == "memory":
         return ALLOW
     if kind == "starter":
@@ -181,6 +213,11 @@ def _describe_connect_tool(args: dict) -> str:
     from waku.tools import connectors
 
     target = str(args.get("name_or_url", "")).strip()
+    writes = str(args.get("writes") or "").strip().lower()
+    if writes == "allow":
+        return f"Let {target}'s tools write without asking first."
+    if writes:
+        return f"Make {target}'s tools that write ask first again."
     listed = connectors.starter().get(target.lower())
     if listed is not None:
         return (f"Connect {listed['title']} ({listed['url']}). Waku will be able to "
@@ -290,7 +327,8 @@ class Gate:
 
             connector = connectors.connector_of(self.home, server)
         return mode(tool, args, address, getattr(known, "read_only", False),
-                    connector=connector, own_name=own_name)
+                    connector=connector, own_name=own_name,
+                    allowed=stored(self.conn) if connector is not None else ())
 
 
 def ran_before(conn: sqlite3.Connection, digest: str, now: datetime,

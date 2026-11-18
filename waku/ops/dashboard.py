@@ -594,10 +594,17 @@ def connectors_data() -> dict:
     live = browser_agent.current()
     tools = list(live.tools._tools.values()) if live is not None else []
     rows = []
+    allowed = connectors.writes_allowed(home)
     for spec in mcp_servers(home):
         row = _mcp_row(home, spec, live, tools)
         # A plugin's server goes when the plugin goes (`waku plugin`).
         row["removable"] = not row["plugin"]
+        # The switch of spec 025, decision 4. Waku Memory has none: its
+        # tools always run.
+        kind = getattr(connectors.connector_of(home, row["name"]), "kind", connectors.OWN)
+        row["writes"] = ("allow" if kind == connectors.MEMORY or row["name"] in allowed
+                         else "ask")
+        row["switch"] = kind != connectors.MEMORY
         rows.append(row)
     waiting = connectors.sign_in_waiting(home)
     added = {str(spec.get("url", "")).rstrip("/") for spec in mcp_servers(home)}
@@ -636,6 +643,21 @@ def connectors_add(payload: dict) -> dict:
     waiting = connectors.sign_in_waiting(home)
     return {"ok": True, "name": str(spec.get("name", "")), "message": message,
             "link": waiting.link if waiting is not None else None}
+
+
+def connectors_approve(payload: dict) -> dict:
+    """The card's switch: let one connector write without asking, or make
+    its writes ask again."""
+    from waku.tools import connectors
+
+    name, allow = str(payload.get("name") or ""), payload.get("allow")
+    if not isinstance(allow, bool):
+        return {"error": "`allow` is true or false."}
+    try:
+        connectors.set_writes(load_settings().ensure_home(), name, allow)
+    except connectors.Refused as refused:
+        return {"error": str(refused)}
+    return {"ok": True, "name": name, "writes": "allow" if allow else "ask"}
 
 
 def connectors_remove(payload: dict) -> dict:
@@ -1672,7 +1694,8 @@ class Handler(BaseHTTPRequestHandler):
                   "/api/turn-evals/judge": judge_turn,
                   "/api/waiting/cancel": waiting_cancel,
                   "/api/connectors/add": connectors_add,
-                  "/api/connectors/remove": connectors_remove}
+                  "/api/connectors/remove": connectors_remove,
+                  "/api/connectors/approve": connectors_approve}
         if self.path not in routes:
             self.send_response(404)
             self.end_headers()

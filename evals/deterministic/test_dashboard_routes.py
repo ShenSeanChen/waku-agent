@@ -49,6 +49,8 @@ POST_ROUTES = {
     # spec 025: add or remove an MCP server of the person's own
     "/api/connectors/add",
     "/api/connectors/remove",
+    # spec 025: let one connector write without asking, or take that back
+    "/api/connectors/approve",
 }
 
 # Paths served on GET, either exactly or as a prefix.

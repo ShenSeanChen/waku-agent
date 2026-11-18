@@ -30,6 +30,11 @@ function connectorRows(c){
   return c.servers.map(r => uiRow(uiBadge(esc(r.name), "value"),
     `${esc(r.address)}${r.account ? `<div class="meta">${esc(r.account)}</div>` : ""}`,
     (r.tools === null ? "" : `<span class="meta">${r.tools} tool${r.tools === 1 ? "" : "s"}</span> `) +
+    (r.switch ? uiButton(r.writes === "allow" ? "Writes run without asking" : "Writes ask first",
+        {level: "tertiary", size: "sm",
+         onclick: `setConnectorWrites('${esc(r.name)}', ${r.writes !== "allow"})`,
+         title: r.writes === "allow" ? "Make " + r.name + " ask before it writes"
+                                     : "Let " + r.name + " write without asking"}) + " " : "") +
     (r.removable
       ? uiButton("Remove", {level: "tertiary", size: "sm", danger: true,
           onclick: `removeConnector('${esc(r.name)}')`, title: "Remove " + r.name})
@@ -77,5 +82,14 @@ async function addConnector(name){
 async function removeConnector(name){
   const r = await postJSON("/api/connectors/remove", {name});
   connectorNote = r.error ? ("Not removed: " + r.error) : ("Removed " + name + ".");
+  await refresh();
+}
+
+// The switch on a row: let this connector's tools write without asking, or
+// make its writes ask again.
+async function setConnectorWrites(name, allow){
+  const r = await postJSON("/api/connectors/approve", {name, allow});
+  connectorNote = r.error ? ("Not changed: " + r.error)
+    : (allow ? name + " now writes without asking." : name + " asks before it writes.");
   await refresh();
 }
