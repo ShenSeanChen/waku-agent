@@ -44,7 +44,9 @@ STOP_TIMEOUT_SECONDS = 60
 
 # A source: given the inbox, start receiving and return something with stop(),
 # or None when the source is not configured. It raises MissingExtra when its
-# setting is there and the extra it needs is not installed.
+# setting is there and the extra it needs is not installed. What it returns
+# may have blocked(), which gives the reason the source receives nothing
+# right now, or "" (spec 024, decision 11).
 Source = Callable[[Inbox], Any]
 # A route: given the request's headers and body, return (status, JSON bytes).
 Route = Callable[[Mapping[str, str], bytes], tuple[int, bytes]]
@@ -117,6 +119,8 @@ class Service:
         self.running: list[str] = []          # the sources that started
         self.missing: dict[str, str] = {}     # source -> why it could not start
         self._handles: list[Any] = []
+        self._by_name: dict[str, Any] = {}    # source -> its handle, or None
+        self._told_blocked: dict[str, str] = {}   # what watch() last reported
         self._worker: Worker | None = None
         self._ready = threading.Event()
         self.worker_thread: threading.Thread | None = None
@@ -193,6 +197,7 @@ class Service:
                 threading.Thread(target=self._server.serve_forever, name="serve-http",
                                  daemon=True).start()
             for name, source in self._sources.items():
+                self._by_name[name] = None
                 try:
                     handle = source(self.inbox)
                 except MissingExtra as exc:
@@ -205,10 +210,65 @@ class Service:
                     continue
                 if handle is not None:
                     self._handles.append(handle)
+                    self._by_name[name] = handle
                     self.running.append(name)
         except BaseException:
             self.stop()
             raise
+
+    def blocked(self) -> dict[str, str]:
+        """source -> why it receives nothing right now."""
+        found = {}
+        for name in self.running:
+            why = getattr(self._by_name.get(name), "blocked", lambda: "")()
+            if why:
+                found[name] = why
+        return found
+
+    def states(self) -> dict[str, tuple[str, str]]:
+        """Each source's state: `listening`, `not configured`, or `blocked`
+        with the reason. A source whose extra is missing is `not running`
+        with the command that installs it."""
+        blocked = self.blocked()
+        states = {}
+        for name in self._by_name:
+            if name in self.missing:
+                states[name] = ("not running", self.missing[name])
+            elif name in blocked:
+                states[name] = ("blocked", blocked[name])
+            else:
+                states[name] = ("listening" if name in self.running else "not configured", "")
+        return states
+
+    def watch(self) -> str | None:
+        """The line that lists the sources, when it changed since the last
+        call, else None. `waku serve` calls this once a second and prints
+        what it returns. A source that became blocked is also said to the
+        owner, once, on a channel other than the blocked one."""
+        blocked = self.blocked()
+        if blocked == self._told_blocked:
+            return None
+        new = {name: why for name, why in blocked.items() if name not in self._told_blocked}
+        self._told_blocked = blocked
+        for name, why in new.items():
+            self._tell_owner(name, why)
+        return sources_line(self)
+
+    def _tell_owner(self, name: str, why: str) -> None:
+        from waku.db import connect
+
+        owner = next(((channel, target) for channel, target in outbox.owner_addresses()
+                      if channel != name and channel in self._senders), None)
+        if owner is None:
+            return
+        conn = connect(self.settings.home)   # this runs on the thread of `waku serve` itself
+        try:
+            now = outbox.utc_now()
+            outbox.insert(conn, run_id="serve", channel=owner[0], target=owner[1],
+                          body=f"{name.capitalize()} is blocked: {why}",
+                          idempotency_key=f"blocked:{name}:{outbox._stamp(now)}", now=now)
+        finally:
+            conn.close()
 
     def stop(self) -> None:
         """Stop receiving first, let the run in flight finish, then stop
@@ -220,6 +280,7 @@ class Service:
             except Exception as exc:
                 self._log(f"(serve) a source did not stop cleanly: {type(exc).__name__}")
         self._handles, self.running, self.missing = [], [], {}
+        self._by_name, self._told_blocked = {}, {}
         if self._server is not None:
             self._server.shutdown()
             self._server.server_close()
@@ -242,10 +303,16 @@ class Service:
 def sources_line(service: Service) -> str:
     """The line of `waku serve` that lists the sources. A source whose setting
     is there and whose extra is missing is named here with the command that
-    installs it, so the list never reads as if the source were switched off."""
+    installs it, so the list never reads as if the source were switched off.
+    A source that is blocked is named with the reason, so the list never
+    reads as if it were listening."""
     if not service.running and not service.missing:
         return "  sources: none configured (docs/integrations.md lists them)"
-    line = "  sources: " + (", ".join(service.running) or "none running")
+    blocked = service.blocked()
+    line = "  sources: " + (", ".join(n for n in service.running if n not in blocked)
+                            or "none running")
+    for name, why in blocked.items():
+        line += f"; {name} is blocked: {why}"
     if service.missing:
         line += ". Not running: " + "; ".join(
             f"{name} ({why})" for name, why in service.missing.items())
@@ -305,7 +372,8 @@ def main(argv: list[str]) -> int:
                 "http://{}:{}{}".format(*service.address, path) for path in routes))
         print("  replies go out on: " + ", ".join(sorted(service.sending)))
         while not stop.wait(1):
-            pass
+            if changed := service.watch():   # a source became blocked, or took over
+                print(changed)
     finally:
         service.stop()
     print("waku serve stopped.")

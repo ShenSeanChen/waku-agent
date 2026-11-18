@@ -143,6 +143,12 @@ Two limits today:
 - One `waku serve` runs per Waku home. A second one refuses to start.
 - Telegram allows one poller per bot token, so stop `waku telegram` and the
   dashboard's Telegram before starting `waku serve` with the same token.
+  While another program reads the bot, the line that lists the sources says
+  so: "sources: github; telegram is blocked: another program is reading this
+  bot (waku dashboard, waku telegram or a second waku serve). Stop it and
+  this one takes over." `waku serve` prints the line again when that
+  changes, and tells you once on another channel when `WAKU_OWNER` names
+  one.
 
 ## Brief me on my week (Apple Calendar + Mail)
 

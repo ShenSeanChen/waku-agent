@@ -176,6 +176,18 @@ def start_in_background() -> TelegramHandle | None:
     return TelegramHandle(loop, app, thread, warned, runner)
 
 
+def note_poll_error(exc: Exception, warned: dict, idle: str) -> None:
+    """Runs on every polling error. The common one is Conflict: another bot
+    instance is already polling this token. Say it ONCE, plainly, and never
+    dump a traceback into the terminal. `warned["conflict"]` stays True until
+    its owner clears it, which `waku serve` does when a message arrives."""
+    from telegram.error import Conflict
+
+    if isinstance(exc, Conflict) and not warned["conflict"]:
+        warned["conflict"] = True
+        print(f"(telegram) another instance is already running this bot — {idle}")
+
+
 def poll_in_thread(app, warned: dict, idle: str):
     """Long-poll `app` on a daemon thread with its own event loop. Returns
     (loop, thread). `warned["conflict"]` turns True when another process is
@@ -184,14 +196,7 @@ def poll_in_thread(app, warned: dict, idle: str):
     import logging
 
     def on_poll_error(exc: Exception) -> None:
-        # Runs on every polling error. The common one is Conflict: another bot
-        # instance is already polling this token. Say it ONCE, plainly, and never
-        # dump a traceback into the terminal.
-        from telegram.error import Conflict
-
-        if isinstance(exc, Conflict) and not warned["conflict"]:
-            warned["conflict"] = True
-            print(f"(telegram) another instance is already running this bot — {idle}")
+        note_poll_error(exc, warned, idle)
 
     loop = asyncio.new_event_loop()
 
