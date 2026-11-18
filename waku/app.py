@@ -78,7 +78,10 @@ class Waku:
         from waku.memory import Memory
 
         self.memory = Memory(self.conn, self.settings, self.client)
-        self.tools = build_registry(self.conn, self.settings, self.memory)
+        # schedule_task asks which conversation it is in when it is called, and
+        # self.session exists by then.
+        self.tools = build_registry(self.conn, self.settings, self.memory,
+                                    session_id=lambda: self.session.session_id)
         self.mcp_bridge = getattr(self.tools, "mcp_bridge", None)
         # Spec 006: with Waku Memory connected, every fact consolidation keeps
         # is sent there too. Without it this is None and nothing is sent.

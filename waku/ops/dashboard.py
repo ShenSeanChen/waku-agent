@@ -647,7 +647,7 @@ def session_list(conn) -> list[dict]:
 
 
 # A tool's origin, for grouping in the Tools tab (name → category).
-_FLAGSHIP = {"create_event", "list_events", "save_note", "send_message"}
+_FLAGSHIP = {"create_event", "list_events", "save_note", "send_message", "schedule_task"}
 _SELFMGMT = {"manage_memory", "update_soul", "create_skill"}
 _APPLE = {"read_apple_calendar", "read_apple_mail", "create_reminder", "create_note"}
 _WEB = {"search_web"}

@@ -161,6 +161,7 @@ class RunContext:
     run_id: str
     address: tuple[str, dict] | None   # the conversation the run's events came from
     sends: int = 0                     # the messages this run has queued itself
+    timers: int = 0                    # the timers this run has set
 
     def next_key(self) -> str:
         """`<run>:1`, `<run>:2`, ... in call order. The run's reply is `<run>:0`.
@@ -168,6 +169,11 @@ class RunContext:
         the same keys."""
         self.sends += 1
         return f"{self.run_id}:{self.sends}"
+
+    def next_timer_key(self) -> str:
+        """`<run>:t1`, `<run>:t2`, ... in call order, for the same reason."""
+        self.timers += 1
+        return f"{self.run_id}:t{self.timers}"
 
 
 # One worker per home runs one run at a time, so a home has at most one entry.

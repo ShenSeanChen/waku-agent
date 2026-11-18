@@ -89,6 +89,8 @@ table of `state.db` and returns, and one worker starts the run.
 ```mermaid
 flowchart LR
   TG["Telegram message"] & SL["Slack @mention"] & GH["GitHub issue or mention"] -->|insert only| EV[("events<br/>state.db")]
+  TI[("timers<br/>state.db")] -->|every 30 s,<br/>each due timer| EV
+  RUN -->|schedule_task| TI
   EV -->|claim, wait 3 s,<br/>batch per session| W["Worker<br/>one per home"]
   W -->|one run| RUN["waku.respond()<br/>the loop above"]
   RUN -->|done or failed| EV
@@ -120,6 +122,22 @@ of them in the session `slack:<channel>:<thread>`. The rows end `done`, or
 - **`state.db` is in WAL mode**, so the dashboard reads it while
   `waku serve` writes.
 
+A run sets its own follow-up with `schedule_task(when, note)`, which writes
+one row into the `timers` table. Ana writes "@waku check issue 12 on Thursday
+at 09:00", and the run answers "I will check issue 12 on Thursday at 09:00".
+
+- **A timer is an event that arrives later.** Every 30 seconds a loop in
+  `waku serve` writes each due timer into `events` with `source = timer`, the
+  session that set it and its note. The run that follows reads the note as
+  the reason it woke, and replies in the conversation that set the timer.
+- **A timer fires once.** The event's external id is `timer:<id>`, so a
+  process that dies between writing the event and marking the timer `fired`
+  writes no second event.
+- **`when` is an absolute time** in the time zone of the machine. The tool
+  refuses a time in the past and a time more than one year away. No timer
+  repeats: a run that wants to check again sets a new one.
+- **A timer waits while `waku serve` is down** and fires at the next start.
+
 A run never sends. Its reply becomes one row in the `outbox` table, and the
 dispatcher sends the row to the Telegram chat, the Slack thread or the GitHub
 issue the events came from.
@@ -132,7 +150,7 @@ issue the events came from.
   1 hour. The fifth failure marks the row `dead`, and the owner gets one
   notice on another channel when `WAKU_OWNER` names one.
 - **A run may say nothing.** An empty reply, or the single word `SILENT`,
-  writes no row.
+  writes no row. The prompt of a run that a timer started says so.
 - **`send_message` writes a row too.** It reaches the owner and the
   conversation the run came from. It refuses anyone else, because nothing can
   ask the owner for approval yet (spec 023, group C).
@@ -369,7 +387,8 @@ shows those instead. A proxy that does not know the turn leaves the estimate.
 - `waku/alwayson/` — the always-on path (spec 023): `events.py` (the inbox),
   `worker.py` (one worker, one run per session batch, the lock), `outbox.py`
   (every outgoing message is a row), `dispatcher.py` (sends each row and
-  retries), `senders/` (Telegram, Slack and `gh`), `serve.py` (`waku serve`)
+  retries), `senders/` (Telegram, Slack and `gh`), `timers.py` (the timers
+  table and the loop that fires each due timer), `serve.py` (`waku serve`)
   and `sources/` (Telegram, Slack and GitHub handlers that only insert a
   row).
 - `waku/runtime/session.py` — working memory for one turn: SOUL.md, memory
@@ -383,7 +402,7 @@ shows those instead. A proxy that does not know the turn leaves the estimate.
   structure around the loop. The loop never changes, a graph node can be a loop
   turn, and every failure fails open to the plain loop.
 - `waku/tools/` — what the agent can call: `calendar.py`, `google_calendar.py`,
-  `apple.py`, `notes.py`, `messages.py`, `search.py`, `github.py`,
+  `apple.py`, `notes.py`, `messages.py`, `schedule.py`, `search.py`, `github.py`,
   `workspace.py`, `memory_admin.py`, the MCP client and `experimental.py`.
   `registry.py` decides which are on.
 - `waku/memory/` — semantic (FTS5), episodic and procedural (SKILL.md) memory,

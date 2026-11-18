@@ -1,7 +1,7 @@
 """The one worker: it claims events, batches them per session and starts one
 run for each batch (spec 023, decision 2).
 
-  claim the oldest pending row
+  claim the oldest pending row (a message, or a timer that came due)
   wait 3 seconds, so a second message sent right after the first joins it
   claim every pending row of that session
   one run with all of them, through waku.respond()
@@ -102,17 +102,40 @@ def is_silent(reply: str | None) -> bool:
 
 def reply_address(batch: list[Event]) -> tuple[str, dict] | None:
     """Where the reply to a batch goes: the newest event that says where a
-    reply goes decides, and the channel is the one that event came in on."""
+    reply goes decides. The channel is the one that event came in on. A timer
+    comes in on no channel, so its event names the channel of the conversation
+    that set it."""
     for event in reversed(batch):
         target = event.payload.get("reply_to")
-        if target and event.source in outbox.CHANNELS:
-            return event.source, target
+        channel = event.payload.get("channel") if event.source == "timer" else event.source
+        if target and channel in outbox.CHANNELS:
+            return channel, target
     return None
+
+
+# What a run reads when a timer woke it. Nobody is waiting for an answer, so
+# the model is told that it may end the run without sending one.
+TIMER_PROMPT = """\
+[A timer you set with schedule_task on {set_at} is due now. Nobody sent this \
+message. Your note to yourself was:]
+
+{note}
+
+[Do what the note asks. Your reply is sent to the conversation that set the \
+timer. If there is nothing worth sending, reply with the single word SILENT \
+and nothing is sent.]"""
+
+
+def _text(event: Event) -> str:
+    text = event.payload.get("text", "")
+    if event.source != "timer":
+        return text
+    return TIMER_PROMPT.format(set_at=event.payload.get("set_at", "an earlier day"), note=text)
 
 
 def render(batch: list[Event]) -> str:
     """The one user message a run starts with: each event's text, oldest first."""
-    return "\n\n".join(e.payload.get("text", "") for e in batch).strip()
+    return "\n\n".join(_text(e) for e in batch).strip()
 
 
 class AgentRun:
