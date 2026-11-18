@@ -19,8 +19,8 @@ from datetime import UTC, datetime
 import pytest
 
 from evals.helpers import ScriptedClient, make_waku, response, text_block, tool_block
-from waku.alwayson import events, outbox, waiting
-from waku.alwayson.worker import AgentRun, Worker
+from waku.alwayson import approvals, events, outbox, runs, waiting
+from waku.alwayson.worker import AgentRun, Worker, render
 from waku.db import connect
 
 TUESDAY = datetime(2026, 11, 17, 17, 43, 0, tzinfo=UTC)
@@ -200,3 +200,95 @@ def test_a_turn_hands_back_its_reply_without_a_note_the_model_wrote(home):
 
     assert result.reply == "Nothing today."
     assert record.count("[tools used: ") == 1 and "plugin hook" not in record
+
+
+# ---- 3: the agent knows when it talks to the owner ------------------------------
+
+class Recorder:
+    """A fake run for the worker: it keeps what each run read."""
+
+    def __init__(self, reply="SILENT") -> None:
+        self.reply, self.read = reply, []
+
+    def __call__(self, session_id, batch):
+        self.read.append(render(batch))
+        return self.reply
+
+
+def test_a_run_in_the_owners_chat_is_told_who_it_talks_to(home, conn):
+    """WAKU_OWNER_NAME is not set (the fixture removes it)."""
+    _message(conn, "Comment whatsssupp in our GitHub issue")
+    run = Recorder()
+
+    _worker(conn, run).step()
+
+    (read,) = run.read
+    assert read.startswith("Comment whatsssupp in our GitHub issue")
+    assert "You are talking to the person who runs this assistant" in read
+    assert "they answer yes or no in this chat" in read
+    assert "42" not in read
+
+
+def test_a_timer_in_the_owners_chat_is_told_who_reads_the_reply(home, conn):
+    _timer(conn)
+    run = Recorder()
+
+    _worker(conn, run).step()
+
+    assert "You are talking to the person who runs this assistant" in run.read[0]
+
+
+@pytest.mark.parametrize("sender, chat_id", [("77", 77), ("77", 42)])
+def test_a_run_for_anyone_else_is_not_told_it_talks_to_the_owner(home, conn, sender, chat_id):
+    """Another person's chat, and a sender who is not the owner."""
+    _message(conn, "hello", sender=sender, chat_id=chat_id)
+    run = Recorder()
+
+    _worker(conn, run).step()
+
+    assert run.read == ["hello"]
+
+
+def test_a_call_from_the_owners_own_chat_says_the_person_was_asked(home, conn):
+    event_id = _message(conn, "Comment whatsssupp in our GitHub issue")
+    run = runs.start(conn, SESSION, [event_id], now=TUESDAY)
+
+    with outbox.running(home, str(run.id), OWNER):
+        said, _ = approvals.Gate(home, conn, now=lambda: TUESDAY)("send_message", COMMENT)
+
+    assert "The person you are talking to has been asked" in said
+    assert "they answer yes or no in this chat" in said
+    assert "owner" not in said and "42" not in said
+    assert runs.get(conn, run.id).pending_hash, "the call is stored all the same"
+
+
+def test_a_call_from_another_conversation_says_the_owner_was_asked(home, conn):
+    thread = ("slack", {"channel": "C1", "thread_ts": "1700.0001"})
+    event_id = events.insert(conn, source="slack", external_id="Ev1",
+                             session_id="slack:C1:1700.0001",
+                             payload={"text": "comment", "sender": {"id": "U_ANA"},
+                                      "reply_to": thread[1]})
+    run = runs.start(conn, "slack:C1:1700.0001", [event_id], now=TUESDAY)
+
+    with outbox.running(home, str(run.id), thread):
+        said, _ = approvals.Gate(home, conn, now=lambda: TUESDAY)("send_message", COMMENT)
+
+    assert said == approvals.WAITS and "The request is with the owner" in said
+    assert "42" not in said
+
+
+@pytest.mark.parametrize("wrote", [
+    "It went to the approval request on Telegram (chat ID 7300000042).",
+    "The owner was asked on telegram:7300000042.",
+    "Your id is 7300000042, right?"])
+def test_a_reply_never_shows_the_owners_chat_id(tmp_path, monkeypatch, wrote):
+    monkeypatch.setenv("WAKU_OWNER", "telegram:7300000042")
+    conn = connect(tmp_path)
+    try:
+        _message(conn, "Who is the owner?", sender="7300000042", chat_id=7300000042)
+        _worker(conn, lambda session_id, batch: wrote).step()
+        ((_, _, body, _),) = _outbox(conn)
+    finally:
+        conn.close()
+
+    assert "7300000042" not in body and "this chat" in body

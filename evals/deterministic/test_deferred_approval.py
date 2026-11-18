@@ -21,7 +21,7 @@ from evals.helpers import ScriptedClient, make_waku, response, text_block, tool_
 from waku.alwayson import approvals, events, outbox, runs
 from waku.alwayson.dispatcher import Dispatcher
 from waku.alwayson.senders import github as github_sender
-from waku.alwayson.worker import AgentRun, Worker
+from waku.alwayson.worker import OWNER_READS, AgentRun, Worker
 from waku.db import connect
 
 THURSDAY = datetime(2026, 11, 19, 9, 0, 0, tzinfo=UTC)
@@ -654,7 +654,8 @@ def test_yes_inside_a_sentence_is_an_ordinary_message(home, conn):
 
     assert recorder.executed == []
     assert runs.get(conn, run_id).status == "parked"
-    assert recorder.runs == [("telegram:42", "yes but change the wording first")]
+    assert recorder.runs == [
+        ("telegram:42", f"yes but change the wording first\n\n{OWNER_READS}")]
 
 
 def test_expire_after_72_hours_a_yes_runs_nothing(home, conn):
@@ -670,7 +671,8 @@ def test_expire_after_72_hours_a_yes_runs_nothing(home, conn):
 
     assert recorder.executed == []
     assert runs.get(conn, run_id).status == "expired"
-    assert recorder.runs[0] == ("telegram:42", "yes")
+    assert recorder.runs[0][0] == "telegram:42"
+    assert recorder.runs[0][1].startswith("yes\n\n")
     # spec 024: Ana's thread hears that the call expired
     assert [session for session, _ in recorder.runs[1:]] == ["slack:C1:1700.0001"]
 
@@ -886,7 +888,7 @@ def test_unknown_tool_parks_under_the_gate_and_a_read_only_one_runs(home, conn):
         assert gate("notion_search", {"query": "roadmap"}) == (None, "")
         deny, _ = gate("notion_create_page", {"title": "Roadmap"})
 
-    assert "waits for the owner's approval" in deny
+    assert "The person you are talking to has been asked" in deny
     assert runs.get(conn, run.id).pending_call["tool"] == "notion_create_page"
     ((_, _, body, _),) = _outbox(conn)
     assert 'Run notion_create_page with {"title": "Roadmap"}' in body
@@ -974,9 +976,9 @@ def test_connector_modes_on_a_starter_server_a_write_parks_and_a_read_runs(home,
 
     assert _gate_says(home, conn, tools, "linear_list_issues") is None
     assert _gate_says(home, conn, tools, "linear_get_issue") is None
-    assert "waits for the owner's approval" in _gate_says(
+    assert "The person you are talking to has been asked" in _gate_says(
         home, conn, tools, "linear_create_issue", {"title": "Login fails"})
-    assert "waits for the owner's approval" in _gate_says(home, conn, tools,
+    assert "The person you are talking to has been asked" in _gate_says(home, conn, tools,
                                                           "linear_save_comment")
 
 
@@ -987,9 +989,9 @@ def test_connector_modes_on_a_server_added_by_address_a_tool_without_the_hint_pa
         ("search", True), ("list_things", False), ("create_thing", False)]))
 
     assert _gate_says(home, conn, tools, "example_search") is None
-    assert "waits for the owner's approval" in _gate_says(home, conn, tools,
+    assert "The person you are talking to has been asked" in _gate_says(home, conn, tools,
                                                           "example_list_things")
-    assert "waits for the owner's approval" in _gate_says(home, conn, tools,
+    assert "The person you are talking to has been asked" in _gate_says(home, conn, tools,
                                                           "example_create_thing")
 
 
@@ -999,7 +1001,7 @@ def test_connector_modes_a_server_named_like_a_starter_one_is_not_on_the_list(ho
     tools = _connected(home, ("linear", "https://mcp.not-linear.example/mcp", [
         ("list_issues", False)]))
 
-    assert "waits for the owner's approval" in _gate_says(home, conn, tools,
+    assert "The person you are talking to has been asked" in _gate_says(home, conn, tools,
                                                           "linear_list_issues")
 
 
@@ -1096,7 +1098,7 @@ def _owner_says(home, conn, tools, args, answer="yes"):
 
     for tool in connectors.make_tools(home):
         tools.register(tool)
-    assert "waits for the owner's approval" in _gate_says_parked(home, conn, tools, args)
+    assert "The person you are talking to has been asked" in _gate_says_parked(home, conn, tools, args)
     request = _outbox(conn)[-1][2]
     (run,) = runs.parked(conn)
     if answer != "yes":

@@ -31,6 +31,7 @@ The worker never sends. The dispatcher sends what the outbox holds.
 from __future__ import annotations
 
 import os
+import re
 import sqlite3
 import threading
 from collections.abc import Callable
@@ -176,6 +177,47 @@ WANTS_TO_COMMENT = "I want to comment, see the request above."
 COMMENTED = "I commented."
 
 
+# What a run reads last when its reply goes to the owner's own chat. Without
+# it the model told the owner that "the owner" had been asked, and to "check
+# Telegram", in the owner's Telegram chat. It names no one and no address, so
+# it holds whether or not WAKU_OWNER_NAME is set.
+OWNER_READS = ("[You are talking to the person who runs this assistant. They are the one "
+               "who approves its calls, and they answer yes or no in this chat. Address "
+               "them as \"you\", never in the third person, and never show them a chat id "
+               "or an address.]")
+
+
+def to_owner(batch: list[Event]) -> bool:
+    """Whether the owner is the person a run talks to: its reply goes to the
+    owner's own chat, and every message in the batch came from that chat's
+    one person. In a private Telegram chat the chat's id is the person's id."""
+    address = reply_address(batch)
+    if not approvals.is_owner_chat(address):
+        return False
+    owner = str(address[1].get("chat_id"))
+    return all(str((e.payload.get("sender") or {}).get("id", "")) == owner
+               for e in batch if e.source not in INTERNAL)
+
+
+_PLACE = r"(?:telegram:|chat\s+id\s*:?\s*|chat\s+)"
+
+
+def without_chat_ids(reply: str, address: tuple[str, dict] | None) -> str:
+    """A reply with no chat id of the owner in it. The model reads such an id
+    in an address and can repeat it; no person needs to read one."""
+    for channel, target in outbox.owner_addresses():
+        chat_id = str(target.get("chat_id", ""))
+        if channel != "telegram" or not chat_id.lstrip("-").isdigit():
+            continue
+        words = "this chat" if (channel, target) == address else "the owner's chat"
+        # A long number is an id wherever it stands. A short one is replaced
+        # only where the words before it say it is a chat.
+        bare = "?" if len(chat_id) >= 6 else ""
+        reply = re.sub(rf"{_PLACE}{bare}(?<!\d){re.escape(chat_id)}(?!\d)", words, reply,
+                       flags=re.IGNORECASE)
+    return reply
+
+
 def _text(event: Event) -> str:
     text = event.payload.get("text", "")
     if event.source == approvals.SOURCE:
@@ -192,7 +234,8 @@ def _text(event: Event) -> str:
 
 def render(batch: list[Event]) -> str:
     """The one user message a run starts with: each event's text, oldest first."""
-    return "\n\n".join(_text(e) for e in batch).strip()
+    text = "\n\n".join(_text(e) for e in batch).strip()
+    return f"{text}\n\n{OWNER_READS}" if to_owner(batch) else text
 
 
 class AgentRun:
@@ -448,6 +491,7 @@ class Worker:
             self._log(f"(serve) the run for {batch[0].session_id} has nowhere to reply")
             return
         channel, target = address
+        reply = without_chat_ids(reply, address)
         if not approvals.reply_is_free(address):
             self._park_reply(run_id, batch[0].session_id, address, reply.strip())
             return
