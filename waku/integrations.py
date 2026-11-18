@@ -476,6 +476,69 @@ def render_env_example_block() -> str:
     return "\n".join(lines)
 
 
+def _slack_api(method: str, token: str) -> tuple[dict, dict]:
+    """One call to Slack's Web API: (the JSON body, the response headers with
+    lower-case names). The token goes to slack.com and nowhere else."""
+    request = urllib.request.Request(f"https://slack.com/api/{method}", data=b"",
+                                     headers={"Authorization": f"Bearer {token}"})
+    with urllib.request.urlopen(request, timeout=10) as response:  # noqa: S310 - fixed provider endpoint
+        headers = {name.lower(): value for name, value in response.headers.items()}
+        return json.loads(response.read().decode("utf-8") or "{}"), headers
+
+
+def slack_status(env: Mapping[str, str] | None = None, fetch=None,
+                 extra_installed: bool | None = None) -> tuple[bool | None, str]:
+    """Slack's line for `waku connections` (spec 025, decision 5): (whether
+    `waku serve` would hear a mention, the line). None means Slack is not set
+    up at all, which is not a failure.
+
+    With both tokens set it asks Slack two things. `auth.test` says whose bot
+    token this is and which scopes it holds, and a scope the Slack source or
+    sender needs and the token lacks is named. `apps.connections.open` says
+    whether the app-level token may open a Socket Mode connection. No token is
+    ever part of the line.
+    """
+    from waku.alwayson.sources import slack
+
+    env = os.environ if env is None else env
+    bot, app = env.get("SLACK_BOT_TOKEN", "").strip(), env.get("SLACK_APP_TOKEN", "").strip()
+    if not bot and not app:
+        return None, f"not configured · create the app from {slack.MANIFEST}"
+    for name, value in (("SLACK_BOT_TOKEN", bot), ("SLACK_APP_TOKEN", app)):
+        if not value:
+            return False, f"{name} is not set · docs/integrations.md, \"Slack from a manifest\""
+    if not bot.startswith("xoxb-") or not app.startswith("xapp-"):
+        return False, ("SLACK_BOT_TOKEN starts xoxb- (the Bot User OAuth Token) and "
+                       "SLACK_APP_TOKEN starts xapp- (an app-level token): check which is which")
+    if not (_extra_installed("slack_sdk") if extra_installed is None else extra_installed):
+        return False, "needs the slack extra: pip install 'waku-agent[slack]'"
+    try:
+        who, headers = (fetch or _slack_api)("auth.test", bot)
+        if not who.get("ok"):
+            return False, f"Slack refused SLACK_BOT_TOKEN ({who.get('error', 'no reason given')})"
+        held = {scope.strip() for scope in headers.get("x-oauth-scopes", "").split(",")}
+        missing = [scope for scope in slack.BOT_SCOPES if scope not in held]
+        if missing:
+            return False, (f"the bot token is missing the scope{'s' if len(missing) > 1 else ''} "
+                           f"{' and '.join(missing)}: add under OAuth & Permissions, then "
+                           "reinstall the app")
+        opened, _ = (fetch or _slack_api)("apps.connections.open", app)
+    except (OSError, ValueError):
+        return False, "could not reach Slack to check the tokens"
+    if not opened.get("ok"):
+        if opened.get("error") == "missing_scope":
+            return False, (f"SLACK_APP_TOKEN is missing the scope "
+                           f"{opened.get('needed') or slack.APP_SCOPE}: generate an app-level "
+                           "token with it under Basic Information")
+        return False, f"Slack refused SLACK_APP_TOKEN ({opened.get('error', 'no reason given')})"
+    channels = [c for c in env.get("SLACK_ALLOWED_CHANNELS", "").split(",") if c.strip()]
+    if not channels:
+        return False, ("the tokens work, and SLACK_ALLOWED_CHANNELS is empty, so nobody "
+                       "is heard: put a channel id in it")
+    return True, (f"connected · workspace {who.get('team', '?')} as {who.get('user', '?')} · "
+                  f"hears {len(channels)} channel{'' if len(channels) == 1 else 's'}")
+
+
 def cli_main() -> int:
     """Print the current Connections surface and return a meaningful exit code."""
     from rich.console import Console
@@ -529,7 +592,12 @@ def cli_main() -> int:
     # treg the same way: an MCP server with a sign-in, not an .env field.
     console.print("\n[bold]Live data[/bold]")
     console.print(f"  {'treg':<20} {treg_status(load_settings().home)}", markup=False)
-    return int(failed)
+    # Slack for `waku serve` (spec 025): two tokens that Slack is asked about
+    # here, so a missing scope is named before the first mention goes unheard.
+    slack_ok, slack_line = slack_status()
+    console.print("\n[bold]Always-on[/bold]")
+    console.print(f"  {'Slack':<20} {slack_line}", markup=False)
+    return int(failed or slack_ok is False)
 
 
 def _find_integration(key: str) -> Integration | None:

@@ -62,7 +62,10 @@ def make_tool(home: Path) -> Tool:
                                     target=target, body=body, idempotency_key=key)
         finally:
             conn.close()
-        where = ("the owner" if to.lower() in ("owner", "me")
+        # In the owner's own chat the message comes back to the person the
+        # model talks to, so the answer does not call them "the owner".
+        where = ("this chat" if run is not None and address == run.address
+                 else "the owner" if to.lower() in ("owner", "me")
                  else outbox.format_address(channel, target))
         if written is None:
             return f"The message to {where} was already queued by an earlier attempt of this run."

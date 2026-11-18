@@ -273,6 +273,108 @@ def test_sign_in_that_fails_says_so_and_holds_no_link(tmp_path):
     assert flow.link is None and flow.ok is False and flow.tools is None
 
 
+def _owner_heard(home):
+    from waku.db import connect
+
+    conn = connect(home)
+    try:
+        return [row[0] for row in conn.execute("SELECT body FROM outbox ORDER BY id")]
+    finally:
+        conn.close()
+
+
+def test_the_link_says_how_long_it_works(tmp_path):
+    """The third live run: the link was opened thirteen hours later and the
+    reply had never said that it stops working."""
+    from waku.tools.mcp_oauth import SIGN_IN_TIMEOUT, sign_in_minutes
+
+    connectors.add(tmp_path, "linear", url=LINEAR)
+    flow = connectors.SignIn(tmp_path, "linear", bridge=FakeBridge).start(wait=5)
+
+    said = connectors.link_words("linear", flow)
+
+    assert SIGN_IN_TIMEOUT >= 900, "a link sent to a phone is opened at the computer later"
+    assert f"works for {sign_in_minutes()} minutes" in said and SIGN_IN_LINK in said
+
+
+def test_the_owner_hears_when_the_link_stops_working(tmp_path, monkeypatch):
+    """The third live run: the wait ran out and nothing was sent, so the
+    owner opened a dead link the next morning."""
+    from waku.tools.mcp_oauth import sign_in_minutes
+
+    monkeypatch.setenv("WAKU_OWNER", "telegram:42")
+    connectors.add(tmp_path, "linear", url=LINEAR)
+
+    class TimesOut(FakeBridge):
+        def start(self):
+            self.open_url(self.link)
+            raise RuntimeError("timed out waiting for the browser sign-in to come back")
+
+    flow = connectors.SignIn(tmp_path, "linear", bridge=TimesOut,
+                             on_done=lambda done: connectors.tell_owner(tmp_path, done))
+    flow.start(wait=5)
+    assert flow.wait(5) is True
+
+    heard = _owner_heard(tmp_path)
+    assert len(heard) == 1
+    assert "no longer works" in heard[0] and f"{sign_in_minutes()} minutes" in heard[0]
+    assert 'Say "connect linear"' in heard[0]
+    assert "http" not in heard[0] and "timed out" not in heard[0]
+
+
+def test_a_sign_in_that_never_had_a_link_sends_nothing_later(tmp_path, monkeypatch):
+    """The reply that started it already said why."""
+    monkeypatch.setenv("WAKU_OWNER", "telegram:42")
+    connectors.add(tmp_path, "linear", url=LINEAR)
+
+    class Broken(FakeBridge):
+        def start(self):
+            raise RuntimeError("could not reach the server")
+
+    flow = connectors.SignIn(tmp_path, "linear", bridge=Broken,
+                             on_done=lambda done: connectors.tell_owner(tmp_path, done))
+    flow.start(wait=5)
+    assert flow.wait(5) is True
+
+    assert _owner_heard(tmp_path) == []
+
+
+OLD_LINK = ("https://mcp.notion.com/authorize?response_type=code&client_id=abc"
+            "&redirect_uri=http%3A%2F%2F127.0.0.1%3A41765%2Fcallback&state=old")
+
+
+def test_a_reply_does_not_repeat_a_link_that_nothing_waits_for(tmp_path):
+    """The fourth live run: asked to connect Notion again, the model repeated
+    the link of the evening before without a call."""
+    reply = f"Here's the link again:\n\n{OLD_LINK}\n\nOnce you sign in, you're set."
+
+    said = connectors.without_dead_links(tmp_path, reply)
+
+    assert "http" not in said
+    assert connectors.DEAD_LINK in said and said.endswith(connectors.DEAD_LINK_NEXT)
+    assert "Once you sign in" in said, "the rest of the reply is kept"
+
+
+def test_a_reply_keeps_the_link_of_the_sign_in_that_waits(tmp_path):
+    connectors.add(tmp_path, "notion", url="https://mcp.notion.com/mcp")
+    live = OLD_LINK.replace("state=old", "state=new")
+    made = []
+    connectors.start_sign_in(
+        tmp_path, "notion", wait=5,
+        bridge=lambda *a: made.append(FakeBridge(*a, link=live)) or made[-1])
+
+    assert connectors.without_dead_links(tmp_path, f"Open this: {live}.") == f"Open this: {live}."
+    said = connectors.without_dead_links(tmp_path, f"Old: {OLD_LINK}\nNew: {live}")
+    assert OLD_LINK not in said and live in said
+    made[0].finish.set()
+
+
+def test_a_reply_with_an_ordinary_link_is_left_alone(tmp_path):
+    reply = "The docs are at https://developers.notion.com/docs/mcp and the weather is fine."
+
+    assert connectors.without_dead_links(tmp_path, reply) == reply
+
+
 def test_sign_in_one_at_a_time_because_one_port_catches_the_redirect(tmp_path):
     connectors.add(tmp_path, "linear", url=LINEAR)
     connectors.add(tmp_path, "notion", url="https://mcp.notion.com/mcp")
@@ -474,7 +576,7 @@ def _requests(chat):
 def test_chat_connect_with_an_address_parks_and_writes_nothing_until_the_yes(chat):
     said, run_id = _ask(chat, "connect_tool", {"name_or_url": EXAMPLE})
 
-    assert "waits for the owner's approval" in said
+    assert "The person you are talking to has been asked" in said
     assert not (chat.home / "mcp.json").exists(), "nothing is written before the yes"
     assert chat.bridges == [], "and no sign-in starts"
     (request,) = _requests(chat)
@@ -558,7 +660,7 @@ def test_chat_disconnect_parks_and_then_removes_the_entry_and_the_token(chat):
     token = _token(chat.home, "linear")
 
     said, run_id = _ask(chat, "disconnect_tool", {"name": "linear"})
-    assert "waits for the owner's approval" in said
+    assert "The person you are talking to has been asked" in said
     assert token.exists() and len(_servers(chat.home)) == 1
     assert "linear" in _requests(chat)[0]
 
@@ -864,7 +966,7 @@ def test_starter_list_cli_add_linear_writes_one_entry_and_prints_a_sign_in_link(
 def test_starter_list_chat_connects_by_name_and_the_request_says_which_server(chat):
     said, run_id = _ask(chat, "connect_tool", {"name_or_url": "Linear"})
 
-    assert "waits for the owner's approval" in said
+    assert "The person you are talking to has been asked" in said
     assert "Connect Linear (https://mcp.linear.app/mcp)" in _requests(chat)[0]
 
     answer = _approve(chat, run_id)

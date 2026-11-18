@@ -781,3 +781,89 @@ def test_unprompted_mention_is_a_person_asking_and_writes_no_line(inbox, monkeyp
     finally:
         conn.close()
     assert len(bodies) == 1 and "Approve?" in bodies[0]
+
+
+# ---- spec 025, decision 5: the Slack app is created from a manifest ---------
+
+def _yaml(text: str):
+    """The small part of YAML the manifest uses: nested mappings by two-space
+    indentation, lists of scalars, and scalars. PyYAML is not a dependency,
+    and Slack reads the same file."""
+    lines = [(len(raw) - len(raw.lstrip(" ")), raw.strip())
+             for raw in text.splitlines() if raw.strip() and not raw.strip().startswith("#")]
+
+    def scalar(value: str):
+        value = value.strip()
+        if value in ("true", "false"):
+            return value == "true"
+        return value.strip("\"'")
+
+    def block(at: int, indent: int):
+        if lines[at][1].startswith("- "):
+            items = []
+            while at < len(lines) and lines[at][0] == indent and lines[at][1].startswith("- "):
+                items.append(scalar(lines[at][1][2:]))
+                at += 1
+            return items, at
+        mapping = {}
+        while at < len(lines) and lines[at][0] == indent:
+            key, _, value = lines[at][1].partition(":")
+            assert _ == ":" and key and " " not in key, f"not `key: value`: {lines[at][1]}"
+            at += 1
+            if value.strip():
+                mapping[key] = scalar(value)
+            else:
+                assert at < len(lines) and lines[at][0] > indent, f"'{key}' holds nothing"
+                mapping[key], at = block(at, lines[at][0])
+        return mapping, at
+
+    parsed, end = block(0, 0)
+    assert end == len(lines), f"line {end + 1} is indented less than its block"
+    return parsed
+
+
+def test_manifest_parses_and_names_the_two_scopes_and_the_one_event():
+    """Spec 025, acceptance 7."""
+    from waku.alwayson.sources import slack
+
+    manifest = _yaml(slack.MANIFEST.read_text(encoding="utf-8"))
+
+    assert manifest["oauth_config"]["scopes"]["bot"] == ["app_mentions:read", "chat:write"]
+    assert manifest["oauth_config"]["scopes"].keys() == {"bot"}, "no user scope is asked for"
+    assert manifest["settings"]["event_subscriptions"]["bot_events"] == ["app_mention"]
+    assert manifest["settings"]["event_subscriptions"].keys() == {"bot_events"}
+    assert manifest["settings"]["socket_mode_enabled"] is True
+    assert manifest["features"]["bot_user"]["display_name"].strip()
+    assert manifest["display_information"]["name"].strip()
+
+
+def test_manifest_asks_for_what_the_slack_source_and_sender_use():
+    """The scopes the manifest grants are the ones `waku connections` checks
+    for, so a workspace made from the file passes the check."""
+    from waku.alwayson.sources import slack
+
+    manifest = _yaml(slack.MANIFEST.read_text(encoding="utf-8"))
+
+    assert set(manifest["oauth_config"]["scopes"]["bot"]) == set(slack.BOT_SCOPES)
+    assert manifest["settings"]["event_subscriptions"]["bot_events"] == [slack.BOT_EVENT]
+
+
+def test_manifest_ships_inside_the_package_and_holds_no_token():
+    from pathlib import Path
+
+    import waku
+    from waku.alwayson.sources import slack
+
+    assert Path(waku.__file__).resolve().parent in slack.MANIFEST.resolve().parents
+    text = slack.MANIFEST.read_text(encoding="utf-8")
+    assert "xoxb-" not in text and "xapp-" not in text
+    assert text.isascii()
+
+
+def test_manifest_reader_refuses_a_file_that_is_not_the_shape_it_reads():
+    import pytest as _pytest
+
+    with _pytest.raises(AssertionError):
+        _yaml("settings:\n  socket_mode_enabled\n")
+    with _pytest.raises(AssertionError):
+        _yaml("settings:\nfeatures:\n  a: b\n")

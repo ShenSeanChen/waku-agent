@@ -395,14 +395,20 @@ class SignIn:
       done    set when the sign-in ended, either way
       ok      whether the server connected
       tools   the tools the server listed, or None
+      reason  why the sign-in could not start, in words for the person, or ""
     """
 
     def __init__(self, home: Path, name: str, on_done: Callable[[SignIn], None] | None = None,
                  bridge: Callable = _bridge) -> None:
         self.home, self.name = Path(home), name
         self.link: str | None = None
+        # Whether the person was ever handed a link. `link` is cleared when
+        # the sign-in fails, and this is how the end knows somebody may still
+        # be holding one that no longer works.
+        self.had_link = False
         self.tools: list | None = None
         self.ok = False
+        self.reason = ""
         self.done = threading.Event()
         self._has_link = threading.Event()
         self._on_done, self._make_bridge = on_done, bridge
@@ -410,16 +416,37 @@ class SignIn:
 
     def _open(self, link: str) -> None:
         self.link = link
+        self.had_link = True
         self._has_link.set()
+
+    def _port_refusal(self) -> str:
+        """Why the sign-in cannot start, or "": the port this client is
+        registered on is held by another program. The check runs before a
+        link is made, so the person is not sent to a page that leads back to
+        another program."""
+        from waku.tools.mcp_oauth import FileTokenStorage, PortBusy, check_port
+
+        servers = _read(self.home)["servers"]
+        spec = next((s for s in servers if isinstance(s, dict)
+                     and s.get("name") == self.name and s.get("oauth")), None)
+        if spec is None or signed_in(self.home, spec):
+            return ""
+        try:
+            check_port(FileTokenStorage(self.home, self.name, spec.get("url")))
+        except PortBusy as busy:
+            return str(busy)
+        return ""
 
     def _run(self) -> None:
         try:
-            self._bridge = self._make_bridge(self.home, self.name, self._open)
-            self.tools = list(self._bridge.start())
-            # A server that failed to connect is skipped by the bridge, so no
-            # tools and no session is how a failure looks from here.
-            connected = getattr(self._bridge, "connected", None)
-            self.ok = bool(self.tools) or bool(connected and connected(self.name))
+            self.reason = self._port_refusal()
+            if not self.reason:
+                self._bridge = self._make_bridge(self.home, self.name, self._open)
+                self.tools = list(self._bridge.start())
+                # A server that failed to connect is skipped by the bridge, so
+                # no tools and no session is how a failure looks from here.
+                connected = getattr(self._bridge, "connected", None)
+                self.ok = bool(self.tools) or bool(connected and connected(self.name))
         except Exception:   # noqa: BLE001  (the reason may quote a token, so it is dropped)
             self.tools, self.ok = None, False
         finally:
@@ -468,8 +495,9 @@ def start_sign_in(home: Path, name: str, on_done: Callable[[SignIn], None] | Non
             return _SIGN_INS[key]
         if _SIGN_INS:
             waiting = next(iter(_SIGN_INS))[1]
+            from waku.tools.mcp_oauth import sign_in_minutes
             raise Refused(f"The sign-in to '{waiting}' is still waiting. Finish it, or "
-                          "try again in five minutes.")
+                          f"try again in {sign_in_minutes()} minutes.")
         flow = _SIGN_INS[key] = SignIn(home, name, on_done=on_done, bridge=bridge)
     return flow.start(wait)
 
@@ -493,8 +521,9 @@ def signed_in(home: Path, spec: dict) -> bool:
     """Whether a sign-in has left a token for this `oauth` server."""
     from waku.tools.mcp_oauth import FileTokenStorage
 
-    storage = FileTokenStorage(Path(home), str(spec.get("name", "")), spec.get("url"))
-    return storage._path.exists() and storage.matches()
+    # The file alone is not a sign-in: it holds this client's registration
+    # before the person has opened the link.
+    return FileTokenStorage(Path(home), str(spec.get("name", "")), spec.get("url")).has_tokens()
 
 
 def needs_sign_in(home: Path, spec: dict) -> bool:
@@ -581,8 +610,14 @@ def _free_name(home: Path, name: str) -> str:
 
 
 def tell_owner(home: Path, flow: SignIn) -> None:
-    """One message to the owner when a sign-in that chat started is done."""
-    if not flow.ok:
+    """One message to the owner when a sign-in that chat started ends: the
+    server is connected, or the link they were sent no longer works. A
+    sign-in that never had a link said why in the reply that started it."""
+    if flow.ok:
+        body = connected_line(flow.name, flow.tools or [], home)
+    elif flow.had_link:
+        body = expired_line(flow.name)
+    else:
         return
     from waku.alwayson import outbox
     from waku.db import connect
@@ -592,18 +627,57 @@ def tell_owner(home: Path, flow: SignIn) -> None:
         stamp = outbox.utc_now().isoformat(timespec="seconds")
         for channel, target in outbox.owner_addresses():
             outbox.insert(conn, run_id="", channel=channel, target=target,
-                          body=connected_line(flow.name, flow.tools or [], home),
+                          body=body,
                           idempotency_key=f"connector:{flow.name}:{channel}:{stamp}")
     finally:
         conn.close()
 
 
+def expired_line(name: str) -> str:
+    """What the owner reads when a sign-in ended without connecting. It does
+    not say why: the reason may quote a token, and the next step is the same."""
+    from waku.tools.mcp_oauth import sign_in_minutes
+
+    return (f"The sign-in to '{name}' did not finish, so the link I sent no longer works. "
+            f"A link lasts {sign_in_minutes()} minutes. Say \"connect {name}\" for a new one.")
+
+
 def link_words(name: str, flow: SignIn | None) -> str:
     """What the person does to sign in, for a chat reply and the card."""
     if flow is not None and flow.link:
+        from waku.tools.mcp_oauth import sign_in_minutes
+
         return ("Open this link on the computer Waku runs on, in its browser. It does "
-                f"not work from another device:\n{flow.link}")
+                f"not work from another device, and it works for {sign_in_minutes()} "
+                f"minutes:\n{flow.link}")
     return f"Sign in on the computer Waku runs on: waku mcp login {name}"
+
+
+# A sign-in link sends the browser back to a port on this computer, and that
+# is how one is told from any other address in a reply.
+_SIGN_IN_LINK = re.compile(
+    r"https?://[^\s<>\"')\]]*redirect_uri=http(?:%3A%2F%2F|://)(?:127\.0\.0\.1|localhost)"
+    r"[^\s<>\"')\]]*", re.IGNORECASE)
+DEAD_LINK = "(a sign-in link that no longer works was here)"
+DEAD_LINK_NEXT = ("That link is an old one: nothing on this computer is waiting for it any "
+                  "more. Say \"connect <name>\" again and I will make a new one.")
+
+
+def without_dead_links(home: Path, reply: str) -> str:
+    """A reply with no sign-in link that nothing waits for. On 2026-11-18 the
+    owner asked to connect Notion a second time, and the model repeated the
+    link of the evening before from the conversation, without a call. The
+    browser came back to a closed port. The link of the sign-in that waits
+    now is left as it is."""
+    waiting = sign_in_waiting(home)
+    live = (waiting.link or "") if waiting is not None else ""
+    dead = [found for found in _SIGN_IN_LINK.findall(reply or "")
+            if not (live and live.startswith(found.rstrip(".,;:!?")))]
+    if not dead:
+        return reply
+    for found in dead:
+        reply = reply.replace(found, DEAD_LINK)
+    return f"{reply.rstrip()}\n\n{DEAD_LINK_NEXT}"
 
 
 def connect(home: Path, target: str, sign_in: Callable | None = None,
@@ -631,6 +705,8 @@ def connect(home: Path, target: str, sign_in: Callable | None = None,
         return f"{lead} {refused} Then: waku mcp login {name}"
     if flow.done.is_set() and flow.ok:
         return f"{lead} {connected_line(name, flow.tools or [], home)}"
+    if flow.done.is_set() and flow.reason:
+        return f"{lead} {flow.reason}"
     return f"{lead} {link_words(name, flow)}"
 
 
@@ -686,7 +762,9 @@ def make_tools(home: Path, sign_in: Callable = start_sign_in) -> list[Tool]:
                 "to connect a service. It takes a name on the starter list ("
                 + ", ".join(starter()) + ") or the server's https address, never a "
                 "command to run. The owner approves it first, and then signs in through "
-                "a link. With `writes`, it changes a connected server instead: 'allow' "
+                "a link. A sign-in link works once and for a few minutes, so never "
+                "repeat a link from earlier in the conversation: call this tool again "
+                "and it answers with the link that works now. With `writes`, it changes a connected server instead: 'allow' "
                 "when the user says to let it write without asking, 'ask' to take that "
                 "back."
             ),
