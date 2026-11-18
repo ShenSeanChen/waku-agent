@@ -1,5 +1,5 @@
-"""`waku serve`: the handlers and the worker in one process, without the
-dashboard (spec 023).
+"""`waku serve`: the handlers, the worker and the dispatcher in one process,
+without the dashboard (spec 023).
 
     waku serve            run until Ctrl-C or SIGTERM
     waku serve --port N   the port for incoming webhooks (default 7780)
@@ -7,6 +7,7 @@ dashboard (spec 023).
 What runs:
 
   one worker     claims events and starts runs (worker.py)
+  a dispatcher   sends each row of the outbox (dispatcher.py)
   the sources    each configured source inserts events (sources/)
   a listener     only when a source receives webhooks; on 127.0.0.1 unless
                  WAKU_SERVE_HOST says otherwise
@@ -26,6 +27,8 @@ from collections.abc import Callable, Mapping
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
+from waku.alwayson import outbox
+from waku.alwayson.dispatcher import Dispatcher, Sender
 from waku.alwayson.events import Event, Inbox
 from waku.alwayson.worker import BATCH_WAIT_SECONDS, AgentRun, AlreadyRunning, ServeLock, Worker
 from waku.config import Settings
@@ -92,12 +95,15 @@ class Service:
     """Everything `waku serve` runs, with one start and one stop."""
 
     def __init__(self, settings: Settings, *, sources: Mapping[str, Source] | None = None,
-                 routes: Mapping[str, Route] | None = None, port: int = DEFAULT_PORT,
-                 run: Callable[[str, list[Event]], None] | None = None,
+                 routes: Mapping[str, Route] | None = None,
+                 senders: Mapping[str, Sender] | None = None, port: int = DEFAULT_PORT,
+                 run: Callable[[str, list[Event]], str | None] | None = None,
                  batch_wait: float = BATCH_WAIT_SECONDS,
                  log: Callable[[str], None] = print) -> None:
         self.settings, self._log = settings, log
         self._sources, self._routes, self._port = dict(sources or {}), dict(routes or {}), port
+        self._senders = dict(senders or {})
+        self.sending = list(self._senders)     # the channels a reply can go out on
         self._run, self._batch_wait = run, batch_wait
         self._lock = ServeLock(settings.home)
         self.inbox = Inbox(settings.home)
@@ -106,6 +112,9 @@ class Service:
         self._worker: Worker | None = None
         self._ready = threading.Event()
         self.worker_thread: threading.Thread | None = None
+        self._dispatcher: Dispatcher | None = None
+        self._dispatching = threading.Event()
+        self.dispatcher_thread: threading.Thread | None = None
         self._server: ThreadingHTTPServer | None = None
 
     @property
@@ -129,6 +138,18 @@ class Service:
                 run.close()
             conn.close()
 
+    def _dispatch(self) -> None:
+        from waku.db import connect
+
+        conn = connect(self.settings.home)
+        self._dispatcher = Dispatcher(conn, self._senders, owner=outbox.owner_addresses(),
+                                      log=self._log)
+        self._dispatching.set()
+        try:
+            self._dispatcher.run_forever()
+        finally:
+            conn.close()
+
     def start(self) -> None:
         self._lock.acquire()   # raises AlreadyRunning
         try:
@@ -136,6 +157,10 @@ class Service:
                                                   daemon=True)
             self.worker_thread.start()
             self._ready.wait(10)
+            self.dispatcher_thread = threading.Thread(target=self._dispatch,
+                                                      name="serve-dispatcher", daemon=True)
+            self.dispatcher_thread.start()
+            self._dispatching.wait(10)
             if self._routes:
                 self._server = ThreadingHTTPServer((bind_host(), self._port),
                                                    _handler(self._routes))
@@ -157,7 +182,8 @@ class Service:
             raise
 
     def stop(self) -> None:
-        """Stop receiving first, then let the run in flight finish."""
+        """Stop receiving first, let the run in flight finish, then stop
+        sending. A reply the dispatcher did not reach stays pending on disk."""
         for handle in self._handles:
             try:
                 handle.stop()
@@ -172,6 +198,10 @@ class Service:
             self._worker.stop.set()
         if self.worker_thread is not None and self.worker_thread.is_alive():
             self.worker_thread.join(STOP_TIMEOUT_SECONDS)
+        if self._dispatcher is not None:
+            self._dispatcher.stop.set()
+        if self.dispatcher_thread is not None and self.dispatcher_thread.is_alive():
+            self.dispatcher_thread.join(STOP_TIMEOUT_SECONDS)
         self._lock.release()
 
 
@@ -206,7 +236,10 @@ def main(argv: list[str]) -> int:
     settings = load_settings()
     settings.ensure_home()
     sources, routes = configured(settings)
-    service = Service(settings, sources=sources, routes=routes, port=args.port)
+    from waku.alwayson import senders
+
+    service = Service(settings, sources=sources, routes=routes,
+                      senders=senders.configured(settings), port=args.port)
 
     # Set before start, so a signal that arrives during startup still stops it.
     stop = threading.Event()
@@ -224,7 +257,7 @@ def main(argv: list[str]) -> int:
         if service.address:
             print("  webhooks: " + ", ".join(
                 "http://{}:{}{}".format(*service.address, path) for path in routes))
-        print("  A reply is printed here and kept in the chat log. It is not sent back yet.")
+        print("  replies go out on: " + ", ".join(sorted(service.sending)))
         while not stop.wait(1):
             pass
     finally:

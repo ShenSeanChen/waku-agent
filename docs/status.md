@@ -20,13 +20,17 @@ their `mcp_tool` hooks run at SessionStart, UserPromptSubmit, PreToolUse and
 Stop (spec 021). `command` hooks, which run a program on this machine, are
 not built.
 
-`waku serve` starts (spec 023, group A). It stores each Telegram message,
-Slack @mention and GitHub issue or mention as a row in `state.db`, and one
-worker answers them one conversation at a time. A message that arrives during
-a restart is answered after it. The Slack and GitHub handlers have run against
-fake events and a fake `gh` only, never against a live workspace or repository.
+`waku serve` starts (spec 023, groups A and D). It stores each Telegram
+message, Slack @mention and GitHub issue or mention as a row in `state.db`,
+and one worker answers them one conversation at a time. A message that arrives
+during a restart is answered after it. Each reply is a row in the `outbox`
+table, and a dispatcher sends it to the Telegram chat, the Slack thread or the
+GitHub issue it answers, retrying a failed delivery four times. `send_message`
+writes a row in the same table. The Slack and GitHub handlers and all three
+senders have run against fake events, fake answers and a fake `gh` only, never
+against a live chat, workspace or repository.
 
-**3,598 deterministic evals pass offline**, with no API key; 60 more are live
+**3,645 deterministic evals pass offline**, with no API key; 60 more are live
 evals that skip without one. CI runs the offline tier on every PR along with
 ruff, the skills validator, and a check that `.env.example` still matches the
 integrations registry.
@@ -47,7 +51,9 @@ Nothing here is a surprise. If you hit one of these, the issue exists.
 | The model picker offers OpenAI models that 404 on use | #137 | #178 |
 | GPT-5.6 tool calls fail on Chat Completions | — | #146 |
 | OpenCode Zen fails with a rate-limit error | #112 | #113 |
-| `waku serve` does not send its reply. It prints the reply in its terminal and keeps it in the chat log | — | spec 023, group D (the outbox) |
+| `send_message` reaches only the owner in `WAKU_OWNER` and the conversation a `waku serve` run came from. It refuses anyone else, and it has no address book, so "message Alex" is refused | — | spec 023, group C (approval) |
+| A message `send_message` queues waits until `waku serve` runs; `waku` and `waku dashboard` do not send it, and the dashboard does not list it | — | — |
+| `waku serve` can deliver a chat reply twice when it dies after the channel accepted the reply and before the row is marked `sent` | — | — |
 | `waku serve` and the dashboard's Telegram cannot share one bot token: Telegram allows one poller, and the second one stays idle | — | — |
 | `waku serve` cannot set a follow-up or wait for a yes: timers and approval are spec 023, groups B and C | — | — |
 | Google Calendar sign-in has no bundled OAuth client, so `waku connect google` needs your own `~/.waku/credentials.json` | — | — |

@@ -92,6 +92,9 @@ flowchart LR
   EV -->|claim, wait 3 s,<br/>batch per session| W["Worker<br/>one per home"]
   W -->|one run| RUN["waku.respond()<br/>the loop above"]
   RUN -->|done or failed| EV
+  RUN -->|reply, or nothing| OB[("outbox<br/>state.db")]
+  OB -->|due rows| D["Dispatcher"]
+  D -->|Telegram, Slack,<br/>gh issue comment| P["Person"]
 ```
 
 Ana writes "@waku is issue 12 still open?" in a Slack thread while a run for
@@ -117,8 +120,24 @@ of them in the session `slack:<channel>:<thread>`. The rows end `done`, or
 - **`state.db` is in WAL mode**, so the dashboard reads it while
   `waku serve` writes.
 
-A run's reply is printed in the `waku serve` terminal and kept in the chat
-log. It is not sent back to Telegram, Slack or GitHub yet.
+A run never sends. Its reply becomes one row in the `outbox` table, and the
+dispatcher sends the row to the Telegram chat, the Slack thread or the GitHub
+issue the events came from.
+
+- **One reply per run.** The reply's `idempotency_key` is the run's name and
+  `0`, and a run is named by its first event. A run that is replayed after a
+  crash writes the same key, and `UNIQUE(idempotency_key)` drops the second
+  row.
+- **A failed delivery is retried** after 10 seconds, 1 minute, 10 minutes and
+  1 hour. The fifth failure marks the row `dead`, and the owner gets one
+  notice on another channel when `WAKU_OWNER` names one.
+- **A run may say nothing.** An empty reply, or the single word `SILENT`,
+  writes no row.
+- **`send_message` writes a row too.** It reaches the owner and the
+  conversation the run came from. It refuses anyone else, because nothing can
+  ask the owner for approval yet (spec 023, group C).
+- **A delivery can happen twice** when the process dies after the channel
+  accepted the message and before the row is marked `sent`.
 
 ### Which memories earn a slot
 
@@ -348,9 +367,11 @@ shows those instead. A proxy that does not know the turn leaves the estimate.
   `supervisor.py`. Gateways only move text. Under `waku serve` the Telegram
   handler writes an event instead of running the turn.
 - `waku/alwayson/` — the always-on path (spec 023): `events.py` (the inbox),
-  `worker.py` (one worker, one run per session batch, the lock), `serve.py`
-  (`waku serve`) and `sources/` (Telegram, Slack and GitHub handlers that
-  only insert a row).
+  `worker.py` (one worker, one run per session batch, the lock), `outbox.py`
+  (every outgoing message is a row), `dispatcher.py` (sends each row and
+  retries), `senders/` (Telegram, Slack and `gh`), `serve.py` (`waku serve`)
+  and `sources/` (Telegram, Slack and GitHub handlers that only insert a
+  row).
 - `waku/runtime/session.py` — working memory for one turn: SOUL.md, memory
   context and chat history.
 - `waku/loop/agent.py` — the loop, with an optional `before_tool` a plugin's
@@ -382,7 +403,9 @@ shows those instead. A proxy that does not know the turn leaves the estimate.
 - `examples/` — teaching material, not product; one folder per topic.
 - `~/.waku/` — runtime state: `state.db` (with `state.db-wal` and
   `state.db-shm` beside it), `calendar.ics`, `outbox/`, `traces/`, and
-  `serve.lock` while `waku serve` runs.
+  `serve.lock` while `waku serve` runs. `outbox/` holds the files that
+  `waku brief`, `waku gather` and `delegate` write. A message `send_message`
+  queues is a row in the `outbox` table of `state.db`, not a file there.
   `WAKU_HOME` moves it; `make` sets it to the repo's own `.waku/`, which is
   gitignored. `waku/config.py` `resolve_home()` has the rules.
 - `.env` — a model key is read from the environment, then the nearest `.env`

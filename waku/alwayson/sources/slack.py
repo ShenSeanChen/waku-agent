@@ -1,8 +1,9 @@
 """Slack as an event source (spec 023): an @mention becomes one row in `events`.
 
 Setup:
-  1. Create a Slack app with Socket Mode on, the `app_mentions:read` scope and
-     the `app_mention` event. Socket Mode means this machine calls Slack, so a
+  1. Create a Slack app with Socket Mode on, the `app_mentions:read` and
+     `chat:write` scopes (to hear a mention and to reply) and the
+     `app_mention` event. Socket Mode means this machine calls Slack, so a
      laptop needs no public address.
   2. pip install 'waku-agent[slack]'
   3. In .env: SLACK_APP_TOKEN (starts xapp-), SLACK_BOT_TOKEN (starts xoxb-)

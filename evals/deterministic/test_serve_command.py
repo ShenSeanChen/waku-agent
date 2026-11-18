@@ -90,17 +90,59 @@ def test_an_event_inserted_while_serving_becomes_a_run(tmp_path):
         conn.close()
 
 
+def test_an_outbox_row_written_while_serving_is_sent(tmp_path):
+    """Task D2: the dispatcher runs inside `waku serve`."""
+    from waku.alwayson import outbox
+
+    sent = []
+    service = _service(tmp_path, senders={
+        "telegram": lambda message: sent.append((message.target, message.body))})
+    service.start()
+    try:
+        conn = connect(tmp_path)
+        try:
+            outbox.insert(conn, run_id="e1", channel="telegram", target={"chat_id": 42},
+                          body="hello Sean", idempotency_key="e1:0")
+            assert _until(lambda: sent), "the dispatcher never sent the row"
+            assert _until(lambda: [r["status"] for r in conn.execute(
+                "SELECT status FROM outbox")] == ["sent"])
+        finally:
+            conn.close()
+    finally:
+        service.stop()
+    assert sent == [({"chat_id": 42}, "hello Sean")]
+
+
+def test_a_message_to_serve_gets_its_reply_on_the_channel_it_came_from(tmp_path):
+    """Task D3: handler, worker, outbox and dispatcher in one process."""
+    sent = []
+    service = _service(
+        tmp_path, run=lambda session_id, batch: f"You said: {batch[0].payload['text']}",
+        senders={"telegram": lambda message: sent.append((message.target, message.body))})
+    service.start()
+    try:
+        Inbox(tmp_path).add(source="telegram", external_id="1", session_id="telegram:42",
+                            payload={"text": "hello", "reply_to": {"chat_id": 42}})
+        assert _until(lambda: sent), "the reply never reached the sender"
+    finally:
+        service.stop()
+    assert sent == [({"chat_id": 42}, "You said: hello")]
+
+
 def test_stop_ends_the_worker_and_releases_the_lock(tmp_path):
     service = _service(tmp_path)
     service.start()
     thread = service.worker_thread
     assert thread.is_alive()
+    assert service.dispatcher_thread.is_alive()
     with pytest.raises(AlreadyRunning):
         ServeLock(tmp_path).acquire()
 
+    dispatcher = service.dispatcher_thread
     service.stop()
 
     assert not thread.is_alive()
+    assert not dispatcher.is_alive()
     lock = ServeLock(tmp_path)
     lock.acquire()
     lock.release()
