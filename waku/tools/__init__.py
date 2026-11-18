@@ -8,7 +8,7 @@ import sqlite3
 from collections.abc import Callable
 
 from waku.config import Settings
-from waku.tools import calendar, memory_admin, messages, notes, schedule, search
+from waku.tools import calendar, memory_admin, messages, notes, schedule, search, waiting
 from waku.tools.registry import ToolRegistry
 
 
@@ -35,6 +35,10 @@ def build_registry(conn: sqlite3.Connection, settings: Settings, memory=None,
     # A follow-up the agent sets for itself (spec 023): a row in `timers`
     # that `waku serve` turns into an event when its time comes.
     registry.register(schedule.make_tool(settings.home, session_id=session_id))
+    # What waits, and cancelling one of them (spec 024): "what reminders do I
+    # have?" and "cancel the Thursday one" work from chat.
+    for tool in waiting.make_tools(settings.home, session_id=session_id):
+        registry.register(tool)
     # Web search — pairs with create_event for the multi-tool loop demo
     # ("find the World Cup games left and add them to my calendar").
     registry.register(search.make_tool())

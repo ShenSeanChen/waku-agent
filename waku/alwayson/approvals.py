@@ -78,6 +78,8 @@ MODES: dict[str, str | Callable[[dict, Address | None], str]] = {
     "list_events": ALLOW,
     "save_note": ALLOW,
     "schedule_task": ALLOW,
+    "list_waiting": ALLOW,
+    "cancel_waiting": ALLOW,   # it cancels the person's own timers and requests
     "search_web": ALLOW,
     "manage_memory": ALLOW,
     "update_soul": ALLOW,

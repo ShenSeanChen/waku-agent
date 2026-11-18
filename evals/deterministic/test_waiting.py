@@ -299,3 +299,82 @@ def test_cli_prints_no_emoji(home, conn, monkeypatch, capsys):
     _three(conn, home)
     _, out = _cli(home, monkeypatch, capsys)
     assert out.isascii()
+
+
+# ---- C3: the tools list_waiting and cancel_waiting --------------------------
+
+def _tools(home, session="telegram:42"):
+    from waku.tools import waiting as waiting_tools
+
+    made = {tool.name: tool for tool in waiting_tools.make_tools(
+        home, session_id=lambda: session, tz=UTC)}
+    return made["list_waiting"].fn, made["cancel_waiting"].fn
+
+
+def test_tool_list_answers_what_reminders_do_i_have(home, conn):
+    timer_id, run_id, message_id = _three(conn, home)
+    list_waiting, _ = _tools(home)
+
+    said = list_waiting()
+
+    assert f"t{timer_id}: Thursday 19 November 09:00. Check whether issue 12" in said
+    assert f'r{run_id}: Comment on acme/app#12: "Sean will review' in said
+    assert f"m{message_id}: to telegram:42, queued. The demo moved to Friday." in said
+    assert "waku" not in said.lower().replace("label waku", ""), "no command for the model to quote"
+
+
+def test_tool_list_says_so_when_nothing_waits(home, conn):
+    list_waiting, _ = _tools(home)
+    assert list_waiting().startswith("Nothing waits")
+
+
+def test_tool_cancel_cancels_the_thursday_one(home, conn):
+    timer_id, _, _ = _three(conn, home)
+    _, cancel_waiting = _tools(home)
+
+    said = cancel_waiting(id=f"t{timer_id}")
+
+    assert said == f"Cancelled t{timer_id}: Check whether issue 12 is still open."
+    assert timers.get(conn, timer_id).status == "cancelled"
+    again = cancel_waiting(id=f"t{timer_id}")
+    assert again.startswith("Not cancelled:") and "list_waiting" in again
+
+
+def test_tool_in_another_persons_conversation_sees_only_that_conversation(home, conn):
+    """Ana's thread is not the owner. A run there lists and cancels what her
+    thread set, and nothing of Sean's."""
+    timer_id, run_id, message_id = _three(conn, home)
+    list_waiting, cancel_waiting = _tools(home, session="slack:C1:1700.0001")
+
+    with outbox.running(home, "5", THREAD):
+        said = list_waiting()
+        refused = cancel_waiting(id=f"t{timer_id}")
+        cancelled = cancel_waiting(id=f"r{run_id}")
+
+    assert f"r{run_id}:" in said, "the call her thread parked"
+    assert f"t{timer_id}:" not in said and f"m{message_id}:" not in said
+    assert refused.startswith("Not cancelled:")
+    assert timers.get(conn, timer_id).status == "pending"
+    assert cancelled.startswith(f"Cancelled r{run_id}:")
+
+
+def test_tool_in_the_owners_chat_sees_everything(home, conn):
+    _three(conn, home)
+    list_waiting, _ = _tools(home)
+    with outbox.running(home, "5", CHAT):
+        said = list_waiting()
+    assert said.count("\n  ") == 3
+
+
+def test_tool_both_are_core_tools_with_a_mode(home):
+    from evals.helpers import ScriptedClient, make_waku
+
+    waku = make_waku(home, client=ScriptedClient([]), episodic_store="sqlite")
+    try:
+        names = [schema["name"] for schema in waku.tools.schemas()]
+    finally:
+        waku.close()
+        waku.conn.close()
+    assert "list_waiting" in names and "cancel_waiting" in names
+    assert approvals.mode("list_waiting", {}) == "allow"
+    assert approvals.mode("cancel_waiting", {"id": "t1"}) == "allow"
