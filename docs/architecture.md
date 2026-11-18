@@ -199,7 +199,14 @@ no.'
 - **The conversation that parked hears the outcome.** The outcome is an event
   with `source = approval` in that session, so the next run there starts
   with "Approved and posted: ..." or "Declined and discarded: ...".
-- **One call waits per conversation**, and it expires after 72 hours.
+- **One call waits per conversation**, and it expires after 72 hours. The
+  owner gets one reminder at 48 hours and one message at the expiry, and the
+  conversation that asked gets the outcome as an event.
+- **What waits can be listed and cancelled.** `waiting.py` reads the pending
+  timers, the parked runs and the pending or dead outbox rows, and cancels
+  one by its id (`t3`, `r7`, `m12`). `waku waiting`, the tools `list_waiting`
+  and `cancel_waiting`, and the dashboard's "Waiting" card all call it. A
+  cancelled row keeps its record with the status `cancelled`.
 - **Only the owner approves.** `who_may_approve` in `approvals.py` is the one
   function that decides, and it answers with `WAKU_OWNER`. The yes counts in
   a private Telegram chat, where one person writes.
@@ -439,8 +446,10 @@ shows those instead. A proxy that does not know the turn leaves the estimate.
   (every run is a row), `approvals.py` (tool modes, parking a call, the
   owner's answer), `outbox.py` (every outgoing message is a row),
   `dispatcher.py` (sends each row and retries), `senders/` (Telegram, Slack
-  and `gh`), `timers.py` (the timers table and the loop that fires each due
-  timer), `serve.py` (`waku serve`)
+  and `gh`, and `format.py`, which turns the model's Markdown into what each
+  channel reads), `timers.py` (the timers table and the loop that fires each
+  due timer), `waiting.py` (lists what waits and cancels one), `serve.py`
+  (`waku serve`)
   and `sources/` (Telegram, Slack and GitHub handlers that only insert a
   row).
 - `waku/runtime/session.py` — working memory for one turn: SOUL.md, memory
