@@ -35,14 +35,37 @@ ALLOW, ASK = "allow", "ask"
 Address = tuple[str, dict]
 
 
+def is_private(address: Address) -> bool:
+    """Whether only the people a message is meant for read this place: an
+    address WAKU_OWNER names, or a Telegram chat with one person, whose id is
+    positive. A GitHub issue, a Slack channel and a group chat are read by
+    others."""
+    channel, target = address
+    chat_id = target.get("chat_id")
+    return (address in outbox.owner_addresses()
+            or (channel == "telegram" and isinstance(chat_id, int) and chat_id > 0))
+
+
+def reply_is_free(address: Address) -> bool:
+    """Whether a run's reply goes to this place without a yes (spec 024,
+    decision 5). A reply to a private place does. A reply other people read is
+    a write, unless WAKU_APPROVE_ALLOW names `reply:<channel>`, for example
+    `reply:github` for a person's own repositories."""
+    from waku.config import approval_overrides
+
+    return is_private(address) or f"reply:{address[0]}" in approval_overrides()[0]
+
+
 def _send_message(args: dict, address: Address | None) -> str:
-    """A message to the owner, or back into the conversation the run came
-    from, is a reply. A message to anyone else is a write to a third party."""
+    """A message to the owner is a reply. So is a message back into the
+    conversation the run came from, when the run's own reply would go there
+    without a yes. A message to anyone else is a write to a third party."""
     to = str(args.get("to", "")).strip()
     if to.lower() in ("owner", "me"):
         return ALLOW
     target = outbox.parse_address(to)
-    if target is not None and (target in outbox.owner_addresses() or target == address):
+    if target is not None and (target in outbox.owner_addresses()
+                               or (target == address and reply_is_free(address))):
         return ALLOW
     return ASK
 
@@ -71,11 +94,13 @@ MODES: dict[str, str | Callable[[dict, Address | None], str]] = {
 }
 
 
-def mode(tool: str, args: dict, address: Address | None = None) -> str:
+def mode(tool: str, args: dict, address: Address | None = None,
+         read_only: bool = False) -> str:
     """`allow` or `ask` for one call. WAKU_APPROVE_ASK and WAKU_APPROVE_ALLOW
     each name tools that skip the table, and `ask` wins when a tool is in
     both. A tool the table does not know, which is a tool from an MCP server,
-    is `allow` until WAKU_APPROVE_ASK names it."""
+    asks (spec 024, decision 6), unless the server declared it read-only
+    (`readOnlyHint`) or WAKU_APPROVE_ALLOW names it."""
     from waku.config import approval_overrides
 
     allow, ask = approval_overrides()
@@ -83,7 +108,7 @@ def mode(tool: str, args: dict, address: Address | None = None) -> str:
         return ASK
     if tool in allow:
         return ALLOW
-    rule = MODES.get(tool, ALLOW)
+    rule = MODES.get(tool, ALLOW if read_only else ASK)
     return rule(args if isinstance(args, dict) else {}, address) if callable(rule) else rule
 
 
@@ -170,17 +195,21 @@ class Gate:
     bring a parked call back."""
 
     def __init__(self, home: Path, conn: sqlite3.Connection,
-                 now: Callable[[], datetime] = outbox.utc_now, tz: tzinfo | None = None) -> None:
+                 now: Callable[[], datetime] = outbox.utc_now, tz: tzinfo | None = None,
+                 tools=None) -> None:
         # `tz` is for the evals: the zone a time in a request is said in.
         # None is the zone of this machine, which is the owner's.
         self.home, self.conn, self._now, self._tz = home, conn, now, tz
+        # The agent's tool registry, which knows what each tool declared.
+        self._tools = tools
 
     def __call__(self, tool: str, args: dict) -> tuple[str | None, str]:
         context = outbox.current_run(self.home)
         if context is None or not context.run_id.isdigit():
             return None, ""
         args = args if isinstance(args, dict) else {}
-        if mode(tool, args, context.address) == ALLOW:
+        known = self._tools.get(tool) if self._tools is not None else None
+        if mode(tool, args, context.address, getattr(known, "read_only", False)) == ALLOW:
             return None, ""
         return park(self.conn, int(context.run_id), tool, args, self._now(), self._tz), ""
 
@@ -198,9 +227,10 @@ def ran_before(conn: sqlite3.Connection, digest: str, now: datetime,
 
 
 def park(conn: sqlite3.Connection, run_id: int, tool: str, args: dict, now: datetime,
-         tz: tzinfo | None = None) -> str:
+         tz: tzinfo | None = None, reply: bool = False) -> str:
     """Store the call in its run's row and ask the owner. Returns what the
-    model reads in place of the tool's result."""
+    model reads in place of the tool's result. `reply` marks the call as the
+    run's own reply, which the worker parks when other people would read it."""
     run = runs.get(conn, run_id)
     digest = call_hash(tool, args)
     runs.expire(conn, now)
@@ -213,8 +243,10 @@ def park(conn: sqlite3.Connection, run_id: int, tool: str, args: dict, now: date
     if asked is None:
         return NOBODY
     channel, target = asked
-    runs.set_pending(conn, run.id, {"tool": tool, "args": args,
-                                    "asked": {"channel": channel, "target": target}}, digest)
+    call = {"tool": tool, "args": args, "asked": {"channel": channel, "target": target}}
+    if reply:
+        call["reply"] = True
+    runs.set_pending(conn, run.id, call, digest)
     # One request per run: a replayed run asks with the same key.
     outbox.insert(conn, run_id=str(run.id), channel=channel, target=target,
                   body=REQUEST.format(what=describe(tool, args), code=digest[:8],

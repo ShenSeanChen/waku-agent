@@ -75,7 +75,9 @@ def test_the_example_runs_from_mondays_message_to_thursdays_comment(tmp_path, mo
     import waku.tools.github as github_tool
 
     monkeypatch.setenv("WAKU_OWNER", "telegram:42")
-    monkeypatch.delenv("WAKU_APPROVE_ALLOW", raising=False)
+    # Spec 024: Sean lets the agent answer in Slack without a yes. A comment on
+    # GitHub still waits for him.
+    monkeypatch.setenv("WAKU_APPROVE_ALLOW", "reply:slack")
     monkeypatch.delenv("WAKU_APPROVE_ASK", raising=False)
     home = tmp_path / "home"
     home.mkdir()

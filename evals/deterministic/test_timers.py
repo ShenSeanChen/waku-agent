@@ -362,7 +362,10 @@ def _outbox(conn):
             for r in conn.execute("SELECT * FROM outbox ORDER BY id")]
 
 
-def test_a_run_a_timer_fires_once_replies_to_the_conversation_that_set_it(conn):
+def test_a_run_a_timer_fires_once_replies_to_the_conversation_that_set_it(conn, monkeypatch):
+    # Spec 024: a reply to a Slack thread or a GitHub issue waits for a yes
+    # unless the owner allows it. These rows are about delivery, so it is on.
+    monkeypatch.setenv("WAKU_APPROVE_ALLOW", "reply:slack")
     _add(conn)
     _loop(conn, Clock(THURSDAY_9)).step()
     seen = []

@@ -100,6 +100,35 @@ def _model_safe_name(server: str, tool: str) -> str:
     return safe[-64:].lstrip("_")
 
 
+def tool_meta(tool) -> dict:
+    """What Waku keeps of one tool a server listed."""
+    notes = getattr(tool, "annotations", None)
+    return {
+        "name": tool.name,
+        "description": tool.description,
+        "inputSchema": getattr(tool, "input_schema", None) or getattr(tool, "inputSchema", None),
+        # The server's own word that the tool changes nothing. `readOnlyHint`
+        # on the wire; the SDK's 2.x line may spell it `read_only_hint`.
+        "readOnly": bool(getattr(notes, "read_only_hint", None)
+                         or getattr(notes, "readOnlyHint", None)),
+    }
+
+
+def as_tool(server: str, meta: dict, call) -> Tool:
+    """The Tool the model is offered for one listed tool. `call` is
+    (server, tool name, arguments) -> text."""
+    return Tool(
+        name=_model_safe_name(server, meta["name"]),
+        description=f"[MCP:{server}] {meta.get('description','') or ''}",
+        input_schema=meta.get("inputSchema") or {"type": "object", "properties": {}},
+        # `tname` is the server's OWN name, unsanitised — the rename above is
+        # only how the model refers to the tool, never what goes back over
+        # the wire.
+        fn=(lambda srv=server, tname=meta["name"], **kw: call(srv, tname, kw)),
+        read_only=bool(meta.get("readOnly")),
+    )
+
+
 def merge(config_servers: list[dict], plugin_servers: list[dict]) -> tuple[list[dict], list[tuple[str, str]]]:
     """mcp.json's servers, then each plugin server mcp.json does not already
     have (spec 021). A plugin server at a URL mcp.json names is the same
@@ -225,16 +254,7 @@ class MCPBridge:
         listed = fut.result(deadline)  # {server: [tool metas]}
         tools: list[Tool] = []
         for srv, metas in listed.items():
-            for meta in metas:
-                tools.append(Tool(
-                    name=_model_safe_name(srv, meta["name"]),
-                    description=f"[MCP:{srv}] {meta.get('description','') or ''}",
-                    input_schema=meta.get("inputSchema") or {"type": "object", "properties": {}},
-                    # `tname` is the server's OWN name, unsanitised — the
-                    # rename above is only how the model refers to the tool,
-                    # never what goes back over the wire.
-                    fn=(lambda srv=srv, tname=meta["name"], **kw: self.call(srv, tname, kw)),
-                ))
+            tools.extend(as_tool(srv, meta, self.call) for meta in metas)
         return tools
 
     async def _open_streams(self, spec: dict):
@@ -333,14 +353,7 @@ class MCPBridge:
         # `input_schema` in the SDK's 2.x line; it was `inputSchema` in 1.x.
         # getattr covers both so a user on either pin gets a working connector
         # rather than an AttributeError reported as "failed to connect".
-        return [
-            {
-                "name": t.name,
-                "description": t.description,
-                "inputSchema": getattr(t, "input_schema", None) or getattr(t, "inputSchema", None),
-            }
-            for t in tools
-        ]
+        return [tool_meta(t) for t in tools]
 
     async def _connect_all(self, servers) -> dict:
         self._stack = AsyncExitStack()

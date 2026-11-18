@@ -7,7 +7,9 @@ run for each batch (spec 023, decision 2).
   take out each row that is the owner's yes or no to a call that waits, and
     act on it (approvals.py)
   one run with all of them, through waku.respond()
-  write the run's reply into the outbox, unless the run chose to say nothing
+  write the run's reply into the outbox, unless the run chose to say nothing.
+    A reply to a place other people read (a GitHub issue, a Slack channel)
+    waits for the owner's yes like any call that writes to a third party
   close the run's row in `runs`: done, failed, or parked when it left a
     call waiting for the owner's yes. A parked run's reply is not sent: the
     request to the owner is the one message
@@ -154,10 +156,34 @@ timer. If there is nothing worth sending, reply with the single word SILENT \
 and nothing is sent.]"""
 
 
+# What a run reads when an event started it and no person asked for anything,
+# for example a new issue with the label. The last sentence says what happens
+# to a reply: it goes out, or the owner reads it first.
+UNPROMPTED_PROMPT = """\
+{text}
+
+[Nobody asked you for anything: this arrived by itself. If you have nothing \
+useful to add, reply with the single word SILENT. That is the right answer \
+most of the time, and then nothing is posted. {reply}]"""
+UNPROMPTED_ASKS = ("If you do reply, the owner reads it first and decides whether it "
+                   "is posted.")
+UNPROMPTED_POSTS = "If you do reply, your reply is posted where this came from."
+# The one line the owner gets about such an event, after the words the source
+# gave it: "New issue acme/app#12: 'Login fails on Safari'. I did nothing."
+DID_NOTHING = "I did nothing."
+WANTS_TO_COMMENT = "I want to comment, see the request above."
+COMMENTED = "I commented."
+
+
 def _text(event: Event) -> str:
     text = event.payload.get("text", "")
     if event.source == approvals.SOURCE:
         return APPROVAL_PROMPT.format(outcome=text)
+    if event.payload.get("unprompted"):
+        address = reply_address([event])
+        free = address is not None and approvals.reply_is_free(address)
+        return UNPROMPTED_PROMPT.format(
+            text=text, reply=UNPROMPTED_POSTS if free else UNPROMPTED_ASKS)
     if event.source != "timer":
         return text
     return TIMER_PROMPT.format(set_at=event.payload.get("set_at", "an earlier day"), note=text)
@@ -273,6 +299,8 @@ class Worker:
                 self._queue_asked(run.id, batch)
             else:
                 self._queue_reply(run.id, batch, outcome.reply)
+                status = self._ended(run.id, "done")   # the reply itself may wait
+            self._tell_owner(run.id, batch, status)
             runs.finish(self.conn, run.id, status, outcome.turn_id, now=self._now())
             events.mark(self.conn, ids, "done")
         return True
@@ -310,12 +338,15 @@ class Worker:
         output = ""
         if approved and approvals.intact(run):
             output = self._execute(run, address)
-        payload: dict = {"text": approvals.outcome(run, approved, output)}
-        if address:
-            payload["channel"], payload["reply_to"] = address
-        events.insert(self.conn, source=approvals.SOURCE, external_id=f"approval:{run.id}",
-                      session_id=run.session_id, payload=payload,
-                      received_at=outbox._stamp(self._now()))
+        # A reply that waited is the end of its run: once it is posted or
+        # dropped, the conversation has nothing to hear about the approval.
+        if not (run.pending_call or {}).get("reply"):
+            payload: dict = {"text": approvals.outcome(run, approved, output)}
+            if address:
+                payload["channel"], payload["reply_to"] = address
+            events.insert(self.conn, source=approvals.SOURCE,
+                          external_id=f"approval:{run.id}", session_id=run.session_id,
+                          payload=payload, received_at=outbox._stamp(self._now()))
         ran = approved and approvals.intact(run)
         runs.resolve(self.conn, run.id, "failed" if approved and not ran else "done",
                      approved=ran, now=self._now())
@@ -324,15 +355,34 @@ class Worker:
         """`parked` when the run left a call waiting for the owner's yes."""
         return "parked" if runs.get(self.conn, run_id).pending_hash else status
 
+    def _tell_owner(self, run_id: int, batch: list[Event], status: str) -> None:
+        """One line to the owner for an event no person sent (spec 024,
+        decision 5): what arrived, and what the agent did about it. It goes
+        to the owner's own address, never to the place the event came from."""
+        arrived = [e.payload["unprompted"] for e in batch if e.payload.get("unprompted")]
+        address = reply_address(batch)
+        owner = next((a for a in outbox.owner_addresses() if a != address), None)
+        if not arrived or owner is None:
+            return
+        replied = self.conn.execute("SELECT 1 FROM outbox WHERE idempotency_key = ?",
+                                    (f"{run_id}:0",)).fetchone()
+        did = (WANTS_TO_COMMENT if status == "parked" else COMMENTED if replied
+               else DID_NOTHING)
+        outbox.insert(self.conn, run_id=str(run_id), channel=owner[0], target=owner[1],
+                      body="\n".join(f"{what}. {did}" for what in arrived),
+                      idempotency_key=f"{run_id}:note", now=self._now())
+
     def _queue_asked(self, run_id: int, batch: list[Event]) -> None:
         """A parked run sends one message, the request (spec 024, decision 1).
         Whatever the model replied is dropped. When the owner was asked
-        somewhere else, the conversation that asked reads one fixed line in
-        the reply's place, under the reply's key."""
+        somewhere else, the chat that asked reads one fixed line in the
+        reply's place, under the reply's key. A GitHub issue reads nothing."""
         address = reply_address(batch)
         asked = (runs.get(self.conn, run_id).pending_call or {}).get("asked") or {}
         if address is None or address == (asked.get("channel"), asked.get("target")):
             return
+        if address[0] == "github":
+            return   # a comment is under the owner's name, so nothing is posted unasked
         channel, target = address
         outbox.insert(self.conn, run_id=str(run_id), channel=channel, target=target,
                       body=approvals.asked_line(), idempotency_key=f"{run_id}:0",
@@ -347,8 +397,22 @@ class Worker:
             self._log(f"(serve) the run for {batch[0].session_id} has nowhere to reply")
             return
         channel, target = address
+        if not approvals.reply_is_free(address):
+            self._park_reply(run_id, batch[0].session_id, address, reply.strip())
+            return
         outbox.insert(self.conn, run_id=str(run_id), channel=channel, target=target,
                       body=reply.strip(), idempotency_key=f"{run_id}:0", now=self._now())
+
+    def _park_reply(self, run_id: int, session_id: str, address: tuple[str, dict],
+                    reply: str) -> None:
+        """A reply that other people would read is a write (spec 024, decision
+        5): it is stored as a send_message call, and the owner reads the exact
+        text in the request. Nothing is queued for the conversation."""
+        said = approvals.park(
+            self.conn, run_id, "send_message",
+            {"to": outbox.format_address(*address), "body": reply}, self._now(), reply=True)
+        if said != approvals.WAITS:
+            self._log(f"(serve) the reply for {session_id} was not sent. {said}")
 
     def run_forever(self, idle: float = IDLE_SECONDS) -> None:
         recovered = self.recover()
