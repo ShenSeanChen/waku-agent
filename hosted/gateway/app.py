@@ -39,7 +39,7 @@ from aiohttp import web
 
 from hosted import log
 from hosted.core import policy, quota
-from hosted.gateway import answers, embed, guards, sessions, slack
+from hosted.gateway import answers, embed, guards, sessions, setup_page, slack
 from hosted.gateway.config import GatewayConfig
 from hosted.gateway.identity import NotSignedIn
 from hosted.gateway.launch import (
@@ -83,6 +83,7 @@ STATIC = Path(__file__).resolve().parent / "static"
 STATIC_FILES: dict[str, tuple[str, str]] = {
     "login.css": ("login.css", "text/css"),
     "login.js": ("login.js", "text/javascript"),
+    "setup.css": ("setup.css", "text/css"),
     "waku-mark.svg": ("waku-mark.svg", "image/svg+xml"),
     "design/tokens.css": ("design/tokens.css", "text/css"),
     "design/type.css": ("design/type.css", "text/css"),
@@ -412,6 +413,8 @@ class Gateway:
             return await self._sign_in(request)
         if request.method == "POST" and path == "/auth/logout":
             return self._sign_out(request)
+        if request.method == "GET" and path == slack.SETUP_PATH:
+            return self._setup_page(request)
         if request.method == "GET" and path == slack.INSTALL_PATH:
             return self._slack_install(request)
         if request.method == "GET" and path == slack.CALLBACK_PATH:
@@ -419,6 +422,18 @@ class Gateway:
         if request.method == "GET" and path == "/":
             return answers.redirect("/login")
         return answers.refusal(request, 404, answers.NOT_FOUND)
+
+    def _setup_page(self, request: web.Request) -> web.Response:
+        """GET /setup: the three steps for the person this browser's session
+        names, or for a visitor who has not signed in (spec 026 C4)."""
+        tenant = self._apex_tenant(request)
+        return setup_page.render(
+            signed_in=tenant is not None, slack_on=self._slack is not None,
+            install=self._store.slack_install(tenant.id) if tenant else None,
+            outcome=request.query.get("slack", ""),
+            login_url="/login",
+            dashboard_url=(f"https://{tenant.id}.{self._config.apex_host}/"
+                           if tenant else ""))
 
     # --- "Add to Slack" (spec 026 C1) -----------------------------------
 
