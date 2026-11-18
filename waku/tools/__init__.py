@@ -110,11 +110,13 @@ def build_registry(conn: sqlite3.Connection, settings: Settings, memory=None,
             # no browser opens. The owner signs in through the link.
             wait_for_sign_in = getattr(settings, "mcp_sign_in", True)
 
-            def skip(spec: dict) -> bool:
+            def left_out(spec: dict) -> bool:
                 return ((memory_off and is_waku_memory(spec))
                         or (not wait_for_sign_in
                             and connectors.needs_sign_in(settings.home, spec)))
 
+            # None when neither rule applies: every server is connected.
+            skip = left_out if memory_off or not wait_for_sign_in else None
             bridge = MCPBridge(mcp_config, skip=skip, extra_servers=plugin_servers)
             for t in bridge.start():
                 registry.register(t)
