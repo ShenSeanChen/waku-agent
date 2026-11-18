@@ -382,6 +382,12 @@ class Gateway:
                 return await self._chat_api(request)
             if path == embed.EMBED_API_PATH:
                 return await self._embed_api(request)
+            if path == slack.EVENTS_PATH:
+                # Before the CSRF pair, like the bearer routes: its credential
+                # is Slack's signature (slack.SlackRoutes.events).
+                if self._slack is None:
+                    return slack.not_configured(self._config.slack_problem)
+                return await self._slack.events(request)
             if (path == CONVERSATIONS_API_PATH
                     or path.startswith(CONVERSATIONS_API_PATH + "/")):
                 return await self._conversations_api(request, path)

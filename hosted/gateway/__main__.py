@@ -55,6 +55,7 @@ from hosted.gateway.identity import JwksVerifier
 from hosted.gateway.launch import Launcher
 from hosted.gateway.memory_keys import WakuMemoryKeys
 from hosted.gateway.scheduler import TICK_SECONDS, Scheduler
+from hosted.gateway.slack import EVENTS_PATH, SlackApi, SlackRoutes
 from hosted.gateway.spawner_client import SpawnerClient
 from hosted.gateway.store import ControlDb
 from hosted.gateway.sweep import IdleLoop
@@ -94,10 +95,24 @@ async def main() -> None:
         forwarder = ContainerForwarder(
             launcher=launcher, turns=turns, plans=plans,
             proxy_socket=config.proxy_socket, session=session)
+        # Spec 026 A3, built before the Gateway because a Slack mention asks
+        # it for a tick. It works while containers are stopped: it starts a
+        # tenant that has an event waiting or a timer due.
+        scheduler = Scheduler(store=store, launcher=launcher, containers=containers)
+        # Spec 026 C: the public Slack app. Off, with the reason in the log,
+        # until config/gateway.env has all four Slack values.
+        slack = None
+        if config.slack is not None:
+            slack = SlackRoutes(settings=config.slack, apex_host=config.apex_host,
+                                store=store, api=SlackApi(session), wake=scheduler.kick)
+            _LOG.info("Slack: on. Events at https://%s%s", config.apex_host, EVENTS_PATH)
+        else:
+            _LOG.warning("Slack: off, its routes answer 503: %s", config.slack_problem)
         gateway = Gateway(config=config, store=store, launcher=launcher,
                           verifier=verifier, forward=forwarder, turns=turns,
                           plans=plans,
-                          memory_keys=WakuMemoryKeys(session, config.supabase_audience))
+                          memory_keys=WakuMemoryKeys(session, config.supabase_audience),
+                          slack=slack)
         # Adopt what is already running before the first request arrives, so
         # no container is orphaned and every idle timer starts fresh.
         try:
@@ -121,16 +136,13 @@ async def main() -> None:
             IdleLoop(launcher, disk_path=config.control_db.parent).run())
         _LOG.info("idle loop: stopping containers after %s minutes idle",
                   config.idle_seconds // 60)
-        # Spec 026 A3. It works while containers are stopped: it starts a
-        # tenant that has an event waiting or a timer due.
-        scheduler = asyncio.create_task(
-            Scheduler(store=store, launcher=launcher, containers=containers).run())
+        scheduler_loop = asyncio.create_task(scheduler.run())
         _LOG.info("scheduler: waking tenants for events and timers every %s seconds",
                   TICK_SECONDS)
         try:
             await asyncio.Event().wait()
         finally:
-            scheduler.cancel()
+            scheduler_loop.cancel()
             idle_loop.cancel()
             await runner.cleanup()
             for server in (token_server, admin_server):

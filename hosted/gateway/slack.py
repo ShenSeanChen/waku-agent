@@ -29,6 +29,9 @@ A log line carries a tenant id, a team id and Slack's own error code.
 from __future__ import annotations
 
 import base64
+import hashlib
+import hmac
+import json
 import re
 import time
 import urllib.parse
@@ -58,6 +61,18 @@ STATE_TTL_SECONDS = 600
 # limit on an event, is waiting behind it.
 TIMEOUT_SECONDS = 10
 TEAM_ID = re.compile(r"T[A-Z0-9]{2,31}")
+# How old, or how far ahead, a signed request's timestamp may be. Slack's own
+# number: past it, a recorded request is a replay.
+REPLAY_WINDOW_SECONDS = 300
+SIGNATURE_HEADER = "X-Slack-Signature"
+TIMESTAMP_HEADER = "X-Slack-Request-Timestamp"
+SIGNATURE_VERSION = "v0"
+# Unix seconds as Slack writes them: digits and nothing else.
+_TIMESTAMP = re.compile(r"[0-9]{1,12}")
+
+EVENTS_POST_ONLY = "Slack sends its events as a POST."
+BAD_SIGNATURE = "That request was not signed by Slack."
+NOT_AN_EVENT = "That is not a Slack event."
 
 NOT_CONFIGURED = "Slack is not set up on this server"
 
@@ -76,6 +91,56 @@ def seal_binding(team_id: str) -> str:
     """What a workspace's sealed token is bound to, so one row's value does
     not open in another row."""
     return f"slack:{team_id}"
+
+
+def signed_by_slack(secret: str, *, timestamp: str, signature: str, body: bytes,
+                    now: float) -> bool:
+    """Whether Slack signed exactly these bytes, within the last five minutes.
+
+    Slack signs `v0:<timestamp>:<raw body>` with the app's signing secret and
+    sends the HMAC-SHA256 as `v0=<hex>`. The timestamp is inside what is
+    signed, so it cannot be moved forward on a recorded request, and one
+    older than REPLAY_WINDOW_SECONDS is refused however good its signature.
+    The comparison takes the same time whatever the two strings share.
+    """
+    if not _TIMESTAMP.fullmatch(timestamp):
+        return False
+    if abs(now - int(timestamp)) > REPLAY_WINDOW_SECONDS:
+        return False
+    base = f"{SIGNATURE_VERSION}:{timestamp}:".encode("ascii") + body
+    expected = f"{SIGNATURE_VERSION}=" + hmac.new(
+        secret.encode("utf-8"), base, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(expected.encode("utf-8"), signature.encode("utf-8"))
+
+
+def event_row(envelope: dict) -> dict | None:
+    """What one Events API envelope becomes in tenant_events, or None when it
+    is not a person in this workspace mentioning the bot.
+
+    The same row the container's own Slack source writes under `waku serve`
+    (spec 023): Slack's event id is the external id, so a resent event is a
+    no-op, and each thread is its own conversation.
+    """
+    event = envelope.get("event")
+    if not isinstance(event, dict):
+        return None
+    event_id, team_id = envelope.get("event_id"), envelope.get("team_id")
+    channel, ts = event.get("channel"), event.get("ts")
+    if event.get("type") != "app_mention" or event.get("bot_id"):
+        return None
+    if not all(isinstance(value, str) and value for value in (event_id, channel, ts)):
+        return None
+    # A shared channel carries people from other workspaces, and `user_team`
+    # names the sender's. A stranger's mention would spend this tenant's
+    # credits, so it is dropped.
+    if event.get("user_team", team_id) != team_id:
+        return None
+    thread = event.get("thread_ts") if isinstance(event.get("thread_ts"), str) else ts
+    return {"source": "slack", "external_id": event_id,
+            "session_id": f"slack:{channel}:{thread}",
+            "payload": {"text": str(event.get("text") or ""),
+                        "sender": {"id": str(event.get("user") or "")},
+                        "reply_to": {"channel": channel, "thread_ts": thread}}}
 
 
 class SlackUnreachable(RuntimeError):
@@ -180,6 +245,9 @@ class SlackRoutes:
         self._wake = wake
         self._box = SecretBox(settings.token_key)
         self._states = OAuthStates(now)
+        # Signed events for a workspace no tenant connected. Slack is answered
+        # 200 for them, so this number is the only trace they leave.
+        self.unknown_teams = 0
 
     @property
     def redirect_uri(self) -> str:
@@ -241,6 +309,64 @@ class SlackRoutes:
     @staticmethod
     def _back(outcome: str) -> web.Response:
         return answers.redirect(f"{SETUP_PATH}?slack={outcome}")
+
+    # --- events ---------------------------------------------------------
+
+    async def events(self, request: web.Request) -> web.Response:
+        """POST /v1/triggers/slack: every workspace's events arrive here.
+
+        The signature is checked first, over the bytes as they arrived, and
+        nothing is read from a body that fails it. A signed event is stored
+        and answered: no container is started and no model is called here
+        (spec 026, decision 1). Slack waits three seconds and then resends,
+        and the event id makes that second delivery a no-op.
+
+        NO ORIGIN CHECK, for /v1/chat's reason: the credential is the
+        signature, which a browser cannot produce, and Slack sends no Origin.
+        """
+        if request.method != "POST":
+            return answers.json_error(405, EVENTS_POST_ONLY)
+        body = await request.read()
+        if not signed_by_slack(
+                self._settings.signing_secret, body=body, now=self._now(),
+                timestamp=request.headers.get(TIMESTAMP_HEADER, ""),
+                signature=request.headers.get(SIGNATURE_HEADER, "")):
+            _LOG.info("Slack event refused: bad signature or timestamp")
+            return answers.json_error(403, BAD_SIGNATURE)
+        try:
+            envelope = json.loads(body)
+        except ValueError:
+            envelope = None
+        if not isinstance(envelope, dict):
+            return answers.json_error(400, NOT_AN_EVENT)
+        if envelope.get("type") == "url_verification":
+            # Slack checks the address once, when it is entered in the app's
+            # settings, and expects its own challenge back.
+            return answers.json_ok({"challenge": str(envelope.get("challenge") or "")})
+        if envelope.get("type") == "event_callback":
+            self._route(envelope)
+        return answers.json_ok({"ok": True})
+
+    def _route(self, envelope: dict) -> None:
+        team_id = envelope.get("team_id")
+        tenant_id = self._store.slack_tenant(team_id) if isinstance(team_id, str) else None
+        if tenant_id is None:
+            self.unknown_teams += 1
+            _LOG.info("Slack event for a team no tenant connected (%s so far)",
+                      self.unknown_teams)
+            return
+        event = envelope.get("event")
+        if isinstance(event, dict) and event.get("type") == "app_uninstalled":
+            self._store.delete_slack_install(team_id)
+            _LOG.info("tenant=%s: Slack team=%s removed the app", tenant_id, team_id)
+            return
+        row = event_row(envelope)
+        tenant = self._store.tenant_by_id(tenant_id)
+        if row is None or tenant is None or tenant.status != "active":
+            return
+        if self._store.add_event(tenant_id, **row):
+            # A tick now, so the mention does not wait for the next one.
+            self._wake()
 
 
 _ERROR_CODE = re.compile(r"[a-z0-9_]{1,64}")

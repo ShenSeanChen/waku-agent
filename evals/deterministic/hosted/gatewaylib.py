@@ -334,6 +334,8 @@ class Harness:
         self.slack_settings: SlackSettings | None = None
         self._fake_slack: FakeSlack | None = None
         self.woken = 0
+        # What a wake also calls, when a test wires a real Scheduler's kick.
+        self.on_wake = lambda: None
         self.config = GatewayConfig(
             apex_host=APEX, bind_host="127.0.0.1", port=0,
             control_db=tmp_path / "control.db",
@@ -369,6 +371,7 @@ class Harness:
 
         def wake() -> None:
             self.woken += 1
+            self.on_wake()
 
         self.slack = SlackRoutes(
             settings=self.slack_settings, apex_host=APEX, store=self.store,
