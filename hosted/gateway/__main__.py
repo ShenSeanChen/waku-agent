@@ -7,12 +7,9 @@ loops: the idle loop (sweep.py) and the scheduler (scheduler.py, spec 026):
                             "listens on 127.0.0.1 only", and that is not a
                             default -- it is the reason the gateway is not on
                             the tenant bridge and a container cannot reach it.
-  run/gateway/gateway.sock  token lookup for the proxy (group B's
-                            serve_token_lookup). NOTHING CONNECTS TO IT UNTIL
-                            GROUP D LANDS, and it is served anyway: F1's
-                            Compose mounts the directory, and a socket that
-                            appears only when its client does is a socket
-                            nobody notices is missing.
+  run/gateway/gateway.sock  what the proxy asks: whose token this is, and
+                            to post a container's Slack message with the
+                            token only this process holds (internal.py).
   run/admin/admin.sock      tenant.sh, upgrade.sh --now and restore.sh.
   run/proxy/proxy.sock      NOT served here -- the gateway is its CLIENT.
                             With group D cut there is nothing on the other
@@ -120,7 +117,11 @@ async def main() -> None:
             _LOG.info("adopted %s running tenant containers", len(adopted))
         except OSError as exc:
             _LOG.warning("the spawner did not answer at startup: %s", exc)
-        token_server = await internal.serve_token_lookup(config.gateway_socket, store)
+        # The proxy asks two things on this socket: whose token this is, and,
+        # for a container's outgoing Slack message, to post it (spec 026 C3).
+        token_server = await internal.serve_token_lookup(
+            config.gateway_socket, store,
+            slack_send=slack.relay.send if slack is not None else None)
         admin_server = await admin.serve_admin(config.admin_socket, gateway)
         runner = build_runner(gateway.build())
         await runner.setup()

@@ -41,9 +41,10 @@ import aiohttp
 from aiohttp import web
 
 from hosted import log
+from hosted.core.tenant import is_tenant_id
 from hosted.gateway import answers, sessions
 from hosted.gateway.config import SlackSettings
-from hosted.gateway.secretbox import SecretBox
+from hosted.gateway.secretbox import SecretBox, Unreadable
 from hosted.ports.control import ControlStore
 
 _LOG = log.get(__name__)
@@ -233,6 +234,76 @@ def _install_from(answer: dict) -> tuple[str, str, str, str] | None:
             str(answer.get("bot_user_id") or "")[:64])
 
 
+# A channel, group or direct-message id, and a message's timestamp, as Slack
+# writes them. The relay posts to nothing else: not a channel name, not a
+# user id, which Slack would open a new direct message for.
+CHANNEL_ID = re.compile(r"[CGD][A-Z0-9]{2,31}")
+THREAD_TS = re.compile(r"[0-9]{1,12}\.[0-9]{1,9}")
+# The errors with which Slack says the token will never work again.
+TOKEN_ENDED = frozenset({"token_revoked", "account_inactive", "invalid_auth"})
+
+
+class SlackRelay:
+    """Post one message for a tenant, with that tenant's workspace token.
+
+    WHICH WORKSPACE IS NOT THE CALLER'S CHOICE. The caller gives a tenant id,
+    which the proxy resolved from the container's own platform token, and the
+    relay uses the one token stored for that tenant. A Slack bot token posts
+    only inside the workspace it was issued for, so a tenant's container can
+    reach the workspace that tenant connected and no other.
+
+    WHAT GOES BACK is `ok`, or `ok: false` with a short error code. Slack's
+    answer is read here and never passed on.
+    """
+
+    def __init__(self, *, store: ControlStore, box: SecretBox, api: SlackApi) -> None:
+        self._store = store
+        self._box = box
+        self._api = api
+
+    async def send(self, tenant_id: str, channel: str, text: str,
+                   thread_ts: str = "") -> dict:
+        if (not is_tenant_id(tenant_id) or not isinstance(channel, str)
+                or not CHANNEL_ID.fullmatch(channel)
+                or not isinstance(text, str) or not text
+                or not isinstance(thread_ts, str)
+                or (thread_ts and not THREAD_TS.fullmatch(thread_ts))):
+            return _refused("bad_request")
+        install = self._store.slack_install(tenant_id)
+        if install is None:
+            return _refused("not_installed")
+        try:
+            token = self._box.open(install.token_sealed,
+                                   bound_to=seal_binding(install.team_id))
+        except Unreadable:
+            _LOG.error("tenant=%s: the stored token for Slack team=%s does not open "
+                       "with WAKU_SLACK_TOKEN_KEY", tenant_id, install.team_id)
+            return _refused("token_unreadable")
+        payload = {"channel": channel, "text": text}
+        if thread_ts:
+            payload["thread_ts"] = thread_ts
+        try:
+            answer = await self._api.post_message(token, payload)
+        except SlackUnreachable as exc:
+            _LOG.warning("tenant=%s: Slack send failed: %s", tenant_id, exc)
+            return _refused("slack_unreachable")
+        if answer.get("ok") is True:
+            return {"ok": True}
+        code = _error_code(answer) or "refused"
+        _LOG.info("tenant=%s: Slack refused a message: %s", tenant_id, code)
+        if code in TOKEN_ENDED:
+            # The workspace removed the app or revoked the token. The row is
+            # deleted, so the setup page stops saying the workspace is
+            # connected and the person can add the app again.
+            self._store.delete_slack_install(install.team_id)
+            _LOG.info("tenant=%s: disconnected Slack team=%s", tenant_id, install.team_id)
+        return _refused(code)
+
+
+def _refused(code: str) -> dict:
+    return {"ok": False, "error": code}
+
+
 class SlackRoutes:
     def __init__(self, *, settings: SlackSettings, apex_host: str, store: ControlStore,
                  api: SlackApi, now: Callable[[], float] = time.time,
@@ -248,6 +319,11 @@ class SlackRoutes:
         # Signed events for a workspace no tenant connected. Slack is answered
         # 200 for them, so this number is the only trace they leave.
         self.unknown_teams = 0
+
+    @property
+    def relay(self) -> SlackRelay:
+        """The relay that posts with the tokens these routes stored."""
+        return SlackRelay(store=self._store, box=self._box, api=self._api)
 
     @property
     def redirect_uri(self) -> str:
