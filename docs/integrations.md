@@ -307,13 +307,38 @@ TypeSafe card on Connections sets both.
 pip install -e '.[mcp]'
 ```
 
-Create `~/.waku/mcp.json` and any Model Context Protocol server's tools appear to
+One command adds any Model Context Protocol server, and its tools appear to
 the agent, namespaced `<server>_<tool>` (and in the dashboard's Tools ▸ MCP tab):
+
+```bash
+waku mcp add linear https://mcp.linear.app/mcp      # a remote server: prints its sign-in link and opens your browser
+waku mcp add github https://api.githubcopilot.com/mcp/ --key-env GITHUB_PERSONAL_ACCESS_TOKEN
+waku mcp add fs -- npx -y @modelcontextprotocol/server-filesystem /tmp    # a server this machine runs
+waku mcp remove linear                               # deletes the entry and its sign-in
+```
+
+There are two more ways to add a remote server, and both take an address
+only, never a command:
+
+- **The dashboard.** Tools ▸ MCP has a "Connectors" card with an address
+  field, the sign-in link while one waits, and a Remove button on each server.
+- **Chat, under `waku serve`.** Write "connect https://mcp.example.com/mcp".
+  The agent asks the owner first (see "Always-on: waku serve" above), and after the yes it
+  answers with the sign-in link. Open that link on the computer Waku runs on:
+  the server sends the browser back to a port on that computer, so the link
+  does not work from a phone. The owner gets one message when the server is
+  connected. In the terminal chat and the dashboard chat the agent cannot ask
+  for a yes, so it points at the command and the card instead.
+
+The command writes `~/.waku/mcp.json`, which you can also edit by hand:
 
 ```json
 {"servers": [{"name": "fs", "command": "npx",
   "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]}]}
 ```
+
+Restart Waku after adding a server from the command line or the card. `waku
+serve` loads a server's tools by itself once it is signed in.
 
 **Node-free demo** — a tiny self-contained Python MCP server ships in the repo:
 
@@ -336,6 +361,7 @@ HTTP+SSE transport is deprecated and is not supported.
               "auth_env": "WAKU_MEMORY_API_KEY"}]}
 ```
 
+`waku mcp add <name> <address> --key-env VAR` writes this entry.
 `auth_env` names an **environment variable**; its value is sent as
 `Authorization: Bearer <value>`. The credential never goes in `mcp.json` —
 that file gets pasted into bug reports, and a bearer token in one is a leaked
@@ -349,8 +375,9 @@ the session gone at the same moment share one new session.
 
 ### Signing in instead of holding a key
 
-A server that speaks MCP's authorization spec needs no key at all. Say so, and
-Waku opens your browser on first use:
+A server that speaks MCP's authorization spec needs no key at all. `waku mcp
+add <name> <address>` writes this entry and signs in at once. Written by hand,
+it opens your browser on first use:
 
 ```json
 {"servers": [{"name": "waku_memory",
@@ -391,7 +418,7 @@ Try it against the demo server, no remote host required:
 
 ```bash
 python evals/fixtures/mcp_demo_server.py --http --port 8931
-# .waku/mcp.json → {"servers": [{"name": "demo", "url": "http://127.0.0.1:8931/mcp"}]}
+waku mcp add demo http://127.0.0.1:8931/mcp --no-auth
 ```
 
 Requires `mcp>=2.1` (`pip install -e '.[mcp]'`). The 1.x SDK spelled this

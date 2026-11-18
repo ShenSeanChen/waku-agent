@@ -27,6 +27,8 @@ targets are aliases for the same things, plus the eval and tracing tools.
 | `waku mcp` | MCP servers, and which account each one knows you as |
 | `waku mcp login <name>` | sign in again — as someone else, or after expiry |
 | `waku mcp logout <name>` | forget a server's token |
+| `waku mcp add <name> <https address>` | connect an MCP server of your own and sign in to it; `--key-env VAR` for a server with a key, `-- <command>` for one this machine runs |
+| `waku mcp remove <name>` | disconnect a server and forget its sign-in |
 | `waku skill install <url>` | install a community skill from a GitHub or Gist link |
 | `waku skill export --to claude,codex` | copy Waku's skills to Claude Code and Codex (`--project` for `./.claude/skills`, `--force` to replace) |
 

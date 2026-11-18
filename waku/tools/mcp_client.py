@@ -177,8 +177,12 @@ def _auth_hint(spec: dict, auth_dir: Path) -> str:
 
 class MCPBridge:
     def __init__(self, config_path: Path, timeout: float = 30.0,
-                 call_timeout: float | None = None, skip=None, extra_servers=()):
+                 call_timeout: float | None = None, skip=None, extra_servers=(),
+                 open_url=None):
         self.config_path = config_path
+        # Spec 025: what receives a sign-in link in place of this machine's
+        # browser. None opens the browser, as `waku mcp login` does.
+        self._open_url = open_url
         # Spec 021: the servers installed plugins bring, in mcp.json's shape.
         # They join mcp.json's own (merge below), and `servers` keeps the
         # merged list, so Waku Memory is found whichever file named it.
@@ -310,7 +314,8 @@ class MCPBridge:
             # An httpx auth flow, not a header: the SDK drives the 401, the
             # discovery and the refresh itself, so this is handed to the
             # client once and never thought about again.
-            auth = build_provider(url, spec["name"], self.config_path.parent)
+            auth = build_provider(url, spec["name"], self.config_path.parent,
+                                  open_url=self._open_url)
 
         # create_mcp_http_client applies the SDK's own timeouts and
         # follow_redirects; a header or an auth flow are the two supported ways

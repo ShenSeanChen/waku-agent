@@ -178,13 +178,18 @@ def _port_is_free(port: int) -> bool:
             return False
 
 
-def build_provider(server_url: str, server_name: str, home: Path) -> OAuthClientProvider:
+def build_provider(server_url: str, server_name: str, home: Path,
+                   open_url=None) -> OAuthClientProvider:
     """The provider the HTTP client authenticates with.
 
     `OAuthClientProvider` is an httpx auth flow, so it attaches to the client
     rather than to a request: the SDK retries the 401 itself, discovers the
     authorization server from the resource metadata, and only then calls the
     two handlers below.
+
+    `open_url`, when given, is handed the sign-in link in place of the
+    browser this machine would open (spec 025): a chat reply or the dashboard
+    shows the link, and the person opens it on the computer Waku runs on.
     """
     redirect_uri = f"http://127.0.0.1:{CALLBACK_PORT}{CALLBACK_PATH}"
 
@@ -197,6 +202,9 @@ def build_provider(server_url: str, server_name: str, home: Path) -> OAuthClient
     )
 
     async def redirect_handler(authorization_url: str) -> None:
+        if open_url is not None:
+            open_url(authorization_url)
+            return
         print("\n  Opening your browser to sign in…")
         print(f"  If it does not open: {authorization_url}\n")
         # `open_new_tab` rather than `open`: a headless or SSH session has no

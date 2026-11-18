@@ -35,6 +35,7 @@ runs the bootstrap and must load last**.
 | `compare.js` | the Model arena (`Arena` tab; internals keep the `compare` name) — race one message through several models at once |
 | `memorychoice.js` | the first-run Waku Memory question on Overview (spec 020): `memoryChoiceCard` and `chooseMemory`, which posts `{memory_mode}` to `/api/settings` once. Its own file because `setup.js` never posts |
 | `waiting.js` | the "Waiting" card on Overview (spec 024): timers that have not fired, calls that wait for a yes, and messages that are queued or could not be sent, from `waiting` in `/api/data`; `cancelWaiting` posts one id to `/api/waiting/cancel` |
+| `connectors.js` | the "Connectors" card on Tools > MCP (spec 025): every MCP server with its account and tool count, the sign-in link while one waits, a field that adds a server by its address (`addConnector` posts to `/api/connectors/add`) and a Remove button (`removeConnector`, `/api/connectors/remove`); from `connectors` in `/api/data` |
 | `dock.js`    | chat sessions/history (`loadThreadInto`), model chip, stats toggle, the embedded chat's "..." menu |
 | `main.js`    | `render`/`refresh` loop, resizers, voice, and the bootstrap (**loads last**) |
 | `embed.js`   | `embed.html`'s bootstrap instead of `main.js`: the header's state from `/api/session?action=state`, the `postMessage` to the page that framed it, and the three messages it accepts back (`new-chat`; `theme`, applied but never stored; `ask`, a prompt id mapped to the frame's own fixed sentence, never free text) (**loads last there**) |

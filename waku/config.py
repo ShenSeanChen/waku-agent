@@ -249,6 +249,10 @@ class Settings:
     # chosen yet, and Waku behaves as it did before the choice existed: it
     # connects Waku Memory only if mcp.json names it. "hook" reads as "agent".
     memory_mode: str = field(default_factory=lambda: _memory_mode(os.getenv("WAKU_MEMORY_MODE", "")))
+    # Whether building the agent may open a browser to sign in to an MCP
+    # server that has no token yet. `waku serve` turns it off (spec 025): the
+    # server is left out until the owner has signed in through the link.
+    mcp_sign_in: bool = True
     retrieval_top_k: int = field(default_factory=lambda: int(os.getenv("WAKU_RETRIEVAL_TOP_K", "4")))
     # 'sqlite' (default, zero setup) or 'supabase' (pgvector upgrade path — see launch-rag).
     semantic_store: str = field(default_factory=lambda: os.getenv("WAKU_SEMANTIC_STORE", "sqlite"))

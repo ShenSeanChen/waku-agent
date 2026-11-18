@@ -76,6 +76,11 @@ REVEAL_BLOCKED = "Opening a file in an editor only works on your own machine."
 # and a tenant can change the provider.
 PLUGIN_REFUSED = ("Plugins are not available on hosted Waku. A hosted container's "
                   "servers and memory are set up when you sign in.")
+# waku-agent spec 025: the same holds for a server a tenant would add from the
+# "Connectors" card. Whether a tenant gets the card is the hosted spec's
+# decision, so the three routes are blocked until it is made.
+CONNECTORS_BLOCKED = ("Connectors are not available on hosted Waku. A hosted "
+                      "container's servers are set up when you sign in.")
 PLUGIN_COMMAND = "/plugin"
 CHAT_ROUTES = ("/api/chat", "/api/chat/stream")
 PLATFORM_FIELDS_REFUSED = ("The hosted free tier's key and endpoint are set by the "
@@ -163,6 +168,10 @@ DECISIONS: dict[str, str] = {
     "/api/judgment-arena/stream": BLOCK,
     "/api/voice": BLOCK,
     "/api/reveal": BLOCK,
+    # spec 025: listing, adding and removing a server of the tenant's own
+    "/api/connectors": BLOCK,
+    "/api/connectors/add": BLOCK,
+    "/api/connectors/remove": BLOCK,
 }
 
 BLOCK_MESSAGES: dict[str, str] = {
@@ -180,6 +189,9 @@ BLOCK_MESSAGES: dict[str, str] = {
     "/api/judgment-arena/stream": ARENA_BLOCKED,
     "/api/voice": VOICE_BLOCKED,
     "/api/reveal": REVEAL_BLOCKED,
+    "/api/connectors": CONNECTORS_BLOCKED,
+    "/api/connectors/add": CONNECTORS_BLOCKED,
+    "/api/connectors/remove": CONNECTORS_BLOCKED,
 }
 
 # Substrings no path may contain. The query is split off first, so a percent
