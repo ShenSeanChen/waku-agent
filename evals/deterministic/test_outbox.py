@@ -589,14 +589,19 @@ def test_silent_or_not_a_slack_reply_goes_to_the_thread_and_github_to_the_issue(
         ("github", {"repo": "acme/app", "number": 12})]
 
 
-def test_silent_failed_run_writes_no_row(conn):
+def test_failed_run_writes_one_plain_sentence_and_no_reason(conn):
+    """A run that raised said nothing until the second live run (2026-11-17)."""
+    from waku.alwayson.worker import FAILED
+
     _event(conn)
 
     def run(session_id, batch):
         raise RuntimeError("model is down")
 
     _worker(conn, run).step()
-    assert _rows(conn) == []
+    (row,) = _rows(conn)
+    assert row["body"] == FAILED and "model is down" not in row["body"]
+    assert row["idempotency_key"].endswith(":failed")
 
 
 def test_replay_of_a_run_after_a_crash_leaves_one_row(tmp_path, monkeypatch):

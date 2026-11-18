@@ -261,6 +261,12 @@ def can_answer(address: Address) -> bool:
     return channel == "telegram" and isinstance(chat_id, int) and chat_id > 0
 
 
+def is_owner_chat(address: Address | None) -> bool:
+    """Whether the one person who reads this place is the owner: an address
+    WAKU_OWNER names, where a yes counts."""
+    return address is not None and address in outbox.owner_addresses() and can_answer(address)
+
+
 def asked_line() -> str:
     """The line a conversation reads when its call waits for an owner who
     answers somewhere else. WAKU_OWNER_NAME is how the owner is called."""
@@ -282,11 +288,19 @@ WAITS = ("This call waits for the owner's approval and has not run. The request 
          "the owner, and it is the only message this needs. Do not make the call again, "
          "and do not describe the request: reply with the single word SILENT. When the "
          "owner answers, this conversation is told what happened.")
+# The same, when the run is in the owner's own chat: the person the model
+# talks to is the one who was asked, and the model must not call them "the
+# owner" as if they were someone else (the live run of 2026-11-17).
+WAITS_YOU = ("This call waits for approval and has not run. The person you are talking to "
+             "has been asked; they answer yes or no in this chat. The request is the only "
+             "message this needs. Do not make the call again, and do not describe the "
+             "request: reply with the single word SILENT. When they answer, this "
+             "conversation is told what happened.")
 # What a conversation other than the owner's chat reads when its run parked.
 # Code writes this line; the model's own reply is not sent.
 ASKED = "I asked {owner} to approve this. I will say here what {owner} decides."
-ALREADY_WAITS = ("Not run: another call in this conversation already waits for the owner's "
-                 "approval [{code}]. One call waits at a time.")
+ALREADY_WAITS = ("Not run: another call in this conversation already waits for approval "
+                 "[{code}]. One call waits at a time.")
 NOBODY = ("Not run: this call needs the owner's approval, and WAKU_OWNER names no chat "
           "where the owner can answer. Set WAKU_OWNER in .env to telegram:<chat id>.")
 
@@ -314,7 +328,8 @@ class Gate:
         known = self._tools.get(tool) if self._tools is not None else None
         if self.mode(tool, args, context.address, known) == ALLOW:
             return None, ""
-        return park(self.conn, int(context.run_id), tool, args, self._now(), self._tz), ""
+        return park(self.conn, int(context.run_id), tool, args, self._now(), self._tz,
+                    address=context.address), ""
 
 
     def mode(self, tool: str, args: dict, address: Address | None, known) -> str:
@@ -344,10 +359,12 @@ def ran_before(conn: sqlite3.Connection, digest: str, now: datetime,
 
 
 def park(conn: sqlite3.Connection, run_id: int, tool: str, args: dict, now: datetime,
-         tz: tzinfo | None = None, reply: bool = False) -> str:
+         tz: tzinfo | None = None, reply: bool = False,
+         address: Address | None = None) -> str:
     """Store the call in its run's row and ask the owner. Returns what the
     model reads in place of the tool's result. `reply` marks the call as the
-    run's own reply, which the worker parks when other people would read it."""
+    run's own reply, which the worker parks when other people would read it.
+    `address` is the conversation the run came from."""
     run = runs.get(conn, run_id)
     digest = call_hash(tool, args)
     # A call that has waited 72 hours no longer counts. The worker marks it
@@ -371,7 +388,7 @@ def park(conn: sqlite3.Connection, run_id: int, tool: str, args: dict, now: date
                   body=REQUEST.format(what=describe(tool, args), code=digest[:8],
                                       before=ran_before(conn, digest, now, tz)),
                   idempotency_key=f"{run.id}:ask", now=now)
-    return WAITS
+    return WAITS_YOU if asked == address else WAITS
 
 
 # ---- the answer ------------------------------------------------------------
@@ -382,7 +399,8 @@ APPROVED = "Approved and done: {what} The tool answered: {output}"
 # A message is the one call whose result a person can be told in two words.
 POSTED = "Approved and posted: {what}"
 NOT_POSTED = "Approved, and not posted: {what} The reason: {output}"
-DECLINED = "Declined and discarded: {what} The owner answered no, so the call did not run."
+# The outcomes name nobody: the run that reads one may be talking to the owner.
+DECLINED = "Declined and discarded: {what} The answer was no, so the call did not run."
 BROKEN = ("Approved, and not run: {what} The stored call no longer matches its hash, so it "
           "was discarded.")
 # What the owner reads 24 hours before a waiting call expires, and when it
@@ -390,8 +408,8 @@ BROKEN = ("Approved, and not run: {what} The stored call no longer matches its h
 REMINDER = ("Still waiting for your answer on: {what}\n\nIt expires in 24 hours. "
             "Approve? Reply yes or no. [{code}]")
 STOPPED = "I stopped waiting for your answer on: {what} Nothing was posted."
-EXPIRED = ("Expired and discarded: {what} The owner did not answer in 72 hours, so the "
-           "call did not run.")
+EXPIRED = ("Expired and discarded: {what} Nobody answered in 72 hours, so the call did "
+           "not run.")
 WHICH = "Several calls wait for your answer. Reply yes or no with the code of one:\n{calls}"
 
 

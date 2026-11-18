@@ -57,6 +57,13 @@ LOOKUP_RULE = ("\nWhen a lookup of the same target (a channel, profile, company 
                "user gave, or ask them for it.")
 
 
+# A harness rule for the same reason. On 2026-11-17 a person read "You can
+# connect these via `connect_tool`" in a Telegram reply.
+PLAIN_RULE = ("\nNever say the name of a tool to the user (send_message, connect_tool and "
+              "the like). Say what you can do in their words: \"I can connect Notion\", "
+              "\"I can remind you at five\".")
+
+
 # Spec 022: a harness rule for the same reason as LOOKUP_RULE. An older SOUL.md
 # tells the model to save everything durable, and on 2026-11-13 the model saved
 # "releases need two reviewers", which the person had only mentioned. That fact
@@ -116,7 +123,7 @@ class Session:
                  (f"Your model: you are running on '{self.settings.model}' via the "
                  f"'{self.settings.provider}' provider, inside Waku, a local-first "
                  f"open-source agent harness (github.com/ShenSeanChen/waku-agent)."),
-                 LOOKUP_RULE, SAVE_RULE]
+                 LOOKUP_RULE, PLAIN_RULE, SAVE_RULE]
         # Spec 009 E: a call the deployment refuses is a wasted step and, on a
         # metered tenant, a wasted turn. Spec 014: with the person's own treg
         # key the relay is not in the path, so treg's tools are all theirs.

@@ -474,7 +474,7 @@ def _requests(chat):
 def test_chat_connect_with_an_address_parks_and_writes_nothing_until_the_yes(chat):
     said, run_id = _ask(chat, "connect_tool", {"name_or_url": EXAMPLE})
 
-    assert "waits for the owner's approval" in said
+    assert "The person you are talking to has been asked" in said
     assert not (chat.home / "mcp.json").exists(), "nothing is written before the yes"
     assert chat.bridges == [], "and no sign-in starts"
     (request,) = _requests(chat)
@@ -558,7 +558,7 @@ def test_chat_disconnect_parks_and_then_removes_the_entry_and_the_token(chat):
     token = _token(chat.home, "linear")
 
     said, run_id = _ask(chat, "disconnect_tool", {"name": "linear"})
-    assert "waits for the owner's approval" in said
+    assert "The person you are talking to has been asked" in said
     assert token.exists() and len(_servers(chat.home)) == 1
     assert "linear" in _requests(chat)[0]
 
@@ -864,7 +864,7 @@ def test_starter_list_cli_add_linear_writes_one_entry_and_prints_a_sign_in_link(
 def test_starter_list_chat_connects_by_name_and_the_request_says_which_server(chat):
     said, run_id = _ask(chat, "connect_tool", {"name_or_url": "Linear"})
 
-    assert "waits for the owner's approval" in said
+    assert "The person you are talking to has been asked" in said
     assert "Connect Linear (https://mcp.linear.app/mcp)" in _requests(chat)[0]
 
     answer = _approve(chat, run_id)

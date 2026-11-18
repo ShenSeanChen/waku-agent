@@ -443,6 +443,11 @@ the result in `~/.waku/mcp-auth/<server>.json`, written `0600` — one file per
 server, so a corrupt one costs a single connection rather than all of them.
 Delete that file to sign out.
 
+When another program holds port 41765 at the first sign-in to a server, Waku
+registers on another free port and keeps that port for that server. A server
+Waku is already registered with keeps its port: when that port is held, the
+sign-in does not start, and Waku says which port to free.
+
 `oauth` and `auth_env` are two answers to one question, so naming both is
 refused rather than resolved by precedence.
 
