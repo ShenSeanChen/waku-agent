@@ -40,6 +40,7 @@ from typing import Any
 
 from waku.alwayson import approvals, events, outbox, runs
 from waku.alwayson.events import Event
+from waku.memory import tool_note
 
 BATCH_WAIT_SECONDS = 3.0
 IDLE_SECONDS = 0.5
@@ -439,6 +440,7 @@ class Worker:
 
     def _queue_reply(self, run_id: int, batch: list[Event], reply: str | None) -> None:
         """The run's reply becomes one outbox row. Its key is `<run id>:0`."""
+        reply = tool_note.strip(reply or "")   # the note of history is not for a person
         if is_silent(reply):
             return
         address = reply_address(batch)

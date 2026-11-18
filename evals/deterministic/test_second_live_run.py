@@ -19,7 +19,7 @@ from datetime import UTC, datetime
 import pytest
 
 from evals.helpers import ScriptedClient, make_waku, response, text_block, tool_block
-from waku.alwayson import events, waiting
+from waku.alwayson import events, outbox, waiting
 from waku.alwayson.worker import AgentRun, Worker
 from waku.db import connect
 
@@ -148,3 +148,55 @@ def test_a_reply_that_writes_the_note_of_a_call_it_never_made_makes_the_call(hom
     assert [row["content"].count("[tools used: ") for row in stored] == [1], (
         "history keeps the note of the one call that was made")
     assert "The owner was asked on telegram:42" not in stored[0]["content"]
+
+
+# ---- 2: no message carries the note --------------------------------------------
+
+NOTE = ("[tools used: list_events({'day': 'today'}) -> A plugin hook stopped this call "
+        "before it ran: This call waits. The owner was asked on telegram:42.]")
+
+
+def test_the_reply_of_a_run_reaches_the_person_without_a_note(home, conn):
+    _message(conn, "What is on today?")
+
+    _worker(conn, lambda session_id, batch: f"Nothing today.\n{NOTE}").step()
+
+    assert _outbox(conn) == [(*OWNER, "Nothing today.", "1:0")]
+
+
+def test_a_reply_that_is_only_a_note_sends_nothing(home, conn):
+    _message(conn, "What is on today?")
+
+    _worker(conn, lambda session_id, batch: NOTE).step()
+
+    assert _outbox(conn) == []
+
+
+def test_no_row_in_the_outbox_holds_a_note_whoever_wrote_it(home, conn):
+    outbox.insert(conn, run_id="chat", channel="telegram", target=OWNER[1],
+                  body=f"Hello.\n{NOTE}", idempotency_key="chat:1", now=TUESDAY)
+    only_a_note = outbox.insert(conn, run_id="chat", channel="telegram", target=OWNER[1],
+                                body=NOTE, idempotency_key="chat:2", now=TUESDAY)
+
+    assert _outbox(conn) == [(*OWNER, "Hello.", "chat:1")]
+    assert only_a_note is None
+
+
+def test_a_turn_hands_back_its_reply_without_a_note_the_model_wrote(home):
+    """The note names the call the turn made, so the model is not asked again.
+    The reply loses the note, and history keeps the one Waku writes."""
+    client = ScriptedClient([
+        response([text_block(GATE)]),
+        response([tool_block("list_events", {"day": "today"})], stop_reason="tool_use"),
+        response([text_block("Nothing today.\n[tools used: list_events({'day': 'today'}) "
+                             "-> A plugin hook stopped this call before it ran: no.]")])])
+    waku = make_waku(home, client=client, episodic_store="sqlite")
+    try:
+        result = waku.respond("What is on today?")
+        record = waku.session.history[-1]["content"]
+    finally:
+        waku.close()
+        waku.conn.close()
+
+    assert result.reply == "Nothing today."
+    assert record.count("[tools used: ") == 1 and "plugin hook" not in record

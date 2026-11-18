@@ -111,9 +111,17 @@ def _message(row: sqlite3.Row) -> Message:
 def insert(conn: sqlite3.Connection, *, run_id: str, channel: str, target: dict, body: str,
            idempotency_key: str, now: datetime | None = None) -> int | None:
     """Write one pending row that is due at once. Returns its id, or None when
-    a row with this idempotency_key exists already, sent or not."""
+    a row with this idempotency_key exists already, sent or not, and when the
+    body is empty."""
     if channel not in CHANNELS:
         raise ValueError(f"'{channel}' is not an outbox channel: {', '.join(CHANNELS)}")
+    # No message a person reads carries the "[tools used: ...]" note of
+    # history, whoever wrote it. A body that is only a note is not a message.
+    from waku.memory import tool_note
+
+    body = tool_note.strip(body)
+    if not body:
+        return None
     cursor = conn.execute(
         "INSERT OR IGNORE INTO outbox (run_id, channel, target, body, idempotency_key, "
         "next_attempt_at) VALUES (?, ?, ?, ?, ?, ?)",
