@@ -710,6 +710,36 @@ def connect(home: Path, target: str, sign_in: Callable | None = None,
     return f"{lead} {link_words(name, flow)}"
 
 
+def status(home: Path) -> str:
+    """Every server in mcp.json and whether it can be used now, read from
+    this machine's files at the moment of the call. On 2026-11-18 the owner
+    asked "are we connected?" and the model answered from the conversation."""
+    from waku.tools.mcp_oauth import sign_in_minutes
+
+    try:
+        servers = [s for s in _read(home)["servers"] if isinstance(s, dict) and s.get("name")]
+    except Refused as refused:
+        return f"The connector list could not be read: {refused}"
+    if not servers:
+        return "No connector is added yet. A starter name connects one: " + ", ".join(starter())
+    waiting = sign_in_waiting(home)
+    lines = []
+    for spec in servers:
+        name = str(spec["name"])
+        listed = starter_for(spec)
+        title = listed["title"] if listed else name
+        if not needs_sign_in(home, spec):
+            lines.append(f"{title} ({name}): connected.")
+        elif waiting is not None and waiting.name == name and waiting.link:
+            lines.append(f"{title} ({name}): not connected. A sign-in link is waiting to be "
+                         f"opened on the computer Waku runs on. A link works for "
+                         f"{sign_in_minutes()} minutes.")
+        else:
+            lines.append(f"{title} ({name}): not connected. It is added and nobody has "
+                         "signed in. Connecting it again makes a new sign-in link.")
+    return "\n".join(lines)
+
+
 def _approved(home: Path) -> bool:
     """Whether the call in flight is one the owner said yes to. Only the
     worker runs such a call (alwayson/worker.py, `execute`)."""
@@ -754,7 +784,22 @@ def make_tools(home: Path, sign_in: Callable = start_sign_in) -> list[Tool]:
             return f"Not disconnected: {refused}"
         return f"Disconnected '{name}' and forgot its sign-in."
 
+    def connector_status() -> str:
+        return status(home)
+
     return [
+        Tool(
+            name="connector_status",
+            description=(
+                "Whether each connected service (Notion, Linear, any MCP server) can be "
+                "used right now, read from this machine at the moment of the call. Use "
+                "it whenever the user asks if a service is connected, signed in or "
+                "working. Never answer that from the conversation, and never connect "
+                "again just to find out. It changes nothing and needs no approval."
+            ),
+            input_schema={"type": "object", "properties": {}},
+            fn=connector_status,
+        ),
         Tool(
             name="connect_tool",
             description=(

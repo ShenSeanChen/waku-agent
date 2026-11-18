@@ -36,6 +36,12 @@ def record(inbox: Inbox, update) -> bool:
 # poller keeps asking, so this one receives again once the other one stops.
 BLOCKED = ("another program is reading this bot (waku dashboard, waku telegram or a "
            "second waku serve). Stop it and this one takes over.")
+# Telegram refuses the poller again within about 30 seconds for as long as the
+# other program reads. This long without a refusal means the other program
+# stopped and this one reads the bot. On 2026-11-18 the line still said
+# `blocked` hours after the other program had gone, because only a message
+# cleared it.
+QUIET_SECONDS = 90.0
 
 
 def new_state() -> dict:
@@ -62,7 +68,15 @@ class Handle:
 
     def blocked(self) -> str:
         """The reason this source receives nothing, or "" while it listens."""
-        return BLOCKED if self.state["conflict"] else ""
+        import time
+
+        if not self.state["conflict"]:
+            return ""
+        refused_at = self.state.get("conflict_at")
+        if refused_at is not None and time.monotonic() - refused_at >= QUIET_SECONDS:
+            self.state["conflict"] = False   # the other program stopped
+            return ""
+        return BLOCKED
 
     def stop(self) -> None:
         gateway.stop_polling(self.loop, self.app, self.thread)

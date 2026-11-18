@@ -891,7 +891,7 @@ def test_unknown_tool_parks_under_the_gate_and_a_read_only_one_runs(home, conn):
     assert "The person you are talking to has been asked" in deny
     assert runs.get(conn, run.id).pending_call["tool"] == "notion_create_page"
     ((_, _, body, _),) = _outbox(conn)
-    assert 'Run notion_create_page with {"title": "Roadmap"}' in body
+    assert "Run notion_create_page with:\n• title: Roadmap" in body
 
 
 def test_unknown_tool_the_owner_named_in_allow_runs(home, monkeypatch):
