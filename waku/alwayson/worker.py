@@ -30,6 +30,7 @@ The worker never sends. The dispatcher sends what the outbox holds.
 
 from __future__ import annotations
 
+import dataclasses
 import os
 import re
 import sqlite3
@@ -218,8 +219,19 @@ def without_chat_ids(reply: str, address: tuple[str, dict] | None) -> str:
     return reply
 
 
+# What a run reads after the owner's bare yes or no when no call waits. On
+# 2026-11-17 the owner sent "Approve" with nothing waiting, and the model
+# invented a request it said was on Telegram.
+NOTHING_WAITS = ("[Nothing is waiting for approval: no call waits for a yes or a no. If "
+                 "this message answers a question you asked, take it as that answer. If "
+                 "it is meant to approve or decline a call, say plainly that nothing is "
+                 "waiting for approval.]")
+
+
 def _text(event: Event) -> str:
     text = event.payload.get("text", "")
+    if event.payload.get("nothing_waits"):
+        return f"{text}\n\n{NOTHING_WAITS}"
     if event.source == approvals.SOURCE:
         return APPROVAL_PROMPT.format(outcome=text)
     if event.payload.get("unprompted"):
@@ -406,10 +418,15 @@ class Worker:
             answer = (None if event.source in INTERNAL
                       else approvals.read_answer(event.payload.get("text", "")))
             waiting = approvals.waiting_for(self.conn, event, self._now()) if answer else []
+            nothing_waits = bool(answer) and not waiting and to_owner([event])
             if answer and answer[1]:
                 waiting = [run for run in waiting if run.pending_hash.startswith(answer[1])]
             if not waiting or (answer[0] and self._execute is None):
-                ordinary.append(event)
+                # The run reads that the owner's yes or no has nothing to
+                # answer, so the model does not make up a call that it met.
+                ordinary.append(dataclasses.replace(
+                    event, payload={**event.payload, "nothing_waits": True})
+                    if nothing_waits else event)
                 continue
             if len(waiting) > 1:
                 channel, target = event.source, event.payload["reply_to"]

@@ -292,3 +292,54 @@ def test_a_reply_never_shows_the_owners_chat_id(tmp_path, monkeypatch, wrote):
         conn.close()
 
     assert "7300000042" not in body and "this chat" in body
+
+
+# ---- 4: a yes with nothing waiting -----------------------------------------------
+
+@pytest.mark.parametrize("answer", ["Approve", "yes", "No.", "approved"])
+def test_a_bare_answer_with_nothing_waiting_tells_the_model_so(home, conn, answer):
+    _message(conn, answer)
+    run = Recorder()
+
+    _worker(conn, run).step()
+
+    (read,) = run.read
+    assert read.startswith(f"{answer}\n\n")
+    assert "Nothing is waiting for approval" in read
+
+
+def test_a_sentence_with_a_yes_in_it_is_not_called_an_answer(home, conn):
+    _message(conn, "yes but change the wording first")
+    run = Recorder()
+
+    _worker(conn, run).step()
+
+    assert "Nothing is waiting" not in run.read[0]
+
+
+def test_a_yes_from_someone_else_is_an_ordinary_message(home, conn):
+    _message(conn, "yes", sender="77", chat_id=77)
+    run = Recorder()
+
+    _worker(conn, run).step()
+
+    assert run.read == ["yes"]
+
+
+def test_a_yes_to_a_call_that_waits_is_still_the_answer(home, conn):
+    event_id = _message(conn, "Comment whatsssupp in our GitHub issue")
+    parked = runs.start(conn, SESSION, [event_id], now=TUESDAY)
+    with outbox.running(home, str(parked.id), OWNER):
+        approvals.Gate(home, conn, now=lambda: TUESDAY)("send_message", COMMENT)
+    events.mark(conn, [event_id], "done")
+    runs.finish(conn, parked.id, "parked", now=TUESDAY)
+    _message(conn, "Approve", external_id="901")
+    run, executed = Recorder(), []
+    worker = Worker(conn, run, execute=lambda r, a: executed.append(r.id) or "on its way",
+                    wait=lambda seconds: None, now=lambda: TUESDAY, log=lambda line: None)
+
+    while worker.step():
+        pass
+
+    assert executed == [parked.id]
+    assert all("Nothing is waiting" not in read for read in run.read)
