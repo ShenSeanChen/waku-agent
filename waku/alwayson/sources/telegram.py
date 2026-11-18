@@ -31,13 +31,38 @@ def record(inbox: Inbox, update) -> bool:
     )
 
 
-def build_app(token: str, inbox: Inbox):
-    return gateway._build_app(token, on_message=lambda update: record(inbox, update))
+# Why Telegram is blocked, as the line that lists the sources says it (spec
+# 024, decision 11). Telegram gives one bot's messages to one reader. The
+# poller keeps asking, so this one receives again once the other one stops.
+BLOCKED = ("another program is reading this bot (waku dashboard, waku telegram or a "
+           "second waku serve). Stop it and this one takes over.")
+
+
+def new_state() -> dict:
+    """What the poller knows: whether Telegram refused it because another
+    program reads the same bot."""
+    return {"conflict": False}
+
+
+def received(inbox: Inbox, state: dict, update) -> bool:
+    """One allowed message arrived, so this program is the bot's reader."""
+    state["conflict"] = False
+    return record(inbox, update)
+
+
+def build_app(token: str, inbox: Inbox, state: dict | None = None):
+    state = state if state is not None else new_state()
+    return gateway._build_app(token, on_message=lambda update: received(inbox, state, update))
 
 
 class Handle:
-    def __init__(self, loop, app, thread) -> None:
+    def __init__(self, loop, app, thread, state: dict | None = None) -> None:
         self.loop, self.app, self.thread = loop, app, thread
+        self.state = state if state is not None else new_state()
+
+    def blocked(self) -> str:
+        """The reason this source receives nothing, or "" while it listens."""
+        return BLOCKED if self.state["conflict"] else ""
 
     def stop(self) -> None:
         gateway.stop_polling(self.loop, self.app, self.thread)
@@ -57,9 +82,7 @@ def start(inbox: Inbox) -> Handle | None:
         raise MissingExtra("TELEGRAM_BOT_TOKEN", "telegram") from None
     print("(telegram) starting:")
     print(gateway.posture())
-    app = build_app(token, inbox)
-    loop, thread = gateway.poll_in_thread(
-        app, {"conflict": False},
-        "waku serve receives no Telegram messages. Stop the other `waku telegram` or "
-        "`waku dashboard` and restart.")
-    return Handle(loop, app, thread)
+    state = new_state()
+    app = build_app(token, inbox, state)
+    loop, thread = gateway.poll_in_thread(app, state, BLOCKED)
+    return Handle(loop, app, thread, state)

@@ -334,3 +334,151 @@ def test_sigterm_stops_the_process_cleanly(tmp_path):
     lock = ServeLock(home)
     lock.acquire()   # the process let go of it
     lock.release()
+
+
+# ---- spec 024, decision 11: the sources line tells the truth ----------------
+
+WHY_BLOCKED = ("another program is reading this bot (waku dashboard, waku telegram or a "
+               "second waku serve). Stop it and this one takes over.")
+BLOCKED_LINE = "  sources: github; telegram is blocked: " + WHY_BLOCKED
+
+
+class _Conflict(Exception):
+    """Stands in for telegram.error.Conflict."""
+
+
+def _telegram_and_github(tmp_path, monkeypatch, owner="telegram:42,slack:D9", **kwargs):
+    """A service with a GitHub source and the real Telegram handle, whose
+    poller is not started. Returns (service, the poller's state)."""
+    from types import SimpleNamespace
+
+    from waku.alwayson.sources import telegram as source
+
+    monkeypatch.setenv("WAKU_OWNER", owner)
+    monkeypatch.setitem(sys.modules, "telegram", SimpleNamespace())
+    monkeypatch.setitem(sys.modules, "telegram.error", SimpleNamespace(Conflict=_Conflict))
+
+    class Quiet:
+        def stop(self):
+            pass
+
+    class Handle(source.Handle):
+        def stop(self):   # no poller runs in this test
+            pass
+
+    state = source.new_state()
+    service = _service(tmp_path, sources={
+        "github": lambda inbox: Quiet(),
+        "telegram": lambda inbox: Handle(None, None, None, state)}, **kwargs)
+    return service, state
+
+
+def _conflict(state):
+    from waku.alwayson.sources import telegram as source
+    from waku.gateway import telegram as gateway
+
+    gateway.note_poll_error(_Conflict("terminated by other getUpdates request"), state,
+                            source.BLOCKED)
+
+
+def _owner_rows(tmp_path):
+    conn = connect(tmp_path)
+    try:
+        return [(r["channel"], json.loads(r["target"]), r["body"])
+                for r in conn.execute("SELECT * FROM outbox ORDER BY id")]
+    finally:
+        conn.close()
+
+
+def test_blocked_telegram_is_on_the_sources_line(tmp_path, monkeypatch, capsys):
+    """Spec 024, acceptance 11. Two programs polled one bot, the message went
+    to the other one, and the line still said `sources: telegram`."""
+    service, state = _telegram_and_github(tmp_path, monkeypatch)
+    service.start()
+    try:
+        assert serve.sources_line(service) == "  sources: github, telegram"
+        assert service.watch() is None, "nothing changed, so nothing is printed again"
+
+        _conflict(state)
+
+        assert serve.sources_line(service) == BLOCKED_LINE
+        assert service.watch() == BLOCKED_LINE, "the line is printed again when it changes"
+        assert service.watch() is None
+        assert service.states() == {
+            "github": ("listening", ""), "telegram": ("blocked", WHY_BLOCKED)}
+    finally:
+        service.stop()
+    assert "another program is reading this bot" in capsys.readouterr().out
+
+
+def test_blocked_is_said_once_to_the_owner_on_another_channel(tmp_path, monkeypatch):
+    service, state = _telegram_and_github(tmp_path, monkeypatch,
+                                          senders={"slack": lambda message: None})
+    service.start()
+    try:
+        _conflict(state)
+        _conflict(state)
+        service.watch()
+        service.watch()
+        rows = _owner_rows(tmp_path)
+    finally:
+        service.stop()
+
+    assert rows == [("slack", {"channel": "D9"}, "Telegram is blocked: " + WHY_BLOCKED)]
+
+
+def test_blocked_is_not_said_on_the_channel_that_is_blocked(tmp_path, monkeypatch):
+    service, state = _telegram_and_github(tmp_path, monkeypatch, owner="telegram:42",
+                                          senders={"telegram": lambda message: None})
+    service.start()
+    try:
+        _conflict(state)
+        assert service.watch() == BLOCKED_LINE
+        assert _owner_rows(tmp_path) == []
+    finally:
+        service.stop()
+
+
+def test_blocked_ends_when_a_message_arrives(tmp_path, monkeypatch):
+    """The other program stopped and this one took over."""
+    from types import SimpleNamespace
+
+    from waku.alwayson.sources import telegram as source
+
+    service, state = _telegram_and_github(tmp_path, monkeypatch)
+    service.start()
+    try:
+        _conflict(state)
+        service.watch()
+        source.received(service.inbox, state, SimpleNamespace(
+            update_id=900, effective_chat=SimpleNamespace(id=42),
+            effective_user=SimpleNamespace(id=42, full_name="Sean"),
+            message=SimpleNamespace(text="hello")))
+
+        assert service.watch() == "  sources: github, telegram"
+        assert service.states()["telegram"] == ("listening", "")
+    finally:
+        service.stop()
+
+
+def test_blocked_a_source_that_is_not_configured_reports_that(tmp_path):
+    service = _service(tmp_path, sources={"slack": lambda inbox: None})
+    service.start()
+    try:
+        assert service.states() == {"slack": ("not configured", "")}
+    finally:
+        service.stop()
+
+
+def test_blocked_another_polling_error_does_not_block(tmp_path, monkeypatch):
+    service, state = _telegram_and_github(tmp_path, monkeypatch)
+    from waku.alwayson.sources import telegram as source
+    from waku.gateway import telegram as gateway
+
+    service.start()
+    try:
+        gateway.note_poll_error(OSError("network down"), state, source.BLOCKED)
+        assert service.watch() is None
+        assert serve.sources_line(service) == "  sources: github, telegram"
+    finally:
+        service.stop()
