@@ -1,14 +1,17 @@
 """Slack as an event source (spec 023): an @mention becomes one row in `events`.
 
 Setup:
-  1. Create a Slack app with Socket Mode on, the `app_mentions:read` and
-     `chat:write` scopes (to hear a mention and to reply) and the
+  1. Create a Slack app from the manifest beside this file,
+     slack-app-manifest.yaml (spec 025): Socket Mode on, the `app_mentions:read`
+     and `chat:write` scopes (to hear a mention and to reply) and the
      `app_mention` event. Socket Mode means this machine calls Slack, so a
      laptop needs no public address.
   2. pip install 'waku-agent[slack]'
   3. In .env: SLACK_APP_TOKEN (starts xapp-), SLACK_BOT_TOKEN (starts xoxb-)
      and SLACK_ALLOWED_CHANNELS, a comma-separated list of channel ids.
   4. waku serve
+
+`waku connections` checks the two tokens and names a scope that is missing.
 
 Who is heard: an `app_mention`, written by a person, in the workspace the bot
 token belongs to, in a channel on the allowlist. Everything else is dropped.
@@ -24,9 +27,20 @@ library's classes and against fake envelopes, never against a live workspace.
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 from waku.alwayson.events import Inbox
 from waku.alwayson.sources import MissingExtra
+
+# The app manifest a person creates their Slack app from. It ships in the
+# package, so an install from PyPI has it too.
+MANIFEST = Path(__file__).with_name("slack-app-manifest.yaml")
+# What the bot token must be allowed to do, and the one event the app is
+# sent. The manifest grants exactly these, and `waku connections` checks them.
+BOT_SCOPES = ("app_mentions:read", "chat:write")
+BOT_EVENT = "app_mention"
+# What the app-level token (xapp-) needs to open a Socket Mode connection.
+APP_SCOPE = "connections:write"
 
 
 def allowed_channels() -> set[str]:
@@ -39,7 +53,7 @@ def record(inbox: Inbox, envelope: dict, *, team_id: str, channels: set[str]) ->
     event = envelope.get("event") or {}
     event_id = envelope.get("event_id") or ""
     channel, ts = event.get("channel") or "", event.get("ts") or ""
-    if event.get("type") != "app_mention" or not event_id or not ts:
+    if event.get("type") != BOT_EVENT or not event_id or not ts:
         return False
     if event.get("bot_id"):
         return False

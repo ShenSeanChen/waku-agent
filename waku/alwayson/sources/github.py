@@ -74,9 +74,13 @@ def _label_event(repo: str, number: int, title: str, body: str, opener: str,
                  sender: str, url: str) -> dict:
     text = (f'GitHub issue {repo}#{number} "{title}" has the label {LABEL}. '
             f"{opener} opened it.\n\n{(body or '')[:_MAX_BODY_CHARS]}").strip()
+    # No person asked the agent for anything here. The worker reads this key:
+    # the run may stay silent, and the owner gets one line that starts with
+    # these words (spec 024, decision 5).
     return {"session_id": f"github:{repo}#{number}",
             "payload": {"text": text, "sender": {"login": sender},
-                        "reply_to": {"repo": repo, "number": number}, "url": url}}
+                        "reply_to": {"repo": repo, "number": number}, "url": url,
+                        "unprompted": f"New issue {repo}#{number}: '{title}'"}}
 
 
 def _mention_event(repo: str, number: int, title: str, body: str, author: str, url: str) -> dict:

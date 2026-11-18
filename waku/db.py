@@ -103,7 +103,7 @@ CREATE TABLE IF NOT EXISTS outbox (
     target TEXT NOT NULL,          -- JSON: a chat id, a channel and thread, or an issue
     body TEXT NOT NULL,
     idempotency_key TEXT NOT NULL UNIQUE,
-    status TEXT NOT NULL DEFAULT 'pending',  -- pending | sent | dead
+    status TEXT NOT NULL DEFAULT 'pending',  -- pending | sent | dead | cancelled
     attempts INTEGER NOT NULL DEFAULT 0,     -- failed deliveries so far
     next_attempt_at TEXT NOT NULL,           -- UTC, ISO 8601
     last_error TEXT NOT NULL DEFAULT ''
@@ -121,7 +121,7 @@ CREATE TABLE IF NOT EXISTS timers (
     note TEXT NOT NULL,            -- what the agent told itself to do then
     reply_to TEXT NOT NULL DEFAULT '',       -- JSON: channel and target, or ''
     idempotency_key TEXT NOT NULL UNIQUE,
-    status TEXT NOT NULL DEFAULT 'pending'   -- pending | fired
+    status TEXT NOT NULL DEFAULT 'pending'   -- pending | fired | cancelled
 );
 CREATE INDEX IF NOT EXISTS timers_due ON timers(status, due_at);
 
@@ -133,13 +133,22 @@ CREATE TABLE IF NOT EXISTS runs (
     session_id TEXT NOT NULL,      -- the conversation the run answered
     started_at TEXT NOT NULL,      -- UTC, ISO 8601
     ended_at TEXT NOT NULL DEFAULT '',       -- '' while the run is in flight
-    status TEXT NOT NULL DEFAULT 'running',  -- running | done | failed | parked | expired
+    status TEXT NOT NULL DEFAULT 'running',  -- running | done | failed | parked | expired | cancelled
     event_ids TEXT NOT NULL,       -- JSON list: the events the run read
     pending_call TEXT NOT NULL DEFAULT '',   -- JSON: the tool call that waits, or ''
     pending_hash TEXT NOT NULL DEFAULT '',   -- SHA-256 of the tool name and arguments
     turn_id TEXT NOT NULL DEFAULT ''         -- spec 011: joins the receipt and the trace
 );
 CREATE INDEX IF NOT EXISTS runs_session ON runs(session_id, status);
+
+-- Approval rules the owner stored (spec 025). One row lets every tool of one
+-- connector run without a question: `linear_*` for the server named linear.
+-- waku/alwayson/approvals.py reads it after WAKU_APPROVE_ASK and _ALLOW.
+CREATE TABLE IF NOT EXISTS approvals (
+    pattern TEXT PRIMARY KEY,      -- `<server>_*`
+    mode TEXT NOT NULL,            -- 'allow'
+    created_at TEXT NOT NULL       -- UTC, ISO 8601
+);
 """
 
 

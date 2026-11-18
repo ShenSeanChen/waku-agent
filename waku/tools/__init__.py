@@ -8,7 +8,16 @@ import sqlite3
 from collections.abc import Callable
 
 from waku.config import Settings
-from waku.tools import calendar, memory_admin, messages, notes, schedule, search
+from waku.tools import (
+    calendar,
+    connectors,
+    memory_admin,
+    messages,
+    notes,
+    schedule,
+    search,
+    waiting,
+)
 from waku.tools.registry import ToolRegistry
 
 
@@ -35,6 +44,14 @@ def build_registry(conn: sqlite3.Connection, settings: Settings, memory=None,
     # A follow-up the agent sets for itself (spec 023): a row in `timers`
     # that `waku serve` turns into an event when its time comes.
     registry.register(schedule.make_tool(settings.home, session_id=session_id))
+    # What waits, and cancelling one of them (spec 024): "what reminders do I
+    # have?" and "cancel the Thursday one" work from chat.
+    for tool in waiting.make_tools(settings.home, session_id=session_id):
+        registry.register(tool)
+    # Connecting a server of the person's own from chat (spec 025). Both
+    # take the owner's yes first, whatever the environment allows.
+    for tool in connectors.make_tools(settings.home):
+        registry.register(tool)
     # Web search — pairs with create_event for the multi-tool loop demo
     # ("find the World Cup games left and add them to my calendar").
     registry.register(search.make_tool())
@@ -87,7 +104,19 @@ def build_registry(conn: sqlite3.Connection, settings: Settings, memory=None,
 
             # Spec 020: "Keep local only" leaves Waku Memory unconnected even
             # when mcp.json or a plugin names it, and touches no other server.
-            skip = is_waku_memory if getattr(settings, "memory_mode", "") == "off" else None
+            memory_off = getattr(settings, "memory_mode", "") == "off"
+            # Spec 025: the always-on agent runs where nobody may be looking,
+            # so a server that still needs its sign-in is left out there and
+            # no browser opens. The owner signs in through the link.
+            wait_for_sign_in = getattr(settings, "mcp_sign_in", True)
+
+            def left_out(spec: dict) -> bool:
+                return ((memory_off and is_waku_memory(spec))
+                        or (not wait_for_sign_in
+                            and connectors.needs_sign_in(settings.home, spec)))
+
+            # None when neither rule applies: every server is connected.
+            skip = left_out if memory_off or not wait_for_sign_in else None
             bridge = MCPBridge(mcp_config, skip=skip, extra_servers=plugin_servers)
             for t in bridge.start():
                 registry.register(t)

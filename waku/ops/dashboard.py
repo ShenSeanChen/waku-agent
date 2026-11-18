@@ -550,6 +550,10 @@ def collect() -> dict:
         "key_locations": model_key_locations(),
         # The first-run Waku Memory question (spec 020): {pending, what}.
         "memory_choice": memory_choice_card(settings),
+        # What waits (spec 024): timers, calls that wait for a yes, messages.
+        "waiting": waiting_data(),
+        # The servers a person connected themselves, and adding one (spec 025).
+        "connectors": connectors_data(),
         "connections": [asdict(view) for view in list_connections()],
         # MCP servers that sign in on their own page rather than through an
         # .env field (spec 007 E). Files only: no browser, no network.
@@ -559,6 +563,135 @@ def collect() -> dict:
         "waku_memory": waku_memory_info(settings),
         "usage": usage_summary(home),
     }
+
+
+def waiting_data() -> dict:
+    """The "Waiting" card (spec 024): the timers that have not fired, the
+    calls that wait for a yes, and the messages that are queued or dead. The
+    same three lists `waku waiting` prints."""
+    from dataclasses import asdict as as_dict
+
+    from waku.alwayson import waiting
+
+    settings = load_settings()
+    settings.ensure_home()
+    conn = connect(settings.home)
+    try:
+        found = waiting.listing(conn)
+    finally:
+        conn.close()
+    return {name: [as_dict(item) for item in getattr(found, name)]
+            for name in ("timers", "calls", "messages")}
+
+
+def connectors_data() -> dict:
+    """The "Connectors" card (spec 025): every MCP server Waku would connect,
+    with its account and its tool count, and the sign-in link while one
+    waits. Reads files and this process's own state; opens nothing."""
+    from waku.tools import connectors
+
+    settings = load_settings()
+    home = settings.home
+    live = browser_agent.current()
+    tools = list(live.tools._tools.values()) if live is not None else []
+    rows = []
+    allowed = connectors.writes_allowed(home)
+    for spec in mcp_servers(home):
+        row = _mcp_row(home, spec, live, tools)
+        # A plugin's server goes when the plugin goes (`waku plugin`).
+        row["removable"] = not row["plugin"]
+        # The switch of spec 025, decision 4. Waku Memory has none: its
+        # tools always run.
+        kind = getattr(connectors.connector_of(home, row["name"]), "kind", connectors.OWN)
+        row["writes"] = ("allow" if kind == connectors.MEMORY or row["name"] in allowed
+                         else "ask")
+        row["switch"] = kind != connectors.MEMORY
+        # How many of its tools ask first, once an agent has listed them.
+        own = [t for t in tools if (getattr(t, "mcp", None) or ("",))[0] == row["name"]]
+        row["asks"] = connectors.asking(home, row["name"], own) if own else None
+        rows.append(row)
+    waiting = connectors.sign_in_waiting(home)
+    added = {str(spec.get("url", "")).rstrip("/") for spec in mcp_servers(home)}
+    return {
+        # The starter list as buttons; one that is connected is marked.
+        "starter": [{"name": entry["name"], "title": entry["title"], "docs": entry["docs"],
+                     "added": entry["url"].rstrip("/") in added}
+                    for entry in connectors.starter().values()],
+        # A hosted container's servers are set when the person signs in, and
+        # the hosted gateway blocks the three routes (hosted/core/policy.py).
+        "available": settings.provider != "waku-platform",
+        "servers": rows,
+        "sign_in": ({"name": waiting.name, "link": waiting.link}
+                    if waiting is not None and waiting.link else None),
+    }
+
+
+def connectors_add(payload: dict) -> dict:
+    """Add the server a starter button names or the card's field holds, and
+    start its sign-in. The card takes a starter name or an address only: a web page that makes Waku run a
+    program is the attack spec 025 names, so a command is added from the
+    command line."""
+    from waku.tools import connectors
+
+    if len(payload) != 1 or set(payload) - {"url", "name"}:
+        return {"error": "The card takes a starter name or the address of a server."}
+    home = load_settings().ensure_home()
+    try:
+        if "name" in payload and str(payload["name"]).lower() not in connectors.starter():
+            raise connectors.Refused(f"'{payload['name']}' is not on the starter list.")
+        _, url, _ = connectors.resolve(str(payload.get("url") or payload.get("name") or ""))
+        message = connectors.connect(home, url)
+        spec = connectors.find(home, url) or {}
+    except connectors.Refused as refused:
+        return {"error": str(refused)}
+    waiting = connectors.sign_in_waiting(home)
+    return {"ok": True, "name": str(spec.get("name", "")), "message": message,
+            "link": waiting.link if waiting is not None else None}
+
+
+def connectors_approve(payload: dict) -> dict:
+    """The card's switch: let one connector write without asking, or make
+    its writes ask again."""
+    from waku.tools import connectors
+
+    name, allow = str(payload.get("name") or ""), payload.get("allow")
+    if not isinstance(allow, bool):
+        return {"error": "`allow` is true or false."}
+    try:
+        connectors.set_writes(load_settings().ensure_home(), name, allow)
+    except connectors.Refused as refused:
+        return {"error": str(refused)}
+    return {"ok": True, "name": name, "writes": "allow" if allow else "ask"}
+
+
+def connectors_remove(payload: dict) -> dict:
+    """Remove one server of the card by its name, and its sign-in."""
+    from waku.tools import connectors
+
+    name = str(payload.get("name") or "")
+    try:
+        connectors.remove(load_settings().home, name)
+    except connectors.Refused as refused:
+        return {"error": str(refused)}
+    return {"ok": True, "removed": name}
+
+
+def waiting_cancel(payload: dict) -> dict:
+    """Cancel one row of the "Waiting" card by its id (t3, r7 or m12)."""
+    from dataclasses import asdict as as_dict
+
+    from waku.alwayson import waiting
+
+    settings = load_settings()
+    settings.ensure_home()
+    conn = connect(settings.home)
+    try:
+        item = waiting.cancel(conn, str(payload.get("id") or ""))
+    except waiting.NotWaiting as exc:
+        return {"error": str(exc)}
+    finally:
+        conn.close()
+    return {"ok": True, "cancelled": as_dict(item)}
 
 
 def observability_data(window: str = "7d") -> dict:
@@ -1291,6 +1424,12 @@ class Handler(BaseHTTPRequestHandler):
             window = parse_qs(urlparse(self.path).query).get("window", ["7d"])[0]
             self._send(json.dumps(observability_data(window), default=str).encode(),
                        "application/json")
+        elif self.path == "/api/waiting":
+            # Spec 024: what waits in this home, the lists `waku waiting` prints.
+            self._send(json.dumps(waiting_data()).encode(), "application/json")
+        elif self.path == "/api/connectors":
+            # Spec 025: the "Connectors" card's servers and waiting sign-in.
+            self._send(json.dumps(connectors_data()).encode(), "application/json")
         elif self.path == "/api/judgment-arena":
             from waku.ops import judgment_arena, judgment_cases  # noqa: PLC0415
             self._send(json.dumps({"suites": judgment_cases.suite_list(),
@@ -1593,7 +1732,11 @@ class Handler(BaseHTTPRequestHandler):
                   "/api/providers": None,
                   "/api/compare/clear": compare_clear,
                   "/api/compare/regrade": compare_regrade, "/api/compare/delete_run": compare_delete_run,
-                  "/api/turn-evals/judge": judge_turn}
+                  "/api/turn-evals/judge": judge_turn,
+                  "/api/waiting/cancel": waiting_cancel,
+                  "/api/connectors/add": connectors_add,
+                  "/api/connectors/remove": connectors_remove,
+                  "/api/connectors/approve": connectors_approve}
         if self.path not in routes:
             self.send_response(404)
             self.end_headers()

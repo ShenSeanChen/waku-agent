@@ -46,16 +46,25 @@ AUTH_DIR = "mcp-auth"
 # than ephemeral because the redirect URI is registered with the authorization
 # server at DCR time and has to still be true on the next run — a random port
 # would force a re-registration every time, and some servers pin the URI.
+# A first sign-in, which has no registration yet, takes another free port when
+# this one is busy (`callback_port`), and registers that one.
 CALLBACK_PORT = 41765
 CALLBACK_PATH = "/callback"
 
 # How long the callback server waits for the browser to come back. This is
-# human time — reading a consent screen, picking between two Google accounts —
-# so it is minutes, not seconds. Exported because the caller that waits on the
-# connection has to wait longer than this, and two independently-chosen
-# numbers is how the CLI came to give up at 60s while this sat patiently for
-# five minutes.
-SIGN_IN_TIMEOUT = 300.0
+# human time — reading a consent screen, picking between two Google accounts,
+# or walking from the phone that got the link to the computer that can open
+# it — so it is minutes, not seconds. Exported because the caller that waits
+# on the connection has to wait longer than this, and two independently-chosen
+# numbers is how the CLI came to give up at 60s while this sat patiently.
+# Every sentence that tells the person how long a link lasts reads it through
+# `sign_in_minutes`, so the words cannot drift from the wait.
+SIGN_IN_TIMEOUT = 900.0
+
+
+def sign_in_minutes() -> int:
+    """How long a sign-in link works, in whole minutes, for the person."""
+    return max(1, round(SIGN_IN_TIMEOUT / 60))
 
 
 def _sanitise(name: str) -> str:
@@ -82,6 +91,23 @@ class FileTokenStorage(TokenStorage):
         before addresses were recorded names none, and matches."""
         stored = self._read().get("url")
         return not (self._url and stored and stored.rstrip("/") != self._url)
+
+    def has_tokens(self) -> bool:
+        """Whether a sign-in to this address finished and left a token. The
+        file exists from the moment this client is registered with the
+        server, which is before the person has signed in."""
+        return self.matches() and bool(self._read().get("tokens"))
+
+    def registered_port(self) -> int | None:
+        """The loopback port in the redirect address this client registered
+        with the server, or None when it has not registered yet."""
+        if not self.matches():
+            return None
+        uris = (self._read().get("client_info") or {}).get("redirect_uris") or []
+        try:
+            return urlparse(str(uris[0])).port if uris else None
+        except ValueError:
+            return None
 
     def _read(self) -> dict:
         try:
@@ -178,15 +204,61 @@ def _port_is_free(port: int) -> bool:
             return False
 
 
-def build_provider(server_url: str, server_name: str, home: Path) -> OAuthClientProvider:
+class PortBusy(RuntimeError):
+    """The sign-in's port is held by another program and cannot change. The
+    message is written for the person: it holds no address and no token."""
+
+
+def _free_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+def callback_port(storage: FileTokenStorage) -> int:
+    """The port this sign-in's redirect comes back to.
+
+    A client that is registered with the server keeps the port it registered:
+    the server compares the redirect address with the one it stored, so
+    another port is refused. A client that has not registered yet takes
+    CALLBACK_PORT, or any free port when CALLBACK_PORT is busy, and registers
+    with that one. Nothing is refused here: a server that is signed in
+    connects with its token and never uses the port.
+    """
+    registered = storage.registered_port()
+    if registered is not None:
+        return registered
+    return CALLBACK_PORT if _port_is_free(CALLBACK_PORT) else _free_port()
+
+
+def check_port(storage: FileTokenStorage) -> None:
+    """PortBusy when a sign-in cannot start: this client is registered on a
+    port that another program holds, so it cannot move to another one."""
+    registered = storage.registered_port()
+    if registered is not None and not _port_is_free(registered):
+        raise PortBusy(
+            f"The sign-in cannot start: another program on the computer Waku runs on "
+            f"uses port {registered}. This sign-in is registered with the server on that "
+            "port, so it cannot move to another port. Close that program, or wait "
+            f"{sign_in_minutes()} minutes if another sign-in is still open, and ask again.")
+
+
+def build_provider(server_url: str, server_name: str, home: Path,
+                   open_url=None) -> OAuthClientProvider:
     """The provider the HTTP client authenticates with.
 
     `OAuthClientProvider` is an httpx auth flow, so it attaches to the client
     rather than to a request: the SDK retries the 401 itself, discovers the
     authorization server from the resource metadata, and only then calls the
     two handlers below.
+
+    `open_url`, when given, is handed the sign-in link in place of the
+    browser this machine would open (spec 025): a chat reply or the dashboard
+    shows the link, and the person opens it on the computer Waku runs on.
     """
-    redirect_uri = f"http://127.0.0.1:{CALLBACK_PORT}{CALLBACK_PATH}"
+    storage = FileTokenStorage(home, server_name, server_url)
+    port = callback_port(storage)
+    redirect_uri = f"http://127.0.0.1:{port}{CALLBACK_PATH}"
 
     metadata = OAuthClientMetadata(
         client_name="Waku",
@@ -197,6 +269,9 @@ def build_provider(server_url: str, server_name: str, home: Path) -> OAuthClient
     )
 
     async def redirect_handler(authorization_url: str) -> None:
+        if open_url is not None:
+            open_url(authorization_url)
+            return
         print("\n  Opening your browser to sign in…")
         print(f"  If it does not open: {authorization_url}\n")
         # `open_new_tab` rather than `open`: a headless or SSH session has no
@@ -205,13 +280,15 @@ def build_provider(server_url: str, server_name: str, home: Path) -> OAuthClient
         webbrowser.open_new_tab(authorization_url)
 
     async def callback_handler() -> AuthorizationCodeResult:
-        if not _port_is_free(CALLBACK_PORT):
-            raise RuntimeError(
-                f"port {CALLBACK_PORT} is in use — the sign-in redirect has nowhere to land. "
+        check_port(storage)
+        if not _port_is_free(port):
+            # Another program took the port after it was chosen.
+            raise PortBusy(
+                f"port {port} is in use — the sign-in redirect has nowhere to land. "
                 "Close whatever holds it and try again."
             )
         _CallbackHandler.result = {}
-        server = HTTPServer(("127.0.0.1", CALLBACK_PORT), _CallbackHandler)
+        server = HTTPServer(("127.0.0.1", port), _CallbackHandler)
         thread = Thread(target=server.handle_request, daemon=True)
         thread.start()
         # Poll rather than join: this runs on the bridge's event loop, and a
@@ -239,7 +316,7 @@ def build_provider(server_url: str, server_name: str, home: Path) -> OAuthClient
     return OAuthClientProvider(
         server_url=server_url,
         client_metadata=metadata,
-        storage=FileTokenStorage(home, server_name, server_url),
+        storage=storage,
         redirect_handler=redirect_handler,
         callback_handler=callback_handler,
     )

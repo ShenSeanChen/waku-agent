@@ -69,6 +69,8 @@ EXPECTED = {
     "/embed/chat": "pass",
     "/api/observability": "pass",
     "/api/turn-evals/judge": "pass",
+    "/api/waiting": "pass",
+    "/api/waiting/cancel": "pass",
     # filter: the payload decides
     "/api/providers": "filter",
     "/api/settings": "filter",
@@ -92,6 +94,10 @@ EXPECTED = {
     # spec 026: only the gateway's scheduler and idle loop ask a container
     # this, and they connect to the container themselves
     "/api/alwayson/next": "block",
+    "/api/connectors": "block",
+    "/api/connectors/add": "block",
+    "/api/connectors/remove": "block",
+    "/api/connectors/approve": "block",
 }
 
 

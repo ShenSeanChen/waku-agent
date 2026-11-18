@@ -1,4 +1,6 @@
 """Send one outbox row to Slack. A row with a thread goes to that thread.
+The model writes Markdown, so the text is converted to Slack's mrkdwn
+(format.py) in both setups.
 
 There are two setups, and `senders.configured` picks one:
 
@@ -18,6 +20,7 @@ from __future__ import annotations
 
 from waku.alwayson.outbox import Message
 from waku.alwayson.senders import Post, SendFailed, post_json
+from waku.alwayson.senders.format import slack_mrkdwn
 
 URL = "https://slack.com/api/chat.postMessage"
 HOSTED_PATH = "/slack/send"
@@ -35,7 +38,7 @@ def _payload(message: Message, text: str) -> dict:
 
 def make(bot_token: str, post: Post = post_json):
     def send(message: Message) -> None:
-        answer = post(URL, _payload(message, message.body),
+        answer = post(URL, _payload(message, slack_mrkdwn(message.body)),
                       {"Authorization": f"Bearer {bot_token}"})
         if not answer.get("ok"):   # Slack answers 200 and says no in the body
             raise SendFailed(f"Slack refused: {answer.get('error') or 'no reason'}")
@@ -49,7 +52,7 @@ def make_hosted(base_url: str, platform_token: str, post: Post = post_json):
     url = base_url.rstrip("/") + HOSTED_PATH
 
     def send(message: Message) -> None:
-        body = message.body
+        body = slack_mrkdwn(message.body)
         for start in range(0, len(body), HOSTED_MAX_CHARS):
             answer = post(url, _payload(message, body[start:start + HOSTED_MAX_CHARS]),
                           {"Authorization": f"Bearer {platform_token}"})

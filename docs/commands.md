@@ -17,7 +17,7 @@ targets are aliases for the same things, plus the eval and tracing tools.
 | `waku brief` | a morning briefing from calendar + mail + memory, run as a loop |
 | `waku gather` | the same job as a graph: four sources fetched together, then one digest |
 | `waku evals turns` | grade your own traced turns with the five turn checks and list the failing ones (`--window today`, `7d` or `all`) |
-| `waku connections` | every integration and its health, including Waku Memory |
+| `waku connections` | every integration and its health, including Waku Memory, and the Slack tokens of `waku serve`: a token Slack refuses or a scope that is missing is named |
 | `waku connect google` | sign in to Google Calendar (opens your browser) |
 | `waku connect waku-memory` | connect Waku Memory without the plugin (opens your browser) |
 | `waku plugin install <plugin>@<marketplace>` | install a plugin after printing its servers, hooks and skills; `waku plugin install waku@waku-memory` is Waku Memory |
@@ -27,6 +27,8 @@ targets are aliases for the same things, plus the eval and tracing tools.
 | `waku mcp` | MCP servers, and which account each one knows you as |
 | `waku mcp login <name>` | sign in again — as someone else, or after expiry |
 | `waku mcp logout <name>` | forget a server's token |
+| `waku mcp add <name> [<https address>]` | connect an MCP server and sign in to it: a name on the starter list (`linear`, `notion`, `github`) alone, or any server by its address; `--key-env VAR` for a server with a key, `-- <command>` for one this machine runs |
+| `waku mcp remove <name>` | disconnect a server and forget its sign-in |
 | `waku skill install <url>` | install a community skill from a GitHub or Gist link |
 | `waku skill export --to claude,codex` | copy Waku's skills to Claude Code and Codex (`--project` for `./.claude/skills`, `--force` to replace) |
 
