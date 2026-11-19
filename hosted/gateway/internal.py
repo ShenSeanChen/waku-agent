@@ -36,15 +36,16 @@ GATEWAY_SOCKET_MODE = 0o660
 # it does not, and answering it anyway teaches that it does.
 TOKEN_FIELDS = frozenset({"op", "hash"})
 SLACK_SEND_FIELDS = frozenset({"op", "tenant", "channel", "text", "thread_ts"})
-SLACK_HISTORY_FIELDS = frozenset({"op", "tenant", "channel", "thread_ts", "limit"})
+SLACK_HISTORY_FIELDS = frozenset({"op", "tenant", "channel", "thread_ts", "limit",
+                                  "days", "person"})
 
 # (tenant id, channel, text, thread_ts) -> {"ok": True} or {"ok": False,
 # "error": code}. hosted/gateway/slack.SlackRelay.send.
 SlackSend = Callable[[str, str, str, str], Awaitable[dict]]
-# (tenant id, channel, thread_ts, limit) -> {"ok": True, "channel": name,
-# "messages": [...]} or {"ok": False, "error": code}.
-# hosted/gateway/slack.SlackHistory.read.
-SlackHistory = Callable[[str, str, str, int], Awaitable[dict]]
+# (tenant id, channel, thread_ts, limit, days, person) -> {"ok": True,
+# "channel": name, "messages": [...], "cut": bool} or {"ok": False, "error":
+# code}. hosted/gateway/slack.SlackHistory.read.
+SlackHistory = Callable[[str, str, str, int, int, str], Awaitable[dict]]
 
 
 async def serve_token_lookup(path: Path, store: ControlStore, *,
@@ -71,7 +72,8 @@ async def serve_token_lookup(path: Path, store: ControlStore, *,
             return {"ok": False, "error": "slack_not_configured"}
         # The reader checks every value's shape itself.
         return await slack_history(request.get("tenant", ""), request.get("channel", ""),
-                                   request.get("thread_ts", ""), request.get("limit", 0))
+                                   request.get("thread_ts", ""), request.get("limit", 0),
+                                   request.get("days", 0), request.get("person", ""))
 
     async def handler(request: dict) -> dict:
         # Three allowed questions, named here; everything else refused. A list

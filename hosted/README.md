@@ -507,7 +507,7 @@ container --POST /slack/history--> proxy --gateway.sock--> gateway --conversatio
 | `GET /slack/oauth/callback` | the apex | checks the `state` and the browser's own session, exchanges Slack's code for the workspace's bot token, and stores it |
 | `POST /v1/triggers/slack` | the apex | takes every workspace's events. It checks Slack's signature over the raw body, refuses a timestamp more than 5 minutes from now, and stores a mention as one row in `tenant_events` under Slack's event id |
 | `POST /slack/send` | the proxy, on the tenant network | takes a container's outgoing message with the container's platform token, and has the gateway post it. A tenant may send 30 a minute; one more answers 429, and the container tries it again after 10 seconds and then a minute |
-| `POST /slack/history` | the proxy, on the tenant network | takes a container's request for the recent messages of one channel, with the container's platform token, and has the gateway read them. The gateway reads a channel only when this tenant's agent was mentioned there. A tenant may read 20 times a minute |
+| `POST /slack/history` | the proxy, on the tenant network | takes a container's request for the messages of one channel (the last ones, a window of days, or one person's), with the container's platform token, and has the gateway read them. The gateway reads a channel only when this tenant's agent was mentioned there. A tenant may read 20 times a minute |
 
 A bad signature answers 403 and writes nothing. A workspace no tenant
 connected answers 200 and writes nothing. A stored mention asks the scheduler
@@ -582,15 +582,24 @@ with the same names.
   messages, and for the names in it (`slack_thread.py`). It has 2 seconds:
   past that the mention goes to the agent alone.
 - **The agent reads the rest of the channel only when it asks** (spec 029).
-  Its `slack_history` tool reads the last messages of the channel the run is
-  in, 30 by default and 100 at most, or one thread of that channel from its
-  first message. The tool names no channel, and the gateway refuses any
-  channel the tenant's agent was never mentioned in. An answer holds at most
-  2,000 characters of each message and 40,000 bytes in all; the oldest
-  messages are dropped first. It needs `channels:history` or
-  `groups:history`, and `users:read` for the names. A workspace that added the app before the three
-  reading scopes were asked for gets its mentions without the thread until
-  its person adds the app again.
+  Its `slack_history` tool reads the channel the run is in, four ways: the
+  last messages (30 by default, 100 at most); the messages of the last `days`
+  days, 30 at most ("summarize this channel for the past week"); only the
+  messages of one `person`, matched on the name Slack shows or its first
+  word ("what did Emily say in the past month"); or one thread, from its
+  first message. Two people who match a name are both named, and no message
+  is returned. The tool names no channel, and the gateway refuses any channel
+  the tenant's agent was never mentioned in.
+- **A `slack_history` answer is bounded, and says when it was cut.** A window
+  is read in at most 10 pages of 200 messages, and no page starts after 7
+  seconds. An answer holds the channel's own messages, without thread
+  replies, each with its count of replies, its author and its time in the
+  tenant's time zone: at most 400 messages, 2,000 characters of each and
+  40,000 bytes in all. Past any of those the newest part is kept, the answer
+  carries `cut`, and the agent reads "Older messages in this window were
+  left out". One request is one of the tenant's 20 reads a minute, however
+  many pages it took. It needs `channels:history` or `groups:history`, and
+  `users:read` for the names.
 - **A reply in a thread the agent was mentioned in reaches it without a
   second mention.** Slack sends every message of a channel the bot is in
   (`message.channels`, `message.groups`). The gateway keeps one only when it

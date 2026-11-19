@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import datetime
 import gzip
 import hashlib
 import hmac
@@ -40,6 +41,7 @@ import json
 import re
 import time
 import urllib.parse
+import zoneinfo
 from collections.abc import Callable
 
 import aiohttp
@@ -281,11 +283,18 @@ class SlackApi:
             data={"channel": channel, "ts": thread_ts, "limit": str(limit)},
             headers={"Authorization": f"Bearer {token}"})
 
-    async def channel_history(self, token: str, channel: str, limit: int) -> dict:
-        """The last messages of one channel, newest first."""
-        return await self._post(
-            "conversations.history", data={"channel": channel, "limit": str(limit)},
-            headers={"Authorization": f"Bearer {token}"})
+    async def channel_history(self, token: str, channel: str, limit: int, *,
+                              oldest: str = "", cursor: str = "") -> dict:
+        """The last messages of one channel, newest first: one page of them.
+        `oldest` is the earliest time to go back to, and `cursor` is the
+        `next_cursor` of the page before."""
+        data = {"channel": channel, "limit": str(limit)}
+        if oldest:
+            data["oldest"] = oldest
+        if cursor:
+            data["cursor"] = cursor
+        return await self._post("conversations.history", data=data,
+                                headers={"Authorization": f"Bearer {token}"})
 
     async def add_reaction(self, token: str, channel: str, ts: str, name: str) -> dict:
         return await self._post("reactions.add",
@@ -399,6 +408,19 @@ HISTORY_TEXT_CHARS = 2000
 HISTORY_ANSWER_BYTES = 40_000
 # Reading the messages and looking up their names, together.
 HISTORY_SECONDS = 8.0
+# With `days`, the channel is read back to that many days ago: 30 at most.
+HISTORY_MAX_DAYS = 30
+# Slack gives a channel's history a page at a time. One call reads at most
+# this many pages of this many messages, and starts no page after
+# HISTORY_PAGING_SECONDS. The container's tool waits 15 seconds for its
+# answer, so the whole call gets 12.
+HISTORY_PAGES, HISTORY_PAGE_SIZE = 10, 200
+HISTORY_PAGING_SECONDS = 7.0
+HISTORY_WINDOW_SECONDS = 12.0
+# The most messages one answer holds, before the cut to HISTORY_ANSWER_BYTES.
+HISTORY_WINDOW_MESSAGES = 400
+HISTORY_PERSON_CHARS = 80
+HISTORY_AMBIGUOUS_NAMES = 5
 
 
 class SlackHistory:
@@ -413,26 +435,39 @@ class SlackHistory:
     channel is refused, including one the bot is a member of. The people in
     a channel the agent answers in already read what it reads there.
 
+    A TIME WINDOW AND A PERSON. With `days` the channel is read from now back
+    to that many days ago, in pages, and with `person` only the messages one
+    author wrote are kept. The author is matched on the name people see, as
+    a whole name or a first name. Two authors who both match are named, and
+    no message is returned.
+
+    AN ANSWER THAT WAS CUT SAYS SO. `cut` is true when the window held more
+    than was read or more than fits, and the newest part is what is kept.
+
     WHAT GOES BACK is names and text: `ok`, the channel's name and each
-    message's ts, author, text and count of replies, or `ok: false` with a
-    short error code. No token, no user id and nothing else of Slack's
+    message's ts, its time in the tenant's time zone, author, text and count
+    of replies, or `ok: false` with a short error code. No token, no user id and nothing else of Slack's
     answer is passed on.
     """
 
     def __init__(self, *, store: ControlStore, box: SecretBox, api: SlackApi,
-                 threads: ThreadReader) -> None:
+                 threads: ThreadReader, now: Callable[[], float] = time.time) -> None:
         self._store = store
         self._box = box
         self._api = api
         self._threads = threads
+        self._now = now
 
     async def read(self, tenant_id: str, channel: str, thread_ts: str = "",
-                   limit: int = HISTORY_DEFAULT) -> dict:
+                   limit: int = HISTORY_DEFAULT, days: int = 0, person: str = "") -> dict:
         if (not is_tenant_id(tenant_id) or not isinstance(channel, str)
                 or not CHANNEL_ID.fullmatch(channel) or not isinstance(thread_ts, str)
                 or (thread_ts and not THREAD_TS.fullmatch(thread_ts))
                 or not isinstance(limit, int) or isinstance(limit, bool)
-                or not 1 <= limit <= HISTORY_MAX):
+                or not 1 <= limit <= HISTORY_MAX
+                or not isinstance(days, int) or isinstance(days, bool)
+                or not 0 <= days <= HISTORY_MAX_DAYS or (days and thread_ts)
+                or not isinstance(person, str) or len(person) > HISTORY_PERSON_CHARS):
             return _refused("bad_request")
         install = self._store.slack_install(tenant_id)
         if install is None:
@@ -447,19 +482,50 @@ class SlackHistory:
         except Unreadable:
             self._store.set_slack_reconnect(install.team_id, True)
             return _refused("token_unreadable")
+        budget = HISTORY_WINDOW_SECONDS if days else HISTORY_SECONDS
         try:
             return await asyncio.wait_for(
-                self._read(token, install, channel, thread_ts, limit), HISTORY_SECONDS)
+                self._read(token, install, channel, thread_ts, limit, days,
+                           " ".join(person.split())), budget)
         except SlackUnreachable as exc:
             _LOG.warning("tenant=%s: Slack history failed: %s", tenant_id, exc)
         except TimeoutError:
-            _LOG.warning("tenant=%s: Slack history took longer than %ss", tenant_id,
-                         HISTORY_SECONDS)
+            _LOG.warning("tenant=%s: Slack history took longer than %ss", tenant_id, budget)
         return _refused("slack_unreachable")
 
+    async def _window(self, token: str, channel: str, days: int) -> tuple[list | dict, bool]:
+        """(the channel's messages from now back to `days` days ago, newest
+        first, whether older ones in the window were left unread). A refusal
+        from Slack comes back in place of the list.
+
+        Slack hands a channel's history out a page at a time. At most
+        HISTORY_PAGES pages are read, and no page is started after
+        HISTORY_PAGING_SECONDS, so one call costs Slack a bounded number of
+        requests however busy the channel was."""
+        oldest = f"{self._now() - days * 86400:.6f}"
+        started, found, cursor = time.monotonic(), [], ""
+        for _ in range(HISTORY_PAGES):
+            answer = await self._api.channel_history(
+                token, channel, HISTORY_PAGE_SIZE, oldest=oldest, cursor=cursor)
+            page = answer.get("messages")
+            if answer.get("ok") is not True or not isinstance(page, list):
+                return answer, False
+            found.extend(page)
+            meta = answer.get("response_metadata")
+            cursor = meta.get("next_cursor") if isinstance(meta, dict) else ""
+            if not isinstance(cursor, str) or not cursor:
+                return found, False
+            if time.monotonic() - started > HISTORY_PAGING_SECONDS:
+                break
+        return found, True
+
     async def _read(self, token: str, install, channel: str, thread_ts: str,
-                    limit: int) -> dict:
-        if thread_ts:
+                    limit: int, days: int, person: str) -> dict:
+        cut = False
+        if days:
+            found, cut = await self._window(token, channel, days)
+            answer = found if isinstance(found, dict) else {"ok": True, "messages": found}
+        elif thread_ts:
             answer = await self._api.thread_replies(token, channel, thread_ts, limit)
         else:
             answer = await self._api.channel_history(token, channel, limit)
@@ -468,18 +534,69 @@ class SlackHistory:
             code = _error_code(answer) or "refused"
             _LOG.info("tenant=%s: Slack refused a history read: %s", install.tenant_id, code)
             return _refused(code)
-        # A channel's history arrives newest first, and a thread oldest first.
-        found = found[:limit] if thread_ts else list(reversed(found[:limit]))
+        if not thread_ts:
+            # The channel's own messages. A reply that was also sent to the
+            # channel is left to its thread, which `replies` counts.
+            found = [m for m in found if isinstance(m, dict)
+                     and m.get("thread_ts") in (None, m.get("ts"))]
+            # A channel's history arrives newest first, and a thread oldest first.
+            found = list(reversed(found if days else found[:limit]))
+        else:
+            found = found[:limit]
         read = await self._threads.messages(
             token=token, team_id=install.team_id, bot_user_id=install.bot_user_id,
             messages=found)
+        channel_name = await self._threads.channel_name(token, install.team_id, channel)
+        tenant = self._store.tenant_by_id(install.tenant_id)
+        zone = _zone(tenant.timezone if tenant is not None else "UTC")
+        base = {"ok": True, "channel": channel_name, "zone": zone.key}
+        if person:
+            names = sorted({m["who"] for m in read if _is_person(m["who"], person)})
+            if len(names) > 1:
+                # Two people answer to that name. Guessing one would put one
+                # person's words in another's mouth.
+                return {**base, "messages": [], "cut": False,
+                        "ambiguous": names[:HISTORY_AMBIGUOUS_NAMES]}
+            read = [m for m in read if m["who"] in names]
+        if len(read) > HISTORY_WINDOW_MESSAGES:
+            read, cut = read[-HISTORY_WINDOW_MESSAGES:], True
         for message in read:
             message["text"] = message["text"][:HISTORY_TEXT_CHARS]
-        # The oldest go first when the answer would not fit on the socket.
-        while read and len(json.dumps(read)) > HISTORY_ANSWER_BYTES:
-            read.pop(0)
-        return {"ok": True, "messages": read,
-                "channel": await self._threads.channel_name(token, install.team_id, channel)}
+            message["when"] = _when(message["ts"], zone)
+        # The oldest go first when the answer would not fit on the socket,
+        # and the answer says that it was cut.
+        kept, size = [], 2
+        for message in reversed(read):
+            size += len(json.dumps(message)) + 2
+            if size > HISTORY_ANSWER_BYTES:
+                cut = True
+                break
+            kept.append(message)
+        read = kept[::-1]
+        return {**base, "messages": read, "cut": cut}
+
+
+def _zone(name: str) -> zoneinfo.ZoneInfo:
+    try:
+        return zoneinfo.ZoneInfo(name)
+    except (zoneinfo.ZoneInfoNotFoundError, ValueError):
+        return zoneinfo.ZoneInfo("UTC")
+
+
+def _when(ts: str, zone: zoneinfo.ZoneInfo) -> str:
+    """A message's time as its reader's clock shows it: `2026-11-12 Thu 14:05`."""
+    try:
+        moment = datetime.datetime.fromtimestamp(float(ts), zone)
+    except (ValueError, OverflowError, OSError):
+        return ""
+    return moment.strftime("%Y-%m-%d %a %H:%M")
+
+
+def _is_person(who: str, asked: str) -> bool:
+    """Whether `asked` names this author: the whole name people see, or its
+    first word, whatever the capitals."""
+    name, asked = " ".join(who.casefold().split()), asked.casefold()
+    return bool(name) and (name == asked or name.split(" ")[0] == asked)
 
 
 class SlackRoutes:
@@ -509,7 +626,7 @@ class SlackRoutes:
         """The reader that uses the tokens these routes stored, and the names
         these routes already looked up."""
         return SlackHistory(store=self._store, box=self._box, api=self._api,
-                            threads=self._threads)
+                            threads=self._threads, now=self._now)
 
     def check_tokens(self) -> list[str]:
         """Find the workspaces whose stored token this gateway's key does not

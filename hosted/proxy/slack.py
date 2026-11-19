@@ -134,25 +134,33 @@ class SlackSend:
 # --- spec 029 D: reading the channel a run is in ------------------------------
 
 HISTORY_PATH = SLACK_HISTORY_PATH
-HISTORY_FIELDS = frozenset({"channel", "thread_ts", "limit"})
+HISTORY_FIELDS = frozenset({"channel", "thread_ts", "limit", "days", "person"})
 # The most reads one tenant makes in RATE_WINDOW_SECONDS. A run that needs
 # the channel reads it once or twice; this stops one that reads in a loop.
 READS_PER_MINUTE = 20
 # What `limit` is when a request names none, and the most it may be.
 HISTORY_DEFAULT, HISTORY_MAX = 30, 100
+# The longest window `days` may ask for, and the longest `person`.
+HISTORY_MAX_DAYS, HISTORY_PERSON_CHARS = 30, 80
 
 
 class SlackHistory:
     """POST /slack/history: the door of the container's slack_history tool.
 
     The same four steps as SlackSend above, in the same order: who, what, how
-    many, and the gateway is asked. The body is `channel`, and `thread_ts`
-    and `limit` or not. The gateway decides whether this tenant may read
+    many, and the gateway is asked. The body is `channel`, and `thread_ts`,
+    `limit`, `days` and `person` or not.
+
+    ONE REQUEST IS ONE READ, however many pages of Slack's history the
+    gateway fetches for it. A request with `days` costs Slack at most ten
+    pages (hosted/gateway/slack.HISTORY_PAGES), so 20 reads a minute are at
+    most 200 requests to Slack, and the gateway's own caps bound each one. The gateway decides whether this tenant may read
     that channel (hosted/gateway/slack.SlackHistory) and reads it with the
     workspace's token, which this process never sees.
 
-    The answer is the gateway's: {"ok": true, "channel": <name>, "messages":
-    [{ts, who, text, replies}]}, or {"ok": false, "error": <code>}.
+    The answer is the gateway's: {"ok": true, "channel": <name>, "zone":
+    <time zone>, "cut": <bool>, "ambiguous": [<names>], "messages": [{ts,
+    when, who, text, replies}]}, or {"ok": false, "error": <code>}.
     """
 
     def __init__(self, *, resolve: Resolve, gateway_socket: Path,
@@ -190,9 +198,13 @@ class SlackHistory:
             return _answer(400, "bad_request")
         channel, thread_ts = asked.get("channel"), asked.get("thread_ts", "")
         limit = asked.get("limit", HISTORY_DEFAULT)
+        days, person = asked.get("days", 0), asked.get("person", "")
         if not (isinstance(channel, str) and isinstance(thread_ts, str)
                 and isinstance(limit, int) and not isinstance(limit, bool)
-                and 1 <= limit <= HISTORY_MAX):
+                and 1 <= limit <= HISTORY_MAX
+                and isinstance(days, int) and not isinstance(days, bool)
+                and 0 <= days <= HISTORY_MAX_DAYS and not (days and thread_ts)
+                and isinstance(person, str) and len(person) <= HISTORY_PERSON_CHARS):
             return _answer(400, "bad_request")
         if not self._take(tenant):
             _LOG.info("tenant=%s: over %s Slack history reads a minute", tenant,
@@ -201,13 +213,19 @@ class SlackHistory:
         try:
             answer = await jsonsock.ask(
                 self._socket, {"op": "slack_history", "tenant": tenant, "channel": channel,
-                               "thread_ts": thread_ts, "limit": limit},
+                               "thread_ts": thread_ts, "limit": limit, "days": days,
+                               "person": person},
                 timeout=GATEWAY_TIMEOUT_SECONDS)
         except jsonsock.Unreachable:
             return _answer(503, "relay_unreachable")
         if answer.get("ok") is True and isinstance(answer.get("messages"), list):
-            return web.json_response({"ok": True, "messages": answer["messages"],
-                                      "channel": str(answer.get("channel") or "")})
+            names = answer.get("ambiguous")
+            return web.json_response({
+                "ok": True, "messages": answer["messages"],
+                "channel": str(answer.get("channel") or ""),
+                "zone": str(answer.get("zone") or ""), "cut": answer.get("cut") is True,
+                "ambiguous": [str(name) for name in names] if isinstance(names, list)
+                else []})
         error = answer.get("error")
         if "ok" not in answer or not isinstance(error, str):
             _LOG.warning("tenant=%s: the gateway did not read a Slack channel", tenant)
