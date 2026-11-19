@@ -78,6 +78,24 @@ def test_a_second_login_does_not_reprovision_or_move_the_time_zone(made):
     assert len(ops(spawner, "provision")) == 1
 
 
+def test_a_tenant_with_no_zone_takes_the_first_real_one_and_keeps_it(made):
+    """A tenant first made by a route that sends no zone told its person a
+    reminder was "set for 21:26" at 1:26 pm."""
+    _path, _store, _spawner, _clock, _fleet, launcher = made
+
+    async def run():
+        await launcher.ensure_tenant(sub="sub-1", email="mei@example.com", timezone="")
+        filled, _ = await launcher.ensure_tenant(
+            sub="sub-1", email="mei@example.com", timezone="America/Los_Angeles")
+        again, _ = await launcher.ensure_tenant(
+            sub="sub-1", email="mei@example.com", timezone="Asia/Shanghai")
+        return filled, again
+
+    filled, again = asyncio.run(run())
+    assert filled.timezone == "America/Los_Angeles"
+    assert again.timezone == "America/Los_Angeles", "a recorded zone is not moved"
+
+
 def test_an_unknown_zone_from_the_browser_is_stored_as_utc(made):
     _path, _store, _spawner, _clock, _fleet, launcher = made
 

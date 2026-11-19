@@ -409,7 +409,9 @@ def test_the_prompt_of_a_message_run_is_the_message_alone(conn):
 
     events.insert(conn, source="telegram", external_id="1", session_id="telegram:42",
                   payload={"text": "is issue 12 open?", "reply_to": {"chat_id": 42}})
-    assert render([events.claim_next(conn)]) == "is issue 12 open?"
+    said = render([events.claim_next(conn)])
+    assert said.split("\n\n")[0] == "is issue 12 open?"
+    assert "Timer" not in said and "timer" not in said, "the lines after it say who reads it"
 
 
 def test_a_timer_run_that_answers_silent_sends_nothing_and_the_model_was_told(tmp_path):
