@@ -185,6 +185,10 @@ flowchart LR
   `WAKU_HOSTED=1` it posts the reply to the platform
   (`waku/alwayson/senders/slack.py`), and the gateway sends it with the token
   it keeps encrypted in `control.db`.
+- **A connector on hosted waku is signed in to by the gateway** (spec 029,
+  `hosted/gateway/connect.py`). The gateway registers itself with Notion or
+  Linear, sends the person's browser to the vendor's sign-in page, and keeps
+  the tokens encrypted in `control.db`. A container holds no vendor token.
 
 A run never sends. Its reply becomes one row in the `outbox` table, and the
 dispatcher sends the row to the Telegram chat, the Slack thread or the GitHub

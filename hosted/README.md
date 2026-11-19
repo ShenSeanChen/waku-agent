@@ -38,9 +38,9 @@ which carries them. Neither license grants any right in them.
 
 | Directory | Holds |
 |---|---|
-| `core/` | pure logic: tenant ids, route policy, quota, idle, provisioning, request validation |
+| `core/` | pure logic: tenant ids, route policy, quota, idle, provisioning, request validation, the connector list |
 | `ports/` | the four replaceable seams, as Protocols and nothing else. The implementations live beside the service that owns each one |
-| `gateway/` | the front door: login, sessions, routing by host, `control.db`, the idle loop, the scheduler that wakes a stopped tenant for an event or a timer, and the public Slack app's install, events and send relay |
+| `gateway/` | the front door: login, sessions, routing by host, `control.db`, the idle loop, the scheduler that wakes a stopped tenant for an event or a timer, the public Slack app's install, events and send relay, and the sign-in to a connector |
 | `proxy/` | the metering proxy in front of the model API, `ledger.db`, and the two routes a container reaches the platform through: treg and outgoing Slack |
 | `spawner/` | the one process that talks to Docker |
 | `image/` | the tenant and services Dockerfiles, their allowlist ignore files, and the seccomp profile every container runs under |
@@ -606,6 +606,69 @@ with the same names.
   can add it.
 - **None of this has run against Slack.** The evals use a fake Slack on
   loopback.
+
+## Connectors: Notion and Linear
+
+A person on hosted waku signs in to Notion or Linear from
+`https://agent.waku.one/setup` (spec 029). Ana presses "Connect Notion",
+approves on Notion's own page, and comes back to `/setup` with "Notion is
+connected." The gateway then holds her Notion tokens.
+
+A person who runs waku themselves uses `waku mcp add` instead, and the
+sign-in comes back to a port on their own computer
+([integrations](../docs/integrations.md)).
+
+| Route | On | What it does |
+|---|---|---|
+| `GET /connect/start?server=<name>` | the apex | sends a signed-in person to the vendor's sign-in page, with a `state` bound to their tenant and the vendor that works once, for 10 minutes, and a PKCE challenge |
+| `GET /connect/callback` | the apex | checks the `state` and the browser's own session, exchanges the vendor's code for the person's tokens, and stores them |
+| `POST /connect/disconnect` | the apex | takes `{"server": "<name>"}` from a signed-in person and deletes their tokens for that vendor |
+
+`<name>` is `notion` or `linear` (`hosted/core/connectors.py`). A person
+cannot add another address: the gateway calls a connector from the platform's
+own network. GitHub is not on the list, because it takes a personal access
+token.
+
+**The gateway registers itself with each vendor.** At the first sign-in to a
+vendor it reads the vendor's sign-in addresses, registers as a client with the
+one redirect address `https://agent.waku.one/connect/callback` (dynamic
+client registration), and keeps that registration in `control.db` for every
+tenant. Nobody creates an app at Notion or Linear, and no client id is copied
+into a config file. Each address the vendor answers with has to be on the
+origin of the vendor's own MCP address, or the sign-in does not start.
+
+**A vendor's tokens never enter a container.** The gateway stores the access
+token and the refresh token in `control.db`, encrypted with AES-256-GCM under
+`WAKU_SLACK_TOKEN_KEY`, the key that seals a workspace's Slack token. Each
+value is bound to its tenant and its vendor, so one row's value does not open
+in another row. The gateway renews an access token in its last minute, and a
+vendor that refuses the renewal puts "Reconnect Notion" on the person's
+`/setup`.
+
+### Turning it on
+
+Connectors are on when `config/gateway.env` has a usable
+`WAKU_SLACK_TOKEN_KEY`, which `install.sh` writes ("Slack: the public Waku
+app" above says how to add one to an older VM). They need none of the other
+three Slack values. The gateway's log says `connectors: on (notion, linear)`,
+or `connectors: off` with the reason, and the three routes then answer 503.
+
+### Limits
+
+- **Linear is asked for `read` alone**, and Notion for `default`, the one
+  scope its server names.
+- **No button disconnects yet.** `POST /connect/disconnect` is the route; the
+  Connections page (spec 030) is where its button goes.
+- **Disconnecting deletes the gateway's copy of the tokens and does not
+  revoke them at the vendor.** The person removes Waku in the vendor's own
+  settings to end the grant there.
+- **A restore onto a new VM needs `WAKU_SLACK_TOKEN_KEY` carried over by
+  hand**, as for Slack. Without it each person signs in to their connectors
+  again, and the gateway registers with each vendor again.
+- **None of this has run against Notion or Linear.** The evals use a fake
+  vendor on loopback. Whether each vendor's registration accepts
+  `https://agent.waku.one/connect/callback` as a redirect address is not
+  verified.
 
 ## The free tier
 

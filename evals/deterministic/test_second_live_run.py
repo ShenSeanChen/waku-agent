@@ -21,7 +21,7 @@ import pytest
 
 from evals.helpers import ScriptedClient, make_waku, response, text_block, tool_block
 from waku.alwayson import approvals, events, outbox, runs, waiting
-from waku.alwayson.worker import FAILED, AgentRun, Worker, render
+from waku.alwayson.worker import CHAT_STYLE, FAILED, AgentRun, Worker, render
 from waku.db import connect
 from waku.tools import connectors, mcp_oauth
 
@@ -248,7 +248,7 @@ def test_a_run_for_anyone_else_is_not_told_it_talks_to_the_owner(home, conn, sen
 
     _worker(conn, run).step()
 
-    assert run.read == ["hello"]
+    assert run.read == [f"hello\n\n{CHAT_STYLE}"], "a chat, and not the owner's"
 
 
 def test_a_call_from_the_owners_own_chat_says_the_person_was_asked(home, conn):
@@ -325,7 +325,7 @@ def test_a_yes_from_someone_else_is_an_ordinary_message(home, conn):
 
     _worker(conn, run).step()
 
-    assert run.read == ["yes"]
+    assert run.read == [f"yes\n\n{CHAT_STYLE}"]
 
 
 def test_a_yes_to_a_call_that_waits_is_still_the_answer(home, conn):
