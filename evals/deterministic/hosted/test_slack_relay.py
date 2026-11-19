@@ -75,7 +75,8 @@ class Rig:
 
     async def __aenter__(self):
         self.store = ControlDb(self.tmp_path / "control.db")
-        self.session = aiohttp.ClientSession()
+        # As the gateway makes it (__main__.py): it does not decompress.
+        self.session = aiohttp.ClientSession(auto_decompress=False)
         self.relay = SlackRelay(store=self.store, box=self.box,
                                 api=SlackApi(self.session, base_url=self.slack.url))
         self.server = await serve_token_lookup(self.sock, self.store,
