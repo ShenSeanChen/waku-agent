@@ -28,6 +28,7 @@ A log line carries a tenant id, a team id and Slack's own error code.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import gzip
 import hashlib
@@ -46,7 +47,7 @@ from hosted.core.tenant import is_tenant_id
 from hosted.gateway import answers, sessions
 from hosted.gateway.config import SlackSettings
 from hosted.gateway.secretbox import SecretBox, Unreadable
-from hosted.gateway.slack_thread import ThreadReader
+from hosted.gateway.slack_thread import BUDGET_SECONDS, ThreadReader
 from hosted.ports.control import ControlStore
 
 _LOG = log.get(__name__)
@@ -62,7 +63,12 @@ SETUP_PATH = "/setup"
 # (slack_thread.py). A workspace that added the app before they were asked for
 # keeps working without them, and gets them when its person adds the app again.
 SCOPES = ("app_mentions:read", "chat:write", "channels:history", "groups:history",
-          "users:read")
+          "users:read", "reactions:write")
+# What the bot puts on a message the moment it is kept for the agent, so the
+# person sees it was heard before the answer is written. A container that was
+# stopped takes some seconds to start, and until 2026-11-19 nothing in Slack
+# said that anything was happening.
+SEEN_REACTION = "eyes"
 STATE_TTL_SECONDS = 600
 # One request to Slack. The person's browser, or Slack's own three-second
 # limit on an event, is waiting behind it.
@@ -271,6 +277,11 @@ class SlackApi:
             "conversations.replies",
             data={"channel": channel, "ts": thread_ts, "limit": str(limit)},
             headers={"Authorization": f"Bearer {token}"})
+
+    async def add_reaction(self, token: str, channel: str, ts: str, name: str) -> dict:
+        return await self._post("reactions.add",
+                                data={"channel": channel, "timestamp": ts, "name": name},
+                                headers={"Authorization": f"Bearer {token}"})
 
     async def user_info(self, token: str, user_id: str) -> dict:
         return await self._post("users.info", data={"user": user_id},
@@ -568,9 +579,28 @@ class SlackRoutes:
                                    bound_to=seal_binding(install.team_id))
         except (Unreadable, AttributeError):
             return str(event.get("text") or "")
-        return await self._threads.compose(
-            token=token, team_id=install.team_id, bot_user_id=install.bot_user_id,
-            event=event, mentioned=mentioned)
+        text, _ = await asyncio.gather(
+            self._threads.compose(token=token, team_id=install.team_id,
+                                  bot_user_id=install.bot_user_id, event=event,
+                                  mentioned=mentioned),
+            self._seen(token, install.team_id, event))
+        return text
+
+    async def _seen(self, token: str, team_id: str, event: dict) -> None:
+        """Mark the message as heard. It runs beside the reading of the
+        thread and inside the same two seconds, and nothing waits on whether
+        it worked: a workspace without `reactions:write` gets no mark and
+        every answer."""
+        try:
+            answer = await asyncio.wait_for(self._api.add_reaction(
+                token, str(event.get("channel") or ""), str(event.get("ts") or ""),
+                SEEN_REACTION), BUDGET_SECONDS)
+        except Exception as exc:  # noqa: BLE001 -- a mark is never worth a mention
+            _LOG.info("Slack message not marked for team=%s: %s", team_id, type(exc).__name__)
+            return
+        if answer.get("ok") is not True:
+            _LOG.info("Slack message not marked for team=%s: %s", team_id,
+                      _error_code(answer) or "refused")
 
 
 _ERROR_CODE = re.compile(r"[a-z0-9_]{1,64}")
