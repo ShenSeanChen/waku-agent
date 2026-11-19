@@ -5,14 +5,18 @@ WHAT IT DOES, EVERY SWEEP_SECONDS:
   1. Launcher.stop_idle(): stop every tenant container with nothing in flight
      and no non-background request for the idle window (15 minutes, or
      WAKU_IDLE_MINUTES). Fleet decides; the Launcher stops; one log line per
-     stop.
+     stop. Since spec 026 the Launcher first asks each such container what
+     work it has left: one that is still running an event or sending a reply
+     is left alone, and one that is stopped has its next timer stored in
+     tenant_wakeups, where the scheduler (scheduler.py) finds it.
   2. The disk warning: log idle.disk_warning() when the filesystem holding
      /srv/waku passes 80%, the spec's "the idle loop also logs a warning".
 
 WHY IT LIVES IN THE GATEWAY AND NOT THE SPAWNER. Idle is a fact about
 requests, and only the gateway sees requests: Fleet's idle clock and in-flight
 count are in the gateway's memory. The spawner knows which containers exist
-and nothing about whether anybody is using them.
+and nothing about whether anybody is using them. A run that an event or a
+timer started has no request, so the container reports that part itself.
 
 WHY IT MATTERS BEYOND MEMORY. Every start creates a new container from the
 current tenant image tag, so an idle stop is also how an upgrade reaches a

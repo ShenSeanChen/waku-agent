@@ -142,6 +142,41 @@ at 09:00", and the run answers "I will check issue 12 on Thursday at 09:00".
   repeats: a run that wants to check again sets a new one.
 - **A timer waits while `waku serve` is down** and fires at the next start.
 
+A hosted container runs the same parts inside the dashboard process (spec
+026, `waku/alwayson/handover.py`). It is started with `WAKU_HOSTED=1`, it has
+no source of its own, and it stops when nobody has used it for 15 minutes. A
+gateway outside it keeps running, and the two talk over HTTP.
+
+```mermaid
+flowchart LR
+  SRC["An event for a tenant<br/>(chat, Slack: later groups)"] -->|insert only| TE[("tenant_events<br/>control.db")]
+  TW[("tenant_wakeups<br/>control.db")]
+  subgraph GW["Gateway, hosted/, always running"]
+    TE --> S["Scheduler<br/>every 30 s"]
+    TW -->|due| S
+    IL["Idle loop<br/>every 60 s"]
+  end
+  subgraph CT["Tenant container: waku dashboard with WAKU_HOSTED=1"]
+    EV[("events<br/>state.db")] --> W["Worker, timer loop,<br/>dispatcher"]
+  end
+  S -->|"start the container"| CT
+  S -->|"POST /api/events<br/>handed on 200"| EV
+  IL -->|"GET /api/alwayson/next"| CT
+  IL -->|"earliest timer"| TW
+  IL -->|"stop, unless it<br/>reports work"| CT
+```
+
+- **`POST /api/events`** stores each event the gateway hands over as one
+  `pending` row, exactly as a source does. A batch with one event that cannot
+  be stored writes no row. An event cannot have the source `timer` or
+  `approval`, because the container writes those itself.
+- **`GET /api/alwayson/next`** answers the earliest pending timer and how
+  many events, outgoing messages and runs are still in flight. The gateway
+  asks before it stops the container, keeps the container while any count is
+  above zero, and starts it again at the timer's time.
+- **Both routes answer 404 without `WAKU_HOSTED=1`**, so a dashboard on a
+  person's own machine has neither, and starts no worker.
+
 A run never sends. Its reply becomes one row in the `outbox` table, and the
 dispatcher sends the row to the Telegram chat, the Slack thread or the GitHub
 issue the events came from.
@@ -462,7 +497,8 @@ shows those instead. A proxy that does not know the turn leaves the estimate.
   and `gh`, and `format.py`, which turns the model's Markdown into what each
   channel reads), `timers.py` (the timers table and the loop that fires each
   due timer), `waiting.py` (lists what waits and cancels one), `serve.py`
-  (`waku serve`)
+  (`waku serve`), `handover.py` (the same parts inside a hosted container's
+  dashboard, and the two routes its gateway calls)
   and `sources/` (Telegram, Slack and GitHub handlers that only insert a
   row).
 - `waku/runtime/session.py` — working memory for one turn: SOUL.md, memory

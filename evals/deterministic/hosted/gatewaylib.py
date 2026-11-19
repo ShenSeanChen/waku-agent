@@ -552,6 +552,73 @@ class FakeContainer:
             self._server = None
 
 
+class AlwaysOnContainer:
+    """The two routes a tenant container answers for the gateway (spec 026):
+    POST /api/events and GET /api/alwayson/next. HTTP/1.0, like the stock
+    dashboard.
+
+    It records every event it was handed, and a test sets what it answers:
+    `events_status` for a hand-over, `work` for the report (None answers 404,
+    which is what an image older than spec 026 answers)."""
+
+    def __init__(self) -> None:
+        self.handed: list[list[dict]] = []
+        self.asked = 0
+        self.events_status = 200
+        self.work: dict | None = {"next_timer_at": None, "events": 0, "outbox": 0,
+                                  "running": 0}
+        # Called inside the report, before it answers: how a test makes a
+        # request arrive while the gateway is waiting for this answer.
+        self.on_ask = lambda: None
+        self._server: ThreadingHTTPServer | None = None
+        self.port = 0
+
+    def start(self, port: int = 0) -> None:
+        recorder = self
+
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, *args):
+                """Silence BaseHTTPRequestHandler's stderr log line."""
+
+            def _answer(self, status: int, payload: dict) -> None:
+                body = json.dumps(payload).encode("utf-8")
+                self.send_response(status)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def do_GET(self):
+                if self.path != "/api/alwayson/next":
+                    self._answer(404, {})
+                    return
+                recorder.asked += 1
+                recorder.on_ask()
+                if recorder.work is None:
+                    self._answer(404, {})
+                else:
+                    self._answer(200, recorder.work)
+
+            def do_POST(self):
+                length = int(self.headers.get("Content-Length", 0))
+                body = json.loads(self.rfile.read(length) or b"{}")
+                if self.path != "/api/events":
+                    self._answer(404, {})
+                    return
+                recorder.handed.append(body.get("events"))
+                self._answer(recorder.events_status, {"accepted": len(body.get("events", []))})
+
+        self._server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+        self.port = self._server.server_address[1]
+        threading.Thread(target=self._server.serve_forever, daemon=True).start()
+
+    def stop(self) -> None:
+        if self._server is not None:
+            self._server.shutdown()
+            self._server.server_close()
+            self._server = None
+
+
 class AcceptsThenCloses:
     """A socket that accepts a connection and closes it without answering.
 

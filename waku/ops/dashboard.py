@@ -32,6 +32,7 @@ from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+from waku.alwayson import handover
 from waku.config import load_settings
 from waku.db import connect
 from waku.integrations import (
@@ -1377,6 +1378,14 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _send_json(self, status: int, payload: dict) -> None:
+        body = json.dumps(payload).encode()
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
     def _foreign_host(self) -> bool:
         """Refuse a request whose Host is not this machine (DNS rebinding).
         True when it did, and the caller returns."""
@@ -1491,6 +1500,17 @@ class Handler(BaseHTTPRequestHandler):
 
             prov = parse_qs(urlparse(self.path).query).get("provider", [None])[0]
             self._send(json.dumps(list_models(prov)).encode(), "application/json")
+        elif self.path == "/api/alwayson/next":
+            # Spec 026: the hosted gateway asks this before it stops an idle
+            # container. The route exists only in a hosted container.
+            if not handover.enabled():
+                self._send_json(404, {})
+                return
+            conn = connect(load_settings().home)
+            try:
+                self._send_json(200, handover.next_work(conn))
+            finally:
+                conn.close()
         elif self.path.startswith("/api/events"):
             from urllib.parse import parse_qs, urlparse
 
@@ -1541,6 +1561,24 @@ class Handler(BaseHTTPRequestHandler):
             self._send(json.dumps(transcribe_audio(raw)).encode(), "application/json")
             return
         # /api/chat/stream streams harness events (SSE) as the turn runs.
+        if self.path == "/api/events":
+            # Spec 026: the hosted gateway hands over the events it kept while
+            # this container was stopped. GET /api/events is the page's own
+            # feed and has nothing to do with this.
+            if not handover.enabled():
+                self._send_json(404, {})
+                return
+            try:
+                payload = json.loads(self.rfile.read(length) or "{}")
+            except ValueError:
+                self._send_json(400, {"error": "the body is not JSON"})
+                return
+            conn = connect(load_settings().home)
+            try:
+                self._send_json(*handover.accept(conn, payload))
+            finally:
+                conn.close()
+            return
         if self.path == "/api/chat/stream":
             payload = json.loads(self.rfile.read(length) or "{}")
             message = (payload.get("message") or "").strip()
@@ -1790,10 +1828,16 @@ def main() -> None:
         register_gateway_status_provider(supervisor.status)
         register_gateway_reloader(supervisor.reconcile)
         supervisor.reconcile()
+        # Spec 026: a hosted container runs the always-on worker, timer loop
+        # and dispatcher in this process. None on a person's own machine,
+        # where `waku serve` is its own command.
+        alwayson = handover.start(load_settings())
         print(f"Waku dashboard → http://localhost:{port}  (Ctrl-C to stop)")
         try:
             server.serve_forever()
         finally:
+            if alwayson is not None:
+                alwayson.stop()
             supervisor.shutdown()
         return
     raise SystemExit(f"no free port in {base}–{base + 9}")

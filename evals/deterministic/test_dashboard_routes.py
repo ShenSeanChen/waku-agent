@@ -85,6 +85,8 @@ PINNED_GET = GET_PATHS | {
     "/api/judgment-arena",
     "/api/memory-arena",
     "/api/memory-arena/stores",
+    # spec 026: the hosted gateway asks a container what work it has left
+    "/api/alwayson/next",
 }
 
 # Every path do_POST matches: the streaming `if self.path == ...` checks handled
@@ -96,6 +98,8 @@ PINNED_POST = POST_ROUTES | STREAM_ROUTES | {
     "/api/judgment-arena/stream",
     "/api/memory-arena/clean",
     "/api/memory-arena/stream",
+    # spec 026: the hosted gateway hands a tenant's waiting events over
+    "/api/events",
 }
 
 _EXACT_PATH = re.compile(r'self\.path\s*==\s*"([^"]+)"')

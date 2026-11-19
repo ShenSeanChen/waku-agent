@@ -336,6 +336,11 @@ def tenant_container(config: SpawnerConfig, *, tenant_id: str, project_id: int,
             # may spend. A research turn with a failed lookup or two needs
             # more than ten; at the limit the loop still answers, tools off.
             f"WAKU_MAX_ITERATIONS={TENANT_MAX_ITERATIONS}",
+            # Spec 026: stock waku's dashboard starts the always-on worker,
+            # timer loop and dispatcher, and answers the gateway's hand-over
+            # routes, only when this is set. An inspect container does not
+            # get it.
+            "WAKU_HOSTED=1",
             # The free tier's four, present only when there IS one. Stock
             # waku decides whether to offer the row by whether these are set
             # (waku/integrations.py, the hidden_unless_env row), so omitting

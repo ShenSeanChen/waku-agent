@@ -73,7 +73,7 @@ Nothing here is a surprise. If you hit one of these, the issue exists.
 | Slack, Gmail and Google Drive are not on the starter list: each vendor's server takes sign-in only from a client registered with it beforehand, and Waku registers itself at sign-in | — | — |
 | The owner can approve only in a private Telegram chat named in `WAKU_OWNER`. Without one, a call that needs a yes is refused. Slack cannot carry the answer, because `waku serve` hears no Slack direct message | — | — |
 | The model reads a call that waits for a yes as "A plugin hook stopped this call before it ran", followed by the real reason | — | — |
-| A timer `schedule_task` sets fires only while `waku serve` runs; `waku` and `waku dashboard` do not fire it. A timer cannot repeat | — | — |
+| A timer `schedule_task` sets fires only while `waku serve` runs, or in a hosted container; `waku` and `waku dashboard` on your own machine do not fire it. A timer cannot repeat. On hosted waku a stopped container is started for a timer, and nothing else wakes it yet: no chat, embed or Slack message is stored as an event (spec 026, groups B and C). A run a timer starts there sends nothing, because a hosted container has no sender. This path has run against a fake spawner and a fake clock only, never on the VM | — | — |
 | Google Calendar sign-in has no bundled OAuth client, so `waku connect google` needs your own `~/.waku/credentials.json` | — | — |
 
 **Providers are the recurring theme.** Three of the items above are one
