@@ -47,6 +47,29 @@ class SlackInstall:
     needs_reconnect: bool = False
 
 
+@dataclass(frozen=True)
+class ConnectClient:
+    """The gateway's registration with one vendor (spec 029 A1). One row per
+    vendor, for every tenant. `client_sealed` holds the client id, the client
+    secret and the vendor's sign-in addresses as SecretBox sealed them."""
+    server: str
+    redirect_uri: str
+    client_sealed: bytes = field(repr=False)
+
+
+@dataclass(frozen=True)
+class Connection:
+    """One person's sign-in to one vendor (spec 029 A3). `token_sealed` holds
+    the access token, the refresh token and when the access token ends, as
+    SecretBox sealed them: the store never sees a token."""
+    tenant_id: str
+    server: str
+    token_sealed: bytes = field(repr=False)
+    # True when the token cannot be used any more: the key does not open it,
+    # or the vendor refused to renew it. The person signs in again.
+    needs_reconnect: bool = False
+
+
 class ControlStore(Protocol):
     def create_tenant(self, *, sub: str, email: str, timezone: str) -> Tenant: ...
     def tenant_by_sub(self, sub: str) -> Tenant | None: ...
@@ -82,4 +105,14 @@ class ControlStore(Protocol):
     def slack_installs(self) -> list[SlackInstall]: ...
     def set_slack_reconnect(self, team_id: str, needed: bool) -> None: ...
     def delete_slack_install(self, team_id: str) -> None: ...
+    def set_connect_client(self, server: str, *, redirect_uri: str,
+                           client_sealed: bytes) -> None: ...
+    def connect_client(self, server: str) -> ConnectClient | None: ...
+    def set_connection(self, tenant_id: str, server: str, *,
+                       token_sealed: bytes) -> None: ...
+    def connection(self, tenant_id: str, server: str) -> Connection | None: ...
+    def connections(self, tenant_id: str) -> list[Connection]: ...
+    def set_connection_reconnect(self, tenant_id: str, server: str,
+                                 needed: bool) -> None: ...
+    def delete_connection(self, tenant_id: str, server: str) -> bool: ...
     def delete_tenant(self, tenant_id: str) -> None: ...

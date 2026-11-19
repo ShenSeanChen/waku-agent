@@ -11,6 +11,11 @@ script and its policy allows none. Each step's state is a `data-state` on its
 list item and a word beside it: done, todo, or off when this server has no
 Slack app configured.
 
+Under the steps the page lists the connectors a person can sign in to (spec
+029): Notion and Linear, each with "Connect", or "Connected" once the gateway
+holds that person's tokens. The Connections page (spec 030) replaces this
+list.
+
 EVERYTHING THAT IS NOT THIS FILE'S OWN TEXT IS ESCAPED. The workspace's name
 comes from Slack, and the outcome in `?slack=` comes from a URL anybody can
 write, so the outcome is looked up in a closed set and never shown itself.
@@ -23,7 +28,7 @@ from pathlib import Path
 
 from aiohttp import web
 
-from hosted.gateway import answers, slack
+from hosted.gateway import answers, connect, slack
 from hosted.ports.control import SlackInstall
 
 TEMPLATE = Path(__file__).resolve().parent.parent / "templates" / "setup.html"
@@ -36,6 +41,16 @@ OUTCOMES = {
     slack.FAILED: "Slack did not finish the install. Press Add to Slack again.",
     slack.TAKEN: "That workspace is already connected to another Waku account.",
 }
+# How a connector's sign-in ended, as /setup?connect=<outcome>&server=<name>.
+# `{title}` is the vendor's name from this code's own list, never the query's.
+CONNECT_OUTCOMES = {
+    connect.CONNECTED: "{title} is connected. Its tools are there in your agent's next answer.",
+    connect.DENIED: "{title} was not connected, because the request was cancelled there.",
+    connect.EXPIRED: "That link expired before the sign-in finished. Press Connect again.",
+    connect.FAILED: "{title} did not finish the sign-in. Press Connect again.",
+}
+CONNECTORS_HEAD = "Connect your tools"
+CONNECTOR_WORDS = {"connected": "Connected", "reconnect": "To do", "todo": "To do"}
 SLACK_OFF = "Slack is not available on this server yet."
 STATE_WORDS = {"done": "Done", "todo": "To do", "off": "Not available"}
 
@@ -59,8 +74,42 @@ def _step(number: int, name: str, state: str, title: str, detail: str,
             f'<span class="state">{STATE_WORDS[state]}</span></li>\n')
 
 
+def _connectors(signed_in: bool, connectors: list[tuple[str, str, str]]) -> str:
+    """The list of connectors, or nothing when this server offers none. Each
+    item is (name, title, state), and the state is `connected`, `reconnect`
+    or `todo` (connect.Connect.states)."""
+    if not connectors:
+        return ""
+    items = ""
+    for name, title, state in connectors:
+        start = f"{connect.START_PATH}?server={name}"
+        if not signed_in:
+            detail, action = "Sign in first.", ""
+        elif state == "connected":
+            detail = (f"Your agent can read {title}. It cannot change anything there "
+                      "yet: a change needs your yes, and that is not built here.")
+            action = _button(start, f"Sign in to {title} again", secondary=True)
+        elif state == "reconnect":
+            detail = f"Waku lost its sign-in to {title}. Connect it again."
+            action = _button(start, f"Reconnect {title}")
+        else:
+            detail = f"Sign in on {title}'s own page. Waku never sees your password."
+            action = _button(start, f"Connect {title}")
+        done = "done" if signed_in and state == "connected" else "todo"
+        items += (f'    <li data-connector="{html.escape(name, quote=True)}" '
+                  f'data-state="{done}"><span class="number"></span>'
+                  f"<div><h2>{html.escape(title)}</h2>"
+                  f'<p class="detail">{html.escape(detail)}</p>{action}</div>'
+                  f'<span class="state">{CONNECTOR_WORDS[state] if signed_in else "To do"}'
+                  "</span></li>\n")
+    return (f'  <h2 id="connectors-head">{html.escape(CONNECTORS_HEAD)}</h2>\n'
+            f'  <ol id="connectors">\n{items}  </ol>\n')
+
+
 def render(*, signed_in: bool, slack_on: bool, install: SlackInstall | None,
-           outcome: str, login_url: str, dashboard_url: str) -> web.Response:
+           outcome: str, login_url: str, dashboard_url: str,
+           connectors: list[tuple[str, str, str]] | None = None,
+           connect_outcome: str = "", connect_server: str = "") -> web.Response:
     # A workspace whose stored token cannot be opened is not connected: it
     # hears mentions and cannot answer. slack.check_tokens marks it.
     lost = signed_in and install is not None and install.needs_reconnect
@@ -95,10 +144,19 @@ def render(*, signed_in: bool, slack_on: bool, install: SlackInstall | None,
         if connected else "After Slack is connected, mention @Waku in a channel.",
         _button(dashboard_url, "Open your agent", secondary=True) if connected else "")
     sentence = OUTCOMES.get(outcome, "") if signed_in else ""
+    connectors = connectors or []
+    # The vendor's title comes from this server's own list: the name in the
+    # query only picks one, and a name that is not on the list shows nothing.
+    title = next((title for name, title, _ in connectors if name == connect_server), "")
+    if (not sentence and signed_in and connect_outcome in CONNECT_OUTCOMES
+            and (title or connect_outcome == connect.EXPIRED)):
+        sentence = CONNECT_OUTCOMES[connect_outcome].format(title=title)
+        outcome = connect_outcome
     notice = (f'  <p id="notice" role="status" data-outcome="{outcome}">'
               f"{html.escape(sentence)}</p>\n" if sentence else "")
     body = (TEMPLATE.read_text(encoding="utf-8")
-            .replace("@@NOTICE@@", notice).replace("@@STEPS@@", steps))
+            .replace("@@NOTICE@@", notice).replace("@@STEPS@@", steps)
+            .replace("@@CONNECTORS@@", _connectors(signed_in, connectors)))
     response = web.Response(text=body, content_type="text/html", charset="utf-8")
     response.headers["Content-Security-Policy"] = POLICY
     return answers.harden(response)

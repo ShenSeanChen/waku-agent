@@ -1,6 +1,7 @@
 """control.db -- tenants, sessions, proxy tokens, and each tenant's waiting
-events and next wakeup, and the Slack workspace each tenant connected (spec
-026). The gateway's alone.
+events and next wakeup, the Slack workspace each tenant connected (spec
+026), and each tenant's sign-in to a connector (spec 029). The gateway's
+alone.
 
 On the VM, control/ is owned by UID 10002 with mode 0700, so the one-writer
 rule is enforced by file ownership rather than by convention. The proxy never
@@ -11,7 +12,8 @@ Neither a cookie value nor a proxy token's plaintext is stored: those are
 hashes. Two credentials are stored. A tenant's Waku Memory key is in
 plaintext (set_memory_key says why). A workspace's Slack bot token is sealed
 with a key that is not in this file (hosted/gateway/secretbox.py), so a copy
-of this file cannot post to anybody's Slack.
+of this file cannot post to anybody's Slack. A connector's tokens, and the
+gateway's own registration with the vendor, are sealed the same way.
 """
 
 from __future__ import annotations
@@ -32,7 +34,7 @@ from hosted.core.tenant import (
     normalise_timezone,
     token_hash,
 )
-from hosted.ports.control import SlackInstall, Tenant, TenantEvent
+from hosted.ports.control import ConnectClient, Connection, SlackInstall, Tenant, TenantEvent
 
 SESSION_TTL_SECONDS = 30 * 24 * 3600
 
@@ -120,6 +122,28 @@ CREATE TABLE IF NOT EXISTS slack_install (
   installed_at  REAL NOT NULL,
   -- 1 when the gateway's key does not open token_sealed (slack.check_tokens).
   needs_reconnect INTEGER NOT NULL DEFAULT 0
+);
+-- Spec 029 A1: the gateway's registration with one vendor's sign-in server,
+-- made once with the one redirect address and used for every tenant.
+-- client_sealed is the client id, the client secret and the vendor's sign-in
+-- addresses, encrypted by SecretBox.
+CREATE TABLE IF NOT EXISTS connect_client (
+  server         TEXT PRIMARY KEY,
+  redirect_uri   TEXT NOT NULL,
+  client_sealed  BLOB NOT NULL,
+  registered_at  REAL NOT NULL
+);
+-- Spec 029 A3: one tenant's sign-in to one vendor. token_sealed is the access
+-- token, the refresh token and the access token's end, encrypted by SecretBox
+-- and bound to this tenant and this server.
+CREATE TABLE IF NOT EXISTS connect_token (
+  tenant_id     TEXT NOT NULL,
+  server        TEXT NOT NULL,
+  token_sealed  BLOB NOT NULL,
+  connected_at  REAL NOT NULL,
+  -- 1 when the token cannot be used any more (connect.Connect marks it).
+  needs_reconnect INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (tenant_id, server)
 );
 """
 
@@ -551,6 +575,80 @@ class ControlDb:
             self._conn.execute("DELETE FROM slack_install WHERE team_id = ?", (team_id,))
             self._conn.commit()
 
+    # --- spec 029: connectors -------------------------------------------
+
+    def set_connect_client(self, server: str, *, redirect_uri: str,
+                           client_sealed: bytes) -> None:
+        """Keep the gateway's registration with one vendor, in place of the
+        one kept before."""
+        with self._lock:
+            self._conn.execute(
+                "INSERT OR REPLACE INTO connect_client (server, redirect_uri, "
+                "client_sealed, registered_at) VALUES (?, ?, ?, ?)",
+                (server, redirect_uri, client_sealed, self._now()))
+            self._conn.commit()
+
+    def connect_client(self, server: str) -> ConnectClient | None:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT server, redirect_uri, client_sealed FROM connect_client "
+                "WHERE server = ?", (server,)).fetchone()
+        return ConnectClient(row[0], row[1], bytes(row[2])) if row is not None else None
+
+    def set_connection(self, tenant_id: str, server: str, *, token_sealed: bytes) -> None:
+        """Keep this tenant's tokens for one vendor. A second sign-in, and
+        each renewal, replaces the row and clears its reconnect mark."""
+        self._require_tenant_id(tenant_id)
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO connect_token (tenant_id, server, token_sealed, connected_at) "
+                "VALUES (?, ?, ?, ?) ON CONFLICT (tenant_id, server) DO UPDATE SET "
+                "token_sealed = excluded.token_sealed, needs_reconnect = 0",
+                (tenant_id, server, token_sealed, self._now()))
+            self._conn.commit()
+
+    @staticmethod
+    def _connection(row: sqlite3.Row) -> Connection:
+        return Connection(row[0], row[1], bytes(row[2]), bool(row[3]))
+
+    def connection(self, tenant_id: str, server: str) -> Connection | None:
+        if not is_tenant_id(tenant_id):
+            return None
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT tenant_id, server, token_sealed, needs_reconnect FROM connect_token "
+                "WHERE tenant_id = ? AND server = ?", (tenant_id, server)).fetchone()
+        return self._connection(row) if row is not None else None
+
+    def connections(self, tenant_id: str) -> list[Connection]:
+        """Every vendor this tenant signed in to, by name."""
+        if not is_tenant_id(tenant_id):
+            return []
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT tenant_id, server, token_sealed, needs_reconnect FROM connect_token "
+                "WHERE tenant_id = ? ORDER BY server", (tenant_id,)).fetchall()
+        return [self._connection(row) for row in rows]
+
+    def set_connection_reconnect(self, tenant_id: str, server: str, needed: bool) -> None:
+        self._require_tenant_id(tenant_id)
+        with self._lock:
+            self._conn.execute(
+                "UPDATE connect_token SET needs_reconnect = ? "
+                "WHERE tenant_id = ? AND server = ?", (int(needed), tenant_id, server))
+            self._conn.commit()
+
+    def delete_connection(self, tenant_id: str, server: str) -> bool:
+        """Remove this tenant's tokens for one vendor. True when there were
+        any."""
+        self._require_tenant_id(tenant_id)
+        with self._lock:
+            removed = self._conn.execute(
+                "DELETE FROM connect_token WHERE tenant_id = ? AND server = ?",
+                (tenant_id, server)).rowcount
+            self._conn.commit()
+        return removed > 0
+
     def delete_tenant(self, tenant_id: str) -> None:
         """The row goes; the archive keeps the files for 30 days.
 
@@ -571,5 +669,6 @@ class ControlDb:
             self._conn.execute("DELETE FROM tenant_events WHERE tenant_id = ?", (tenant_id,))
             self._conn.execute("DELETE FROM tenant_wakeups WHERE tenant_id = ?", (tenant_id,))
             self._conn.execute("DELETE FROM slack_install WHERE tenant_id = ?", (tenant_id,))
+            self._conn.execute("DELETE FROM connect_token WHERE tenant_id = ?", (tenant_id,))
             self._conn.execute("DELETE FROM tenant WHERE id = ?", (tenant_id,))
             self._conn.commit()

@@ -187,6 +187,10 @@ flowchart LR
   it keeps encrypted in `control.db`. The container's `slack_history` tool
   (`waku/tools/slack_history.py`, hosted only) asks the platform the same way
   for the recent messages of the channel a run is in.
+- **A connector on hosted waku is signed in to by the gateway** (spec 029,
+  `hosted/gateway/connect.py`). The gateway registers itself with Notion or
+  Linear, sends the person's browser to the vendor's sign-in page, and keeps
+  the tokens encrypted in `control.db`. A container holds no vendor token.
 
 A run never sends. Its reply becomes one row in the `outbox` table, and the
 dispatcher sends the row to the Telegram chat, the Slack thread or the GitHub
