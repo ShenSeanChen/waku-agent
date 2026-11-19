@@ -1079,3 +1079,62 @@ def test_connected_line_reaches_the_owner_after_the_sign_in(chat):
 def test_connected_line_is_printed_by_the_command_line(cli):
     _, out = cli("add", "linear")
     assert "Linear is connected: 1 tool, and it does not ask first." in out
+
+
+# ---- the fourth live run, 2026-11-18 ---------------------------------------
+
+def test_status_says_which_server_is_connected_and_which_is_not(tmp_path):
+    """"Are we connected?" was answered from the conversation, and before
+    that by connecting again, which asked the owner for a yes."""
+    connectors.add(tmp_path, "linear", url=LINEAR)
+    connectors.add(tmp_path, "notion", url="https://mcp.notion.com/mcp")
+    _token(tmp_path, "linear")
+
+    said = connectors.status(tmp_path).splitlines()
+
+    assert said[0] == "Linear (linear): connected."
+    assert said[1].startswith("Notion (notion): not connected.")
+    assert "nobody has signed in" in said[1] and "http" not in said[1]
+
+
+def test_status_says_when_a_link_is_waiting(tmp_path):
+    connectors.add(tmp_path, "linear", url=LINEAR)
+    made = []
+    connectors.start_sign_in(tmp_path, "linear", wait=5,
+                             bridge=lambda *a: made.append(FakeBridge(*a)) or made[-1])
+
+    said = connectors.status(tmp_path)
+
+    assert "A sign-in link is waiting" in said and "http" not in said
+    made[0].finish.set()
+
+
+def test_status_with_nothing_added_names_the_starter_list(tmp_path):
+    assert "No connector is added yet" in connectors.status(tmp_path)
+
+
+def test_status_is_a_tool_that_never_asks(chat):
+    from waku.alwayson import approvals
+
+    assert chat.tools.get("connector_status") is not None
+    assert approvals.mode("connector_status", {}) == approvals.ALLOW
+
+
+def test_a_tool_that_does_not_exist_asks_nobody(chat):
+    """The model called `notion_notion-notion-search`, a name it made up, and
+    the owner was asked to approve a search."""
+    said, _ = _ask(chat, "notion_notion-notion-search", {"query": "Thoughts"})
+
+    assert said == "Error: unknown tool 'notion_notion-notion-search'"
+    assert chat.conn.execute("SELECT COUNT(*) FROM outbox").fetchone()[0] == 0
+
+
+def test_a_request_lists_the_arguments_one_per_line():
+    from waku.alwayson import approvals
+
+    said = approvals.describe("notion_notion-update-page",
+                              {"page_id": "abc", "properties": {"title": "Video ideas"}})
+
+    assert said.splitlines() == ["Run notion_notion-update-page with:", "• page_id: abc",
+                                 '• properties: {"title": "Video ideas"}']
+    assert approvals.describe("some_tool", {}) == "Run some_tool."

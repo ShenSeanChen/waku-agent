@@ -115,6 +115,7 @@ MODES: dict[str, str | Callable[[dict, Address | None], str]] = {
     "send_message": _send_message,
     "connect_tool": _connect_tool,
     "disconnect_tool": ASK,
+    "connector_status": ALLOW,   # it reads this machine's own files
 }
 
 
@@ -229,6 +230,23 @@ def _describe_disconnect_tool(args: dict) -> str:
     return f"Disconnect '{str(args.get('name', '')).strip()}' and forget its sign-in."
 
 
+_MAX_VALUE_CHARS = 300
+
+
+def _describe_any(tool: str, args: dict) -> str:
+    """A tool with no words of its own: its name, then one line per
+    argument. The owner reads this on a phone, so it is not one line of JSON."""
+    if not args:
+        return f"Run {tool}."
+    lines = [f"Run {tool} with:"]
+    for key, value in args.items():
+        said = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
+        if len(said) > _MAX_VALUE_CHARS:
+            said = said[:_MAX_VALUE_CHARS] + "…"
+        lines.append(f"• {key}: {said}")
+    return "\n".join(lines)
+
+
 # What a call will do, in the tool's own words. The owner reads this.
 DESCRIBE: dict[str, Callable[[dict], str]] = {
     "send_message": _describe_send_message,
@@ -240,7 +258,7 @@ _MAX_DESCRIPTION_CHARS = 1500
 
 def describe(tool: str, args: dict) -> str:
     words = DESCRIBE.get(tool)
-    text = words(args) if words else f"Run {tool} with {json.dumps(args, ensure_ascii=False)}"
+    text = words(args) if words else _describe_any(tool, args)
     return text[:_MAX_DESCRIPTION_CHARS]
 
 
@@ -326,6 +344,11 @@ class Gate:
             return None, ""
         args = args if isinstance(args, dict) else {}
         known = self._tools.get(tool) if self._tools is not None else None
+        if self._tools is not None and known is None and tool not in MODES:
+            # No such tool, so there is nothing to approve. The registry tells
+            # the model so. On 2026-11-18 the model called a Notion tool under
+            # a name it made up, and the owner was asked to approve a search.
+            return None, ""
         if self.mode(tool, args, context.address, known) == ALLOW:
             return None, ""
         return park(self.conn, int(context.run_id), tool, args, self._now(), self._tz,

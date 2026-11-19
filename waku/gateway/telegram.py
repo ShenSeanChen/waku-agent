@@ -180,10 +180,17 @@ def note_poll_error(exc: Exception, warned: dict, idle: str) -> None:
     """Runs on every polling error. The common one is Conflict: another bot
     instance is already polling this token. Say it ONCE, plainly, and never
     dump a traceback into the terminal. `warned["conflict"]` stays True until
-    its owner clears it, which `waku serve` does when a message arrives."""
+    its owner clears it, which `waku serve` does when a message arrives or
+    when Telegram has stopped refusing. `warned["conflict_at"]` is when the
+    last refusal came, on the monotonic clock."""
+    import time
+
     from telegram.error import Conflict
 
-    if isinstance(exc, Conflict) and not warned["conflict"]:
+    if not isinstance(exc, Conflict):
+        return
+    warned["conflict_at"] = time.monotonic()
+    if not warned["conflict"]:
         warned["conflict"] = True
         print(f"(telegram) another instance is already running this bot — {idle}")
 
