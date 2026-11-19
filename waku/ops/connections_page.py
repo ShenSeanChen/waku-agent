@@ -263,3 +263,71 @@ def page(connections: list[dict], mcp_cards: list[dict], connectors: dict,
         "sign_in": waiting,
         "add_by_address": bool(connectors.get("available")),
     }
+
+
+# ---- the Tools page: where each ability comes from (decision 2) -------------
+
+# The tools Waku ships that a card on Connections turns on or improves.
+APPLE_TOOLS = frozenset({"read_apple_calendar", "read_apple_mail", "create_reminder",
+                         "create_note"})
+WEB_SEARCH = "search_web"
+
+
+def _cards(composed: dict) -> list[dict]:
+    out: list[dict] = []
+    for group in composed["groups"]:
+        out += group["cards"]
+        if group["more"]:
+            out += group["more"]["cards"]
+    return out
+
+
+def _server_cards(composed: dict, connectors: dict) -> dict[str, dict]:
+    """Server name -> the card that controls it."""
+    cards = _cards(composed)
+    found = {card["action"]["target"]: card for card in cards
+             if card["action"] and card["action"]["kind"] == "manage"}
+    by_id = {card["id"]: card for card in cards}
+    for row in connectors.get("servers", []):
+        if row.get("own_card"):
+            card = by_id.get(WAKU_MEMORY_ID if row.get("memory") else row["name"])
+            if card is not None:
+                found[row["name"]] = card
+    return found
+
+
+def tool_sources(names: list[str], composed: dict, connectors: dict) -> dict[str, dict | None]:
+    """For each tool, the card on the Connections page that controls it, as
+    {id, name}, or None for a tool that is built in. A server's tools are
+    named `<server>_<tool>`, and the longest server name that fits wins. A
+    server with no card on the page (a hosted container's) is named and has
+    no id, so the Tools page links nowhere for it."""
+    by_id = {card["id"]: card for card in _cards(composed)}
+    servers = _server_cards(composed, connectors)
+    every = sorted((row["name"] for row in connectors.get("servers", [])), key=len, reverse=True)
+
+    def source(name: str) -> dict | None:
+        server = next((s for s in every if name.startswith(f"{s}_")), None)
+        if server is not None:
+            card = servers.get(server)
+            return ({"id": card["id"], "name": card["name"]} if card
+                    else {"id": "", "name": server})
+        if name in APPLE_TOOLS:
+            card = by_id.get("apple_tools")
+        elif name == WEB_SEARCH:
+            # Waku searches the web without a key. Tavily's key makes that
+            # search Tavily's.
+            card = by_id.get("tavily")
+            card = card if card and card["state"] != "not-configured" else None
+        else:
+            card = None
+        return {"id": card["id"], "name": card["name"]} if card else None
+
+    return {name: source(name) for name in names}
+
+
+def not_connected(composed: dict) -> list[dict]:
+    """The starter connectors nobody connected: the cards whose button adds
+    one. The Tools page lists them once, with a link."""
+    return [{"id": card["id"], "name": card["name"]} for card in _cards(composed)
+            if card["action"] and card["action"]["kind"] == "add"]

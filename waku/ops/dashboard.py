@@ -615,6 +615,7 @@ def connectors_data() -> dict:
         # Waku Memory and treg each have a card of their own on Connections
         # (spec 030), so their server is not drawn a second time.
         row["own_card"] = kind == connectors.MEMORY or row["name"] == treg.NAME
+        row["memory"] = kind == connectors.MEMORY
         rows.append(row)
     waiting = connectors.sign_in_waiting(home)
     # A server counts as a starter connector by its address, never by its name.
@@ -1002,15 +1003,25 @@ def tools_info(events: list[dict] | None = None) -> dict:
             from waku.tools import experimental as experimental_tools
 
             tools += experimental_tools.make_tools(settings)
+    # Where each ability comes from (spec 030): None for a tool that is
+    # built in, or the card on the Connections page that controls it.
+    from waku.ops import connections_page
+
+    page = connections_page_data()
+    servers = connectors_data()
+    origin = connections_page.tool_sources([t.name for t in tools], page, servers)
     for t in tools:
         catalog.append({"name": t.name, "description": t.description,
-                        "source": _tool_source(t.name, mcp["servers"])})
+                        "source": _tool_source(t.name, mcp["servers"]),
+                        "from": origin[t.name]})
     catalog.sort(key=lambda c: (c["source"], c["name"]))
     from waku.tools.experimental import PLANNED
 
     mcp["rows"] = [_mcp_row(settings.home, spec, live, tools) for spec in specs]
     return {"catalog": catalog, "mcp": mcp, "hooks": hooks_info(settings.home, events),
             "apple_on": settings.apple_tools,
+            # Starter connections nobody connected, listed once on the page.
+            "not_connected": connections_page.not_connected(page),
             "planned": PLANNED}   # whiteboard boxes not wired in yet (coming soon)
 
 

@@ -585,21 +585,28 @@ const VIEWS = {
     let h = subtabBar("tools", tabs, sub);
     if (sub === "results") return h + toolsResults(d);
     if (sub === "hooks") return h + toolsHooks(t);
-    // Available: what the agent CAN do (grouped by origin), not just what it did.
-    h += `<div class="meta" style="margin-bottom:var(--space-3)">The capabilities the agent can call this turn.
-      A tool is a name + description the model reads, a JSON schema, and a Python function — that's it.
-      ${t.apple_on?"":"Apple tools are off (set <code>WAKU_APPLE_TOOLS=1</code>). "}Connect more in
-      ${uiLink("Connections", "#connections/apps")}.</div>`;
-    const SRC = [["flagship","Flagship task — scheduling"],["web","Web search"],
-      ["self-management","Self-management — it edits its own memory"],
-      ["apple","Apple ecosystem"],["mcp","MCP servers"],["other","Other"]];
-    SRC.forEach(([key,label]) => {
-      const items = t.catalog.filter(c => c.source === key);
-      if (!items.length) return;
-      h += `<h2>${label}</h2>`;
-      h += items.map(c => uiCard(`
-        <div class="tn"><code>${esc(c.name)}</code> ${uiBadge(esc(key), key==="mcp" ? "ok" : "neutral")}</div>
-        <div class="td">${esc(c.description)}</div>`, {cls: "toolcard", size: "sm"})).join("");
+    // Available: what the agent can do right now, grouped by where each
+    // ability comes from (spec 030). The page changes nothing: a connection
+    // is managed on its card in Connections, one click from its group here.
+    h += `<div class="meta" style="margin-bottom:var(--space-3)">What Waku can do right now. Each tool says where
+      it comes from: Waku itself, or a connection. This page changes nothing: a connection is added and
+      removed in ${uiLink("Connections", "#connections")}.</div>`;
+    const toolCard = (c, label) => uiCard(`
+        <div class="tn"><code>${esc(c.name)}</code> ${uiBadge(esc(label), c.from ? "ok" : "neutral")}</div>
+        <div class="td">${esc(c.description)}</div>`, {cls: "toolcard", size: "sm"});
+    const builtIn = t.catalog.filter(c => !c.from);
+    if (builtIn.length)
+      h += `<h2>Built in</h2>` + builtIn.map(c => toolCard(c, "built in")).join("");
+    // One group for each connection, in the order its first tool appears.
+    const groups = [];
+    t.catalog.filter(c => c.from).forEach(c => {
+      let g = groups.find(x => x.name === c.from.name);
+      if (!g) groups.push(g = {name: c.from.name, id: c.from.id, items: []});
+      g.items.push(c);
+    });
+    groups.forEach(g => {
+      h += `<h2>${esc(g.name)}</h2>` + g.items.map(c => toolCard(c, g.name)).join("");
+      if (g.id) h += `<div class="meta toolmanage">${uiLink("Manage in Connections", "#connections/" + encodeURIComponent(g.id))}</div>`;
     });
     // Roadmap: whiteboard boxes not wired in yet — set expectations, don't over-promise.
     if ((t.planned||[]).length){
@@ -608,6 +615,12 @@ const VIEWS = {
         <div class="tn"><code>${esc(p.name)}</code> ${uiBadge(`soon · ${esc(p.box)}`)}</div>
         <div class="td">${esc(p.description)}</div>`, {cls: "toolcard toolcard-soon", size: "sm"})).join("");
     }
+    // The last line of the page: the starter connections nobody connected,
+    // so a person who looks for a missing ability finds the way.
+    const missing = t.not_connected || [];
+    if (missing.length)
+      h += `<div class="meta toolmissing">Not connected: ${missing.map(m => esc(m.name)).join(", ")}.
+        ${uiLink("Connect", "#connections/" + encodeURIComponent(missing[0].id))}</div>`;
     return h;
   },
   sql(d){
