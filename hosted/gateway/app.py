@@ -39,7 +39,16 @@ from aiohttp import web
 
 from hosted import log
 from hosted.core import policy, quota
-from hosted.gateway import answers, connect, embed, guards, sessions, setup_page, slack
+from hosted.gateway import (
+    answers,
+    connect,
+    embed,
+    guards,
+    sessions,
+    setup_page,
+    slack,
+    slack_state,
+)
 from hosted.gateway.config import GatewayConfig
 from hosted.gateway.identity import NotSignedIn
 from hosted.gateway.launch import (
@@ -912,6 +921,15 @@ class Gateway:
                 return answers.refusal(request, 403, embed.EMBED_REFUSED)
         if request.method == "GET" and path == embed.PAGE_PATH:
             return await self._embed_page(request, tenant)
+        if path == slack_state.PATH:
+            # Spec 030: the Slack card's facts. Answered here, so a stopped
+            # container is not started to say what only the gateway knows.
+            if request.method != "GET":
+                return answers.json_error(405, slack_state.GET_ONLY)
+            return answers.json_ok(slack_state.facts(
+                slack_on=self._slack is not None,
+                install=self._store.slack_install(tenant.id),
+                apex_host=self._config.apex_host))
         return await self._forward(request, tenant)
 
     def _embed_session(self, request: web.Request, label: str) -> str | None:

@@ -31,6 +31,12 @@ function render(){
     history.replaceState(null, "", "#evals");
     hashView = "evals"; subRaw = undefined;
   }
+  // Tools had a tab for the servers a person connects. They are cards on
+  // Connections now (spec 030), so the old link opens that page.
+  if (hashView === "tools" && subRaw === "mcp"){
+    history.replaceState(null, "", "#connections/apps");
+    hashView = "connections"; subRaw = "apps";
+  }
   const v = hashView === "ops" ? "observability" : hashView;
   const sub = subRaw || null;
   // FIRST RUN. With no usable provider, every other page is a page about a
@@ -81,6 +87,9 @@ function render(){
     const y = keepScroll ? main.scrollTop : 0;
     document.getElementById("view").innerHTML = VIEWS[view](D, sub);
     if (keepScroll) main.scrollTop = y;
+    // #connections/<card> opens the page at that card. Every redraw marks it
+    // again; only the navigation scrolls to it.
+    if (view === "connections" && sub) focusConnection(sub, subChanged);
   }
   activeView = view; activeSub = sub;
   document.getElementById("n-gw").textContent = (D.chat_log||[]).length || "";
@@ -181,6 +190,7 @@ async function refresh(background = false){
     applyTele();      // reflect the stats on/off choice (default on)
     syncLiveView(background);   // live-update an opened conversation (e.g. new phone messages)
     if (!dockRestored) restoreDock(background);
+    hostedAfterRefresh(background);   // hosted Waku: what the gateway knows about Slack
     // Self-heal the Compare scoreboard: it otherwise only loads on tab-open and
     // after a race, so a slow/interrupted race (or a server blip) can leave it
     // showing a partial set. Re-pull the server totals while viewing the tab —

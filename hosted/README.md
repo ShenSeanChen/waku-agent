@@ -501,7 +501,8 @@ container --POST /slack/send--> proxy --gateway.sock--> gateway --chat.postMessa
 
 | Route | On | What it does |
 |---|---|---|
-| `GET /setup` | the apex | shows three steps and which are done: Sign in, Add to Slack, Mention @Waku |
+| `GET /setup` | the apex | shows three steps and which are done: Sign in, Add to Slack, Mention @Waku. A connected workspace gets "Update permissions" and "Connect a different workspace", which both open Slack's approval page |
+| `GET /hosted/slack` | a tenant's own host | tells the dashboard's Slack card what the gateway knows: whether this server has a Slack app, whether the person connected a workspace, its name, and the addresses of `/slack/install` and `/setup`. It reads one row, changes nothing, holds no token, and does not start the container |
 | `GET /slack/install` | the apex | sends a signed-in person to Slack's approval page, with a `state` bound to their tenant that works once, for 10 minutes |
 | `GET /slack/oauth/callback` | the apex | checks the `state` and the browser's own session, exchanges Slack's code for the workspace's bot token, and stores it |
 | `POST /v1/triggers/slack` | the apex | takes every workspace's events. It checks Slack's signature over the raw body, refuses a timestamp more than 5 minutes from now, and stores a mention as one row in `tenant_events` under Slack's event id |
@@ -842,7 +843,7 @@ server of their own keeps it.
 
 A person who has a treg team of their own can use it instead (spec 014). On
 the Connections page the treg card reads "Through waku.one: paid in your Waku
-credits." and has a Configure button. They paste their org-scoped treg key,
+credits." and has a Manage button. They paste their org-scoped treg key,
 Test connection asks treg (`GET https://treg.to/tools`, free) whether it is
 good, and Save writes `TREG_API_KEY` to their own `.env`, like a Tavily key.
 The card then reads "Your own treg key: paid by your treg account."

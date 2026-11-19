@@ -155,7 +155,27 @@ def _darwin_tools(env: Mapping[str, str]) -> bool:
     return sys.platform == "darwin" and bool(env.get("WAKU_APPLE_TOOLS"))
 
 
+# The page that says how to make the Slack app from the manifest. A link to
+# the repository, because a card's setup link opens in the browser.
+SLACK_SETUP = ("https://github.com/ShenSeanChen/waku-agent/blob/main/"
+               "docs/integrations.md#slack-from-a-manifest")
+
 INTEGRATIONS: tuple[Integration, ...] = (
+    # Spec 030: Slack has a card like Telegram's. `waku serve` hears Slack
+    # (waku/alwayson/sources/slack.py), not the dashboard, so the row is LIVE:
+    # a save writes .env and the dashboard starts nothing. Its test is the
+    # check `waku connections` makes (slack_status).
+    Integration("slack", "Channels", "Slack",
+                "Lets Waku answer Slack mentions while waku serve runs.",
+                (EnvField("SLACK_BOT_TOKEN", "Bot token", required=True, secret=True,
+                          help="Starts with xoxb-. The Bot User OAuth Token of your own Slack app."),
+                 EnvField("SLACK_APP_TOKEN", "App-level token", required=True, secret=True,
+                          help="Starts with xapp-. It opens the Socket Mode connection."),
+                 EnvField("SLACK_ALLOWED_CHANNELS", "Allowed channels",
+                          help="Channel ids the agent hears, comma-separated. Empty means it "
+                               "hears nobody.")),
+                "slack", "slack_sdk", SLACK_SETUP, ReloadMode.LIVE,
+                lambda env: bool(env.get("SLACK_BOT_TOKEN")), None),
     Integration("telegram", "Channels", "Telegram", "Lets Waku receive and send Telegram messages.",
                 (EnvField("TELEGRAM_BOT_TOKEN", "Bot token", required=True, secret=True),
                  EnvField("TELEGRAM_ALLOWED_USER", "Allowed user")), "telegram", "telegram",
@@ -194,7 +214,8 @@ INTEGRATIONS: tuple[Integration, ...] = (
                 "Lets Waku use Apple Mail and other local Apple tools.",
                 (EnvField("WAKU_APPLE_TOOLS", "Enable Apple tools", FieldKind.BOOL),), None, None,
                 "", ReloadMode.AGENT, _darwin_tools, None),
-    Integration("notion", "Memory & Storage", "Notion", "Stores episodic memory in a Notion database.",
+    Integration("notion", "Memory & Storage", "Notion database (memory store)",
+                "Stores episodic memory in a Notion database.",
                 (EnvField("WAKU_EPISODIC_STORE", "Episodic store", FieldKind.CHOICE,
                           default="sqlite", options=("sqlite", "notion")),
                  EnvField("NOTION_TOKEN", "Integration token", required=True, secret=True),
@@ -248,7 +269,7 @@ INTEGRATIONS: tuple[Integration, ...] = (
                           help="Embeddings also require OPENAI_API_KEY (optionally OPENAI_EMBED_MODEL).")),
                 "supabase", "supabase", "", ReloadMode.AGENT,
                 lambda env: env.get("WAKU_SEMANTIC_STORE") == "supabase", None),
-    Integration("tavily", "Search & Observability", "Tavily", "Lets Waku search the web.",
+    Integration("tavily", "Search & Observability", "Web search", "Search the web, through Tavily.",
                 (EnvField("TAVILY_API_KEY", "API key", secret=True),), None, None,
                 "https://tavily.com", ReloadMode.LIVE, lambda env: bool(env.get("TAVILY_API_KEY")), None),
     # Spec 014: a person's own treg key. Its card is treg's MCP card
@@ -654,6 +675,14 @@ def _tavily_probe(values: Mapping[str, str]) -> None:
             raise ValueError(f"Tavily returned HTTP {response.status}")
 
 
+def _slack_probe(values: Mapping[str, str]) -> None:
+    """Ask Slack whether the two tokens work and hold the scopes `waku serve`
+    needs: the same check `waku connections` prints."""
+    ok, line = slack_status(values)
+    if not ok:
+        raise ValueError(line)
+
+
 def _treg_probe(values: Mapping[str, str]) -> None:
     """Ask treg whether the key is good: GET /tools lists the team's own tools,
     is free, writes nothing and answers 401 on a bad key. Straight to treg.to,
@@ -712,6 +741,8 @@ def _probed(integration: Integration) -> Integration:
         return Integration(**{**integration.__dict__, "probe": _notion_probe})
     if integration.key == "tavily":
         return Integration(**{**integration.__dict__, "probe": _tavily_probe})
+    if integration.key == "slack":
+        return Integration(**{**integration.__dict__, "probe": _slack_probe})
     if integration.key == "treg":
         return Integration(**{**integration.__dict__, "probe": _treg_probe})
     if integration.key == "otel":

@@ -102,5 +102,5 @@ def test_the_tools_page_has_a_hooks_tab_and_the_memory_page_its_strip():
     views = (Path(dashboard.__file__).parent / "static" / "js" / "views.js").read_text(encoding="utf-8")
     assert '["hooks","Hooks"' in views and "function toolsHooks(t)" in views
     assert "function memWhich(d)" in views and "memWhich(d) + uiNotice" in views
-    # the MCP tab reads the merged rows, not mcp.json's names alone
-    assert "m.rows" in views
+    # The servers moved to the Connections page (spec 030): Tools has no tab for them.
+    assert '["mcp","MCP"' not in views and "function toolsMCP(" not in views

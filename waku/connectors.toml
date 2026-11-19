@@ -2,7 +2,7 @@
 #
 #   waku mcp add linear        the command line
 #   "connect Linear"           chat, after the owner's yes
-#   the "Connectors" card      the dashboard
+#   the Connections page      the dashboard
 #
 # Each entry is the vendor's own hosted MCP server. Nobody submits a connector
 # here: the list changes by pull request, and a person adds any other server
