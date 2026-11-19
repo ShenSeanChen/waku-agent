@@ -22,8 +22,9 @@ JS_FILES = sorted((STATIC / "js").glob("*.js"))
 JS_SRC = "\n".join(f.read_text() for f in JS_FILES)
 # The registry's cards, plus the MCP sign-in cards (spec 007 E), which are not
 # .env integrations and so are not in the registry.
+# GitHub is a starter connector (waku/connectors.toml), not a registry row.
 CONNECTION_LOGOS = ({f"{integration.key}.svg" for integration in INTEGRATIONS}
-                    | {f"{treg.NAME}.svg"})
+                    | {f"{treg.NAME}.svg", "github.svg"})
 
 # JS keywords / builtins / DOM globals an inline handler may call without a js/
 # definition. Kept small on purpose — anything else must be a real app function.
@@ -89,6 +90,36 @@ def test_inline_handlers_are_defined():
     called = _handler_calls(INDEX) | _handler_calls(JS_SRC)
     missing = {n for n in called if n not in defined and n not in ALLOWED}
     assert not missing, f"inline handlers call undefined functions: {sorted(missing)}"
+
+
+# Browser functions with a camelCase name that the scripts call.
+BROWSER_FUNCTIONS = {
+    "setTimeout", "setInterval", "clearTimeout", "clearInterval", "encodeURIComponent",
+    "decodeURIComponent", "parseFloat", "parseInt", "isNaN", "getComputedStyle",
+    "requestAnimationFrame", "structuredClone",
+}
+
+
+def test_every_app_function_a_script_calls_is_defined():
+    """A function that one script calls and no script defines is a button
+    that throws when it is pressed. `test_inline_handlers_are_defined` reads
+    the handlers; this reads the calls made from inside functions.
+
+    It caught nothing until 2026-11-19: spec 030 removed
+    `connectionStatusDisplay` with the block around it, `openConnectionModal`
+    still called it, and every card's dialog failed to open with every eval
+    green. The dashboard's functions are camelCase, so a camelCase name that
+    is called and is neither defined here nor a browser function is one."""
+    code = re.sub(r"//[^\n]*", "", JS_SRC)
+    called = {name for name in re.findall(r"(?<![.\w$])([a-z][a-z0-9]*[A-Z][\w$]*)\s*\(", code)}
+    defined = set(re.findall(r"function\s+([A-Za-z_$][\w$]*)", code))
+    defined |= set(re.findall(r"(?:const|let|var)\s+([A-Za-z_$][\w$]*)", code))
+    for params in (re.findall(r"function\s*[\w$]*\s*\(([^)]*)\)", code)
+                   + re.findall(r"\(([^()]*)\)\s*=>", code)):
+        defined |= {part.split("=")[0].strip(" {}[].") for part in params.split(",")}
+    defined |= set(re.findall(r"([A-Za-z_$][\w$]*)\s*=>", code))
+    missing = called - defined - BROWSER_FUNCTIONS
+    assert not missing, f"called and never defined: {sorted(missing)}"
 
 
 def test_app_js_is_gone():

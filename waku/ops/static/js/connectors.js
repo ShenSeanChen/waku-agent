@@ -1,7 +1,7 @@
 // The parts of the Connections page that belong to a server a person
 // connected themselves (spec 025, moved here from Tools by spec 030): the
 // sign-in link while one waits, the dialog a card's Manage button opens, and
-// the section that adds a server by its address.
+// the form that adds a server by its address ("For developers").
 //
 // The rows come from `connectors` in /api/data. The page takes a starter name
 // or an address only. A server that is a program on this machine is added from the command
@@ -11,9 +11,9 @@
 // so every one goes through esc, and a link is shown only when it is http(s).
 
 let connectorNote = "";
-// Whether the "Add a server by address" section is open. The page is drawn
-// again every few seconds, and a section a person opened must stay open.
-let connectorAddOpen = false;
+// Whether the "For developers" section is open. The page is drawn again
+// every few seconds, and a section a person opened must stay open.
+let connectionsDevOpen = false;
 
 function connectorLink(link){
   return /^https?:\/\//.test(link || "")
@@ -60,11 +60,10 @@ function openConnectorManage(name){
     </div>`, {label: r.name});
 }
 
-// The advanced section at the foot of "Apps Waku can use": a server that is
-// not on the starter list, by its address.
+// Inside "For developers" at the foot of the page: a server that is not on
+// the starter list, by its address.
 function connectorAddSection(){
-  return `<details class="connmore"${connectorAddOpen ? " open" : ""} ontoggle="connectorAddOpen = this.open">
-    <summary>Add a server by address</summary>
+  return `<h3 class="connsub">Add a server by address</h3>
     <div class="connmore-body">
       <div class="meta" style="margin-bottom:var(--space-2)">For an app that is not listed above and gives
         its tools from a web address. Waku asks before one of its tools changes anything.</div>
@@ -79,8 +78,7 @@ function connectorAddSection(){
         A plugin brings its server and its ${uiLink("hooks", "#tools/hooks")} with it:
         <code>waku plugin install &lt;name&gt;@&lt;marketplace&gt;</code>.
         Restart the dashboard to load a new server's tools.</div>
-    </div>
-  </details>`;
+    </div>`;
 }
 
 // With a name: a starter card's Connect button. Without one: the address in

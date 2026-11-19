@@ -24,6 +24,12 @@ GROUPS = (
 COMPARE_TITLE = "Memory stores to compare"
 COMPARE_STORES = ("mem0", "zep", "langmem", "supabase")
 
+# The closed section at the foot of the page: settings a developer uses, and
+# adding a server by its address. OpenTelemetry sends traces somewhere; it
+# gives the agent nothing to do, so it is not an app.
+DEVELOPERS_TITLE = "For developers"
+DEVELOPER_CARDS = ("otel",)
+
 # Where a registry group's cards go (waku/integrations.py names the groups).
 REGISTRY_GROUP = {
     "Channels": "talk",
@@ -58,6 +64,9 @@ HOSTED_CONNECTIONS = frozenset({"notion", "tavily", "treg"})
 # The cards that can never work in a container. They are left off the page,
 # and one closed line says why.
 MAC_ONLY = ("apple_calendar", "apple_tools")
+# The registry's Slack row is a person's own Slack app. Hosted Waku has one
+# app for everybody, and its card comes from the gateway.
+HOSTED_SLACK = "slack"
 HIDDEN_WHY = "{names} need a Mac, and hosted Waku runs on a Linux server."
 WAKU_MEMORY_HOSTED = "Hosted Waku sets this up when you sign in."
 
@@ -98,7 +107,8 @@ _TREG_STATE = {
 # The cards that have a drawing under waku/ops/static/. A card without one
 # shows the first letter of its name.
 _REGISTRY_LOGO = "logos/connections/{key}.svg"
-_STARTER_LOGOS = {"notion": "logos/connections/notion.svg"}
+_STARTER_LOGOS = {"notion": "logos/connections/notion.svg",
+                  "github": "logos/connections/github.svg"}
 _WAKU_LOGO = "waku-mark.svg"
 
 
@@ -120,6 +130,12 @@ def server_id(name: str) -> str:
     return f"server-{name}"
 
 
+def verb(state: str) -> str:
+    """One verb for one act: "Connect" on a card that is not connected, and
+    "Manage" once it is. A card that is half set up is not connected."""
+    return "Manage" if state in ("connected", "configured", "error") else "Connect"
+
+
 def registry_card(view: dict) -> dict:
     """A card for one row of the integrations registry. Its button opens the
     row's own dialog."""
@@ -130,8 +146,7 @@ def registry_card(view: dict) -> dict:
     why = str(status.get("message") or "") if state in ("needs-setup", "error") else ""
     return _card(view["key"], view["name"], state, view["what"],
                  logo=_REGISTRY_LOGO.format(key=view["key"]), why=why,
-                 action=_action("dialog", "Configure" if state == "not-configured" else "Edit",
-                                view["key"]))
+                 action=_action("dialog", verb(state), view["key"]))
 
 
 def treg_card(card: dict) -> dict:
@@ -140,7 +155,7 @@ def treg_card(card: dict) -> dict:
     opens that key's dialog instead (spec 014)."""
     state, label = _TREG_STATE.get(card.get("state"), _TREG_STATE["not_added"])
     if card.get("configurable"):
-        action = _action("dialog", "Configure", card["key"])
+        action = _action("dialog", verb(state), card["key"])
     elif state == "connected":
         action = None
     else:
@@ -260,6 +275,7 @@ def page(connections: list[dict], mcp_cards: list[dict], connectors: dict,
     grouped: dict[str, list[dict]] = {group_id: [] for group_id, _ in GROUPS}
     compare: list[dict] = []
     hidden: list[str] = []
+    developers: list[dict] = []
     # A registry row that a sign-in card stands for (treg's key) is drawn
     # once, as that card. Its dialog is still the registry row's.
     drawn = {card["key"] for card in mcp_cards}
@@ -269,10 +285,16 @@ def page(connections: list[dict], mcp_cards: list[dict], connectors: dict,
         if hosted and view["key"] in MAC_ONLY:
             hidden.append(view["name"])
             continue
+        if hosted and view["key"] == HOSTED_SLACK:
+            # The gateway knows about Slack on hosted Waku, and the page
+            # draws its card from the gateway's answer (static/js/hosted.js).
+            continue
         card = registry_card(view)
         if hosted and view["key"] not in HOSTED_CONNECTIONS:
             card = not_here(card)
-        if view["key"] in COMPARE_STORES:
+        if view["key"] in DEVELOPER_CARDS:
+            developers.append(card)
+        elif view["key"] in COMPARE_STORES:
             compare.append(card)
         else:
             grouped[REGISTRY_GROUP.get(view["group"], "apps")].append(card)
@@ -300,7 +322,8 @@ def page(connections: list[dict], mcp_cards: list[dict], connectors: dict,
         apps_first = [not_here(starter_card(entry, None, None))
                       for entry in connectors.get("starter", [])]
     fixed = {card["name"].casefold()
-             for card in apps_first + compare + [c for cards in grouped.values() for c in cards]}
+             for card in apps_first + compare + developers
+             + [c for cards in grouped.values() for c in cards]}
     fixed.add("waku memory")
     _unique_names(own, fixed)
     grouped["apps"] = apps_first + own + grouped["apps"]
@@ -312,7 +335,8 @@ def page(connections: list[dict], mcp_cards: list[dict], connectors: dict,
                              if group_id == "memory" and compare else None)}
                    for group_id, title in GROUPS],
         "sign_in": waiting,
-        "add_by_address": bool(connectors.get("available")),
+        "developers": {"title": DEVELOPERS_TITLE, "cards": developers,
+                       "add_by_address": bool(connectors.get("available"))},
         "hidden": _hidden(hidden),
     }
 
@@ -331,7 +355,16 @@ def _cards(composed: dict) -> list[dict]:
         out += group["cards"]
         if group["more"]:
             out += group["more"]["cards"]
-    return out
+    return out + composed["developers"]["cards"]
+
+
+def connected(composed: dict) -> list[dict]:
+    """The connections that are set up right now, in the page's order, each
+    with its logo: the first row of the Tools page. A card that is set up and
+    not yet tested counts. One that failed its test, waits for a sign-in or
+    is half set up does not."""
+    return [{"id": card["id"], "name": card["name"], "logo": card["logo"]}
+            for card in _cards(composed) if card["state"] in ("connected", "configured")]
 
 
 def _server_cards(composed: dict, connectors: dict) -> dict[str, dict]:

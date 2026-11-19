@@ -151,10 +151,11 @@ def test_the_page_offers_configure_and_draws_treg_once():
     card = {"key": "treg", "name": "treg", "group": "Search & Observability", "what": "Live data.",
             "state": "connected", "detail": "", "configurable": True}
     page = connections_page.page([row], [card], {"available": False}, {"connected": False})
+    # "Manage", not "Configure": the card is connected, and the dialog changes its key.
 
     cards = [c for group in page["groups"] for c in group["cards"] if c["id"] == "treg"]
     assert len(cards) == 1 and cards[0]["what"] == "Live data."
-    assert cards[0]["action"] == {"kind": "dialog", "label": "Configure", "target": "treg"}
+    assert cards[0]["action"] == {"kind": "dialog", "label": "Manage", "target": "treg"}
     card["configurable"] = False
     assert connections_page.treg_card(card)["action"] is None, "connected, and no key to set"
 

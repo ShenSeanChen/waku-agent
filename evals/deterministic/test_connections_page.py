@@ -47,7 +47,7 @@ def _cards(page):
         out += group["cards"]
         if group["more"]:
             out += group["more"]["cards"]
-    return out
+    return out + page["developers"]["cards"]
 
 
 def _group(page, group_id):
@@ -72,11 +72,13 @@ def test_the_page_has_three_groups_named_by_what_a_person_does(home):
 def test_each_group_holds_the_cards_the_spec_names(home):
     page = _page()
 
-    assert [c["id"] for c in _group(page, "talk")["cards"]] == ["telegram", "discord", "whatsapp"]
+    assert [c["id"] for c in _group(page, "talk")["cards"]] == ["slack", "telegram", "discord",
+                                                                 "whatsapp"]
     apps = [c["id"] for c in _group(page, "apps")["cards"]]
     assert apps[:3] == ["app-linear", "app-notion", "app-github"], "the starter list comes first"
     assert set(apps) == {"app-linear", "app-notion", "app-github", "google_calendar",
-                         "apple_calendar", "apple_tools", "tavily", "treg", "otel"}
+                         "apple_calendar", "apple_tools", "tavily", "treg"}
+    assert [c["id"] for c in page["developers"]["cards"]] == ["otel"]
     memory = _group(page, "memory")
     assert [c["id"] for c in memory["cards"]] == ["waku-memory", "notion", "typesafe"]
     assert memory["more"]["title"] == "Memory stores to compare"
@@ -219,12 +221,12 @@ def test_waku_memory_card_offers_connect_until_it_is_connected(home, monkeypatch
 def test_a_registry_card_opens_its_own_dialog(home, monkeypatch):
     card = _card(_page(), "telegram")
     assert (card["state"], card["label"]) == ("not-configured", "not connected")
-    assert card["action"] == {"kind": "dialog", "label": "Configure", "target": "telegram"}
+    assert card["action"] == {"kind": "dialog", "label": "Connect", "target": "telegram"}
 
     monkeypatch.setenv("TAVILY_API_KEY", "tvly-not-a-real-key")
     card = _card(_page(), "tavily")
     assert (card["state"], card["label"]) == ("configured", "configured · not tested")
-    assert card["action"] == {"kind": "dialog", "label": "Edit", "target": "tavily"}
+    assert card["action"] == {"kind": "dialog", "label": "Manage", "target": "tavily"}
 
 
 def test_a_card_that_needs_setup_says_what_is_missing(home, monkeypatch):
@@ -239,7 +241,7 @@ def test_a_card_that_needs_setup_says_what_is_missing(home, monkeypatch):
 def test_adding_a_server_by_address_is_offered_on_a_persons_own_machine(home):
     page = _page()
 
-    assert page["add_by_address"] is True
+    assert page["developers"]["add_by_address"] is True
     assert page["sign_in"] is None
 
 
@@ -332,7 +334,7 @@ def test_hosted_lists_the_starter_apps_and_cannot_connect_them_yet(hosted):
         card = _card(page, card_id)
         assert card["action"] is None
         assert card["label"] == "not available here"
-    assert page["add_by_address"] is False
+    assert page["developers"]["add_by_address"] is False
 
 
 def test_hosted_waku_memory_is_set_up_by_the_platform_so_it_has_no_button(hosted):

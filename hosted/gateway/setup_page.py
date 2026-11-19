@@ -82,7 +82,11 @@ def render(*, signed_in: bool, slack_on: bool, install: SlackInstall | None,
         steps += _step(
             2, "slack", "done", "Add to Slack",
             f"Connected to {install.team_name}.",
-            _button(slack.INSTALL_PATH, "Connect a different workspace", secondary=True))
+            # Both open Slack's approval page. "Update permissions" is the
+            # same workspace approved again, which is what a person wants
+            # when Waku asks for a new permission.
+            _button(slack.INSTALL_PATH, "Update permissions")
+            + _button(slack.INSTALL_PATH, "Connect a different workspace", secondary=True))
     else:
         steps += _step(
             2, "slack", "todo", "Add to Slack",

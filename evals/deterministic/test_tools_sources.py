@@ -63,7 +63,7 @@ def test_a_tool_waku_ships_with_is_built_in(home):
 def test_web_search_names_tavily_once_its_key_is_set(home, monkeypatch):
     monkeypatch.setenv("TAVILY_API_KEY", "tvly-not-a-real-key")
 
-    assert _from(dashboard.tools_info())["search_web"] == {"id": "tavily", "name": "Tavily"}
+    assert _from(dashboard.tools_info())["search_web"] == {"id": "tavily", "name": "Web search"}
 
 
 def test_a_connected_servers_tool_names_its_card(home, monkeypatch):

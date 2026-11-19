@@ -320,6 +320,20 @@ async function saveProvider(provider){
 }
 function stProvider(){ return (D.settings || {}).provider || "anthropic"; }
 
+// A registry row's state as the connection dialog shows it, in the words the
+// cards use (waku/ops/connections_page.py, STATES). The dialog reads the row
+// itself, because Test connection answers with a row and not with a card.
+function connectionStatusDisplay(status){
+  const state = (status && status.state) || "not_configured";
+  if (state === "connected") return {label: "connected", className: "connected"};
+  if (state === "error") return {label: "error", className: "error"};
+  // Every required field is filled and nothing has tried it yet. That is
+  // not a warning, so it does not take the colour of one.
+  if (state === "configured") return {label: "configured · not tested", className: "configured"};
+  if (state === "installed_but_unconfigured") return {label: "needs setup", className: "needs-setup"};
+  return {label: "not connected", className: "not-configured"};
+}
+
 // The Connections page (spec 030). `connections_page` in /api/data holds
 // every card, in its group, with its state and its one button
 // (waku/ops/connections_page.py decides all of it). This file draws them.
@@ -331,18 +345,27 @@ function connectionLogo(card){
     : `<span class="provlogo connmark" aria-hidden="true">${esc(card.name.slice(0, 1).toUpperCase())}</span>`;
 }
 
-// The one button of a card. `kind` says what it does; an address is opened
-// only when it is http(s).
-function connectionAction(card){
-  const a = card.action;
+// A card's button. `kind` says what it does. An address is opened in a new
+// tab, and only when it is http(s): the button carries it as data, so no
+// address is ever part of a script.
+function connectionButton(a, level){
   if (!a) return "";
   const t = esc(a.target);
   if (a.kind === "href")
     return /^https?:\/\//.test(a.target)
-      ? `<a class="link" href="${t}" target="_blank" rel="noopener noreferrer">${esc(a.label)}</a>` : "";
+      ? uiButton(esc(a.label), {level, onclick: "openHref(this)", attrs: `data-href="${t}"`}) : "";
   const onclick = {dialog: `openConnectionModal('${t}')`, chat: `connectInChat('${t}')`,
                    add: `addConnector('${t}')`, manage: `openConnectorManage('${t}')`}[a.kind];
-  return onclick ? uiButton(esc(a.label), {level: "secondary", onclick}) : "";
+  return onclick ? uiButton(esc(a.label), {level, onclick}) : "";
+}
+function openHref(button){
+  const href = button.dataset.href || "";
+  if (/^https?:\/\//.test(href)) window.open(href, "_blank", "noopener,noreferrer");
+}
+// A card has one button. The hosted Slack card has a second, quieter one
+// (`action2`): the same workspace again, or a different one.
+function connectionAction(card){
+  return connectionButton(card.action, "secondary") + connectionButton(card.action2, "tertiary");
 }
 
 function connectionCard(card){
@@ -365,6 +388,9 @@ function connectInChat(key){
 }
 
 function connectionsGrid(page, slack){
+  // A dashboard that was not restarted after an update still sends the page
+  // without this section; draw it empty rather than not at all.
+  const dev = page.developers || {title: "For developers", cards: [], add_by_address: !!page.add_by_address};
   const grid = cards => `<div class="provgrid conngrid">${cards.map(connectionCard).join("")}</div>`;
   // Hosted Waku: the gateway knows about Slack, so its card comes from there
   // (hosted.js) and leads the first group.
@@ -373,12 +399,32 @@ function connectionsGrid(page, slack){
     <h2>${esc(group.title)}</h2>
     ${group.id === "apps" ? connectorSignIn(page.sign_in) : ""}
     ${grid(lead(group).concat(group.cards))}
-    ${group.id === "apps" && page.add_by_address ? connectorAddSection() : ""}
     ${group.more ? `<h3 class="connsub">${esc(group.more.title)}</h3>${grid(group.more.cards)}` : ""}
-  </section>`).join("") + (page.hidden ? `<details class="connmore connhidden">
+  </section>`).join("") + `<details class="connmore conndev" id="conn-group-developers"${connectionsDevOpen ? " open" : ""}
+      ontoggle="connectionsDevOpen = this.open">
+    <summary>${esc(dev.title)}</summary>
+    <div class="conndev-body">
+      ${grid(dev.cards)}
+      ${dev.add_by_address ? connectorAddSection() : ""}
+    </div>
+  </details>` + (page.hidden ? `<details class="connmore connhidden">
     <summary>${esc(page.hidden.title)}</summary>
     <div class="connmore-body meta">${esc(page.hidden.why)}</div>
   </details>` : "");
+}
+
+// The first row of the Tools page: the connections that are connected right
+// now, each with its logo, then the way to Connections. `tools.connected` in
+// /api/data lists them; on hosted Waku a connected Slack workspace joins.
+function toolsConnected(d, t){
+  const slack = hostedSlackCard(d);
+  const items = (slack && slack.state === "connected" ? [slack] : []).concat(t.connected || []);
+  const list = items.length
+    ? items.map(c => `<a class="toolconn-item" href="#connections/${encodeURIComponent(c.id)}"
+        title="${esc(c.name)} in Connections">${connectionLogo(c)}<span>${esc(c.name)}</span></a>`).join("")
+    : `<span class="meta">Nothing is connected yet.</span>`;
+  return `<div class="toolconn"><span class="toolconn-label">Connected</span>${list}
+    ${uiButton("Manage connections", {level: "secondary", size: "sm", cls: "toolconn-go", onclick: "location.hash = '#connections'"})}</div>`;
 }
 
 // A link such as #connections/app-notion opens the page at that card and
@@ -387,6 +433,9 @@ function focusConnection(id, scroll){
   const card = document.getElementById("conn-" + id);
   const el = card || document.getElementById("conn-group-" + id);
   if (!el) return;
+  // A card under "For developers" is in a closed section: open it first.
+  const closed = el.closest("details:not([open])") || (el.matches("details:not([open])") ? el : null);
+  if (closed){ closed.open = true; if (closed.classList.contains("conndev")) connectionsDevOpen = true; }
   if (card) card.classList.add("conn-target");
   if (scroll) el.scrollIntoView({block: card ? "center" : "start"});
 }
@@ -588,7 +637,7 @@ const VIEWS = {
     sub = sub || "available";
     const tabs = [["available","Available",t.catalog.length],["results","Results"],
       ["hooks","Hooks",(t.hooks && t.hooks.count)||null]];
-    let h = subtabBar("tools", tabs, sub);
+    let h = toolsConnected(d, t) + subtabBar("tools", tabs, sub);
     if (sub === "results") return h + toolsResults(d);
     if (sub === "hooks") return h + toolsHooks(t);
     // Available: what the agent can do right now, grouped by where each

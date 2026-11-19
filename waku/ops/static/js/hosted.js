@@ -39,11 +39,14 @@ function hostedAfterRefresh(background){
 function hostedSlackCard(d){
   const s = HOSTED_SLACK.data;
   if (!d.hosted || !s || !s.available) return null;
-  const card = {id: "slack", name: "Slack", logo: "", why: "",
+  const card = {id: "slack", name: "Slack", logo: "logos/connections/slack.svg", why: "",
                 what: "Mention @Waku in a channel, and it answers in the thread."};
   if (s.connected)
+    // Both open Slack's approval page. The first is what a person wants when
+    // Waku asks for a new permission: the same workspace, approved again.
     return {...card, state: "connected", label: "connected", why: s.team_name,
-            action: {kind: "href", label: "Connect a different workspace", target: s.install_url}};
+            action: {kind: "href", label: "Update permissions", target: s.install_url},
+            action2: {kind: "href", label: "Connect a different workspace", target: s.install_url}};
   if (s.needs_reconnect)
     return {...card, state: "needs-setup", label: "needs sign-in",
             why: `Waku lost its connection to ${s.team_name}.`,

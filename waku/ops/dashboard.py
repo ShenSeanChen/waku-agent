@@ -1027,6 +1027,8 @@ def tools_info(events: list[dict] | None = None) -> dict:
             "apple_on": settings.apple_tools,
             # Starter connections nobody connected, listed once on the page.
             "not_connected": connections_page.not_connected(page),
+            # What is connected right now, with logos: the page's first row.
+            "connected": connections_page.connected(page),
             "planned": PLANNED}   # whiteboard boxes not wired in yet (coming soon)
 
 

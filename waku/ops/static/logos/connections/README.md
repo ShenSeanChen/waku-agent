@@ -8,6 +8,14 @@ a third-party CDN at runtime.
   `whatsapp.svg` use paths from
   [Simple Icons 16.21.0](https://github.com/simple-icons/simple-icons), licensed
   under CC0 1.0. Colors and rounded backgrounds are Waku presentation wrappers.
+- `slack.svg` and `github.svg` use paths from Simple Icons 2.13.0, the same
+  set at an older release and under the same CC0 1.0. The paths were copied
+  from the `si` icons of `@react-icons/all-files` 4.1.0, which packages that
+  release. Slack's is its mark in one colour, not the four-colour one.
+  Simple Icons dropped Slack in a later release, which is why this file does
+  not come from 16.21.0.
+- Linear has no file here. Its card shows the first letter of its name until
+  a mark from Linear's own brand page is added.
 - `tavily.svg` uses the `tavily-color` artwork from
   [Lobe Icons 1.90.0](https://github.com/lobehub/lobe-icons), licensed under MIT.
   Copyright (c) 2023 LobeHub.
