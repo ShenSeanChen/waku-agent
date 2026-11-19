@@ -724,6 +724,8 @@ class FakeSlack:
         # What reading a thread and looking up a person answer. The default
         # is a workspace that added the app before those scopes were asked for.
         self.replies_answer: dict = {"ok": False, "error": "missing_scope"}
+        # What reading a channel's history answers (spec 029 D).
+        self.history_answer: dict = {"ok": False, "error": "missing_scope"}
         self.users: dict[str, str] = {}
         self.channels: dict[str, str] = {}
         self._server: ThreadingHTTPServer | None = None
@@ -756,6 +758,7 @@ class FakeSlack:
                 answers = {"/oauth.v2.access": recorder.oauth_answer,
                            "/chat.postMessage": recorder.post_answer,
                            "/conversations.replies": recorder.replies_answer,
+                           "/conversations.history": recorder.history_answer,
                            "/reactions.add": {"ok": True}}
                 answer = answers.get(self.path, {"ok": False, "error": "unknown_method"})
                 if self.path == "/conversations.info":

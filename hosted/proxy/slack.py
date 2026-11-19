@@ -37,7 +37,7 @@ from pathlib import Path
 from aiohttp import web
 
 from hosted import jsonsock, log
-from hosted.proxy.app import SLACK_SEND_PATH, Resolve
+from hosted.proxy.app import SLACK_HISTORY_PATH, SLACK_SEND_PATH, Resolve
 
 _LOG = log.get(__name__)
 
@@ -127,5 +127,89 @@ class SlackSend:
             # The gateway could not do it at all (an older gateway, or its
             # handler failed), which is not Slack saying no.
             _LOG.warning("tenant=%s: the gateway did not relay a Slack message", tenant)
+            return _answer(503, "relay_unreachable")
+        return _answer(400 if error == "bad_request" else 200, error)
+
+
+# --- spec 029 D: reading the channel a run is in ------------------------------
+
+HISTORY_PATH = SLACK_HISTORY_PATH
+HISTORY_FIELDS = frozenset({"channel", "thread_ts", "limit"})
+# The most reads one tenant makes in RATE_WINDOW_SECONDS. A run that needs
+# the channel reads it once or twice; this stops one that reads in a loop.
+READS_PER_MINUTE = 20
+# What `limit` is when a request names none, and the most it may be.
+HISTORY_DEFAULT, HISTORY_MAX = 30, 100
+
+
+class SlackHistory:
+    """POST /slack/history: the door of the container's slack_history tool.
+
+    The same four steps as SlackSend above, in the same order: who, what, how
+    many, and the gateway is asked. The body is `channel`, and `thread_ts`
+    and `limit` or not. The gateway decides whether this tenant may read
+    that channel (hosted/gateway/slack.SlackHistory) and reads it with the
+    workspace's token, which this process never sees.
+
+    The answer is the gateway's: {"ok": true, "channel": <name>, "messages":
+    [{ts, who, text, replies}]}, or {"ok": false, "error": <code>}.
+    """
+
+    def __init__(self, *, resolve: Resolve, gateway_socket: Path,
+                 monotonic: Callable[[], float] = time.monotonic) -> None:
+        self._resolve = resolve
+        self._socket = gateway_socket
+        self._monotonic = monotonic
+        self._recent: dict[str, deque[float]] = defaultdict(deque)
+
+    def _take(self, tenant: str) -> bool:
+        now = self._monotonic()
+        recent = self._recent[tenant]
+        while recent and now - recent[0] >= RATE_WINDOW_SECONDS:
+            recent.popleft()
+        if len(recent) >= READS_PER_MINUTE:
+            return False
+        recent.append(now)
+        return True
+
+    async def handle(self, request: web.Request) -> web.Response:
+        if request.method != "POST":
+            return _answer(405, "post_only")
+        try:
+            resolved = await self._resolve(_bearer(request))
+        except jsonsock.Unreachable:
+            return _answer(503, "relay_unreachable")
+        if resolved is None or resolved[1] != "active":
+            return _answer(401, "not_signed_in")
+        tenant = resolved[0]
+        try:
+            asked = json.loads(await request.read())
+        except (ValueError, web.HTTPRequestEntityTooLarge):
+            asked = None
+        if not isinstance(asked, dict) or set(asked) - HISTORY_FIELDS:
+            return _answer(400, "bad_request")
+        channel, thread_ts = asked.get("channel"), asked.get("thread_ts", "")
+        limit = asked.get("limit", HISTORY_DEFAULT)
+        if not (isinstance(channel, str) and isinstance(thread_ts, str)
+                and isinstance(limit, int) and not isinstance(limit, bool)
+                and 1 <= limit <= HISTORY_MAX):
+            return _answer(400, "bad_request")
+        if not self._take(tenant):
+            _LOG.info("tenant=%s: over %s Slack history reads a minute", tenant,
+                      READS_PER_MINUTE)
+            return _answer(429, "rate_limited")
+        try:
+            answer = await jsonsock.ask(
+                self._socket, {"op": "slack_history", "tenant": tenant, "channel": channel,
+                               "thread_ts": thread_ts, "limit": limit},
+                timeout=GATEWAY_TIMEOUT_SECONDS)
+        except jsonsock.Unreachable:
+            return _answer(503, "relay_unreachable")
+        if answer.get("ok") is True and isinstance(answer.get("messages"), list):
+            return web.json_response({"ok": True, "messages": answer["messages"],
+                                      "channel": str(answer.get("channel") or "")})
+        error = answer.get("error")
+        if "ok" not in answer or not isinstance(error, str):
+            _LOG.warning("tenant=%s: the gateway did not read a Slack channel", tenant)
             return _answer(503, "relay_unreachable")
         return _answer(400 if error == "bad_request" else 200, error)

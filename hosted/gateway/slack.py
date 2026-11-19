@@ -1,6 +1,6 @@
 """The public Waku Slack app (spec 026 group C, decision 5).
 
-One Slack app serves every workspace. Three things happen here:
+One Slack app serves every workspace. Four things happen here:
 
   install   "Add to Slack": GET /slack/install sends a signed-in person to
             Slack, and GET /slack/oauth/callback exchanges the code Slack
@@ -13,6 +13,9 @@ One Slack app serves every workspace. Three things happen here:
   relay     SlackRelay.send: a tenant's container asks for a message to be
             posted, and the gateway posts it with that tenant's token. The
             token never enters a container.
+  history   SlackHistory.read: a tenant's container asks for the recent
+            messages of the channel its run is in, and the gateway reads
+            them with that tenant's token (spec 029 D).
 
 THE STATE IS WHAT TIES AN INSTALL TO A PERSON. Slack returns whatever `state`
 it was given, so the gateway issues one per start: random, bound to the
@@ -228,7 +231,7 @@ _GZIP_MAGIC = b"\x1f\x8b"
 
 
 class SlackApi:
-    """The two Slack Web API methods the gateway calls."""
+    """The Slack Web API methods the gateway calls."""
 
     def __init__(self, session: aiohttp.ClientSession, base_url: str = SLACK_API) -> None:
         self._session = session
@@ -276,6 +279,12 @@ class SlackApi:
         return await self._post(
             "conversations.replies",
             data={"channel": channel, "ts": thread_ts, "limit": str(limit)},
+            headers={"Authorization": f"Bearer {token}"})
+
+    async def channel_history(self, token: str, channel: str, limit: int) -> dict:
+        """The last messages of one channel, newest first."""
+        return await self._post(
+            "conversations.history", data={"channel": channel, "limit": str(limit)},
             headers={"Authorization": f"Bearer {token}"})
 
     async def add_reaction(self, token: str, channel: str, ts: str, name: str) -> dict:
@@ -382,6 +391,97 @@ def _refused(code: str) -> dict:
     return {"ok": False, "error": code}
 
 
+# How many messages slack_history reads when it is not told, and at most.
+HISTORY_DEFAULT, HISTORY_MAX = 30, 100
+# One message's text, and the whole answer as JSON, at most. The answer goes
+# to the proxy as one line on gateway.sock, which holds 65,536 bytes.
+HISTORY_TEXT_CHARS = 2000
+HISTORY_ANSWER_BYTES = 40_000
+# Reading the messages and looking up their names, together.
+HISTORY_SECONDS = 8.0
+
+
+class SlackHistory:
+    """Read recent messages of one channel for a tenant, with that tenant's
+    workspace token (spec 029, decision 5 and task D1).
+
+    WHICH CHANNEL IS NOT A FREE CHOICE. The container names the channel of
+    the run that asks, and a container runs model-chosen tools, so the
+    gateway checks the name against what it knows itself: the channel has to
+    be one where this tenant's agent was mentioned, which is a row the
+    gateway wrote in tenant_events when Slack sent the mention. Any other
+    channel is refused, including one the bot is a member of. The people in
+    a channel the agent answers in already read what it reads there.
+
+    WHAT GOES BACK is names and text: `ok`, the channel's name and each
+    message's ts, author, text and count of replies, or `ok: false` with a
+    short error code. No token, no user id and nothing else of Slack's
+    answer is passed on.
+    """
+
+    def __init__(self, *, store: ControlStore, box: SecretBox, api: SlackApi,
+                 threads: ThreadReader) -> None:
+        self._store = store
+        self._box = box
+        self._api = api
+        self._threads = threads
+
+    async def read(self, tenant_id: str, channel: str, thread_ts: str = "",
+                   limit: int = HISTORY_DEFAULT) -> dict:
+        if (not is_tenant_id(tenant_id) or not isinstance(channel, str)
+                or not CHANNEL_ID.fullmatch(channel) or not isinstance(thread_ts, str)
+                or (thread_ts and not THREAD_TS.fullmatch(thread_ts))
+                or not isinstance(limit, int) or isinstance(limit, bool)
+                or not 1 <= limit <= HISTORY_MAX):
+            return _refused("bad_request")
+        install = self._store.slack_install(tenant_id)
+        if install is None:
+            return _refused("not_installed")
+        if not self._store.has_slack_channel(tenant_id, channel):
+            _LOG.info("tenant=%s: refused the history of a channel its agent was "
+                      "never mentioned in", tenant_id)
+            return _refused("other_channel")
+        try:
+            token = self._box.open(install.token_sealed,
+                                   bound_to=seal_binding(install.team_id))
+        except Unreadable:
+            self._store.set_slack_reconnect(install.team_id, True)
+            return _refused("token_unreadable")
+        try:
+            return await asyncio.wait_for(
+                self._read(token, install, channel, thread_ts, limit), HISTORY_SECONDS)
+        except SlackUnreachable as exc:
+            _LOG.warning("tenant=%s: Slack history failed: %s", tenant_id, exc)
+        except TimeoutError:
+            _LOG.warning("tenant=%s: Slack history took longer than %ss", tenant_id,
+                         HISTORY_SECONDS)
+        return _refused("slack_unreachable")
+
+    async def _read(self, token: str, install, channel: str, thread_ts: str,
+                    limit: int) -> dict:
+        if thread_ts:
+            answer = await self._api.thread_replies(token, channel, thread_ts, limit)
+        else:
+            answer = await self._api.channel_history(token, channel, limit)
+        found = answer.get("messages")
+        if answer.get("ok") is not True or not isinstance(found, list):
+            code = _error_code(answer) or "refused"
+            _LOG.info("tenant=%s: Slack refused a history read: %s", install.tenant_id, code)
+            return _refused(code)
+        # A channel's history arrives newest first, and a thread oldest first.
+        found = found[:limit] if thread_ts else list(reversed(found[:limit]))
+        read = await self._threads.messages(
+            token=token, team_id=install.team_id, bot_user_id=install.bot_user_id,
+            messages=found)
+        for message in read:
+            message["text"] = message["text"][:HISTORY_TEXT_CHARS]
+        # The oldest go first when the answer would not fit on the socket.
+        while read and len(json.dumps(read)) > HISTORY_ANSWER_BYTES:
+            read.pop(0)
+        return {"ok": True, "messages": read,
+                "channel": await self._threads.channel_name(token, install.team_id, channel)}
+
+
 class SlackRoutes:
     def __init__(self, *, settings: SlackSettings, apex_host: str, store: ControlStore,
                  api: SlackApi, now: Callable[[], float] = time.time,
@@ -403,6 +503,13 @@ class SlackRoutes:
     def relay(self) -> SlackRelay:
         """The relay that posts with the tokens these routes stored."""
         return SlackRelay(store=self._store, box=self._box, api=self._api)
+
+    @property
+    def history(self) -> SlackHistory:
+        """The reader that uses the tokens these routes stored, and the names
+        these routes already looked up."""
+        return SlackHistory(store=self._store, box=self._box, api=self._api,
+                            threads=self._threads)
 
     def check_tokens(self) -> list[str]:
         """Find the workspaces whose stored token this gateway's key does not

@@ -92,17 +92,7 @@ class ThreadReader:
                 _LOG.info("Slack thread not read for team=%s: %s", team_id,
                           _code(answer) or "refused")
 
-        async def name(user_id: str) -> str:
-            if user_id == bot_user_id:
-                return YOU
-            return await self._name(token, team_id, user_id)
-
-        async def words(text: str) -> str:
-            found = set(_USER_MENTION.findall(text))
-            names = {user: await name(user) for user in found}
-            text = _USER_MENTION.sub(lambda m: "@" + names[m.group(1)], text)
-            return html.unescape(text).strip()
-
+        name, words = self._readers(token, team_id, bot_user_id)
         who = await name(str(event.get("user") or "")) if event.get("user") else SOMEONE
         asked = (await words(str(event.get("text") or ""))).replace("@" + YOU, "").strip()
         lines = []
@@ -120,6 +110,47 @@ class ThreadReader:
                              channel=channel)
         body = f"{THREAD_HEAD}\n{thread}\n\n{head}\n{asked}" if thread else f"{head}\n{asked}"
         return f"{where}\n{body}"
+
+    def _readers(self, token: str, team_id: str, bot_user_id: str):
+        """(name, words) for one workspace: `name` turns a user id into the
+        name people see, and `words` turns a message's text into what it
+        reads as, with each mention replaced by a name."""
+        async def name(user_id: str) -> str:
+            if user_id == bot_user_id:
+                return YOU
+            return await self._name(token, team_id, user_id)
+
+        async def words(text: str) -> str:
+            found = set(_USER_MENTION.findall(text))
+            names = {user: await name(user) for user in found}
+            text = _USER_MENTION.sub(lambda m: "@" + names[m.group(1)], text)
+            return html.unescape(text).strip()
+
+        return name, words
+
+    async def messages(self, *, token: str, team_id: str, bot_user_id: str,
+                       messages: list) -> list[dict]:
+        """Slack's own message objects as {ts, who, text, replies}, in the
+        order given. A message with no text is left out. `replies` is how
+        many answers its thread holds. Used by slack_history (spec 029 D)."""
+        name, words = self._readers(token, team_id, bot_user_id)
+        read = []
+        for message in messages:
+            if not isinstance(message, dict):
+                continue
+            said = await words(str(message.get("text") or ""))
+            if not said:
+                continue
+            replies = message.get("reply_count")
+            read.append({"ts": str(message.get("ts") or ""),
+                         "who": await self._author(message, name), "text": said,
+                         "replies": replies if isinstance(replies, int)
+                         and not isinstance(replies, bool) else 0})
+        return read
+
+    async def channel_name(self, token: str, team_id: str, channel: str) -> str:
+        """`#name`, or `with the id <id>` when Slack does not say the name."""
+        return await self._channel(token, team_id, channel)
 
     async def _channel(self, token: str, team_id: str, channel: str) -> str:
         """`#name`, or `with the id <id>` when Slack does not say the name
