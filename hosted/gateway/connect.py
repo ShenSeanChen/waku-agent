@@ -47,7 +47,7 @@ import json
 import re
 import time
 import urllib.parse
-from collections.abc import Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 
 import aiohttp
@@ -363,6 +363,22 @@ class Connect:
         # not both spend the refresh token, which a vendor may accept once.
         self._registering: dict[str, asyncio.Lock] = {}
         self._renewing: dict[tuple[str, str], asyncio.Lock] = {}
+        # Spec 029 B2: called with (tenant id, server) after a person signed
+        # in to a vendor or disconnected one, so the container's list of
+        # servers can follow. The gateway's __main__ sets it.
+        self.on_change: Callable[[str, str], Awaitable[None]] | None = None
+
+    async def _changed(self, tenant_id: str, server: str) -> None:
+        """Tell whoever listens. A failure there is logged and never undoes
+        the sign-in: the tokens are kept, and the container's next start
+        reads the list again."""
+        if self.on_change is None:
+            return
+        try:
+            await self.on_change(tenant_id, server)
+        except Exception as exc:  # noqa: BLE001 -- see the docstring
+            _LOG.warning("tenant=%s: the container was not told that %s changed (%s)",
+                         tenant_id, server, type(exc).__name__)
 
     @property
     def vendors(self) -> dict[str, Vendor]:
@@ -475,6 +491,7 @@ class Connect:
             return self._back(FAILED, vendor.name)
         self._keep(found.tenant_id, vendor.name, tokens)
         _LOG.info("tenant=%s: connected %s", found.tenant_id, vendor.name)
+        await self._changed(found.tenant_id, vendor.name)
         return self._back(CONNECTED, vendor.name)
 
     @staticmethod
@@ -553,7 +570,7 @@ class Connect:
             self._keep(tenant_id, server, renewed)
             return renewed["access_token"]
 
-    def disconnect(self, tenant_id: str, server: str) -> bool:
+    async def disconnect(self, tenant_id: str, server: str) -> bool:
         """Forget this person's sign-in to one vendor. True when there was
         one. The row is deleted, so no copy of either token is left here."""
         if server not in self._vendors:
@@ -562,6 +579,7 @@ class Connect:
         removed = self._store.delete_connection(tenant_id, server)
         if removed:
             _LOG.info("tenant=%s: disconnected %s", tenant_id, server)
+            await self._changed(tenant_id, server)
         return removed
 
     def states(self, tenant_id: str | None) -> dict[str, str]:

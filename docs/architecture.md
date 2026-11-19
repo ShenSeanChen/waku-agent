@@ -189,6 +189,11 @@ flowchart LR
   `hosted/gateway/connect.py`). The gateway registers itself with Notion or
   Linear, sends the person's browser to the vendor's sign-in page, and keeps
   the tokens encrypted in `control.db`. A container holds no vendor token.
+  Its `mcp.json` names the metering proxy as the server
+  (`/connect/notion/mcp`), and the gateway makes each call
+  (`hosted/gateway/connect_mcp.py`). The container runs every tool of such a
+  server without asking (`connectors.platform_relayed`), and the gateway
+  refuses the ones that write.
 
 A run never sends. Its reply becomes one row in the `outbox` table, and the
 dispatcher sends the row to the Telegram chat, the Slack thread or the GitHub

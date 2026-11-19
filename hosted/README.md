@@ -41,7 +41,7 @@ which carries them. Neither license grants any right in them.
 | `core/` | pure logic: tenant ids, route policy, quota, idle, provisioning, request validation, the connector list |
 | `ports/` | the four replaceable seams, as Protocols and nothing else. The implementations live beside the service that owns each one |
 | `gateway/` | the front door: login, sessions, routing by host, `control.db`, the idle loop, the scheduler that wakes a stopped tenant for an event or a timer, the public Slack app's install, events and send relay, and the sign-in to a connector |
-| `proxy/` | the metering proxy in front of the model API, `ledger.db`, and the two routes a container reaches the platform through: treg and outgoing Slack |
+| `proxy/` | the metering proxy in front of the model API, `ledger.db`, and the routes a container reaches the platform through: treg, outgoing Slack and a connector's tools |
 | `spawner/` | the one process that talks to Docker |
 | `image/` | the tenant and services Dockerfiles, their allowlist ignore files, and the seccomp profile every container runs under |
 | `templates/` | the hosted `SOUL.md` and the gateway's own pages |
@@ -623,6 +623,12 @@ sign-in comes back to a port on their own computer
 | `GET /connect/start?server=<name>` | the apex | sends a signed-in person to the vendor's sign-in page, with a `state` bound to their tenant and the vendor that works once, for 10 minutes, and a PKCE challenge |
 | `GET /connect/callback` | the apex | checks the `state` and the browser's own session, exchanges the vendor's code for the person's tokens, and stores them |
 | `POST /connect/disconnect` | the apex | takes `{"server": "<name>"}` from a signed-in person and deletes their tokens for that vendor |
+| `POST /connect/<name>/mcp` | the proxy, on the tenant network | takes one MCP message from a container with the container's platform token, and has the gateway make the call with that tenant's sign-in. A tenant may send 60 a minute to one connector; one more answers 429 |
+| `POST /connect/link` | the proxy, on the tenant network | answers the `/connect/start` address for one connector, so "connect Notion" in a chat can give the person the link |
+
+```
+container --POST /connect/notion/mcp--> proxy --gateway.sock--> gateway --> mcp.notion.com
+```
 
 `<name>` is `notion` or `linear` (`hosted/core/connectors.py`). A person
 cannot add another address: the gateway calls a connector from the platform's
@@ -645,6 +651,30 @@ in another row. The gateway renews an access token in its last minute, and a
 vendor that refuses the renewal puts "Reconnect Notion" on the person's
 `/setup`.
 
+**The container sees an MCP server at the proxy.** When a person signs in to
+Notion, the gateway has the spawner provision their tenant again, and
+provisioning writes a `notion` server into the tenant's `mcp.json`:
+`{"name": "notion", "url": "http://10.88.0.1:8788/connect/notion/mcp",
+"auth_env": "WAKU_PLATFORM_TOKEN"}`. The container is not restarted: its agent
+reads `mcp.json` before each run and builds itself again when the list
+changed. Disconnecting removes the entry the same way. A server the tenant
+added themselves under the same name is left alone.
+
+**The gateway reads every message, and a tool that writes is not run.** A
+container may send `initialize`, `tools/list`, `tools/call` and `ping`, and
+anything else is refused. A `tools/call` whose tool matches the vendor's
+write patterns (`hosted/core/connectors.py`, the same patterns as
+`waku/connectors.toml`) is answered by the gateway with "Not run:
+'notion-create-pages' changes something in Notion, and a change needs your yes
+first. Saying yes is not built on hosted Waku yet." Notion is never called for
+it. Spec 029's group C adds the yes.
+
+The gateway keeps the vendor's `Mcp-Session-Id` itself, per tenant and
+vendor, and opens a new session when the vendor has forgotten one or the
+gateway restarted. It reads the vendor's answer to its end, as JSON or as an
+event stream, compressed or not, and returns at most 1 MiB of it as plain
+JSON. A message from a container is at most 48 KB.
+
 ### Turning it on
 
 Connectors are on when `config/gateway.env` has a usable
@@ -657,6 +687,16 @@ or `connectors: off` with the reason, and the three routes then answer 503.
 
 - **Linear is asked for `read` alone**, and Notion for `default`, the one
   scope its server names.
+- **A connector's tools need the free tier**, as a Slack reply does:
+  `POST /connect/<name>/mcp` is a route on the metering proxy, and a container
+  knows the proxy's address only on a deployment installed with
+  `--free-model`. Without it a person can sign in, and no server is written
+  into their `mcp.json`.
+- **A connector's write tools never run**, whatever the person says in chat.
+  A write tool whose name matches none of the vendor's write patterns would
+  run: the patterns list verbs, and a verb can be missing.
+- **Calls are not charged credits.** There is no limit by plan: every person
+  may connect both.
 - **No button disconnects yet.** `POST /connect/disconnect` is the route; the
   Connections page (spec 030) is where its button goes.
 - **Disconnecting deletes the gateway's copy of the tokens and does not

@@ -104,18 +104,24 @@ class FakeSpawner:
             return self.port
         return self.ports.pop(0) if len(self.ports) > 1 else self.ports[0]
 
-    async def provision(self, tenant_id: str, project_id: int) -> None:
-        self.requests.append({"op": "provision", "tenant_id": tenant_id,
-                              "project_id": project_id})
+    async def provision(self, tenant_id: str, project_id: int,
+                        connectors: tuple[str, ...] | None = None) -> None:
+        request = {"op": "provision", "tenant_id": tenant_id, "project_id": project_id}
+        if connectors is not None:
+            request["connectors"] = list(connectors)
+        self.requests.append(request)
         if self.fail_provision is not None:
             raise self.fail_provision
 
     async def start(self, tenant_id: str, project_id: int, timezone: str,
-                    token: str, memory_key: str = "") -> RunningContainer:
+                    token: str, memory_key: str = "",
+                    connectors: tuple[str, ...] | None = None) -> RunningContainer:
         request = {"op": "start", "tenant_id": tenant_id,
                    "project_id": project_id, "timezone": timezone, "token": token}
         if memory_key:
             request["memory_key"] = memory_key
+        if connectors is not None:
+            request["connectors"] = list(connectors)
         self.requests.append(request)
         await asyncio.sleep(self.start_delay)
         if self.fail_start is not None:
@@ -863,6 +869,22 @@ class FakeVendor:
         self.token_answer: dict | None = None
         self.register_answer: dict | None = None
         self.send_refresh_token = True
+        # --- the MCP endpoint, POST /mcp (spec 029 group B) ---
+        self.tools: list[dict] = [
+            {"name": "notion-search", "description": "Search the workspace.",
+             "inputSchema": {"type": "object", "properties": {"query": {"type": "string"}}},
+             "annotations": {"readOnlyHint": True}},
+            {"name": "notion-create-pages", "description": "Create pages.",
+             "inputSchema": {"type": "object", "properties": {}}},
+        ]
+        # Session ids this server handed out and still knows.
+        self.sessions: set[str] = set()
+        self.opened = 0
+        # Answer as a Server-Sent Events stream, with a message of the
+        # server's own in front of the answer, as a real server may.
+        self.sse = False
+        # What a tool call's text is, by tool name; the default says its name.
+        self.tool_text: dict[str, str] = {}
         self._server: ThreadingHTTPServer | None = None
         self.port = 0
 
@@ -872,6 +894,41 @@ class FakeVendor:
 
     def calls(self, path: str) -> list[dict]:
         return [request for request in self.requests if request["path"] == path]
+
+    def mcp_calls(self, method: str) -> list[dict]:
+        return [request for request in self.calls("/mcp")
+                if request["body"].get("method") == method]
+
+    def _mcp(self, sent: dict, headers) -> tuple[int, dict | None, dict]:
+        """(status, the JSON-RPC answer or None, extra headers)."""
+        token = headers.get("Authorization", "").removeprefix("Bearer ")
+        if token not in self.access_tokens:
+            return 401, {"error": "invalid_token"}, {}
+        method, message_id = sent.get("method"), sent.get("id")
+        if method == "initialize":
+            self.opened += 1
+            session = f"{self.title}-session-{self.opened}"
+            self.sessions.add(session)
+            return 200, {"jsonrpc": "2.0", "id": message_id, "result": {
+                "protocolVersion": sent["params"]["protocolVersion"],
+                "capabilities": {"tools": {}},
+                "serverInfo": {"name": self.title, "version": "1"}}}, {
+                    "Mcp-Session-Id": session}
+        if headers.get("Mcp-Session-Id", "") not in self.sessions:
+            return 404, {"jsonrpc": "2.0", "id": message_id,
+                         "error": {"code": -32001, "message": "Session not found"}}, {}
+        if message_id is None:
+            return 202, None, {}
+        if method == "tools/list":
+            result: dict = {"tools": self.tools}
+        elif method == "tools/call":
+            name = sent["params"]["name"]
+            result = {"content": [{"type": "text", "text": self.tool_text.get(
+                name, f"{self.title} ran {name}")}]}
+        else:
+            return 200, {"jsonrpc": "2.0", "id": message_id,
+                         "error": {"code": -32601, "message": "Method not found"}}, {}
+        return 200, {"jsonrpc": "2.0", "id": message_id, "result": result}, {}
 
     def approve(self, query: dict) -> str:
         """The person presses Allow. `query` is what /connect/start sent the
@@ -978,9 +1035,35 @@ class FakeVendor:
                     "method": "POST", "path": self.path, "body": sent,
                     "authorization": self.headers.get("Authorization", ""),
                     "headers": {k.lower(): v for k, v in self.headers.items()}})
-                answer = recorder._post(self.path, sent, self.headers)
-                if answer is not None:
-                    self._send(*answer)
+                if self.path == "/mcp":
+                    self._send_mcp(*recorder._mcp(sent, self.headers))
+                    return
+                self._send(*recorder._post(self.path, sent, self.headers))
+
+            def _send_mcp(self, status: int, answer: dict | None, extra: dict) -> None:
+                if answer is None:
+                    body, kind = b"", ""
+                elif recorder.sse and status == 200:
+                    note = {"jsonrpc": "2.0", "method": "notifications/message",
+                            "params": {"level": "info", "data": "working"}}
+                    body = "".join(f"event: message\r\ndata: {json.dumps(item)}\r\n\r\n"
+                                   for item in (note, answer)).encode("utf-8")
+                    kind = "text/event-stream"
+                else:
+                    body, kind = json.dumps(answer).encode("utf-8"), "application/json"
+                zipped = bool(body) and "gzip" in self.headers.get("Accept-Encoding", "")
+                if zipped:
+                    body = gzip.compress(body)
+                self.send_response(status)
+                if kind:
+                    self.send_header("Content-Type", kind)
+                if zipped:
+                    self.send_header("Content-Encoding", "gzip")
+                for name, value in extra.items():
+                    self.send_header(name, value)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
 
         self._server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         self.port = self._server.server_address[1]

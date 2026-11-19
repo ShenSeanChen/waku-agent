@@ -41,6 +41,10 @@ RELAY_PATHS = ("/treg/mcp", "/treg/mcp/")
 # Where a container's Slack sender posts (spec 026 C3; hosted/proxy/slack.py).
 # Here for RELAY_PATHS' reason: that module imports this one.
 SLACK_SEND_PATH = "/slack/send"
+# Where a container's MCP client reaches a connector, and where it asks for
+# the sign-in address (spec 029 B; hosted/proxy/connect.py).
+CONNECT_MCP_PATH = "/connect/{name}/mcp"
+CONNECT_LINK_PATH = "/connect/link"
 RATE_WINDOW_SECONDS = 60.0
 # Waku-agent spec 011 B1: what one chat turn was charged.
 CHARGES_PATH = re.compile(r"/v1/turns/([^/]+)/charges")
@@ -148,7 +152,8 @@ class MeteringProxy:
                  memory_key: Callable[[str], str] | None = None,
                  wallet: Wallet | None = None, treg: Handler | None = None,
                  turns: TurnCharges | None = None,
-                 slack: Handler | None = None) -> None:
+                 slack: Handler | None = None, connect: Handler | None = None,
+                 connect_link: Handler | None = None) -> None:
         self._config = config
         self._ledger = ledger
         self._resolve = resolve
@@ -159,6 +164,8 @@ class MeteringProxy:
         self._wallet = wallet
         self._treg = treg
         self._slack = slack
+        self._connect = connect
+        self._connect_link = connect_link
         self._turns = turns if turns is not None else TurnCharges(monotonic)
         self._in_flight: dict[str, int] = defaultdict(int)
         self._recent: dict[str, deque[float]] = defaultdict(deque)
@@ -172,6 +179,10 @@ class MeteringProxy:
                 app.router.add_route("*", path, self._treg)
         if self._slack is not None:
             app.router.add_route("*", SLACK_SEND_PATH, self._slack)
+        if self._connect_link is not None:
+            app.router.add_route("*", CONNECT_LINK_PATH, self._connect_link)
+        if self._connect is not None:
+            app.router.add_route("*", CONNECT_MCP_PATH, self._connect)
         app.router.add_route("*", "/{tail:.*}", self._dispatch)
         return app
 

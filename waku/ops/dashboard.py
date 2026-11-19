@@ -111,6 +111,9 @@ def chat_stream(message: str, emit) -> None:
             events.append({"kind": kind, **ev})
         emit(kind, ev)
 
+    # Hosted Waku: a connector the person just signed in to has its tools in
+    # this answer (spec 029).
+    browser_agent.follow_connectors()
     with agent_lock:
         agent = get_agent()
         maybe_rotate_session(agent)
