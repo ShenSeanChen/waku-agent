@@ -528,7 +528,7 @@ the workspace that will own it. In the app's settings:
 | Page | Field | Value |
 |---|---|---|
 | OAuth & Permissions | Redirect URLs | `https://agent.waku.one/slack/oauth/callback` |
-| OAuth & Permissions | Bot Token Scopes | `app_mentions:read`, `chat:write`, `channels:history`, `groups:history`, `users:read` |
+| OAuth & Permissions | Bot Token Scopes | `app_mentions:read`, `chat:write`, `channels:history`, `groups:history`, `users:read`, `reactions:write` |
 | Event Subscriptions | Request URL | `https://agent.waku.one/v1/triggers/slack` |
 | Event Subscriptions | Subscribe to bot events | `app_mention`, `app_uninstalled`, `message.channels`, `message.groups` |
 | Manage Distribution | Activate Public Distribution | on, so another workspace can add the app |
@@ -588,6 +588,10 @@ with the same names.
   is a person's reply in a thread that already holds a mention for this
   tenant, and drops the rest without storing them. The agent is told that
   people also talk to each other there, and that saying nothing is an answer.
+- **A message the agent was given gets an eyes reaction at once**
+  (`reactions:write`), so the person sees it was heard while a stopped
+  container starts. A follow-up the agent then answers with silence keeps the
+  reaction and gets no reply.
 - **Every channel the bot is invited to is heard.** The hosted app has no
   channel allowlist. A mention by a person from another workspace, in a
   shared channel, is dropped.

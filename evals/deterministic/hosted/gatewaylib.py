@@ -754,7 +754,8 @@ class FakeSlack:
                     "authorization": self.headers.get("Authorization", "")})
                 answers = {"/oauth.v2.access": recorder.oauth_answer,
                            "/chat.postMessage": recorder.post_answer,
-                           "/conversations.replies": recorder.replies_answer}
+                           "/conversations.replies": recorder.replies_answer,
+                           "/reactions.add": {"ok": True}}
                 answer = answers.get(self.path, {"ok": False, "error": "unknown_method"})
                 if self.path == "/users.info":
                     known = recorder.users.get(sent.get("user", ""))

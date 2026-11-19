@@ -522,3 +522,21 @@ def test_a_message_that_is_not_a_follow_up_is_dropped(harness, envelope):
     status, events = _run(harness, body)
     assert status == 200
     assert [event.external_id for event in events] == ["Ev0001"]
+
+
+# --- the message is marked as heard (2026-11-19) ----------------------------
+
+def test_a_kept_message_is_marked_at_once_and_a_dropped_one_is_not(harness, slack):
+    """A follow-up got no answer for minutes and nothing in Slack said
+    whether the agent had heard it."""
+    async def body():
+        connect_readable(harness, "sub-ana", "T0ANA")
+        await post(harness, mention("T0ANA", "Ev0001"))
+        await post(harness, follow_up("Ev0002"))
+        await post(harness, follow_up("Ev0003", thread_ts="1699990000.000001"))
+
+    _run(harness, body)
+    marked = [(call["body"]["channel"], call["body"]["timestamp"], call["body"]["name"])
+              for call in slack.calls("/reactions.add")]
+    assert marked == [("C0DEMO", "1700000000.000100", "eyes"),
+                      ("C0DEMO", "1700000000.000300", "eyes")]
