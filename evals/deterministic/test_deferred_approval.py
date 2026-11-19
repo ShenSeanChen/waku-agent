@@ -1367,3 +1367,19 @@ def test_the_always_on_package_imports_nothing_from_team_or_hosted():
                      else [node.module or ""] if isinstance(node, ast.ImportFrom) else [])
             for name in names:
                 assert name.split(".")[0] not in ("team", "hosted"), f"{path.name}: {name}"
+
+
+def test_a_slack_reply_on_hosted_waku_needs_no_yes(home, monkeypatch):
+    """The first mention on hosted Waku, 2026-11-18: the agent answered and
+    the answer waited for an approval that a hosted container cannot get."""
+    thread = ("slack", {"channel": "C09", "thread_ts": "1794952040.892829"})
+    assert approvals.reply_is_free(thread) is False, "your own Slack app still asks"
+
+    monkeypatch.setenv("WAKU_HOSTED", "1")
+
+    assert approvals.reply_is_free(thread) is True
+    assert approvals.reply_is_free(("github", {"repo": "a/b", "issue": 1})) is False
+    assert approvals.mode("send_message", {"to": "slack:C09:1794952040.892829", "body": "hi"},
+                          thread) == "allow", "a message back into the same thread"
+    assert approvals.mode("send_message", {"to": "slack:C77", "body": "hi"},
+                          thread) == "ask", "another channel is still a write"

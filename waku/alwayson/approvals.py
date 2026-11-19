@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import sqlite3
 from collections.abc import Callable
@@ -49,12 +50,24 @@ def is_private(address: Address) -> bool:
 
 def reply_is_free(address: Address) -> bool:
     """Whether a run's reply goes to this place without a yes (spec 024,
-    decision 5). A reply to a private place does. A reply other people read is
-    a write, unless WAKU_APPROVE_ALLOW names `reply:<channel>`, for example
-    `reply:github` for a person's own repositories."""
+    decision 5). A reply to a private place does, and so does a Slack reply
+    on hosted Waku. Any other reply that other people read is a write, unless
+    WAKU_APPROVE_ALLOW names `reply:<channel>`, for example `reply:github`
+    for a person's own repositories."""
     from waku.config import approval_overrides
 
-    return is_private(address) or f"reply:{address[0]}" in approval_overrides()[0]
+    return (is_private(address) or _hosted_slack(address)
+            or f"reply:{address[0]}" in approval_overrides()[0])
+
+
+def _hosted_slack(address: Address) -> bool:
+    """A Slack reply from a hosted container. The person pressed "Add to
+    Slack" so that the agent answers where it is mentioned, and a hosted
+    container has no chat where an owner could say yes. On 2026-11-18 the
+    first mention on hosted Waku was answered and the answer was never sent:
+    it waited for an approval nobody could give. A container sends to Slack
+    only through the platform, to the one workspace its person connected."""
+    return address[0] == "slack" and os.getenv("WAKU_HOSTED", "") == "1"
 
 
 def _send_message(args: dict, address: Address | None) -> str:
