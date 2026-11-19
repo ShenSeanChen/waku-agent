@@ -27,6 +27,7 @@ import json
 import socket
 import threading
 import time
+import urllib.parse
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -38,10 +39,11 @@ from cryptography.hazmat.primitives.asymmetric import ec
 from hosted.core import idle, quota
 from hosted.core.tenant import address_for_project
 from hosted.gateway.app import Gateway
-from hosted.gateway.config import GatewayConfig
+from hosted.gateway.config import GatewayConfig, SlackSettings
 from hosted.gateway.forward import ContainerForwarder
 from hosted.gateway.identity import JwksVerifier
 from hosted.gateway.launch import Launcher
+from hosted.gateway.slack import SlackApi, SlackRoutes
 from hosted.gateway.store import ControlDb
 from hosted.ports.runtime import RunningContainer
 
@@ -326,6 +328,14 @@ class Harness:
         self.session = None
         self.container = None
         self._real_forwarding = False
+        # Spec 026 C: set by use_slack. `woken` counts the scheduler ticks the
+        # Slack routes asked for.
+        self.slack: SlackRoutes | None = None
+        self.slack_settings: SlackSettings | None = None
+        self._fake_slack: FakeSlack | None = None
+        self.woken = 0
+        # What a wake also calls, when a test wires a real Scheduler's kick.
+        self.on_wake = lambda: None
         self.config = GatewayConfig(
             apex_host=APEX, bind_host="127.0.0.1", port=0,
             control_db=tmp_path / "control.db",
@@ -346,7 +356,28 @@ class Harness:
                        launcher=self.launcher, verifier=self.verifier,
                        forward=self.forwarder, turns=self.turns,
                        plans=self.plans, memory_keys=self.memory_keys,
-                       now=self.clock)
+                       slack=self.slack, now=self.clock)
+
+    def use_slack(self, fake: FakeSlack, settings: SlackSettings | None = None) -> None:
+        """Turn the Slack routes on, in front of a fake Slack. Before start(),
+        for use_real_forwarding's reason: the client session needs the loop."""
+        assert self._runner is None, "call use_slack before start()"
+        self._fake_slack = fake
+        self.slack_settings = settings or slack_settings()
+
+    def _wire_slack(self) -> None:
+        if self.session is None:
+            self.session = aiohttp.ClientSession(auto_decompress=False)
+
+        def wake() -> None:
+            self.woken += 1
+            self.on_wake()
+
+        self.slack = SlackRoutes(
+            settings=self.slack_settings, apex_host=APEX, store=self.store,
+            api=SlackApi(self.session, base_url=self._fake_slack.url),
+            now=self.clock, wake=wake)
+        self.gateway = self._build_gateway()
 
     def use_real_forwarding(self, container: FakeContainer) -> None:
         """Point the harness at a fake container and swap the recording
@@ -394,6 +425,8 @@ class Harness:
     async def start(self) -> None:
         if self._real_forwarding:
             self._wire_real_forwarding()
+        if self._fake_slack is not None:
+            self._wire_slack()
         self._runner = web.AppRunner(self.gateway.build())
         await self._runner.setup()
         site = web.TCPSite(self._runner, "127.0.0.1", 0)
@@ -552,6 +585,73 @@ class FakeContainer:
             self._server = None
 
 
+class AlwaysOnContainer:
+    """The two routes a tenant container answers for the gateway (spec 026):
+    POST /api/events and GET /api/alwayson/next. HTTP/1.0, like the stock
+    dashboard.
+
+    It records every event it was handed, and a test sets what it answers:
+    `events_status` for a hand-over, `work` for the report (None answers 404,
+    which is what an image older than spec 026 answers)."""
+
+    def __init__(self) -> None:
+        self.handed: list[list[dict]] = []
+        self.asked = 0
+        self.events_status = 200
+        self.work: dict | None = {"next_timer_at": None, "events": 0, "outbox": 0,
+                                  "running": 0}
+        # Called inside the report, before it answers: how a test makes a
+        # request arrive while the gateway is waiting for this answer.
+        self.on_ask = lambda: None
+        self._server: ThreadingHTTPServer | None = None
+        self.port = 0
+
+    def start(self, port: int = 0) -> None:
+        recorder = self
+
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, *args):
+                """Silence BaseHTTPRequestHandler's stderr log line."""
+
+            def _answer(self, status: int, payload: dict) -> None:
+                body = json.dumps(payload).encode("utf-8")
+                self.send_response(status)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def do_GET(self):
+                if self.path != "/api/alwayson/next":
+                    self._answer(404, {})
+                    return
+                recorder.asked += 1
+                recorder.on_ask()
+                if recorder.work is None:
+                    self._answer(404, {})
+                else:
+                    self._answer(200, recorder.work)
+
+            def do_POST(self):
+                length = int(self.headers.get("Content-Length", 0))
+                body = json.loads(self.rfile.read(length) or b"{}")
+                if self.path != "/api/events":
+                    self._answer(404, {})
+                    return
+                recorder.handed.append(body.get("events"))
+                self._answer(recorder.events_status, {"accepted": len(body.get("events", []))})
+
+        self._server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+        self.port = self._server.server_address[1]
+        threading.Thread(target=self._server.serve_forever, daemon=True).start()
+
+    def stop(self) -> None:
+        if self._server is not None:
+            self._server.shutdown()
+            self._server.server_close()
+            self._server = None
+
+
 class AcceptsThenCloses:
     """A socket that accepts a connection and closes it without answering.
 
@@ -586,4 +686,83 @@ class AcceptsThenCloses:
     def stop(self) -> None:
         if self._server is not None:
             self._server.close()
+            self._server = None
+
+
+# --- spec 026 group C: a fake Slack --------------------------------------
+
+# Not a real token's shape past the prefix, so no secret scanner reads it as one.
+SLACK_BOT_TOKEN = "xoxb-fake-token-for-ana"
+SLACK_CLIENT_ID = "1111.2222"
+SLACK_CLIENT_SECRET = "fake-client-secret"
+SLACK_SIGNING_SECRET = "fake-signing-secret"
+SLACK_TOKEN_KEY = "0f" * 32
+
+
+def slack_settings(**changes) -> SlackSettings:
+    values = {"client_id": SLACK_CLIENT_ID, "client_secret": SLACK_CLIENT_SECRET,
+              "signing_secret": SLACK_SIGNING_SECRET,
+              "token_key": bytes.fromhex(SLACK_TOKEN_KEY)}
+    return SlackSettings(**{**values, **changes})
+
+
+class FakeSlack:
+    """Slack's Web API on loopback: oauth.v2.access and chat.postMessage.
+
+    It records every request with its Authorization header, and a test sets
+    what each method answers. Slack answers 200 and says no in the body, and
+    so does this."""
+
+    def __init__(self) -> None:
+        self.requests: list[dict] = []
+        self.oauth_answer: dict = {
+            "ok": True, "access_token": SLACK_BOT_TOKEN, "token_type": "bot",
+            "scope": "app_mentions:read,chat:write", "bot_user_id": "U0BOT",
+            "team": {"id": "T0ANA", "name": "Ana & Co"}}
+        self.post_answer: dict = {"ok": True, "ts": "171.9"}
+        self._server: ThreadingHTTPServer | None = None
+        self.port = 0
+
+    @property
+    def url(self) -> str:
+        return f"http://127.0.0.1:{self.port}"
+
+    def calls(self, path: str) -> list[dict]:
+        return [request for request in self.requests if request["path"] == path]
+
+    def start(self) -> None:
+        recorder = self
+
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, *args):
+                """Silence BaseHTTPRequestHandler's stderr log line."""
+
+            def do_POST(self):
+                length = int(self.headers.get("Content-Length", 0))
+                raw = self.rfile.read(length).decode("utf-8")
+                if "json" in self.headers.get("Content-Type", ""):
+                    sent = json.loads(raw or "{}")
+                else:
+                    sent = {k: v[0] for k, v in urllib.parse.parse_qs(raw).items()}
+                recorder.requests.append({
+                    "path": self.path, "body": sent,
+                    "authorization": self.headers.get("Authorization", "")})
+                answers = {"/oauth.v2.access": recorder.oauth_answer,
+                           "/chat.postMessage": recorder.post_answer}
+                answer = answers.get(self.path, {"ok": False, "error": "unknown_method"})
+                body = json.dumps(answer).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+        self._server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.port = self._server.server_address[1]
+        threading.Thread(target=self._server.serve_forever, daemon=True).start()
+
+    def stop(self) -> None:
+        if self._server is not None:
+            self._server.shutdown()
+            self._server.server_close()
             self._server = None

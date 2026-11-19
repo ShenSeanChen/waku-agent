@@ -14,3 +14,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 # names WAKU_HOME cannot override it. Tests of the resolution rules pass their
 # own env, cwd and user_home.
 os.environ["WAKU_HOME"] = tempfile.mkdtemp(prefix="waku-evals-")
+
+# `waku connections` asks Slack about these two tokens (spec 025). Set to
+# empty before waku.config loads a .env, which never overrides a variable
+# that is set: a maintainer's real tokens never reach Slack from a test.
+os.environ["SLACK_APP_TOKEN"] = ""
+os.environ["SLACK_BOT_TOKEN"] = ""

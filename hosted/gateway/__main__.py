@@ -1,17 +1,15 @@
 """python -m hosted.gateway.
 
-THE ONLY PLACE THE WHOLE THING IS WIRED. Four sockets and one HTTP site:
+THE ONLY PLACE THE WHOLE THING IS WIRED. Four sockets, one HTTP site, and two
+loops: the idle loop (sweep.py) and the scheduler (scheduler.py, spec 026):
 
   127.0.0.1:<port>          the dashboard traffic, behind Caddy. The spec says
                             "listens on 127.0.0.1 only", and that is not a
                             default -- it is the reason the gateway is not on
                             the tenant bridge and a container cannot reach it.
-  run/gateway/gateway.sock  token lookup for the proxy (group B's
-                            serve_token_lookup). NOTHING CONNECTS TO IT UNTIL
-                            GROUP D LANDS, and it is served anyway: F1's
-                            Compose mounts the directory, and a socket that
-                            appears only when its client does is a socket
-                            nobody notices is missing.
+  run/gateway/gateway.sock  what the proxy asks: whose token this is, and
+                            to post a container's Slack message with the
+                            token only this process holds (internal.py).
   run/admin/admin.sock      tenant.sh, upgrade.sh --now and restore.sh.
   run/proxy/proxy.sock      NOT served here -- the gateway is its CLIENT.
                             With group D cut there is nothing on the other
@@ -48,10 +46,13 @@ from hosted.core import idle, quota
 from hosted.gateway import admin, internal
 from hosted.gateway.app import Gateway
 from hosted.gateway.config import config_from_env
+from hosted.gateway.container_api import ContainerApi
 from hosted.gateway.forward import ContainerForwarder
 from hosted.gateway.identity import JwksVerifier
 from hosted.gateway.launch import Launcher
 from hosted.gateway.memory_keys import WakuMemoryKeys
+from hosted.gateway.scheduler import TICK_SECONDS, Scheduler
+from hosted.gateway.slack import EVENTS_PATH, SlackApi, SlackRoutes
 from hosted.gateway.spawner_client import SpawnerClient
 from hosted.gateway.store import ControlDb
 from hosted.gateway.sweep import IdleLoop
@@ -77,19 +78,42 @@ async def main() -> None:
     store = ControlDb(config.control_db)
     spawner = SpawnerClient(config.spawner_socket)
     fleet = idle.Fleet(time.time, config.max_running, config.idle_seconds)
-    launcher = Launcher(store=store, spawner=spawner, fleet=fleet)
     verifier = JwksVerifier(jwks_url=config.supabase_jwks_url,
                             issuer=config.supabase_issuer,
                             audience=config.supabase_audience)
     turns = quota.TurnWindow(time.time)
     async with aiohttp.ClientSession(auto_decompress=False) as session:
+        # Spec 026: the two requests the gateway itself makes to a container.
+        # The Launcher asks a container what work it has left before an idle
+        # stop, and the scheduler hands a tenant's waiting events over.
+        containers = ContainerApi(session)
+        launcher = Launcher(store=store, spawner=spawner, fleet=fleet,
+                            containers=containers)
         forwarder = ContainerForwarder(
             launcher=launcher, turns=turns, plans=plans,
             proxy_socket=config.proxy_socket, session=session)
+        # Spec 026 A3, built before the Gateway because a Slack mention asks
+        # it for a tick. It works while containers are stopped: it starts a
+        # tenant that has an event waiting or a timer due.
+        scheduler = Scheduler(store=store, launcher=launcher, containers=containers)
+        # Spec 026 C: the public Slack app. Off, with the reason in the log,
+        # until config/gateway.env has all four Slack values.
+        slack = None
+        if config.slack is not None:
+            slack = SlackRoutes(settings=config.slack, apex_host=config.apex_host,
+                                store=store, api=SlackApi(session), wake=scheduler.kick)
+            _LOG.info("Slack: on. Events at https://%s%s", config.apex_host, EVENTS_PATH)
+            # Says in the log, and on each person's setup page, when the key
+            # in gateway.env does not open the tokens control.db holds. It
+            # never raises.
+            slack.check_tokens()
+        else:
+            _LOG.warning("Slack: off, its routes answer 503: %s", config.slack_problem)
         gateway = Gateway(config=config, store=store, launcher=launcher,
                           verifier=verifier, forward=forwarder, turns=turns,
                           plans=plans,
-                          memory_keys=WakuMemoryKeys(session, config.supabase_audience))
+                          memory_keys=WakuMemoryKeys(session, config.supabase_audience),
+                          slack=slack)
         # Adopt what is already running before the first request arrives, so
         # no container is orphaned and every idle timer starts fresh.
         try:
@@ -97,7 +121,11 @@ async def main() -> None:
             _LOG.info("adopted %s running tenant containers", len(adopted))
         except OSError as exc:
             _LOG.warning("the spawner did not answer at startup: %s", exc)
-        token_server = await internal.serve_token_lookup(config.gateway_socket, store)
+        # The proxy asks two things on this socket: whose token this is, and,
+        # for a container's outgoing Slack message, to post it (spec 026 C3).
+        token_server = await internal.serve_token_lookup(
+            config.gateway_socket, store,
+            slack_send=slack.relay.send if slack is not None else None)
         admin_server = await admin.serve_admin(config.admin_socket, gateway)
         runner = build_runner(gateway.build())
         await runner.setup()
@@ -113,9 +141,13 @@ async def main() -> None:
             IdleLoop(launcher, disk_path=config.control_db.parent).run())
         _LOG.info("idle loop: stopping containers after %s minutes idle",
                   config.idle_seconds // 60)
+        scheduler_loop = asyncio.create_task(scheduler.run())
+        _LOG.info("scheduler: waking tenants for events and timers every %s seconds",
+                  TICK_SECONDS)
         try:
             await asyncio.Event().wait()
         finally:
+            scheduler_loop.cancel()
             idle_loop.cancel()
             await runner.cleanup()
             for server in (token_server, admin_server):

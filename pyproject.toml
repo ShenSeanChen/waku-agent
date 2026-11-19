@@ -69,6 +69,11 @@ gcal = [
     # application-default login`, which is a developer ritual, not a sign-in.
     "google-auth-oauthlib>=1.0",
 ]
+# Optional source for `waku serve`: Slack mentions over Socket Mode, which
+# needs no public address. The built-in Socket Mode client is stdlib only.
+slack = [
+    "slack_sdk>=3.27",
+]
 # Optional gateway: message Waku from Discord
 discord = [
     "discord.py>=2.4",

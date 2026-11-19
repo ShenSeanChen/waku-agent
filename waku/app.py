@@ -15,7 +15,7 @@ from waku.db import connect
 from waku.loop import trim
 from waku.loop.agent import LoopResult, Observer, run_loop
 from waku.loop.models import get_client
-from waku.memory import brain, reports
+from waku.memory import brain, reports, tool_note
 from waku.ops import receipt as receipts
 from waku.ops.tracing import Tracer, compose, metered
 from waku.plugins import store as plugin_store
@@ -78,7 +78,10 @@ class Waku:
         from waku.memory import Memory
 
         self.memory = Memory(self.conn, self.settings, self.client)
-        self.tools = build_registry(self.conn, self.settings, self.memory)
+        # schedule_task asks which conversation it is in when it is called, and
+        # self.session exists by then.
+        self.tools = build_registry(self.conn, self.settings, self.memory,
+                                    session_id=lambda: self.session.session_id)
         self.mcp_bridge = getattr(self.tools, "mcp_bridge", None)
         # Spec 006: with Waku Memory connected, every fact consolidation keeps
         # is sent there too. Without it this is None and nothing is sent.
@@ -96,6 +99,12 @@ class Waku:
         if remember_tool is not None:
             remember_tool.fn = reports.guard_remember(remember_tool.fn)
         self.session = Session(self.settings, memory=self.memory)
+        # Spec 023: under `waku serve`, a tool call that writes to a third
+        # party waits for the owner's yes. Outside a run the gate lets every
+        # call through.
+        from waku.alwayson.approvals import Gate
+
+        self.approvals = Gate(self.settings.home, self.conn, tools=self.tools)
         # Spec 022: with Waku Memory's remember tool on offer, one prompt line
         # keeps the model to save_note, which saves here and sends.
         # The name comes from the registry, so the line is only there while the
@@ -321,14 +330,19 @@ class Waku:
         return [CAPTURE_PAUSED_LINE] if state == "paused" else []
 
     def _before_tool(self, notify):
-        """PreToolUse for this turn's loop, or None when no hook wants it.
-        `command` and `file_path` are read from the tool's input when it has
-        them, the two fields Waku Memory's act channel reads."""
-        if self.hooks is None or self._turn_vars is None or not self.hooks.has("PreToolUse"):
-            return None
+        """What the loop asks before each tool call. Under `waku serve` the
+        approval gate answers first (spec 023): a call whose mode is `ask` is
+        stored for the owner and does not run. Then PreToolUse, when a hook
+        wants it. `command` and `file_path` are read from the tool's input
+        when it has them, the two fields Waku Memory's act channel reads."""
+        hooked = (self.hooks is not None and self._turn_vars is not None
+                  and self.hooks.has("PreToolUse"))
         variables = self._turn_vars
 
         def before(name: str, args: dict) -> tuple[str | None, str]:
+            waits, _ = self.approvals(name, args)
+            if waits is not None or not hooked:
+                return waits, ""
             given = args if isinstance(args, dict) else {}
             result = self.hooks.run("PreToolUse", {
                 **variables, "tool_name": name, "tool_input": given,
@@ -413,22 +427,39 @@ class Waku:
                 notify("tool", call)
             system += known.context
 
-        result = run_loop(
-            client=self.client,
-            model=self.settings.model,
-            system=system,
-            messages=messages,
-            tools=self.tools,
-            max_iterations=self.settings.max_iterations,
-            max_tokens=self.settings.max_tokens,
-            observer=notify,
-            stream=stream,
-            # before each later call, a whole earlier report the model read
-            # is cut to its digest (spec 009 A), and any other long result it
-            # read is cut to its opening (waku/loop/trim.py)
-            trim=trim.chain(reports.shrink_read, trim.shrink_seen),
-            before_tool=self._before_tool(notify),
-        )
+        def loop() -> LoopResult:
+            return run_loop(
+                client=self.client,
+                model=self.settings.model,
+                system=system,
+                messages=messages,
+                tools=self.tools,
+                max_iterations=self.settings.max_iterations,
+                max_tokens=self.settings.max_tokens,
+                observer=notify,
+                stream=stream,
+                # before each later call, a whole earlier report the model read
+                # is cut to its digest (spec 009 A), and any other long result it
+                # read is cut to its opening (waku/loop/trim.py)
+                trim=trim.chain(reports.shrink_read, trim.shrink_seen),
+                before_tool=self._before_tool(notify),
+            )
+
+        result = loop()
+        # History shows a "[tools used: ...]" note after each turn that called
+        # a tool, and a model can write one itself in place of a call. On
+        # 2026-11-17 a reply said a comment waited for approval, and no call
+        # had been made. The model is told so and the loop runs once more.
+        if tool_note.imitated(result.reply, result.tool_calls):
+            notify("imitated_note", {"tools": tool_note.claimed(result.reply)})
+            messages.append({"role": "user", "content": tool_note.NO_CALL_WAS_MADE})
+            first, result = result, loop()
+            result.tool_calls = first.tool_calls + result.tool_calls
+            result.iterations += first.iterations
+        # Only Waku writes the note, and only into history: the reply a person
+        # reads never carries one.
+        if tool_note.PREFIX in result.reply:
+            result.reply = tool_note.strip(result.reply)
         result.read_first, result.used = known.calls, known.used
         result.recalled = "\n".join(p for p in (self.session.retrieved, known.context) if p)
         return result

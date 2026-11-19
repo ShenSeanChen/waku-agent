@@ -28,12 +28,24 @@ ways a container comes to be RUNNING, and they are not the same event:
 set_status() itself records a transition and nothing more. It used to refresh
 the clock "if last_activity == 0.0", which is true exactly once in a
 container's life, so every restart after the first was stopped a minute later.
+
+IDLE IS TWO QUESTIONS SINCE SPEC 026. The fleet answers the first from what
+the gateway saw: nothing in flight and no non-background request for the idle
+window. A container can still be working with no request open, because an
+event or a timer started a run inside it. So the gateway asks an idle
+container for its own report, and work_left() below reads it: a container
+with a run in progress, an event no run has finished with, or an outgoing
+message not yet sent is not idle. The same report carries the container's
+earliest timer, which the gateway stores before it stops the container so
+that it can start it again at that time. A parked run waiting for the owner's
+yes is not work: the yes arrives as an event.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import datetime
 
 from hosted.core import policy
 
@@ -68,6 +80,11 @@ FORWARD_TIMEOUT_SECONDS = 120
 # the gateway process.
 SESSION_CACHE_SECONDS = 60
 DISK_WARNING_FRACTION = 0.80
+# How long past the idle window a container that reports work is kept (spec
+# 026). An outgoing message is retried for a little over an hour before it is
+# given up on, so two hours covers every honest report; a container that still
+# says it is working after that is broken, and it is stopped like any other.
+WORK_LIMIT_SECONDS = 2 * 3600
 
 CAPACITY_MESSAGE = "At capacity, try again shortly."
 START_TIMEOUT_MESSAGE = "Your assistant is taking too long to start. Try again."
@@ -95,6 +112,48 @@ class Admission:
     action: str               # forward | wait | start | evict_then_start | paused | at_capacity
     evict: str | None = None
     message: str = ""
+
+
+@dataclass(frozen=True)
+class WorkLeft:
+    """A container's own report, read. `busy` is True when a run, an event or
+    an outgoing message still waits; `wakeup` is when its earliest timer is
+    due, in seconds since the epoch, or None when it has no timer."""
+    busy: bool
+    wakeup: float | None
+
+
+_WORK_COUNTS = ("events", "outbox", "running")
+
+
+def work_left(report: object) -> WorkLeft | None:
+    """Read what GET /api/alwayson/next answered (spec 026), or None when the
+    answer is not the agreed shape.
+
+    A CLOSED SET. The report is {next_timer_at, events, outbox, running}:
+    three whole numbers that are not negative, and a time that is either null
+    or ISO 8601 with a zone. Anything else is None, and the caller treats None
+    as "no report", which stops the container and leaves its stored wakeup
+    alone. A container cannot keep itself running or move its wakeup with an
+    answer this function would have to guess at.
+    """
+    if not isinstance(report, dict):
+        return None
+    counts = [report.get(name) for name in _WORK_COUNTS]
+    if not all(type(count) is int and count >= 0 for count in counts):
+        return None
+    timer = report.get("next_timer_at", "")
+    if timer is None:
+        return WorkLeft(busy=any(counts), wakeup=None)
+    if not isinstance(timer, str):
+        return None
+    try:
+        due = datetime.fromisoformat(timer)
+    except ValueError:
+        return None
+    if due.tzinfo is None:
+        return None
+    return WorkLeft(busy=any(counts), wakeup=due.timestamp())
 
 
 class Fleet:
@@ -173,6 +232,16 @@ class Fleet:
         the idle loop writes. 0.0 for a tenant the fleet has no state for."""
         state = self._states.get(tenant_id)
         return self._now() - state.last_activity if state is not None else 0.0
+
+    def worked_too_long(self, tenant_id: str) -> bool:
+        """Whether a container that says it still has work has said so for
+        WORK_LIMIT_SECONDS past the idle window. False for a tenant the fleet
+        has no state for."""
+        state = self._states.get(tenant_id)
+        if state is None:
+            return False
+        limit = self._idle_seconds + WORK_LIMIT_SECONDS
+        return self._now() - state.last_activity >= limit
 
     def _idle(self, state: ContainerState) -> bool:
         cutoff = self._now() - self._idle_seconds

@@ -125,6 +125,11 @@ ALLOWED_IMPORT_ROOTS_IN_HOSTED = (
     # The two distributions the `hosted` extra declares, by import name.
     # Nothing in group B imports either; groups D and E do.
     | {"aiohttp", "jwt"}
+    # cryptography is what the extra's own `PyJWT[crypto]` installs, so
+    # naming it here installs nothing new and adds no line to pyproject.toml
+    # or uv.lock. hosted/gateway/secretbox.py seals a Slack bot token with
+    # its AES-GCM (spec 026 C1); the standard library has no cipher.
+    | {"cryptography"}
     # yarl is aiohttp's OWN required dependency ("yarl<2.0,>=1.17.0" in
     # aiohttp's metadata), so naming it here installs nothing that was not
     # already being installed and adds no line to pyproject.toml or uv.lock.
@@ -186,7 +191,7 @@ def test_hosted_imports_nothing_outside_the_allowlist():
     assert not offenders, (
         f"hosted/ imports outside its allowlist: {offenders}\n"
         "hosted/ may import the standard library (minus the import machinery), "
-        "hosted itself, aiohttp and jwt. Everything else is refused, because a "
+        "hosted itself, aiohttp, jwt and cryptography. Everything else is refused, because a "
         "sibling package that imports waku is a path to waku.config, which "
         "loads the platform's own .env on the VM.")
 

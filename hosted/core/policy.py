@@ -70,12 +70,21 @@ WRONG_METHOD = "That route only takes a POST."
 ARENA_BLOCKED = "The arenas are not available on hosted waku."
 VOICE_BLOCKED = "Voice is not available on hosted waku."
 REVEAL_BLOCKED = "Opening a file in an editor only works on your own machine."
+# Spec 026: two routes a container answers for the gateway alone. The
+# scheduler and the idle loop connect to the container themselves, so nothing
+# that arrives through the forwarder is ever one of their calls.
+GATEWAY_ONLY = "Only the gateway may call this."
 # waku-agent spec 021: a tenant's MCP servers and memory are set when they
 # sign in, so a chat message that is a /plugin command is refused here. The
 # container refuses it too, but only while its provider is the platform's,
 # and a tenant can change the provider.
 PLUGIN_REFUSED = ("Plugins are not available on hosted Waku. A hosted container's "
                   "servers and memory are set up when you sign in.")
+# waku-agent spec 025: the same holds for a server a tenant would add from the
+# "Connectors" card. Whether a tenant gets the card is the hosted spec's
+# decision, so its routes are blocked until it is made.
+CONNECTORS_BLOCKED = ("Connectors are not available on hosted Waku. A hosted "
+                      "container's servers are set up when you sign in.")
 PLUGIN_COMMAND = "/plugin"
 CHAT_ROUTES = ("/api/chat", "/api/chat/stream")
 PLATFORM_FIELDS_REFUSED = ("The hosted free tier's key and endpoint are set by the "
@@ -83,6 +92,11 @@ PLATFORM_FIELDS_REFUSED = ("The hosted free tier's key and endpoint are set by t
 CONNECTION_REFUSED = ("Only Tavily, Notion and your own treg key can be connected "
                       "on hosted waku.")
 CONNECTION_FIELD_REFUSED = "Only the treg API key can be set here."
+
+# Routes a browser may only GET. /api/events is two things on one path: the
+# page's own feed (GET) and the gateway's hand-over of a tenant's waiting
+# events (POST, spec 026). Any other method on it is refused here.
+READ_ONLY_ROUTES = frozenset({"/api/events"})
 
 # Design section 9: a turn is one request to one of these three. The gateway
 # sees turns; the proxy only sees individual model calls.
@@ -139,6 +153,10 @@ DECISIONS: dict[str, str] = {
     # spends through the tenant's own provider, so on the free tier the
     # metering proxy charges it in credits; one call per click, 300 tokens out
     "/api/turn-evals/judge": PASS,
+    # spec 024: the timers, waiting calls and queued messages of this tenant's
+    # own home, and cancelling one of them. Per-tenant like /api/data
+    "/api/waiting": PASS,
+    "/api/waiting/cancel": PASS,
     # filtered: the payload decides
     "/api/providers": FILTER,
     "/api/settings": FILTER,
@@ -159,6 +177,14 @@ DECISIONS: dict[str, str] = {
     "/api/judgment-arena/stream": BLOCK,
     "/api/voice": BLOCK,
     "/api/reveal": BLOCK,
+    # spec 026: what work a container has left, asked by the gateway only
+    "/api/alwayson/next": BLOCK,
+    # spec 025: listing, adding and removing a server of the tenant's own, and
+    # the switch that lets one write without asking
+    "/api/connectors": BLOCK,
+    "/api/connectors/add": BLOCK,
+    "/api/connectors/remove": BLOCK,
+    "/api/connectors/approve": BLOCK,
 }
 
 BLOCK_MESSAGES: dict[str, str] = {
@@ -176,6 +202,11 @@ BLOCK_MESSAGES: dict[str, str] = {
     "/api/judgment-arena/stream": ARENA_BLOCKED,
     "/api/voice": VOICE_BLOCKED,
     "/api/reveal": REVEAL_BLOCKED,
+    "/api/alwayson/next": GATEWAY_ONLY,
+    "/api/connectors": CONNECTORS_BLOCKED,
+    "/api/connectors/add": CONNECTORS_BLOCKED,
+    "/api/connectors/remove": CONNECTORS_BLOCKED,
+    "/api/connectors/approve": CONNECTORS_BLOCKED,
 }
 
 # Substrings no path may contain. The query is split off first, so a percent
@@ -338,6 +369,8 @@ def decide(method: str, raw_path: str, payload: dict | None = None) -> Outcome:
     decision = DECISIONS[route]
     if route in CHAT_ROUTES and _is_plugin_command(payload):
         return Outcome("refuse", 403, PLUGIN_REFUSED, route=route, streaming=streaming)
+    if route in READ_ONLY_ROUTES and method.upper() != "GET":
+        return Outcome("block", 403, GATEWAY_ONLY, route=route, streaming=streaming)
     if decision == BLOCK:
         return Outcome("block", 403, BLOCK_MESSAGES[route], route=route, streaming=streaming)
     if decision == FILTER:

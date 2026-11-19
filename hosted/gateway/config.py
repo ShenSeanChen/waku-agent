@@ -9,19 +9,25 @@ sets a value and the gateway ignores it.
 
 THE SUPABASE VALUES ARE PUBLIC. The JWKS holds one ES256 public key and the
 publishable key is meant for a browser. The gateway holds no Supabase secret
-at all, which is why config/gateway.env can be read by the gateway's user
-without that being a hole: there is nothing in it that is not already on the
-wire to every visitor.
+at all.
+
+THE FOUR SLACK VALUES ARE NOT (spec 026 C). The client secret, the signing
+secret and the key that seals each workspace's bot token in control.db are
+secrets, so config/gateway.env is one now. install.sh has always written it
+0600 in a directory only root can enter, and Compose hands it to the gateway
+as an env_file; nothing reads it from the repository. SlackSettings keeps all
+three out of its repr, and no message in this module quotes a value.
 """
 
 from __future__ import annotations
 
 import re
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from hosted.core import idle
+from hosted.gateway.secretbox import SecretBox
 
 # The live project's audience. It is NOT "authenticated": that is the `role`
 # claim. See hosted/gateway/identity.py's docstring.
@@ -58,7 +64,20 @@ REQUIRED_ENV_NAMES = (
     # request before the idle loop stops a tenant's container. In
     # MAY_BE_ABSENT below; absent means idle.IDLE_SECONDS, fifteen minutes.
     "WAKU_IDLE_MINUTES",
+    # Spec 026 C: the public Waku Slack app. SLACK_ENV_NAMES below, and in
+    # MAY_BE_ABSENT: without all four the gateway starts and its Slack routes
+    # refuse, naming what is missing.
+    "WAKU_SLACK_CLIENT_ID",
+    "WAKU_SLACK_CLIENT_SECRET",
+    "WAKU_SLACK_SIGNING_SECRET",
+    "WAKU_SLACK_TOKEN_KEY",
 )
+
+# The Slack app's client id, client secret and signing secret, which the
+# operator copies from the app's settings page at api.slack.com, and the key
+# that seals each workspace's bot token, which install.sh generates on the VM.
+SLACK_ENV_NAMES = ("WAKU_SLACK_CLIENT_ID", "WAKU_SLACK_CLIENT_SECRET",
+                   "WAKU_SLACK_SIGNING_SECRET", "WAKU_SLACK_TOKEN_KEY")
 
 # WRITTEN BY install.sh, PINNED LIKE THE REST, AND STILL ALLOWED TO BE ABSENT,
 # on the proxy's precedent for its treg names (hosted/proxy/config.py).
@@ -66,7 +85,7 @@ REQUIRED_ENV_NAMES = (
 # has no WAKU_EMBED_ORIGINS line, and a gateway that refused to start without
 # it would take every tenant down on the upgrade that added the embedded chat.
 # Absent or empty, the allowlist is DEFAULT_EMBED_ORIGINS.
-MAY_BE_ABSENT = frozenset({"WAKU_EMBED_ORIGINS", "WAKU_IDLE_MINUTES"})
+MAY_BE_ABSENT = frozenset({"WAKU_EMBED_ORIGINS", "WAKU_IDLE_MINUTES", *SLACK_ENV_NAMES})
 
 # waku.one's three hosts. http://localhost:3000, for developing waku.one's own
 # page against a real gateway, is never in the default: an operator who wants
@@ -116,6 +135,41 @@ def idle_seconds_from(raw: str | None) -> int:
 
 
 @dataclass(frozen=True)
+class SlackSettings:
+    """The public Slack app's credentials. Only the client id is public: it
+    is in the address "Add to Slack" opens."""
+    client_id: str
+    client_secret: str = field(repr=False)
+    signing_secret: str = field(repr=False)
+    token_key: bytes = field(repr=False)
+
+
+def slack_from(env: Mapping[str, str]) -> tuple[SlackSettings | None, str]:
+    """(the settings, "") when all four values are usable, or (None, why not).
+
+    The reason names every missing name and quotes no value. It never raises:
+    a gateway.env written before spec 026 has none of the four, and a typo in
+    one of them must not stop the gateway that serves every tenant."""
+    values = {name: (env.get(name) or "").strip() for name in SLACK_ENV_NAMES}
+    missing = [name for name, value in values.items() if not value]
+    if missing:
+        return None, f"config/gateway.env is missing {', '.join(missing)}"
+    try:
+        SecretBox.from_hex(values["WAKU_SLACK_TOKEN_KEY"])
+    except ValueError as exc:
+        return None, f"WAKU_SLACK_TOKEN_KEY in config/gateway.env is not usable: {exc}"
+    return SlackSettings(
+        client_id=values["WAKU_SLACK_CLIENT_ID"],
+        client_secret=values["WAKU_SLACK_CLIENT_SECRET"],
+        signing_secret=values["WAKU_SLACK_SIGNING_SECRET"],
+        token_key=bytes.fromhex(values["WAKU_SLACK_TOKEN_KEY"])), ""
+
+
+# What a GatewayConfig built by hand says about Slack: off, all four missing.
+SLACK_NOT_CONFIGURED = f"config/gateway.env is missing {', '.join(SLACK_ENV_NAMES)}"
+
+
+@dataclass(frozen=True)
 class GatewayConfig:
     apex_host: str
     bind_host: str
@@ -135,6 +189,10 @@ class GatewayConfig:
     # tests, the Docker tier -- gets the documented allowlist without naming it.
     embed_origins: tuple[str, ...] = DEFAULT_EMBED_ORIGINS
     idle_seconds: int = idle.IDLE_SECONDS
+    # Spec 026 C. `slack` is None when the Slack routes are off, and
+    # `slack_problem` then says why in words an operator can act on.
+    slack: SlackSettings | None = None
+    slack_problem: str = SLACK_NOT_CONFIGURED
 
 
 def config_from_env(env: Mapping[str, str]) -> GatewayConfig:
@@ -144,6 +202,7 @@ def config_from_env(env: Mapping[str, str]) -> GatewayConfig:
         raise ValueError(
             f"config/gateway.env is missing {missing}. install.sh writes this "
             "file; every name in config.REQUIRED_ENV_NAMES must be in it.")
+    slack, slack_problem = slack_from(env)
     return GatewayConfig(
         apex_host=env["WAKU_APEX_HOST"].strip().lower(),
         bind_host=env["WAKU_GATEWAY_BIND"],
@@ -161,4 +220,6 @@ def config_from_env(env: Mapping[str, str]) -> GatewayConfig:
         supabase_publishable_key=env["WAKU_SUPABASE_PUBLISHABLE_KEY"],
         embed_origins=embed_origins_from(env.get("WAKU_EMBED_ORIGINS")),
         idle_seconds=idle_seconds_from(env.get("WAKU_IDLE_MINUTES")),
+        slack=slack,
+        slack_problem=slack_problem,
     )

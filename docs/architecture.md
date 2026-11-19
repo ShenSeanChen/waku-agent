@@ -79,6 +79,198 @@ flowchart LR
 > ([@ShenSeanChen](https://github.com/ShenSeanChen)). Code is MIT; **this diagram is licensed CC BY-NC-SA 4.0** —
 > reuse it with credit to the channel, not for commercial resale._
 
+### The always-on path
+
+`waku serve` puts an inbox in front of the same loop (spec 023,
+`waku/alwayson/`). A gateway above runs the turn while the message is still in
+memory. A handler under `waku serve` writes the message into the `events`
+table of `state.db` and returns, and one worker starts the run.
+
+```mermaid
+flowchart LR
+  TG["Telegram message"] & SL["Slack @mention"] & GH["GitHub issue or mention"] -->|insert only| EV[("events<br/>state.db")]
+  TI[("timers<br/>state.db")] -->|every 30 s,<br/>each due timer| EV
+  RUN -->|schedule_task| TI
+  EV -->|claim, wait 3 s,<br/>batch per session| W["Worker<br/>one per home"]
+  W -->|one run| RUN["waku.respond()<br/>the loop above"]
+  RUN -->|done or failed| EV
+  RUN -->|reply, or nothing| OB[("outbox<br/>state.db")]
+  RUN -->|a call that needs a yes:<br/>store it, ask the owner| OB
+  P -->|"yes" or "no"| EV
+  OB -->|due rows| D["Dispatcher"]
+  D -->|Telegram, Slack,<br/>gh issue comment| P["Person"]
+```
+
+Ana writes "@waku is issue 12 still open?" in a Slack thread while a run for
+Sean's Telegram chat is busy. Her message is one `pending` row before any
+model is called. The worker claims the oldest pending row, waits 3 seconds,
+claims every other pending row of that session, and starts one run with all
+of them in the session `slack:<channel>:<thread>`. The rows end `done`, or
+`failed` when the run raised.
+
+- **A redelivery is a no-op.** `UNIQUE(source, external_id)` drops a message
+  the sender delivers twice. Telegram's `update_id`, Slack's `event_id` and
+  GitHub's `X-GitHub-Delivery` are the external ids.
+- **A restart loses nothing.** At startup the worker returns every `claimed`
+  row to `pending`, so a run that died runs again.
+- **One worker per home.** A second `waku serve` on the same home refuses to
+  start, because `<home>/serve.lock` is held.
+- **Each conversation is its own session**: `telegram:<chat id>`,
+  `slack:<channel>:<thread>` or `github:<owner>/<repo>#<number>`.
+- **GitHub arrives by poll or by webhook.** Every 60 seconds the poller asks
+  the `gh` CLI about `WAKU_GITHUB_REPOS`. With `GITHUB_WEBHOOK_SECRET` set,
+  `POST /webhooks/github` on `127.0.0.1:7780` replaces the poller and checks
+  `X-Hub-Signature-256`.
+- **`state.db` is in WAL mode**, so the dashboard reads it while
+  `waku serve` writes.
+
+A run sets its own follow-up with `schedule_task(when, note)`, which writes
+one row into the `timers` table. Ana writes "@waku check issue 12 on Thursday
+at 09:00", and the run answers "I will check issue 12 on Thursday at 09:00".
+
+- **A timer is an event that arrives later.** A loop in `waku serve` writes
+  each due timer into `events` with `source = timer`, the session that set it
+  and its note. The loop sleeps until the earliest timer is due, or for 30
+  seconds, whichever is shorter, and `schedule_task` wakes it when it sets a
+  timer, so a timer fires within 2 seconds of its time. The run that follows reads the note as
+  the reason it woke, and replies in the conversation that set the timer.
+- **A timer fires once.** The event's external id is `timer:<id>`, so a
+  process that dies between writing the event and marking the timer `fired`
+  writes no second event.
+- **`when` is an absolute time** in the time zone of the machine. The tool
+  refuses a time in the past and a time more than one year away. No timer
+  repeats: a run that wants to check again sets a new one.
+- **A timer waits while `waku serve` is down** and fires at the next start.
+
+A hosted container runs the same parts inside the dashboard process (spec
+026, `waku/alwayson/handover.py`). It is started with `WAKU_HOSTED=1`, it has
+no source of its own, and it stops when nobody has used it for 15 minutes. A
+gateway outside it keeps running, and the two talk over HTTP.
+
+```mermaid
+flowchart LR
+  SRC["A Slack mention<br/>POST /v1/triggers/slack<br/>(chat: a later group)"] -->|"verify, insert,<br/>tick now"| TE[("tenant_events<br/>control.db")]
+  TW[("tenant_wakeups<br/>control.db")]
+  subgraph GW["Gateway, hosted/, always running"]
+    TE --> S["Scheduler<br/>every 30 s"]
+    TW -->|due| S
+    IL["Idle loop<br/>every 60 s"]
+  end
+  subgraph CT["Tenant container: waku dashboard with WAKU_HOSTED=1"]
+    EV[("events<br/>state.db")] --> W["Worker, timer loop,<br/>dispatcher"]
+  end
+  S -->|"start the container"| CT
+  S -->|"POST /api/events<br/>handed on 200"| EV
+  IL -->|"GET /api/alwayson/next"| CT
+  IL -->|"earliest timer"| TW
+  IL -->|"stop, unless it<br/>reports work"| CT
+  W -->|"POST /slack/send<br/>through the proxy"| RL["Slack relay<br/>holds each workspace's token"]
+  RL -->|chat.postMessage| SLK["Slack"]
+```
+
+- **`POST /api/events`** stores each event the gateway hands over as one
+  `pending` row, exactly as a source does. A batch with one event that cannot
+  be stored writes no row. An event cannot have the source `timer` or
+  `approval`, because the container writes those itself.
+- **`GET /api/alwayson/next`** answers the earliest pending timer and how
+  many events, outgoing messages and runs are still in flight. The gateway
+  asks before it stops the container, keeps the container while any count is
+  above zero, and starts it again at the timer's time.
+- **Both routes answer 404 without `WAKU_HOSTED=1`**, so a dashboard on a
+  person's own machine has neither, and starts no worker.
+- **Slack on hosted waku is one public app** (spec 026 C,
+  `hosted/gateway/slack.py`). Slack posts every workspace's mentions to the
+  gateway, which checks the signature and stores each one for the tenant its
+  team id maps to. The container's Slack sender has no token: with
+  `WAKU_HOSTED=1` it posts the reply to the platform
+  (`waku/alwayson/senders/slack.py`), and the gateway sends it with the token
+  it keeps encrypted in `control.db`.
+
+A run never sends. Its reply becomes one row in the `outbox` table, and the
+dispatcher sends the row to the Telegram chat, the Slack thread or the GitHub
+issue the events came from.
+
+- **One reply per run.** Each run is one row in the `runs` table, and the
+  reply's `idempotency_key` is that row's id and `0`. A run that is replayed
+  after a crash starts with the same first event, so it reuses its row and
+  writes the same key, and `UNIQUE(idempotency_key)` drops the second row.
+- **A failed delivery is retried** after 10 seconds, 1 minute, 10 minutes and
+  1 hour. The fifth failure marks the row `dead`, and the owner gets one
+  notice on another channel when `WAKU_OWNER` names one.
+- **A run may say nothing.** An empty reply, or the single word `SILENT`,
+  writes no row. The prompt of a run that a timer started says so.
+- **`send_message` writes a row too.** A message to the owner is queued at
+  once. A message to anyone else waits for the owner's yes.
+- **A chat delivery can happen twice** when the process dies after the
+  channel accepted the message and before the row is marked `sent`. A GitHub
+  comment cannot: each comment ends with a hidden marker that carries the
+  row's key, and the sender posts nothing when the issue already has it.
+- **A run that raises sends one plain sentence** to the conversation, or to
+  the owner when other people read that conversation. The reason is in the
+  log of `waku serve` and never in a message.
+- **A run in the owner's own chat is told so.** Its prompt ends with a line
+  that says the person it talks to runs the assistant and approves its calls.
+
+A tool call that writes to a third party waits for the owner's yes
+(`approvals.py`). On Thursday the run for Ana's thread calls `send_message`
+with `to: github:acme/app#12`. Sean reads on Telegram: 'Comment on
+acme/app#12: "Sean will review this issue this week." Approve? Reply yes or
+no.'
+
+- **Each tool has a mode, `allow` or `ask`.** A table in `approvals.py` names
+  every built-in tool. `send_message` is `ask` unless the message goes to the
+  owner, or back to a conversation whose replies need no yes. `WAKU_APPROVE_ASK` and
+  `WAKU_APPROVE_ALLOW` override one tool at a time. A tool the table does
+  not know is a tool from an MCP server, and its connector decides
+  (`connector_of` in `waku/tools/connectors.py`): a Waku Memory tool is
+  `allow`; a tool of a server on the starter list (`waku/connectors.toml`)
+  is `ask` when it matches the entry's `writes`; a tool of any other server
+  is `ask` unless the server declares `readOnlyHint` for it. The owner can
+  store one rule per connector in the `approvals` table, which makes every
+  tool of that connector `allow`. `connect_tool` and `disconnect_tool` are
+  `ask` whatever the environment says.
+- **A reply other people read is a write.** The worker stores a run's reply
+  to a GitHub issue, a Slack channel or a group chat as a `send_message`
+  call, and the owner reads the exact text in the request. A reply to the
+  owner's chat or to a Telegram chat with one person is queued at once.
+  `reply:github` and `reply:slack` in `WAKU_APPROVE_ALLOW` skip the question
+  for one channel.
+- **An event nobody sent is said to the owner.** A new issue with the label
+  starts a run whose prompt says that `SILENT` is the right answer when there
+  is nothing to add. The owner gets one line on their own channel either
+  way.
+- **An `ask` call parks the run.** The loop's `before_tool` asks the approval
+  gate before PreToolUse. The gate stores the tool name, the arguments and a
+  SHA-256 hash of both in the run's row, writes one outbox row to the owner,
+  and the tool does not run. The run ends `parked`.
+- **A parked run sends one message, the request.** The worker writes no reply
+  row for it. When the run came from a conversation other than the owner's
+  chat, that conversation reads one line that code wrote: "I asked Sean to
+  approve this. I will say here what Sean decides." The name is
+  `WAKU_OWNER_NAME`, and without it the line says "the owner".
+- **The owner's answer is an event.** Before the worker starts a run it takes
+  out a "yes" or "no" that came from the chat the request went to. Yes runs
+  the stored call exactly as stored, without asking the model, and no
+  discards it. Any other message, and a yes from anyone else, goes to the
+  model as an ordinary message.
+- **The conversation that parked hears the outcome.** The outcome is an event
+  with `source = approval` in that session, so the next run there starts
+  with "Approved and posted: ..." or "Declined and discarded: ...".
+- **One call waits per conversation**, and it expires after 72 hours. The
+  owner gets one reminder at 48 hours and one message at the expiry, and the
+  conversation that asked gets the outcome as an event.
+- **What waits can be listed and cancelled.** `waiting.py` reads the pending
+  timers, the parked runs and the pending or dead outbox rows, and cancels
+  one by its id (`t3`, `r7`, `m12`). `waku waiting`, the tools `list_waiting`
+  and `cancel_waiting`, and the dashboard's "Waiting" card all call it. A
+  cancelled row keeps its record with the status `cancelled`.
+- **Only the owner approves.** `who_may_approve` in `approvals.py` is the one
+  function that decides, and it answers with `WAKU_OWNER`. The yes counts in
+  a private Telegram chat, where one person writes.
+- **Only `waku serve` parks a call.** In `waku` and the dashboard nothing can
+  bring a parked call back, so `send_message` to a third party is refused
+  there.
+
 ### Which memories earn a slot
 
 Retrieval finds the top facts for a message and, by default, puts all of them
@@ -304,11 +496,24 @@ shows those instead. A proxy that does not know the turn leaves the estimate.
 
 - `waku/gateway/` — how text gets in and out: `cli.py`, `voice.py` (wake word),
   `telegram.py`, `discord.py` and `whatsapp.py`, started by `runner.py` and
-  `supervisor.py`. Gateways only move text.
+  `supervisor.py`. Gateways only move text. Under `waku serve` the Telegram
+  handler writes an event instead of running the turn.
+- `waku/alwayson/` — the always-on path (spec 023): `events.py` (the inbox),
+  `worker.py` (one worker, one run per session batch, the lock), `runs.py`
+  (every run is a row), `approvals.py` (tool modes, parking a call, the
+  owner's answer), `outbox.py` (every outgoing message is a row),
+  `dispatcher.py` (sends each row and retries), `senders/` (Telegram, Slack
+  and `gh`, and `format.py`, which turns the model's Markdown into what each
+  channel reads), `timers.py` (the timers table and the loop that fires each
+  due timer), `waiting.py` (lists what waits and cancels one), `serve.py`
+  (`waku serve`), `handover.py` (the same parts inside a hosted container's
+  dashboard, and the two routes its gateway calls)
+  and `sources/` (Telegram, Slack and GitHub handlers that only insert a
+  row).
 - `waku/runtime/session.py` — working memory for one turn: SOUL.md, memory
   context and chat history.
-- `waku/loop/agent.py` — the loop, with an optional `before_tool` a plugin's
-  `PreToolUse` hook answers. `loop/models.py` — pluggable providers over
+- `waku/loop/agent.py` — the loop, with an optional `before_tool` that the
+  approval gate of `waku serve` and a plugin's `PreToolUse` hook answer. `loop/models.py` — pluggable providers over
   two wire formats.
 - `waku/plugins/` — plugins: the manifest, what is installed, marketplaces,
   `waku plugin ...`, and the hook runner (spec 021).
@@ -316,7 +521,7 @@ shows those instead. A proxy that does not know the turn leaves the estimate.
   structure around the loop. The loop never changes, a graph node can be a loop
   turn, and every failure fails open to the plain loop.
 - `waku/tools/` — what the agent can call: `calendar.py`, `google_calendar.py`,
-  `apple.py`, `notes.py`, `messages.py`, `search.py`, `github.py`,
+  `apple.py`, `notes.py`, `messages.py`, `schedule.py`, `search.py`, `github.py`,
   `workspace.py`, `memory_admin.py`, the MCP client and `experimental.py`.
   `registry.py` decides which are on.
 - `waku/memory/` — semantic (FTS5), episodic and procedural (SKILL.md) memory,
@@ -334,7 +539,11 @@ shows those instead. A proxy that does not know the turn leaves the estimate.
   The two never mix. `evals/hosted_docker/` is a third tier for `hosted/`:
   0/1 and offline, but it needs a Docker daemon and its own CI job.
 - `examples/` — teaching material, not product; one folder per topic.
-- `~/.waku/` — runtime state: `state.db`, `calendar.ics`, `outbox/`, `traces/`.
+- `~/.waku/` — runtime state: `state.db` (with `state.db-wal` and
+  `state.db-shm` beside it), `calendar.ics`, `outbox/`, `traces/`, and
+  `serve.lock` while `waku serve` runs. `outbox/` holds the files that
+  `waku brief`, `waku gather` and `delegate` write. A message `send_message`
+  queues is a row in the `outbox` table of `state.db`, not a file there.
   `WAKU_HOME` moves it; `make` sets it to the repo's own `.waku/`, which is
   gitignored. `waku/config.py` `resolve_home()` has the rules.
 - `.env` — a model key is read from the environment, then the nearest `.env`

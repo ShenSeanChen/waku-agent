@@ -31,6 +31,7 @@ from __future__ import annotations
 import asyncio
 import time
 from collections.abc import Callable
+from typing import TYPE_CHECKING
 
 from hosted import log
 from hosted.core import idle
@@ -38,6 +39,11 @@ from hosted.core import tenant as tenant_core
 from hosted.gateway.spawner_client import SpawnerBusy, SpawnerClient, SpawnerError
 from hosted.ports.control import ControlStore, Tenant
 from hosted.ports.runtime import RunningContainer
+
+if TYPE_CHECKING:
+    # For the annotation only: container_api imports forward, and forward
+    # imports this module.
+    from hosted.gateway.container_api import ContainerApi
 
 _LOG = log.get(__name__)
 
@@ -64,10 +70,14 @@ class StartTimedOut(StartFailed):
 
 class Launcher:
     def __init__(self, *, store: ControlStore, spawner: SpawnerClient,
-                 fleet: idle.Fleet, now: Callable[[], float] = time.time) -> None:
+                 fleet: idle.Fleet, now: Callable[[], float] = time.time,
+                 containers: ContainerApi | None = None) -> None:
         self._store = store
         self._spawner = spawner
         self._fleet = fleet
+        # Spec 026: how stop_idle asks a container what work it has left.
+        # None means nothing is asked and the fleet's answer is final.
+        self._containers = containers
         # E2's own logic never reads this: every clock decision it makes is
         # a delegate's (Fleet.adopt, Fleet.set_status, ControlDb's own
         # `now`). It is stored anyway because the brief's signature takes
@@ -399,10 +409,17 @@ class Launcher:
         The next request from a stopped tenant goes through Fleet.admit like
         any other: a non-background one starts a new container from the
         current tenant image, and a background poll reads `paused`.
+
+        THE CONTAINER IS ASKED TOO (spec 026), in _settled, and that is a
+        third question with an await in front of it. _settled asks is_idle()
+        again after its await, and it is the last thing before the stop, so
+        the rule above still holds.
         """
         stopped: list[str] = []
         for tenant_id in self._fleet.idle_stops():
             if not self._fleet.is_idle(tenant_id):
+                continue
+            if not await self._settled(tenant_id):
                 continue
             _LOG.info("idle stop tenant=%s: nothing in flight and no request "
                       "for %d minutes", tenant_id,
@@ -410,6 +427,45 @@ class Launcher:
             await self.stop(tenant_id)
             stopped.append(tenant_id)
         return stopped
+
+    async def _settled(self, tenant_id: str) -> bool:
+        """Whether an idle container may be stopped now, after asking it what
+        work it has left (spec 026, decision 3). When the answer is yes, the
+        container's next timer is already in tenant_wakeups.
+
+          no report   it did not answer, its image has no such route, or the
+                      answer was not the agreed shape: stop it, and leave the
+                      stored wakeup as it is. Keeping a container that cannot
+                      answer would keep a broken one for ever, and would keep
+                      an old image from ever being replaced.
+          busy        a run, an event or an outgoing message still waits: do
+                      not stop it, until Fleet.worked_too_long says the
+                      report can no longer be believed.
+          quiet       store its earliest timer, or delete the stored one when
+                      it has none, then stop it.
+        """
+        running = self._addresses.get(tenant_id)
+        if self._containers is None or running is None:
+            return True
+        left = idle.work_left(await self._containers.next_work(running))
+        if not self._fleet.is_idle(tenant_id):
+            # A request arrived while the container was answering.
+            return False
+        if left is None:
+            _LOG.info("tenant=%s gave no report of its work; stopping it and "
+                      "keeping the wakeup it had", tenant_id)
+            return True
+        if left.busy and not self._fleet.worked_too_long(tenant_id):
+            return False
+        if left.busy:
+            _LOG.warning("tenant=%s has reported work for %d minutes with no "
+                         "request; stopping it", tenant_id,
+                         self._fleet.seconds_idle(tenant_id) // 60)
+        if left.wakeup is None:
+            self._store.clear_wakeup(tenant_id)
+        else:
+            self._store.set_wakeup(tenant_id, left.wakeup)
+        return True
 
     def _forget_running(self, tenant_id: str) -> None:
         self._addresses.pop(tenant_id, None)

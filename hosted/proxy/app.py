@@ -38,6 +38,9 @@ QUEUE_SECONDS = 30.0
 # Where the treg relay answers (spec 004 E). Here rather than in treg.py, which
 # imports this module, so the router can name them.
 RELAY_PATHS = ("/treg/mcp", "/treg/mcp/")
+# Where a container's Slack sender posts (spec 026 C3; hosted/proxy/slack.py).
+# Here for RELAY_PATHS' reason: that module imports this one.
+SLACK_SEND_PATH = "/slack/send"
 RATE_WINDOW_SECONDS = 60.0
 # Waku-agent spec 011 B1: what one chat turn was charged.
 CHARGES_PATH = re.compile(r"/v1/turns/([^/]+)/charges")
@@ -46,6 +49,7 @@ TURN_HEADER = "X-Waku-Turn"
 Resolve = Callable[[str], Awaitable[tuple[str, str] | None]]
 # Spec 004 E: the treg relay's handler (hosted/proxy/treg.py), or None when
 # config/proxy.env carries no treg token and the route does not exist.
+# Spec 026 C3: the Slack send relay's handler has the same shape.
 Handler = Callable[[web.Request], Awaitable[web.StreamResponse]]
 
 
@@ -143,7 +147,8 @@ class MeteringProxy:
                  monotonic: Callable[[], float] = time.monotonic,
                  memory_key: Callable[[str], str] | None = None,
                  wallet: Wallet | None = None, treg: Handler | None = None,
-                 turns: TurnCharges | None = None) -> None:
+                 turns: TurnCharges | None = None,
+                 slack: Handler | None = None) -> None:
         self._config = config
         self._ledger = ledger
         self._resolve = resolve
@@ -153,6 +158,7 @@ class MeteringProxy:
         self._memory_key = memory_key
         self._wallet = wallet
         self._treg = treg
+        self._slack = slack
         self._turns = turns if turns is not None else TurnCharges(monotonic)
         self._in_flight: dict[str, int] = defaultdict(int)
         self._recent: dict[str, deque[float]] = defaultdict(deque)
@@ -164,6 +170,8 @@ class MeteringProxy:
             # Before the catch-all, which would answer them 404.
             for path in RELAY_PATHS:
                 app.router.add_route("*", path, self._treg)
+        if self._slack is not None:
+            app.router.add_route("*", SLACK_SEND_PATH, self._slack)
         app.router.add_route("*", "/{tail:.*}", self._dispatch)
         return app
 

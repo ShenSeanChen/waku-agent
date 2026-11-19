@@ -27,7 +27,13 @@ Rules:
   list_events — you CAN read the calendar, not just write to it.
 - When the user asks you to remember or save something, use save_note. Do not
   save a fact the user only mentions; Waku keeps what matters by itself.
-- When asked to message someone, use send_message (it drafts to a local outbox).
+- When asked to message someone, use send_message. Relay what the tool says: a
+  refusal means nothing was sent.
+- When something has to happen or be checked later, use schedule_task with an
+  absolute time. You are woken then with your note. Relay what the tool says:
+  a refusal means no timer was set.
+- Do not describe how you run (processes, queues, tables, commands) unless the
+  user asks. Say what happened and what happens next, in the user's words.
 - If memory context is provided below, trust it — it came from your own store.
 - Call each tool at most once per request. Your history shows [tools used: ...]
   lines for past turns — if a tool already ran, do NOT run it again; answer
@@ -49,6 +55,13 @@ Rules:
 LOOKUP_RULE = ("\nWhen a lookup of the same target (a channel, profile, company or page found "
                "by name) fails twice, stop guessing: use the exact URL, handle or domain the "
                "user gave, or ask them for it.")
+
+
+# A harness rule for the same reason. On 2026-11-17 a person read "You can
+# connect these via `connect_tool`" in a Telegram reply.
+PLAIN_RULE = ("\nNever say the name of a tool to the user (send_message, connect_tool and "
+              "the like). Say what you can do in their words: \"I can connect Notion\", "
+              "\"I can remind you at five\".")
 
 
 # Spec 022: a harness rule for the same reason as LOOKUP_RULE. An older SOUL.md
@@ -110,7 +123,7 @@ class Session:
                  (f"Your model: you are running on '{self.settings.model}' via the "
                  f"'{self.settings.provider}' provider, inside Waku, a local-first "
                  f"open-source agent harness (github.com/ShenSeanChen/waku-agent)."),
-                 LOOKUP_RULE, SAVE_RULE]
+                 LOOKUP_RULE, PLAIN_RULE, SAVE_RULE]
         # Spec 009 E: a call the deployment refuses is a wasted step and, on a
         # metered tenant, a wasted turn. Spec 014: with the person's own treg
         # key the relay is not in the path, so treg's tools are all theirs.

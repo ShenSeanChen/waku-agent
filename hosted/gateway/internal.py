@@ -1,15 +1,24 @@
-"""run/gateway/gateway.sock -- token lookup, and nothing else.
+"""run/gateway/gateway.sock -- what the proxy may ask the gateway.
 
 The proxy is the one service tenant code can reach directly, so it gets no
-access to control.db. It sends a SHA-256 hash and gets back a tenant id and a
-status, and the tenant's Waku Memory key so it can charge that person's
-credits (spec 004 D). It cannot enumerate tenants, read a session, or issue
+access to control.db. It asks two things here, and nothing else:
+
+  token       it sends a SHA-256 hash and gets back a tenant id and a status,
+              and the tenant's Waku Memory key so it can charge that person's
+              credits (spec 004 D).
+  slack_send  it sends a tenant id it resolved itself, a channel and a text,
+              and the gateway posts the message with that tenant's Slack
+              token (spec 026 C3). It gets back `ok` or an error code. The
+              token stays in this process.
+
+It cannot enumerate tenants, read a session, read a Slack token, or issue
 anything.
 """
 
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 from hosted import jsonsock
@@ -21,14 +30,35 @@ GATEWAY_SOCKET_MODE = 0o660
 # spawner. An extra field is a caller that thinks this socket takes something
 # it does not, and answering it anyway teaches that it does.
 TOKEN_FIELDS = frozenset({"op", "hash"})
+SLACK_SEND_FIELDS = frozenset({"op", "tenant", "channel", "text", "thread_ts"})
+
+# (tenant id, channel, text, thread_ts) -> {"ok": True} or {"ok": False,
+# "error": code}. hosted/gateway/slack.SlackRelay.send.
+SlackSend = Callable[[str, str, str, str], Awaitable[dict]]
 
 
-async def serve_token_lookup(path: Path, store: ControlStore) -> asyncio.Server:
+async def serve_token_lookup(path: Path, store: ControlStore, *,
+                             slack_send: SlackSend | None = None) -> asyncio.Server:
+    """`slack_send` is the relay, or None when Slack is not configured: the
+    operation then answers that, and the socket is otherwise the same."""
+    async def send(request: dict) -> dict:
+        unknown = sorted(set(request) - SLACK_SEND_FIELDS)
+        if unknown:
+            return {"error": f"slack_send does not take {unknown}"}
+        if slack_send is None:
+            return {"ok": False, "error": "slack_not_configured"}
+        # The relay checks every value's shape itself; a missing one is "".
+        return await slack_send(request.get("tenant", ""), request.get("channel", ""),
+                                request.get("text", ""), request.get("thread_ts", ""))
+
     async def handler(request: dict) -> dict:
-        # One allowed question, named here; everything else refused. A list of
-        # forbidden ops would need editing every time the store grows a method.
+        # Two allowed questions, named here; everything else refused. A list
+        # of forbidden ops would need editing every time the store grows a
+        # method.
+        if request.get("op") == "slack_send":
+            return await send(request)
         if request.get("op") != "token":
-            return {"error": "this socket answers one question: op=token"}
+            return {"error": "this socket answers two questions: op=token and op=slack_send"}
         unknown = sorted(set(request) - TOKEN_FIELDS)
         if unknown:
             return {"error": f"token does not take {unknown}"}
