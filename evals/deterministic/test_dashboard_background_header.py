@@ -136,6 +136,11 @@ BACKGROUND_AWARE = {
     "observe.js": {
         "loadObservability": r'background\s*\?\s*\{headers:\s*BG\}\s*:\s*undefined',
     },
+    # spec 030: on hosted Waku the page asks the gateway about Slack after a
+    # refresh, and a refresh is a timer's poll most of the time
+    "hosted.js": {
+        "loadHostedSlack": r'fetch\("/hosted/slack",\s*background\s*\?\s*\{headers:\s*BG\}\s*:\s*undefined\)',
+    },
 }
 
 def _read(name: str) -> str:
@@ -271,6 +276,7 @@ NETWORK_CALLERS = {
     ("judgment.js", "runJudgmentArena"): "user",
     ("main.js", "refresh"): "background",
     ("observe.js", "loadObservability"): "background",
+    ("hosted.js", "loadHostedSlack"): "background",   # spec 030: the Slack card's facts, from the gateway
     ("observe.js", "obsJudge"): "user",   # spec 015: the "Judge this turn" click
     ("main.js", "stopMic"): "user",
     ("memory.js", "saveFact"): "user",

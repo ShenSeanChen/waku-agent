@@ -502,6 +502,7 @@ container --POST /slack/send--> proxy --gateway.sock--> gateway --chat.postMessa
 | Route | On | What it does |
 |---|---|---|
 | `GET /setup` | the apex | shows three steps and which are done: Sign in, Add to Slack, Mention @Waku |
+| `GET /hosted/slack` | a tenant's own host | tells the dashboard's Slack card what the gateway knows: whether this server has a Slack app, whether the person connected a workspace, its name, and the addresses of `/slack/install` and `/setup`. It reads one row, changes nothing, holds no token, and does not start the container |
 | `GET /slack/install` | the apex | sends a signed-in person to Slack's approval page, with a `state` bound to their tenant that works once, for 10 minutes |
 | `GET /slack/oauth/callback` | the apex | checks the `state` and the browser's own session, exchanges Slack's code for the workspace's bot token, and stores it |
 | `POST /v1/triggers/slack` | the apex | takes every workspace's events. It checks Slack's signature over the raw body, refuses a timestamp more than 5 minutes from now, and stores a mention as one row in `tenant_events` under Slack's event id |

@@ -364,15 +364,21 @@ function connectInChat(key){
   sendChat(input);
 }
 
-function connectionsGrid(page){
+function connectionsGrid(page, slack){
   const grid = cards => `<div class="provgrid conngrid">${cards.map(connectionCard).join("")}</div>`;
+  // Hosted Waku: the gateway knows about Slack, so its card comes from there
+  // (hosted.js) and leads the first group.
+  const lead = group => group.id === "talk" && slack ? [slack] : [];
   return page.groups.map(group => `<section class="connsection" id="conn-group-${esc(group.id)}">
     <h2>${esc(group.title)}</h2>
     ${group.id === "apps" ? connectorSignIn(page.sign_in) : ""}
-    ${grid(group.cards)}
+    ${grid(lead(group).concat(group.cards))}
     ${group.id === "apps" && page.add_by_address ? connectorAddSection() : ""}
     ${group.more ? `<h3 class="connsub">${esc(group.more.title)}</h3>${grid(group.more.cards)}` : ""}
-  </section>`).join("");
+  </section>`).join("") + (page.hidden ? `<details class="connmore connhidden">
+    <summary>${esc(page.hidden.title)}</summary>
+    <div class="connmore-body meta">${esc(page.hidden.why)}</div>
+  </details>` : "");
 }
 
 // A link such as #connections/app-notion opens the page at that card and
@@ -443,7 +449,7 @@ const VIEWS = {
   },
   connections(d){
     const page = d.connections_page;
-    return page && page.groups.length ? connectionsGrid(page)
+    return page && page.groups.length ? connectionsGrid(page, hostedSlackCard(d))
       : uiCard(`<span class="empty">Nothing to connect yet.</span>`);
   },
   // Gateway: ONE unified conversation across every channel (dashboard, telegram,
@@ -469,7 +475,7 @@ const VIEWS = {
   overview(d){
     const s = d.stats;
     const u = d.usage || {total_cost:0};
-    return `${memoryChoiceCard(d)}${waitingCard(d)}${uiStatBand([
+    return `${hostedSlackLine(d)}${memoryChoiceCard(d)}${waitingCard(d)}${uiStatBand([
         {label:"spent", value:money(u.total_cost), sub:"all-time", tone:"ok"},
         {label:"avg turn", value:secs(s.latency_avg)},
         {label:"turns", value:s.turns}, {label:"tool calls", value:s.tool_calls},

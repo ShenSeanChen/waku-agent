@@ -190,6 +190,7 @@ async function refresh(background = false){
     applyTele();      // reflect the stats on/off choice (default on)
     syncLiveView(background);   // live-update an opened conversation (e.g. new phone messages)
     if (!dockRestored) restoreDock(background);
+    hostedAfterRefresh(background);   // hosted Waku: what the gateway knows about Slack
     // Self-heal the Compare scoreboard: it otherwise only loads on tab-open and
     // after a race, so a slow/interrupted race (or a server blip) can leave it
     // showing a partial set. Re-pull the server totals while viewing the tab —

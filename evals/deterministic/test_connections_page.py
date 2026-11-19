@@ -275,3 +275,90 @@ def test_the_page_is_in_the_dashboards_payload(home):
     data = dashboard.collect()
 
     assert [g["id"] for g in data["connections_page"]["groups"]] == ["talk", "apps", "memory"]
+
+
+# ---- hosted Waku (decision 3) -------------------------------------------------
+
+@pytest.fixture
+def hosted(home, monkeypatch):
+    """A hosted container: started with WAKU_HOSTED=1."""
+    monkeypatch.setenv("WAKU_HOSTED", "1")
+    return home
+
+
+def test_the_payload_says_whether_the_dashboard_is_hosted(home, monkeypatch):
+    from waku.ops import dashboard
+
+    assert dashboard.collect()["hosted"] is False
+    assert dashboard.connections_page_data()["hidden"] is None
+
+    monkeypatch.setenv("WAKU_HOSTED", "1")
+    assert dashboard.collect()["hosted"] is True
+
+
+def test_hosted_shows_no_card_that_can_never_work_there_and_says_why_once(hosted):
+    """Acceptance 5."""
+    page = _page()
+    ids = [card["id"] for card in _cards(page)]
+
+    assert "apple_calendar" not in ids and "apple_tools" not in ids
+    assert page["hidden"] == {
+        "title": "2 cards are not shown on hosted Waku",
+        "why": "Apple Calendar and Apple Tools need a Mac, and hosted Waku runs on a Linux server.",
+    }
+
+
+def test_hosted_offers_a_button_only_where_the_gateway_takes_the_save(hosted):
+    """A card whose save the gateway refuses reads "not available here" and
+    has no button, so the page does not offer what it will refuse."""
+    page = _page()
+
+    for card in _cards(page):
+        if card["id"] in cp.HOSTED_CONNECTIONS:
+            assert card["action"] is not None, card["id"]
+            assert card["label"] != "not available here"
+        elif card["id"] != "waku-memory":
+            assert card["action"] is None, card["id"]
+            assert (card["state"], card["label"]) == ("not-configured", "not available here")
+    assert _card(page, "telegram")["label"] == "not available here"
+    assert _card(page, "notion")["action"]["kind"] == "dialog"
+    assert _card(page, "tavily")["action"]["kind"] == "dialog"
+
+
+def test_hosted_lists_the_starter_apps_and_cannot_connect_them_yet(hosted):
+    page = _page()
+
+    for card_id in ("app-linear", "app-notion", "app-github"):
+        card = _card(page, card_id)
+        assert card["action"] is None
+        assert card["label"] == "not available here"
+    assert page["add_by_address"] is False
+
+
+def test_hosted_waku_memory_is_set_up_by_the_platform_so_it_has_no_button(hosted):
+    card = _card(_page(), "waku-memory")
+
+    assert card["action"] is None
+    assert card["why"] == "Hosted Waku sets this up when you sign in."
+
+
+def test_hosted_adds_no_card_names_twice(hosted):
+    names = [card["name"] for card in _cards(_page())]
+
+    assert len(names) == len({name.casefold() for name in names})
+
+
+def test_hosted_tools_page_offers_nothing_to_connect(hosted):
+    from waku.ops import dashboard
+
+    assert dashboard.tools_info()["not_connected"] == []
+
+
+def test_a_hosted_container_whose_person_changed_provider_is_still_hosted(hosted, monkeypatch):
+    """The servers' routes are blocked by the gateway whatever the provider
+    is, so the page must not offer them after a provider change."""
+    from waku.ops import dashboard
+
+    monkeypatch.setenv("WAKU_PROVIDER", "anthropic")
+
+    assert dashboard.connectors_data()["available"] is False

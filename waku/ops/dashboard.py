@@ -558,6 +558,9 @@ def collect() -> dict:
         # MCP servers that sign in on their own page rather than through an
         # .env field (spec 007 E). Files only: no browser, no network.
         "mcp_connections": [treg.card(home)],
+        # Whether this dashboard runs in a hosted container (WAKU_HOSTED=1).
+        # The page then asks the gateway about Slack (spec 030).
+        "hosted": handover.enabled(),
         # The Connections page itself: cards in groups (spec 030).
         "connections_page": connections_page_data(),
         "tools": tools_info(events),
@@ -630,7 +633,8 @@ def connectors_data() -> dict:
                     for entry in connectors.starter().values()],
         # A hosted container's servers are set when the person signs in, and
         # the hosted gateway blocks the three routes (hosted/core/policy.py).
-        "available": settings.provider != "waku-platform",
+        # The container is hosted whatever provider its person picked.
+        "available": settings.provider != "waku-platform" and not handover.enabled(),
         "servers": rows,
         "sign_in": ({"name": waiting.name, "link": waiting.link}
                     if waiting is not None and waiting.link else None),
@@ -649,7 +653,8 @@ def connections_page_data() -> dict:
         [asdict(view) for view in list_connections()],
         [treg.card(settings.home)],
         connectors_data(),
-        waku_memory_info(settings))
+        waku_memory_info(settings),
+        hosted=handover.enabled())
 
 
 def connectors_add(payload: dict) -> dict:

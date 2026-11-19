@@ -718,6 +718,7 @@ details.subterm > summary.subterm-h::-webkit-details-marker{ display:none; }
 .connmore>summary{cursor:pointer;font-family:var(--face-mono);font-size:var(--text-xs);letter-spacing:var(--tracking-label);
   text-transform:uppercase;color:var(--text-muted)}
 .connmore-body{margin-top:var(--space-3);max-width:640px}
+.connhidden{margin-top:var(--space-8)}
 .connstatus{display:inline-flex;align-items:center;gap:var(--space-2);font-size:var(--text-xs);color:var(--text-muted)}
 .conndot{width:9px;height:9px;border-radius:var(--shape-circle);background:var(--text-faint);flex-shrink:0}
 .connstatus.connected{color:var(--ok)}

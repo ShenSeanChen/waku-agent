@@ -42,9 +42,24 @@ STATES = {
     "error": "error",
 }
 NEEDS_SIGN_IN = "needs sign-in"
+NOT_HERE = "not available here"
 # Every (class, words) pair a card may show. "needs sign-in" shares the class
 # of "needs setup": both wait for the person.
-PAIRS = frozenset(STATES.items()) | {("needs-setup", NEEDS_SIGN_IN)}
+PAIRS = frozenset(STATES.items()) | {("needs-setup", NEEDS_SIGN_IN), ("not-configured", NOT_HERE)}
+
+# Hosted Waku (decision 3). A hosted container is a Linux server that the
+# person's browser reaches through the platform's gateway.
+#
+# The connections a hosted person can save. The gateway refuses every other
+# one (hosted/core/policy.py, ALLOWED_CONNECTIONS). waku/ never imports
+# hosted/, so the list is written twice, and
+# evals/deterministic/hosted/test_connections_allowlist.py keeps the two equal.
+HOSTED_CONNECTIONS = frozenset({"notion", "tavily", "treg"})
+# The cards that can never work in a container. They are left off the page,
+# and one closed line says why.
+MAC_ONLY = ("apple_calendar", "apple_tools")
+HIDDEN_WHY = "{names} need a Mac, and hosted Waku runs on a Linux server."
+WAKU_MEMORY_HOSTED = "Hosted Waku sets this up when you sign in."
 
 # What a card's one button does:
 #   dialog   opens the registry row `target` in the connection dialog
@@ -191,9 +206,30 @@ def server_card(row: dict, waiting: dict | None) -> dict:
                  why=_server_why(row, state), action=_action("manage", "Manage", row["name"]))
 
 
+def not_here(card: dict) -> dict:
+    """The same card where it cannot be connected: it says so and has no
+    button."""
+    return {**card, "state": "not-configured", "label": NOT_HERE, "why": "", "action": None}
+
+
+def _hidden(names: list[str]) -> dict | None:
+    if not names:
+        return None
+    listed = names[0] if len(names) == 1 else f"{', '.join(names[:-1])} and {names[-1]}"
+    count = f"{len(names)} card{'' if len(names) == 1 else 's'}"
+    verb = "is" if len(names) == 1 else "are"
+    why = HIDDEN_WHY.format(names=listed)
+    return {"title": f"{count} {verb} not shown on hosted Waku",
+            "why": why if len(names) > 1 else why.replace(" need ", " needs ", 1)}
+
+
 def waku_memory_card(info: dict, *, connectable: bool = True) -> dict:
     """Waku Memory's card. `connectable` is False where the platform sets it
     up, so the card offers nothing to press."""
+    if not connectable:
+        state = "connected" if info.get("connected") else "not-configured"
+        return _card(WAKU_MEMORY_ID, "Waku Memory", state, WAKU_MEMORY_WHAT, logo=_WAKU_LOGO,
+                     why=WAKU_MEMORY_HOSTED)
     if info.get("connected"):
         return _card(WAKU_MEMORY_ID, "Waku Memory", "connected", WAKU_MEMORY_WHAT,
                      logo=_WAKU_LOGO, why=str(info.get("account") or ""),
@@ -214,18 +250,28 @@ def _unique_names(cards: list[dict], fixed: set[str]) -> None:
 
 
 def page(connections: list[dict], mcp_cards: list[dict], connectors: dict,
-         waku_memory: dict) -> dict:
+         waku_memory: dict, *, hosted: bool = False) -> dict:
     """The whole page: three groups of cards, the sign-in link while one
-    waits, and whether a server can be added by its address here."""
+    waits, and whether a server can be added by its address here.
+
+    On hosted Waku a card that can never work in a container is left off and
+    named in `hidden`, and a card the gateway would refuse to save reads "not
+    available here" and has no button."""
     grouped: dict[str, list[dict]] = {group_id: [] for group_id, _ in GROUPS}
     compare: list[dict] = []
+    hidden: list[str] = []
     # A registry row that a sign-in card stands for (treg's key) is drawn
     # once, as that card. Its dialog is still the registry row's.
     drawn = {card["key"] for card in mcp_cards}
     for view in connections:
         if view["key"] in drawn:
             continue
+        if hosted and view["key"] in MAC_ONLY:
+            hidden.append(view["name"])
+            continue
         card = registry_card(view)
+        if hosted and view["key"] not in HOSTED_CONNECTIONS:
+            card = not_here(card)
         if view["key"] in COMPARE_STORES:
             compare.append(card)
         else:
@@ -248,12 +294,17 @@ def page(connections: list[dict], mcp_cards: list[dict], connectors: dict,
         # is not drawn a second time.
         own = [server_card(row, waiting) for row in rows.values()
                if row["name"] not in claimed and not row.get("own_card")]
+    elif hosted:
+        # Signing in to one of these on hosted Waku is spec 029. Until it
+        # lands the cards say that they are not available here.
+        apps_first = [not_here(starter_card(entry, None, None))
+                      for entry in connectors.get("starter", [])]
     fixed = {card["name"].casefold()
              for card in apps_first + compare + [c for cards in grouped.values() for c in cards]}
     fixed.add("waku memory")
     _unique_names(own, fixed)
     grouped["apps"] = apps_first + own + grouped["apps"]
-    grouped["memory"].insert(0, waku_memory_card(waku_memory))
+    grouped["memory"].insert(0, waku_memory_card(waku_memory, connectable=not hosted))
 
     return {
         "groups": [{"id": group_id, "title": title, "cards": grouped[group_id],
@@ -262,6 +313,7 @@ def page(connections: list[dict], mcp_cards: list[dict], connectors: dict,
                    for group_id, title in GROUPS],
         "sign_in": waiting,
         "add_by_address": bool(connectors.get("available")),
+        "hidden": _hidden(hidden),
     }
 
 
