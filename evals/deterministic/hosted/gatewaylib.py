@@ -725,6 +725,7 @@ class FakeSlack:
         # is a workspace that added the app before those scopes were asked for.
         self.replies_answer: dict = {"ok": False, "error": "missing_scope"}
         self.users: dict[str, str] = {}
+        self.channels: dict[str, str] = {}
         self._server: ThreadingHTTPServer | None = None
         self.port = 0
 
@@ -757,6 +758,10 @@ class FakeSlack:
                            "/conversations.replies": recorder.replies_answer,
                            "/reactions.add": {"ok": True}}
                 answer = answers.get(self.path, {"ok": False, "error": "unknown_method"})
+                if self.path == "/conversations.info":
+                    named = recorder.channels.get(sent.get("channel", ""))
+                    answer = ({"ok": True, "channel": {"name": named}}
+                              if named else {"ok": False, "error": "missing_scope"})
                 if self.path == "/users.info":
                     known = recorder.users.get(sent.get("user", ""))
                     answer = ({"ok": True, "user": {"profile": {"display_name": known}}}
