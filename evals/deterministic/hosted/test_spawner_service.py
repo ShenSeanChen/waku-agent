@@ -26,12 +26,15 @@ class FakeRuntime:
     def __init__(self) -> None:
         self.calls: list[tuple] = []
 
-    async def provision(self, tenant_id, project_id):
-        self.calls.append(("provision", tenant_id, project_id))
+    async def provision(self, tenant_id, project_id, connectors=()):
+        self.calls.append(("provision", tenant_id, project_id)
+                          + ((connectors,) if connectors else ()))
 
-    async def start(self, tenant_id, project_id, timezone, token, memory_key=""):
+    async def start(self, tenant_id, project_id, timezone, token, memory_key="",
+                    connectors=()):
         self.calls.append(("start", tenant_id, project_id, timezone, token)
-                          + ((memory_key,) if memory_key else ()))
+                          + ((memory_key,) if memory_key else ())
+                          + ((connectors,) if connectors else ()))
         return RunningContainer(tenant_id=tenant_id, address="10.88.0.2", port=7777)
 
     async def stop(self, tenant_id):
@@ -138,6 +141,7 @@ _VALID = {
     "token": TOKEN,
     "task": "backup",
     "memory_key": "mem_sk_" + "v" * 43,
+    "connectors": ["notion"],
 }
 
 

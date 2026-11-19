@@ -200,9 +200,26 @@ class DockerRuntime:
 
     # --- provisioning ----------------------------------------------------
 
-    async def provision(self, tenant_id: str, project_id: int) -> None:
+    async def provision(self, tenant_id: str, project_id: int,
+                        connectors: tuple[str, ...] = ()) -> None:
+        """The `provision` operation: _provision() under the tenant's lock.
+
+        The gateway asks for it when a tenant is created, and again when a
+        person signs in to a connector or disconnects one while their
+        container runs (spec 029 B2). Under the lock, so it never runs beside
+        the provision a start is making: two of them would both write the
+        staging file mcp.json is renamed from.
+        """
+        async with self._lock_for(tenant_id):
+            await self._provision(tenant_id, project_id, connectors)
+
+    async def _provision(self, tenant_id: str, project_id: int,
+                         connectors: tuple[str, ...] = ()) -> None:
         """Create what is missing. Runs before EVERY start, so a failed first
         provision is repaired on the next one.
+
+        `connectors` names the connectors this tenant signed in to (spec 029
+        B2). Provisioning makes the tenant's mcp.json list exactly those.
 
         THE CREATE PATH AND THE REPEAT PATH ARE DIFFERENT, and this is the most
         important seven lines in the class.
@@ -246,7 +263,7 @@ class DockerRuntime:
             config, tenant_id=tenant_id,
             command=["python", "-m", "hosted.spawner.provision_main"],
             # Spec 004 E: where the treg entry points, only when the relay is on.
-            extra_env=tuple(template.provision_env(config)),
+            extra_env=tuple(template.provision_env(config, connectors)),
             # NOT KIND_TASK. See template.KIND_PROVISION: labelling the
             # spawner's own bookkeeping as an operator task makes a tenant's
             # start refuse their own retried start with {"code": "busy"}.
@@ -307,7 +324,8 @@ class DockerRuntime:
     # --- the tenant's own container --------------------------------------
 
     async def start(self, tenant_id: str, project_id: int, timezone: str,
-                    token: str, memory_key: str = "") -> RunningContainer:
+                    token: str, memory_key: str = "",
+                    connectors: tuple[str, ...] = ()) -> RunningContainer:
         if not is_tenant_id(tenant_id):
             # start() validates its OWN id before it does anything, including
             # before the label query below. The socket path has already run
@@ -319,16 +337,17 @@ class DockerRuntime:
         # the two race over the same container name and the same directories.
         async with self._lock_for(tenant_id):
             return await self._start_locked(tenant_id, project_id, timezone, token,
-                                            memory_key)
+                                            memory_key, connectors)
 
     def _lock_for(self, tenant_id: str) -> asyncio.Lock:
         return self._locks.setdefault(tenant_id, asyncio.Lock())
 
     async def _start_locked(self, tenant_id: str, project_id: int, timezone: str,
-                            token: str, memory_key: str = "") -> RunningContainer:
+                            token: str, memory_key: str = "",
+                            connectors: tuple[str, ...] = ()) -> RunningContainer:
         await self._refuse_if_busy(tenant_id)
         await self.stop(tenant_id)          # exactly one container per tenant
-        await self.provision(tenant_id, project_id)
+        await self._provision(tenant_id, project_id, connectors)
 
         body = template.tenant_container(
             self._config, tenant_id=tenant_id, project_id=project_id,

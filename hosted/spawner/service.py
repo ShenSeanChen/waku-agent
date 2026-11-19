@@ -40,12 +40,13 @@ async def handle(runtime: DockerRuntime, payload: dict) -> dict:
 
     try:
         if request.op == "provision":
-            await runtime.provision(request.tenant_id, request.project_id)
+            await runtime.provision(request.tenant_id, request.project_id,
+                                    request.connectors)
             return {"ok": True}
         if request.op == "start":
             running = await runtime.start(request.tenant_id, request.project_id,
                                           request.timezone, request.token,
-                                          request.memory_key)
+                                          request.memory_key, request.connectors)
             return {"address": running.address, "port": running.port}
         if request.op == "stop":
             await runtime.stop(request.tenant_id)

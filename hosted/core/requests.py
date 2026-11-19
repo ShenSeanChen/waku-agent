@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from hosted.core.connectors import is_connector_name
 from hosted.core.tenant import (
     is_known_timezone,
     is_memory_key,
@@ -27,10 +28,14 @@ OPERATIONS = frozenset({"provision", "start", "stop", "list", "tenants", "task"}
 TASKS = frozenset({"backup", "restore", "archive", "inspect", "inspect-stop"})
 
 _KEYS: dict[str, frozenset[str]] = {
-    "provision": frozenset({"op", "tenant_id", "project_id"}),
+    # connectors is optional (spec 029 B2): the names of the connectors this
+    # tenant signed in to, which provisioning writes into the tenant's
+    # mcp.json. Left out, the tenant has none.
+    "provision": frozenset({"op", "tenant_id", "project_id", "connectors"}),
     # memory_key is optional (spec 004): a tenant whose Waku Memory key has not
     # been minted yet still starts, without one.
-    "start": frozenset({"op", "tenant_id", "project_id", "timezone", "token", "memory_key"}),
+    "start": frozenset({"op", "tenant_id", "project_id", "timezone", "token", "memory_key",
+                        "connectors"}),
     "stop": frozenset({"op", "tenant_id"}),
     "list": frozenset({"op"}),
     "tenants": frozenset({"op"}),
@@ -68,6 +73,7 @@ class SpawnerRequest:
     token: str = ""
     task: str = ""
     memory_key: str = ""
+    connectors: tuple[str, ...] = ()
 
 
 def parse(payload: object) -> SpawnerRequest:
@@ -107,10 +113,17 @@ def parse(payload: object) -> SpawnerRequest:
     if "memory_key" in payload and not is_memory_key(memory_key):
         raise Invalid("memory_key is not a Waku Memory key")
 
+    connectors = payload.get("connectors", [])
+    if (not isinstance(connectors, list) or len(set(map(str, connectors))) != len(connectors)
+            or not all(is_connector_name(name) for name in connectors)):
+        # A name becomes part of an address in the tenant's mcp.json, so only
+        # a name on the list is taken (hosted/core/connectors.py).
+        raise Invalid("connectors is a list of distinct connector names")
+
     task = payload.get("task", "")
     if "task" in payload and task not in TASKS:
         raise Invalid(f"task must be one of {sorted(TASKS)}, not {task!r}")
 
     return SpawnerRequest(op=op, tenant_id=tenant_id, project_id=project_id,
                           timezone=timezone, token=token, task=task,
-                          memory_key=memory_key)
+                          memory_key=memory_key, connectors=tuple(connectors))

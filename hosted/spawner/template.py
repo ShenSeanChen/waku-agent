@@ -22,6 +22,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
+from hosted.core.connectors import is_connector_name
 from hosted.core.tenant import (
     INSPECT_NETWORK,
     TENANT_NETWORK,
@@ -154,6 +155,11 @@ TREG_UNAVAILABLE_TOOLS = ("treg_balance", "treg_resources_list")
 # What the provision container is told, and the only variable
 # provision_main.py reads: where the treg entry in mcp.json points.
 TREG_BASE_URL_ENV = "WAKU_TREG_BASE_URL"
+# Spec 029 B2, read by provision_main.py the same way: the metering proxy's
+# address, which a connector's entry in mcp.json points at, and the names of
+# the connectors this tenant signed in to, separated by commas.
+CONNECT_BASE_URL_ENV = "WAKU_CONNECT_BASE_URL"
+CONNECTORS_ENV = "WAKU_CONNECTORS"
 
 # ONE literal for this path. provision_main.py imports it rather than
 # hardcoding the same string, because a plan that says "setting any of them in
@@ -270,11 +276,20 @@ def platform_env(config: SpawnerConfig, token: str) -> list[str]:
     ]
 
 
-def provision_env(config: SpawnerConfig) -> list[str]:
-    """What the provision container is told: the treg relay's base, or nothing."""
-    if not config.treg_relay:
-        return []
-    return [f"{TREG_BASE_URL_ENV}={config.platform_base_url}"]
+def provision_env(config: SpawnerConfig,
+                  connectors: tuple[str, ...] = ()) -> list[str]:
+    """What the provision container is told: the treg relay's base when the
+    relay runs, and, on a deployment with a metering proxy, where a
+    connector's entry points and which connectors this tenant signed in to
+    (spec 029 B2). The connector pair is sent with an empty list too, so a
+    tenant who disconnected their last connector loses its entry."""
+    env = [f"{TREG_BASE_URL_ENV}={config.platform_base_url}"] if config.treg_relay else []
+    if config.platform_base_url:
+        if not all(is_connector_name(name) for name in connectors):
+            raise ValueError("not a list of connector names")
+        env += [f"{CONNECT_BASE_URL_ENV}={config.platform_base_url}",
+                f"{CONNECTORS_ENV}={','.join(connectors)}"]
+    return env
 
 
 def unavailable_tools_env(config: SpawnerConfig) -> list[str]:

@@ -680,8 +680,12 @@ def test_the_treg_relay_is_off_unless_spawner_env_says_on():
     assert template.config_from_env(_spawner_env(**FREE_TIER)).treg_relay is False
     on = template.config_from_env(_spawner_env(**FREE_TIER, WAKU_TREG_RELAY="on"))
     assert on.treg_relay is True
-    assert template.provision_env(on) == ["WAKU_TREG_BASE_URL=http://10.88.0.1:8788"]
-    assert template.provision_env(CONFIG) == []
+    # The first entry is treg's. The other two are spec 029's, sent on every
+    # deployment with a metering proxy (test_connect_container.py).
+    assert template.provision_env(on)[0] == "WAKU_TREG_BASE_URL=http://10.88.0.1:8788"
+    assert not any(line.startswith("WAKU_TREG") for line in
+                   template.provision_env(template.config_from_env(_spawner_env(**FREE_TIER))))
+    assert not any(line.startswith("WAKU_TREG") for line in template.provision_env(CONFIG))
 
 
 def test_treg_without_the_free_tier_or_with_a_misspelt_value_is_refused():
