@@ -67,6 +67,15 @@ It runs through the normal harness, so it animates on the dashboard like any tur
 
 ## Mirror created events to Google Calendar
 
+`create_event` validates both dates before saving an event and requires the end
+to follow the start. A timestamp with an explicit offset keeps its instant and
+is stored in local time with the machine's local offset for the event date. A timestamp
+without an offset remains a floating local time, including existing events.
+Waku compares event instants when checking duplicates. The ICS export writes
+aware timestamps in UTC and escapes multiline text for calendar import.
+`list_events` filters aware events by the machine's current local day and sorts
+events by their instant, including repeated clock hours when daylight saving ends.
+
 The local SQLite database and `calendar.ics` stay authoritative. To also write
 `create_event` results to Google Calendar, install the opt-in extra and configure
 [Application Default Credentials](https://cloud.google.com/docs/authentication/provide-credentials-adc):
