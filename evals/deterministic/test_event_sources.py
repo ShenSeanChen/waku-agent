@@ -892,3 +892,23 @@ def test_a_run_from_a_shared_place_is_told_to_leave_personal_memories_out(monkey
     assert in_slack.endswith(worker.SHARED_PLACE)
     assert "personal memories" in worker.SHARED_PLACE
     assert worker.SHARED_PLACE not in in_private and in_private.endswith(worker.OWNER_READS)
+
+
+def test_a_chat_reply_is_asked_to_be_short_and_a_github_comment_is_not(monkeypatch):
+    """"you talk too much man": a two-line question in Slack got a page of
+    headings and lists, and a reminder was "set for 21:26" at 1:26 pm."""
+    from waku.alwayson import worker
+    from waku.alwayson.events import Event
+
+    def event(source, session, reply_to):
+        return Event(id=1, source=source, external_id="e1", session_id=session,
+                     payload={"text": "remind me in 2 minutes", "sender": {"id": "7"},
+                              "reply_to": reply_to},
+                     status="pending", received_at="2026-11-19T21:24:00+00:00")
+
+    in_slack = worker.render([event("slack", "slack:C1:1.2",
+                                    {"channel": "C1", "thread_ts": "1.2"})])
+    on_github = worker.render([event("github", "github:a/b#1", {"repo": "a/b", "issue": 1})])
+
+    assert worker.CHAT_STYLE in in_slack and "am or pm" in worker.CHAT_STYLE
+    assert worker.CHAT_STYLE not in on_github, "an issue comment may be long"
