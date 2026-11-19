@@ -97,7 +97,7 @@ function memWhich(d){
         : `${uiBadge("not connected", "neutral")} Everything stays on this machine.`}</span>`,
     {title: "Waku Memory, shared",
      action: w.connected ? `<a class="link" href="https://www.waku.one/memories" target="_blank" rel="noopener noreferrer">open waku.one</a>`
-                         : uiLink("how to connect", "#tools/mcp"), cls: "box"});
+                         : uiLink("how to connect", "#connections/waku-memory"), cls: "box"});
   return `<div class="tiles" style="grid-template-columns:repeat(auto-fill,minmax(280px,1fr));margin-bottom:var(--space-3)">${local}${shared}</div>`;
 }
 function memOverview(d){
@@ -215,34 +215,6 @@ function toolsResults(d){
                        : uiCard(`<span class="empty">no drafted messages</span>`);
   return h + rawRows(d, "calendar_events");
 }
-// Tools ▸ MCP: external connectors. Shows live status + a copy-paste config so
-// anyone can plug in their own server (scalable, not a one-off).
-function toolsMCP(t){
-  const m = t.mcp, rows = m.rows || [];
-  // Every server Waku would connect: mcp.json's and the ones a plugin brings.
-  let h = uiNotice(m.live ? "ok" : "note", `<b>Model Context Protocol${m.live?" — connected":m.configured?" — configured":" — not set up"}.</b>
-    <div class="r">MCP lets Waku borrow tools from an outside server, named <code>&lt;server&gt;_&lt;tool&gt;</code>.
-    A server comes from <code>mcp.json</code> or from a plugin you installed.${m.configured && !m.live
-      ? " Send a chat message to connect them." : ""}</div>`);
-  h += `<h2>Servers</h2>` + uiTable(["Server", "Address", "From", "State"], rows.map(r => [
-    `<code>${esc(r.name)}</code>`,
-    `<span class="meta">${esc(r.address)}</span>`,
-    r.plugin ? `the ${esc(r.plugin)} plugin` : `<code>mcp.json</code>`,
-    (r.connected === null ? uiBadge("not started", "neutral")
-      : r.connected ? uiBadge("connected", "ok") : uiBadge("not connected", "warn"))
-      + (r.tools ? ` <span class="meta">${r.tools} tool${r.tools===1?"":"s"}</span>` : "")
-      + (r.account ? `<div class="meta">${esc(r.account)}</div>` : ""),
-  ]), {empty: "No server yet. Add one below."});
-  h += `<h2>Add one</h2>` + connectorsCard(D || {}) + uiCard(`
-    <div class="meta">A plugin brings its server and its ${uiLink("hooks", "#tools/hooks")} with it:
-      <code>waku plugin install &lt;name&gt;@&lt;marketplace&gt;</code>, or <code>/plugin install …</code> in the chat.</div>
-    <div class="meta" style="margin-top:var(--space-2)">From the command line, <code>waku mcp add &lt;name&gt; &lt;https address&gt;</code>
-      writes the same entry in ${reveal("","the .waku folder")}<code>/mcp.json</code>.</div>
-    <div class="meta" style="margin-top:var(--space-2)">Then restart the dashboard. The server's tools appear under
-      ${uiLink("Available ▸ MCP servers", "#tools/available")}.</div>`);
-  return h;
-}
-
 // What each of the four hook moments is, in the words a person would use.
 const HOOK_WHEN = {SessionStart: "Session start", UserPromptSubmit: "Each message",
   PreToolUse: "Before a tool runs", Stop: "After each reply"};
@@ -348,88 +320,40 @@ async function saveProvider(provider){
 }
 function stProvider(){ return (D.settings || {}).provider || "anthropic"; }
 
-const CONNECTION_GROUPS = ["Channels", "Productivity", "Memory", "Tools"];
-// "Memory", not "Storage". The registry already calls this group "Memory &
-// Storage"; the display map was dropping the half that says what these
-// actually are. Notion is the episodic store, Supabase the semantic one, and
-// every hosted memory service that joins them is semantic too — none of it is
-// generic storage, and Memory is one of the four pillars the rest of the
-// dashboard is organised around.
-const CONNECTION_GROUP_MAP = {
-  "Channels": "Channels",
-  "Calendar & Productivity": "Productivity",
-  "Memory & Storage": "Memory",
-  "Search & Observability": "Tools",
-};
+// The Connections page (spec 030). `connections_page` in /api/data holds
+// every card, in its group, with its state and its one button
+// (waku/ops/connections_page.py decides all of it). This file draws them.
 
-function connectionDisplayGroup(item){
-  if (item.key === "apple_tools") return "Tools";
-  return CONNECTION_GROUP_MAP[item.group] || "Tools";
+// A card with no drawing of its own shows the first letter of its name.
+function connectionLogo(card){
+  return card.logo
+    ? `<img class="provlogo connlogo" src="/static/${esc(card.logo)}" alt="">`
+    : `<span class="provlogo connmark" aria-hidden="true">${esc(card.name.slice(0, 1).toUpperCase())}</span>`;
 }
 
-function connectionStatusDisplay(status){
-  const state = (status && status.state) || "not_configured";
-  if (state === "connected") return {label:"connected", className:"connected"};
-  if (state === "error") return {label:"error", className:"error"};
-  // "configured" means every required field is filled and the extra is
-  // installed — it just hasn't been probed. That is not a warning, so it must
-  // not wear the amber "needs setup" pill: this state covers most of a working
-  // setup on first visit, and colouring it like a problem told every new user
-  // their Telegram, Notion and Tavily needed fixing when they were fine.
-  if (state === "configured") return {label:"configured · not tested", className:"configured"};
-  if (state === "installed_but_unconfigured") return {label:"needs setup", className:"needs-setup"};
-  return {label:"not configured", className:"not-configured"};
+// The one button of a card. `kind` says what it does; an address is opened
+// only when it is http(s).
+function connectionAction(card){
+  const a = card.action;
+  if (!a) return "";
+  const t = esc(a.target);
+  if (a.kind === "href")
+    return /^https?:\/\//.test(a.target)
+      ? `<a class="link" href="${t}" target="_blank" rel="noopener noreferrer">${esc(a.label)}</a>` : "";
+  const onclick = {dialog: `openConnectionModal('${t}')`, chat: `connectInChat('${t}')`,
+                   add: `addConnector('${t}')`, manage: `openConnectorManage('${t}')`}[a.kind];
+  return onclick ? uiButton(esc(a.label), {level: "secondary", onclick}) : "";
 }
 
-function connectionCard(item){
-  const display = connectionStatusDisplay(item.status);
-  const action = item.status && item.status.state !== "not_configured" ? "Edit" : "Configure";
-  // Say WHY on the card. "needs setup" covers two unrelated fixes — a missing
-  // value ("missing NOTION_TOKEN") and a missing package ("missing notion
-  // extra", which wants a pip install, not a key) — and the reason used to be
-  // hidden until you opened the modal. The message repeats the label for
-  // connected/configured, so only show it where it adds something.
-  const why = (item.status && item.status.message
-    && (item.status.state === "installed_but_unconfigured" || item.status.state === "error"))
-    ? `<div class="connwhy">${esc(item.status.message)}</div>` : "";
-  return uiCard(`
-    <img class="provlogo connlogo" src="/static/logos/connections/${esc(item.key)}.svg" alt="">
-    <div class="connstatus ${display.className}"><span class="conndot"></span>${esc(display.label)}</div>
-    ${why}
-    <div class="conndesc">${esc(item.what)}</div>
-    <div class="provactions connactions">
-      ${uiButton(action, {level: "secondary", onclick: `openConnectionModal('${esc(item.key)}')`})}
-    </div>`, {title: esc(item.name), cls: "provcard conncard"});
-}
-
-// MCP servers that sign in on their own page (spec 007 E: treg). They are not
-// .env fields, so they are not in the registry and have no modal: the card
-// says where the server stands, and Connect sends `/connect <key>` through the
-// chat dock, the same door as typing it. The reply lands in the dock.
-const MCP_STATE_DISPLAY = {
-  connected: {label:"connected", className:"connected"},
-  not_signed_in: {label:"not signed in", className:"needs-setup"},
-  not_added: {label:"not added", className:"not-configured"},
-};
-
-// Spec 014: a card that can take a key of the person's own (`configurable`:
-// treg through the hosted relay, or with a key already set) offers Configure,
-// which opens the registry row of the same key in the connection dialog. The
-// detail line says who pays, and never names an environment variable on hosted.
-function mcpConnectionCard(item){
-  const display = MCP_STATE_DISPLAY[item.state] || MCP_STATE_DISPLAY.not_added;
-  const why = item.detail ? `<div class="connwhy">${esc(item.detail)}</div>` : "";
-  const button = item.configurable
-    ? uiButton("Configure", {level: "secondary", onclick: `openConnectionModal('${esc(item.key)}')`})
-    : item.state === "connected" ? ""
-    : uiButton("Connect", {level: "secondary", onclick: `connectInChat('${esc(item.key)}')`});
-  const action = button ? `<div class="provactions connactions">${button}</div>` : "";
-  return uiCard(`
-    <img class="provlogo connlogo" src="/static/logos/connections/${esc(item.key)}.svg" alt="">
-    <div class="connstatus ${display.className}"><span class="conndot"></span>${esc(display.label)}</div>
-    ${why}
-    <div class="conndesc">${esc(item.what)}</div>
-    ${action}`, {title: esc(item.name), cls: "provcard conncard"});
+function connectionCard(card){
+  const action = connectionAction(card);
+  return `<div class="conncell" id="conn-${esc(card.id)}">${uiCard(`
+    ${connectionLogo(card)}
+    <div class="connstatus ${esc(card.state)}"><span class="conndot"></span>${esc(card.label)}</div>
+    ${card.why ? `<div class="connwhy">${esc(card.why)}</div>` : ""}
+    <div class="conndesc">${esc(card.what)}</div>
+    ${action ? `<div class="provactions connactions">${action}</div>` : ""}`,
+    {title: esc(card.name), cls: "provcard conncard"})}</div>`;
 }
 
 function connectInChat(key){
@@ -440,18 +364,25 @@ function connectInChat(key){
   sendChat(input);
 }
 
-function connectionsGrid(items, mcpItems = []){
-  const grouped = Object.fromEntries(CONNECTION_GROUPS.map(group => [group, []]));
-  // A registry row that an MCP card stands for (treg's key) is drawn once, as
-  // that MCP card; its dialog is still the registry row's.
-  const drawnAsMcp = new Set(mcpItems.map(item => item.key));
-  items.filter(item => !drawnAsMcp.has(item.key))
-    .forEach(item => grouped[connectionDisplayGroup(item)].push(connectionCard(item)));
-  mcpItems.forEach(item => grouped[connectionDisplayGroup(item)].push(mcpConnectionCard(item)));
-  return CONNECTION_GROUPS.map(group => `<section class="connsection">
-    <h2>${group}</h2>
-    <div class="provgrid conngrid">${grouped[group].join("")}</div>
+function connectionsGrid(page){
+  const grid = cards => `<div class="provgrid conngrid">${cards.map(connectionCard).join("")}</div>`;
+  return page.groups.map(group => `<section class="connsection" id="conn-group-${esc(group.id)}">
+    <h2>${esc(group.title)}</h2>
+    ${group.id === "apps" ? connectorSignIn(page.sign_in) : ""}
+    ${grid(group.cards)}
+    ${group.id === "apps" && page.add_by_address ? connectorAddSection() : ""}
+    ${group.more ? `<h3 class="connsub">${esc(group.more.title)}</h3>${grid(group.more.cards)}` : ""}
   </section>`).join("");
+}
+
+// A link such as #connections/app-notion opens the page at that card and
+// marks it, so one click from Tools reaches the card that controls a tool.
+function focusConnection(id, scroll){
+  const card = document.getElementById("conn-" + id);
+  const el = card || document.getElementById("conn-group-" + id);
+  if (!el) return;
+  if (card) card.classList.add("conn-target");
+  if (scroll) el.scrollIntoView({block: card ? "center" : "start"});
 }
 
 // The connection dialog. openDialog (ui.js) owns the <dialog>: Escape and a
@@ -511,9 +442,9 @@ const VIEWS = {
     return modelsGrid(d);
   },
   connections(d){
-    const items = d.connections || [], mcpItems = d.mcp_connections || [];
-    return items.length || mcpItems.length ? connectionsGrid(items, mcpItems)
-      : uiCard(`<span class="empty">No integrations registered.</span>`);
+    const page = d.connections_page;
+    return page && page.groups.length ? connectionsGrid(page)
+      : uiCard(`<span class="empty">Nothing to connect yet.</span>`);
   },
   // Gateway: ONE unified conversation across every channel (dashboard, telegram,
   // voice, cli) — the same loop + memory answer all of them. Each message is
@@ -650,17 +581,15 @@ const VIEWS = {
     const t = d.tools || {catalog:[], mcp:{configured:false,servers:[],live:false}, apple_on:false};
     sub = sub || "available";
     const tabs = [["available","Available",t.catalog.length],["results","Results"],
-      ["mcp","MCP",t.mcp.servers.length||null],
       ["hooks","Hooks",(t.hooks && t.hooks.count)||null]];
     let h = subtabBar("tools", tabs, sub);
     if (sub === "results") return h + toolsResults(d);
-    if (sub === "mcp") return h + toolsMCP(t);
     if (sub === "hooks") return h + toolsHooks(t);
     // Available: what the agent CAN do (grouped by origin), not just what it did.
     h += `<div class="meta" style="margin-bottom:var(--space-3)">The capabilities the agent can call this turn.
       A tool is a name + description the model reads, a JSON schema, and a Python function — that's it.
-      ${t.apple_on?"":"Apple tools are off (set <code>WAKU_APPLE_TOOLS=1</code>). "}Connect more via
-      ${uiLink("MCP", "#tools/mcp")}.</div>`;
+      ${t.apple_on?"":"Apple tools are off (set <code>WAKU_APPLE_TOOLS=1</code>). "}Connect more in
+      ${uiLink("Connections", "#connections/apps")}.</div>`;
     const SRC = [["flagship","Flagship task — scheduling"],["web","Web search"],
       ["self-management","Self-management — it edits its own memory"],
       ["apple","Apple ecosystem"],["mcp","MCP servers"],["other","Other"]];

@@ -279,9 +279,9 @@ NETWORK_CALLERS = {
     ("memory.js", "saveSkill"): "user",
     ("memorychoice.js", "chooseMemory"): "user",   # a click on the first-run Waku Memory card (spec 020)
     ("waiting.js", "cancelWaiting"): "user",   # the Cancel button on a row of the Waiting card
-    ("connectors.js", "addConnector"): "user",      # the Add button of the Connectors card (spec 025)
-    ("connectors.js", "removeConnector"): "user",   # the Remove button on a row of that card
-    ("connectors.js", "setConnectorWrites"): "user",   # the switch on a row of that card
+    ("connectors.js", "addConnector"): "user",      # Connect on a starter card, and Add by address (spec 025)
+    ("connectors.js", "removeConnector"): "user",   # Remove in a server's Manage dialog
+    ("connectors.js", "setConnectorWrites"): "user",   # the writes switch in that dialog
     ("models.js", "saveSettings"): "user",
     ("models.js", "loadModelList"): "user",
     ("models.js", "switchModel"): "user",

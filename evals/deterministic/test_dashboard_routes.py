@@ -68,7 +68,7 @@ GET_PATHS = {
     "/api/observability",
     # spec 024: the three lists of the "Waiting" card
     "/api/waiting",
-    # spec 025: the servers and the waiting sign-in of the "Connectors" card
+    # spec 025: the servers and the waiting sign-in behind the Connections page's cards
     "/api/connectors",
 }
 

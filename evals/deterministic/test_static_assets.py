@@ -56,29 +56,13 @@ def test_connection_card_logos_are_local_and_complete():
         assert "<title>" in svg, f"{name} needs an accessible title"
 
 
-def test_connection_display_groups_stay_in_product_order():
-    """The order is the reading order of the page, so it is pinned deliberately
-    rather than left to whatever the object literal happens to say.
-
-    "Memory", not "Storage": the registry group is called "Memory & Storage" and
-    the display map used to keep the wrong half. Notion is the episodic store,
-    Supabase the semantic one, and every hosted memory service that joins them
-    is semantic too — none of it is generic storage."""
-    assert 'const CONNECTION_GROUPS = ["Channels", "Productivity", "Memory", "Tools"]' in JS_SRC
-
-
-def test_every_registry_group_has_a_display_name():
-    """connectionDisplayGroup falls back to "Tools" for anything unmapped, so a
-    new registry group would not error — it would quietly file itself under the
-    wrong heading and nobody would notice. Pin the mapping instead of trusting
-    the fallback."""
-    from waku import integrations
-
-    mapped = set(re.findall(r'^\s*"([^"]+)":\s*"[^"]+",\s*$', JS_SRC, re.MULTILINE))
-    # AI Providers has its own page (Models), so it is deliberately not here.
-    groups = {i.group for i in integrations.registry()} - {"AI Providers"}
-    missing = groups - mapped
-    assert not missing, f"registry groups with no display name, they'd land in Tools: {missing}"
+def test_connection_groups_are_decided_in_python_not_in_the_script():
+    """Spec 030: the page's groups, their order and each card's place are
+    composed in waku/ops/connections_page.py, where an eval can read them
+    (test_connections_page.py pins the order and that every registry group
+    has a place). The script keeps no group table of its own to drift."""
+    assert "CONNECTION_GROUPS" not in JS_SRC and "CONNECTION_GROUP_MAP" not in JS_SRC
+    assert "connections_page" in JS_SRC
 
 
 def _defined_names() -> set[str]:

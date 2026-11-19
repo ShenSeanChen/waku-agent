@@ -31,6 +31,12 @@ function render(){
     history.replaceState(null, "", "#evals");
     hashView = "evals"; subRaw = undefined;
   }
+  // Tools had a tab for the servers a person connects. They are cards on
+  // Connections now (spec 030), so the old link opens that page.
+  if (hashView === "tools" && subRaw === "mcp"){
+    history.replaceState(null, "", "#connections/apps");
+    hashView = "connections"; subRaw = "apps";
+  }
   const v = hashView === "ops" ? "observability" : hashView;
   const sub = subRaw || null;
   // FIRST RUN. With no usable provider, every other page is a page about a
@@ -81,6 +87,9 @@ function render(){
     const y = keepScroll ? main.scrollTop : 0;
     document.getElementById("view").innerHTML = VIEWS[view](D, sub);
     if (keepScroll) main.scrollTop = y;
+    // #connections/<card> opens the page at that card. Every redraw marks it
+    // again; only the navigation scrolls to it.
+    if (view === "connections" && sub) focusConnection(sub, subChanged);
   }
   activeView = view; activeSub = sub;
   document.getElementById("n-gw").textContent = (D.chat_log||[]).length || "";

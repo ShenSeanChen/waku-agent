@@ -5,7 +5,7 @@ A connector is one entry in WAKU_HOME/mcp.json, the file mcp_client.py reads.
 
     waku mcp add linear https://mcp.linear.app/mcp     the command line
     connect_tool("https://mcp.linear.app/mcp")         chat, after the owner's yes
-    the "Connectors" card                              the dashboard
+    the Connections page                               the dashboard
 
 A remote server signs in one of two ways. `oauth` is the browser flow on the
 server's own page (mcp_oauth.py). The other is a key the person holds in an
@@ -577,8 +577,8 @@ COMMAND_REFUSED = ("this takes the address of an MCP server (https://...) or a n
                    "the starter list ({names}). A server that is a program on this machine "
                    "is added from the command line only: waku mcp add <name> -- <command>")
 NEEDS_YES = ("{done}: this needs the owner's yes, and this conversation cannot ask for it. "
-             "On the computer Waku runs on, run `{command}`, or use the Connectors card "
-             "on the dashboard.")
+             "On the computer Waku runs on, run `{command}`, or use the Connections page "
+             "of the dashboard.")
 
 
 def resolve(target: str) -> tuple[str, str, str]:
@@ -757,8 +757,8 @@ def make_tools(home: Path, sign_in: Callable = start_sign_in) -> list[Tool]:
                 return "Not changed: `writes` is 'ask' or 'allow'."
             if not _approved(home):
                 return ("Not changed: this needs the owner's yes, and this conversation "
-                        "cannot ask for it. Use the switch on the Connectors card on "
-                        "the dashboard.")
+                        "cannot ask for it. Use Manage on the connector's card on the "
+                        "dashboard's Connections page.")
             try:
                 return set_writes(home, name_or_url, allow=writes == "allow")
             except Refused as refused:

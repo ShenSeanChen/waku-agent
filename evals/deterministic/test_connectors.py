@@ -864,16 +864,19 @@ def test_dashboard_routes_are_blocked_on_hosted_with_a_sentence(dash):
                                    "container's servers are set up when you sign in.")
 
 
-def test_dashboard_card_has_an_address_field_and_a_remove_button_on_each_row():
+def test_dashboard_page_has_an_address_field_and_a_remove_button_for_each_server():
+    """The card moved from Tools to the Connections page (spec 030). What is
+    on the page is in test_connections_page.py; this pins the script's side."""
     script = (STATIC / "js" / "connectors.js").read_text(encoding="utf-8")
     index = (STATIC / "index.html").read_text(encoding="utf-8")
     views = (STATIC / "js" / "views.js").read_text(encoding="utf-8")
 
-    assert "function connectorsCard(" in script and 'title: "Connectors"' in script
+    assert "function connectorAddSection(" in script and "function openConnectorManage(" in script
     assert "function addConnector(" in script and "function removeConnector(" in script
     assert '"/api/connectors/add"' in script and '"/api/connectors/remove"' in script
     assert 'type="url"' in script
-    assert "connectorsCard(" in views, "Tools > MCP shows the card"
+    assert "connectorAddSection()" in views, "Connections shows the address field"
+    assert "openConnectorManage(" in views, "a server's card opens its dialog"
     assert index.index("/static/js/connectors.js") < index.index("/static/js/main.js")
     assert script.isascii(), "no emoji in the dashboard"
     assert script.count("esc(") >= 5, "a name, an address and a link are text from outside"
@@ -989,10 +992,21 @@ def test_starter_list_dashboard_lists_it_and_adds_one_by_its_name(dash):
     assert "error" in dash.connectors_add({"name": "linear", "url": EXAMPLE})
 
 
-def test_starter_list_card_draws_one_button_for_each_entry():
+def test_starter_list_every_entry_is_a_card_whose_button_adds_it(tmp_path, monkeypatch):
+    """Spec 030 moved the starter buttons to cards on the Connections page."""
+    from waku.ops import dashboard
+
+    monkeypatch.setenv("WAKU_HOME", str(tmp_path))
+    monkeypatch.setenv("WAKU_PROVIDER", "anthropic")
+    page = dashboard.connections_page_data()
+    cards = {card["id"]: card for group in page["groups"] for card in group["cards"]}
+
+    for name, entry in connectors.starter().items():
+        card = cards[f"app-{name}"]
+        assert card["name"] == entry["title"]
+        assert card["action"] == {"kind": "add", "label": "Connect", "target": name}
     script = (STATIC / "js" / "connectors.js").read_text(encoding="utf-8")
-    assert "c.starter" in script and "addConnector(" in script
-    assert "{name" in script, "a button posts the entry's name"
+    assert "{name" in script, "the button posts the entry's name"
 
 
 @pytest.mark.parametrize("url, name", [

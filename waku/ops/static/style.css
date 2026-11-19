@@ -699,6 +699,21 @@ details.subterm > summary.subterm-h::-webkit-details-marker{ display:none; }
 .conncard{min-height:190px;transition:border-color var(--motion-fast) var(--motion-ease)}
 .conncard:hover{border-color:var(--rule-hard)}
 .connlogo{object-fit:contain}
+/* A card sits in a cell that carries its id, so a link such as
+   #connections/app-notion can open the page at that card and mark it. */
+.conncell{display:grid;min-width:0}
+.conncell.conn-target .conncard{border-color:var(--accent)}
+/* A card with no drawing of its own shows the first letter of its name. */
+.connmark{display:flex;align-items:center;justify-content:center;border:1px solid var(--rule);
+  background:var(--surface-sunk);color:var(--text-muted);font-family:var(--face-display);font-size:var(--text-lg)}
+/* A heading inside a group: "Memory stores to compare". */
+.connsub{font-family:var(--face-mono);font-size:var(--text-xs);font-weight:var(--font-weight-normal);text-transform:uppercase;
+  letter-spacing:var(--tracking-label);color:var(--text-faint);margin:var(--space-6) 0 var(--space-3)}
+/* A section that is closed until asked for: "Add a server by address". */
+.connmore{margin-top:var(--space-4)}
+.connmore>summary{cursor:pointer;font-family:var(--face-mono);font-size:var(--text-xs);letter-spacing:var(--tracking-label);
+  text-transform:uppercase;color:var(--text-muted)}
+.connmore-body{margin-top:var(--space-3);max-width:640px}
 .connstatus{display:inline-flex;align-items:center;gap:var(--space-2);font-size:var(--text-xs);color:var(--text-muted)}
 .conndot{width:9px;height:9px;border-radius:var(--shape-circle);background:var(--text-faint);flex-shrink:0}
 .connstatus.connected{color:var(--ok)}
