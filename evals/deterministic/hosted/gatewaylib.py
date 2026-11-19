@@ -721,6 +721,10 @@ class FakeSlack:
             "scope": "app_mentions:read,chat:write", "bot_user_id": "U0BOT",
             "team": {"id": "T0ANA", "name": "Ana & Co"}}
         self.post_answer: dict = {"ok": True, "ts": "171.9"}
+        # What reading a thread and looking up a person answer. The default
+        # is a workspace that added the app before those scopes were asked for.
+        self.replies_answer: dict = {"ok": False, "error": "missing_scope"}
+        self.users: dict[str, str] = {}
         self._server: ThreadingHTTPServer | None = None
         self.port = 0
 
@@ -749,8 +753,13 @@ class FakeSlack:
                     "path": self.path, "body": sent,
                     "authorization": self.headers.get("Authorization", "")})
                 answers = {"/oauth.v2.access": recorder.oauth_answer,
-                           "/chat.postMessage": recorder.post_answer}
+                           "/chat.postMessage": recorder.post_answer,
+                           "/conversations.replies": recorder.replies_answer}
                 answer = answers.get(self.path, {"ok": False, "error": "unknown_method"})
+                if self.path == "/users.info":
+                    known = recorder.users.get(sent.get("user", ""))
+                    answer = ({"ok": True, "user": {"profile": {"display_name": known}}}
+                              if known else {"ok": False, "error": "missing_scope"})
                 body = json.dumps(answer).encode("utf-8")
                 # Slack compresses its answers for a client that takes gzip.
                 # The fake did not until 2026-11-18, and the first real

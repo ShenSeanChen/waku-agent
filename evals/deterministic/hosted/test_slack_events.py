@@ -35,6 +35,7 @@ from hosted.gateway.config import SLACK_ENV_NAMES
 from hosted.gateway.container_api import ContainerApi
 from hosted.gateway.scheduler import Scheduler
 from hosted.gateway.slack import REPLAY_WINDOW_SECONDS
+from hosted.gateway.slack_thread import THREAD_HEAD
 from hosted.gateway.store import ControlDb
 
 PATH = "/v1/triggers/slack"
@@ -383,3 +384,89 @@ def test_a_mention_reaches_a_sleeping_tenants_container_without_waiting_for_a_ti
     assert [r["tenant_id"] for r in ops(harness.spawner, "start")] == [ana.id]
     assert [[e["external_id"] for e in batch] for batch in container.handed] == [["Ev0001"]]
     assert pending == []
+
+
+# --- the thread a mention is in (2026-11-18) ------------------------------
+
+def connect_readable(harness: Harness, sub: str, team: str):
+    """A tenant whose workspace token opens, so the gateway can ask Slack."""
+    from gatewaylib import SLACK_BOT_TOKEN, SLACK_TOKEN_KEY
+
+    from hosted.gateway.secretbox import SecretBox
+    from hosted.gateway.slack import seal_binding
+
+    tenant = harness.store.create_tenant(sub=sub, email=f"{sub}@example.com",
+                                         timezone="UTC")
+    sealed = SecretBox.from_hex(SLACK_TOKEN_KEY).seal(SLACK_BOT_TOKEN,
+                                                      bound_to=seal_binding(team))
+    assert harness.store.set_slack_install(
+        tenant.id, team_id=team, team_name=team, bot_user_id="U0BOT", token_sealed=sealed)
+    return tenant
+
+
+THREAD = [
+    {"user": "U0SEAN", "ts": "1699999999.5",
+     "text": "<@U0EMILY> the board messages feel deep, four clicks to see one"},
+    {"user": "U0EMILY", "ts": "1699999999.6",
+     "text": "Board messages are not in the memory system yet &amp; that is why"},
+    {"user": "U0BOT", "ts": "1699999999.7", "text": "Noted."},
+    {"user": "U0SEAN", "ts": "1700000000.000100",
+     "text": "<@U0BOT> what do you think of Emily's suggestion?"},
+    {"user": "U0EMILY", "ts": "1700000000.000200", "text": "written after the mention"},
+]
+
+
+def test_a_mention_in_a_thread_reaches_the_agent_with_the_thread_above_it(harness, slack):
+    """The first mention on hosted Waku: "what do you think of Emily's
+    suggestion?", and the agent could see nothing from Emily."""
+    slack.replies_answer = {"ok": True, "messages": THREAD}
+    slack.users = {"U0SEAN": "Sean Chen", "U0EMILY": "Emily Tsai"}
+
+    async def body():
+        ana = connect_readable(harness, "sub-ana", "T0ANA")
+        await post(harness, mention(
+            "T0ANA", "Ev0001", user="U0SEAN", thread_ts="1699999999.5",
+            text="<@U0BOT> what do you think of Emily's suggestion?"))
+        return harness.store.pending_events(ana.id)
+
+    [event] = _run(harness, body)
+    assert event.payload["text"].splitlines() == [
+        THREAD_HEAD,
+        "Sean Chen: @Emily Tsai the board messages feel deep, four clicks to see one",
+        "Emily Tsai: Board messages are not in the memory system yet & that is why",
+        "Waku (you): Noted.",
+        "",
+        "[Sean Chen mentions you in this thread:]",
+        "what do you think of Emily's suggestion?",
+    ]
+    asked = slack.calls("/conversations.replies")
+    assert [call["body"]["ts"] for call in asked] == ["1699999999.5"], "that thread only"
+    assert event.payload["reply_to"] == {"channel": "C0DEMO", "thread_ts": "1699999999.5"}
+
+
+def test_a_mention_outside_a_thread_reads_no_thread(harness, slack):
+    slack.users = {"U0ANA": "Ana"}
+
+    async def body():
+        ana = connect_readable(harness, "sub-ana", "T0ANA")
+        await post(harness, mention("T0ANA", "Ev0001"))
+        return harness.store.pending_events(ana.id)
+
+    [event] = _run(harness, body)
+    assert event.payload["text"] == ("[Ana mentions you in Slack:]\n"
+                                     "remind the channel on Friday at 09:00")
+    assert slack.calls("/conversations.replies") == []
+
+
+def test_a_workspace_without_the_new_scopes_still_gets_its_mention(harness, slack):
+    """It added the app before the gateway asked to read threads. Slack
+    answers missing_scope, and the mention is not lost."""
+    async def body():
+        ana = connect_readable(harness, "sub-ana", "T0ANA")
+        status, _ = await post(harness, mention("T0ANA", "Ev0001", thread_ts="1699999999.5"))
+        return status, harness.store.pending_events(ana.id)
+
+    status, [event] = _run(harness, body)
+    assert status == 200
+    assert event.payload["text"] == ("[someone mentions you in Slack:]\n"
+                                     "remind the channel on Friday at 09:00")

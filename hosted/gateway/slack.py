@@ -46,6 +46,7 @@ from hosted.core.tenant import is_tenant_id
 from hosted.gateway import answers, sessions
 from hosted.gateway.config import SlackSettings
 from hosted.gateway.secretbox import SecretBox, Unreadable
+from hosted.gateway.slack_thread import ThreadReader
 from hosted.ports.control import ControlStore
 
 _LOG = log.get(__name__)
@@ -57,7 +58,11 @@ CALLBACK_PATH = "/slack/oauth/callback"
 EVENTS_PATH = "/v1/triggers/slack"
 SETUP_PATH = "/setup"
 # What the bot may do: hear a mention of itself, and post a message.
-SCOPES = ("app_mentions:read", "chat:write")
+# The last three read the thread a mention is in, and the names in it
+# (slack_thread.py). A workspace that added the app before they were asked for
+# keeps working without them, and gets them when its person adds the app again.
+SCOPES = ("app_mentions:read", "chat:write", "channels:history", "groups:history",
+          "users:read")
 STATE_TTL_SECONDS = 600
 # One request to Slack. The person's browser, or Slack's own three-second
 # limit on an event, is waiting behind it.
@@ -228,6 +233,18 @@ class SlackApi:
         return await self._post("chat.postMessage", json=payload,
                                 headers={"Authorization": f"Bearer {token}"})
 
+    async def thread_replies(self, token: str, channel: str, thread_ts: str,
+                             limit: int) -> dict:
+        """The messages of one thread, oldest first."""
+        return await self._post(
+            "conversations.replies",
+            data={"channel": channel, "ts": thread_ts, "limit": str(limit)},
+            headers={"Authorization": f"Bearer {token}"})
+
+    async def user_info(self, token: str, user_id: str) -> dict:
+        return await self._post("users.info", data={"user": user_id},
+                                headers={"Authorization": f"Bearer {token}"})
+
 
 def _install_from(answer: dict) -> tuple[str, str, str, str] | None:
     """(token, team id, team name, bot user id) from oauth.v2.access, or None
@@ -331,6 +348,7 @@ class SlackRoutes:
         self._wake = wake
         self._box = SecretBox(settings.token_key)
         self._states = OAuthStates(now)
+        self._threads = ThreadReader(api)
         # Signed events for a workspace no tenant connected. Slack is answered
         # 200 for them, so this number is the only trace they leave.
         self.unknown_teams = 0
@@ -476,10 +494,10 @@ class SlackRoutes:
             # settings, and expects its own challenge back.
             return answers.json_ok({"challenge": str(envelope.get("challenge") or "")})
         if envelope.get("type") == "event_callback":
-            self._route(envelope)
+            await self._route(envelope)
         return answers.json_ok({"ok": True})
 
-    def _route(self, envelope: dict) -> None:
+    async def _route(self, envelope: dict) -> None:
         team_id = envelope.get("team_id")
         tenant_id = self._store.slack_tenant(team_id) if isinstance(team_id, str) else None
         if tenant_id is None:
@@ -496,9 +514,25 @@ class SlackRoutes:
         tenant = self._store.tenant_by_id(tenant_id)
         if row is None or tenant is None or tenant.status != "active":
             return
+        row["payload"]["text"] = await self._with_thread(tenant_id, event)
         if self._store.add_event(tenant_id, **row):
             # A tick now, so the mention does not wait for the next one.
             self._wake()
+
+
+    async def _with_thread(self, tenant_id: str, event: dict) -> str:
+        """The mention as the agent reads it: the thread above it and the
+        names in it (slack_thread.py). The mention's own text when the stored
+        token does not open."""
+        install = self._store.slack_install(tenant_id)
+        try:
+            token = self._box.open(install.token_sealed,
+                                   bound_to=seal_binding(install.team_id))
+        except (Unreadable, AttributeError):
+            return str(event.get("text") or "")
+        return await self._threads.compose(
+            token=token, team_id=install.team_id, bot_user_id=install.bot_user_id,
+            event=event)
 
 
 _ERROR_CODE = re.compile(r"[a-z0-9_]{1,64}")
