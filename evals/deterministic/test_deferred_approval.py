@@ -44,6 +44,15 @@ class Clock:
         self.at += timedelta(**delta)
 
 
+def _on_clock(waku, clock):
+    """The agent's approval gate on the test's clock. The gate reads the real
+    time unless it is told otherwise, and a request it wrote was then due only
+    while the real time was before THURSDAY. These tests passed until
+    2026-11-19 09:00 UTC and failed from that minute on."""
+    waku.approvals._now = clock
+    return waku
+
+
 class FakeGh:
     """Stands in for the `gh` CLI. It records every argv it is given."""
 
@@ -202,8 +211,8 @@ def test_park_an_ask_call_stores_it_asks_the_owner_and_runs_nothing(home):
         response([text_block(GATE)]),
         response([tool_block("send_message", COMMENT)], stop_reason="tool_use"),
         response([text_block("SILENT")])])
-    run = AgentRun(lambda: make_waku(home, client=client, episodic_store="sqlite"),
-                   log=lambda line: None)
+    run = AgentRun(lambda: _on_clock(make_waku(home, client=client, episodic_store="sqlite"),
+                                     clock), log=lambda line: None)
     gh, told, clock = FakeGh(), [], Clock()
     conn = connect(home)
     try:
@@ -364,8 +373,8 @@ def _parked_run(home, monkeypatch, insert, reply):
     seen = []
     create = client.messages.create
     client.messages.create = lambda **kw: (seen.append(list(kw["messages"])), create(**kw))[1]
-    run = AgentRun(lambda: make_waku(home, client=client, episodic_store="sqlite"),
-                   log=lambda line: None)
+    run = AgentRun(lambda: _on_clock(make_waku(home, client=client, episodic_store="sqlite"),
+                                     Clock()), log=lambda line: None)
     conn = connect(home)
     try:
         insert(conn)
@@ -502,7 +511,7 @@ def test_ran_before_is_silent_about_a_declined_an_older_and_another_call(home, c
 
 # ---- C4: resuming ----------------------------------------------------------
 
-def test_yes_from_the_owner_runs_only_the_stored_call(home):
+def test_yes_from_the_owner_runs_only_the_stored_call(home, monkeypatch):
     """Acceptance 6, through waku.respond() and the fake gh."""
     client = ScriptedClient([
         response([text_block(GATE)]),
@@ -514,9 +523,11 @@ def test_yes_from_the_owner_runs_only_the_stored_call(home):
     seen = []
     create = client.messages.create
     client.messages.create = lambda **kw: (seen.append(list(kw["messages"])), create(**kw))[1]
-    run = AgentRun(lambda: make_waku(home, client=client, episodic_store="sqlite"),
-                   log=lambda line: None)
+    run = AgentRun(lambda: _on_clock(make_waku(home, client=client, episodic_store="sqlite"),
+                                     clock), log=lambda line: None)
     gh, told, clock = FakeGh(), [], Clock()
+    # The comment the approved call writes takes the real time unless given one.
+    monkeypatch.setattr(outbox, "utc_now", clock)
     conn = connect(home)
     try:
         worker = _worker(conn, run, clock)

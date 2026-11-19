@@ -23,7 +23,7 @@ from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 from evals.helpers import ScriptedClient, make_waku, response, text_block, tool_block
-from waku.alwayson import approvals, timers
+from waku.alwayson import approvals, outbox, timers
 from waku.alwayson.dispatcher import Dispatcher
 from waku.alwayson.events import Inbox
 from waku.alwayson.senders import github as github_sender
@@ -82,6 +82,9 @@ def test_the_example_runs_from_mondays_message_to_thursdays_comment(tmp_path, mo
     home = tmp_path / "home"
     home.mkdir()
     clock, gh, sent = Clock(MONDAY_NOON), FakeGh(), []
+    # A row a tool writes takes the real time unless it is given one, and such
+    # a row was due only while the real time was before the test's Thursday.
+    monkeypatch.setattr(outbox, "utc_now", clock)
     monkeypatch.setattr(github_tool, "_run", gh)   # what the agent's github_read calls
 
     client = ScriptedClient([
@@ -107,6 +110,10 @@ def test_the_example_runs_from_mondays_message_to_thursdays_comment(tmp_path, mo
         # the agent's own schedule_task, on the test's clock and in UTC
         waku.tools.register(schedule.make_tool(
             home, session_id=lambda: waku.session.session_id, now=clock, tz=UTC))
+        # The approval gate too: it reads the real time unless told, and the
+        # request it wrote was due only while the real time was before
+        # THURSDAY_9. This test failed from 2026-11-19 09:00 UTC on.
+        waku.approvals._now = clock
         return waku
 
     def record(channel):
