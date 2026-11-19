@@ -23,6 +23,7 @@ owns the classes they build.
 from __future__ import annotations
 
 import asyncio
+import gzip
 import json
 import socket
 import threading
@@ -751,8 +752,16 @@ class FakeSlack:
                            "/chat.postMessage": recorder.post_answer}
                 answer = answers.get(self.path, {"ok": False, "error": "unknown_method"})
                 body = json.dumps(answer).encode("utf-8")
+                # Slack compresses its answers for a client that takes gzip.
+                # The fake did not until 2026-11-18, and the first real
+                # install failed on exactly that.
+                zipped = "gzip" in self.headers.get("Accept-Encoding", "")
+                if zipped:
+                    body = gzip.compress(body)
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
+                if zipped:
+                    self.send_header("Content-Encoding", "gzip")
                 self.send_header("Content-Length", str(len(body)))
                 self.end_headers()
                 self.wfile.write(body)

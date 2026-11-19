@@ -29,6 +29,7 @@ A log line carries a tenant id, a team id and Slack's own error code.
 from __future__ import annotations
 
 import base64
+import gzip
 import hashlib
 import hmac
 import json
@@ -181,6 +182,9 @@ class OAuthStates:
         return tenant_id if self._now() < expires else None
 
 
+_GZIP_MAGIC = b"\x1f\x8b"
+
+
 class SlackApi:
     """The two Slack Web API methods the gateway calls."""
 
@@ -191,10 +195,19 @@ class SlackApi:
 
     async def _post(self, method: str, **kwargs) -> dict:
         try:
+            # The gateway's one session does not decompress (__main__.py: it
+            # passes a container's bytes through as they are), and Slack
+            # compresses its answers. So this asks for gzip or nothing, and
+            # opens gzip itself. On 2026-11-18 the first real install failed
+            # here: the compressed bytes were read as text.
+            headers = {**kwargs.pop("headers", {}), "Accept-Encoding": "gzip, identity"}
             async with self._session.post(f"{self._base}/{method}", timeout=self._timeout,
-                                          **kwargs) as reply:
-                answer = await reply.json(content_type=None)
-        except (aiohttp.ClientError, TimeoutError, OSError, ValueError) as exc:
+                                          headers=headers, **kwargs) as reply:
+                raw = await reply.read()
+            if raw[:2] == _GZIP_MAGIC:
+                raw = gzip.decompress(raw)
+            answer = json.loads(raw.decode("utf-8"))
+        except (aiohttp.ClientError, TimeoutError, OSError, ValueError, EOFError) as exc:
             # The exception's own text is left out: aiohttp can quote a
             # request's headers, and one of them is a token.
             raise SlackUnreachable(f"{method} failed ({type(exc).__name__})") from None
