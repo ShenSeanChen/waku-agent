@@ -867,3 +867,28 @@ def test_manifest_reader_refuses_a_file_that_is_not_the_shape_it_reads():
         _yaml("settings:\n  socket_mode_enabled\n")
     with _pytest.raises(AssertionError):
         _yaml("settings:\nfeatures:\n  a: b\n")
+
+
+# --- a place several people read (2026-11-19) -----------------------------
+
+def test_a_run_from_a_shared_place_is_told_to_leave_personal_memories_out(monkeypatch):
+    """Asked in a team's Slack channel for "my latest memories", the hosted
+    agent listed its person's outreach drafts to the channel."""
+    from waku.alwayson import worker
+    from waku.alwayson.events import Event
+
+    monkeypatch.setenv("WAKU_OWNER", "telegram:42")
+
+    def event(source, session, reply_to):
+        return Event(id=1, source=source, external_id="e1", session_id=session,
+                     payload={"text": "what are my latest memories?",
+                              "sender": {"id": "42"}, "reply_to": reply_to},
+                     status="pending", received_at="2026-11-19T19:01:00+00:00")
+
+    in_slack = worker.render([event("slack", "slack:C1:1.2",
+                                    {"channel": "C1", "thread_ts": "1.2"})])
+    in_private = worker.render([event("telegram", "telegram:42", {"chat_id": 42})])
+
+    assert in_slack.endswith(worker.SHARED_PLACE)
+    assert "personal memories" in worker.SHARED_PLACE
+    assert worker.SHARED_PLACE not in in_private and in_private.endswith(worker.OWNER_READS)

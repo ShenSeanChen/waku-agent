@@ -653,7 +653,8 @@ def test_stranger_yes_runs_nothing(home, conn):
     assert sorted(session for session, _ in recorder.runs) == [
         "slack:C1:1700.0001", "telegram:42", "telegram:77"], (
         "each yes went to the model as an ordinary message")
-    assert all(text == "yes" for _, text in recorder.runs)
+    # The word, then the line that says who reads the place it came from.
+    assert all(text.split("\n\n")[0] == "yes" for _, text in recorder.runs)
 
 
 def test_yes_inside_a_sentence_is_an_ordinary_message(home, conn):
