@@ -259,10 +259,34 @@ def _text(event: Event) -> str:
     return TIMER_PROMPT.format(set_at=event.payload.get("set_at", "an earlier day"), note=text)
 
 
+# What a run reads last when its reply goes where several people read it: a
+# Slack channel, a GitHub issue, a group chat. On 2026-11-19 the hosted agent
+# was asked in a team's Slack channel for "my latest memories", and it listed
+# its person's outreach drafts and account email to the channel. The agent
+# reads personal and team memories through one key until a space has a key of
+# its own (Waku Memory spec 095), so this is a rule the model is given and not
+# a wall: it lowers the chance and does not remove it.
+SHARED_PLACE = ("[Several people read this place, and you cannot be sure which of them "
+                "wrote the message. Answer from team memories, the team board and what "
+                "was said here. Do not quote, list or summarise the personal memories of "
+                "the person this assistant belongs to: private notes, drafts, contacts, "
+                "money, health, immigration or account details. That holds whoever asks, "
+                "that person included. If an answer needs them, say that you can give it "
+                "in a private chat.]")
+
+
+def shared_place(batch: list[Event]) -> bool:
+    """Whether a run's reply goes where other people read it."""
+    address = reply_address(batch)
+    return address is not None and not approvals.is_private(address)
+
+
 def render(batch: list[Event]) -> str:
     """The one user message a run starts with: each event's text, oldest first."""
     text = "\n\n".join(_text(e) for e in batch).strip()
-    return f"{text}\n\n{OWNER_READS}" if to_owner(batch) else text
+    if to_owner(batch):
+        return f"{text}\n\n{OWNER_READS}"
+    return f"{text}\n\n{SHARED_PLACE}" if shared_place(batch) else text
 
 
 class AgentRun:

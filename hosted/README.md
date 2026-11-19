@@ -530,7 +530,7 @@ the workspace that will own it. In the app's settings:
 | OAuth & Permissions | Redirect URLs | `https://agent.waku.one/slack/oauth/callback` |
 | OAuth & Permissions | Bot Token Scopes | `app_mentions:read`, `chat:write`, `channels:history`, `groups:history`, `users:read` |
 | Event Subscriptions | Request URL | `https://agent.waku.one/v1/triggers/slack` |
-| Event Subscriptions | Subscribe to bot events | `app_mention`, `app_uninstalled` |
+| Event Subscriptions | Subscribe to bot events | `app_mention`, `app_uninstalled`, `message.channels`, `message.groups` |
 | Manage Distribution | Activate Public Distribution | on, so another workspace can add the app |
 
 Leave Socket Mode off. Slack checks the Request URL when you save it, so the
@@ -582,6 +582,12 @@ with the same names.
   goes to the agent alone. A workspace that added the app before the three
   reading scopes were asked for gets its mentions without the thread until
   its person adds the app again.
+- **A reply in a thread the agent was mentioned in reaches it without a
+  second mention.** Slack sends every message of a channel the bot is in
+  (`message.channels`, `message.groups`). The gateway keeps one only when it
+  is a person's reply in a thread that already holds a mention for this
+  tenant, and drops the rest without storing them. The agent is told that
+  people also talk to each other there, and that saying nothing is an answer.
 - **Every channel the bot is invited to is heard.** The hosted app has no
   channel allowlist. A mention by a person from another workspace, in a
   shared channel, is dropped.

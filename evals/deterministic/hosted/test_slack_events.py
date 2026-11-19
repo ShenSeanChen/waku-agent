@@ -470,3 +470,55 @@ def test_a_workspace_without_the_new_scopes_still_gets_its_mention(harness, slac
     assert status == 200
     assert event.payload["text"] == ("[someone mentions you in Slack:]\n"
                                      "remind the channel on Friday at 09:00")
+
+
+# --- a follow-up in the agent's thread, with no mention (2026-11-19) -------
+
+def follow_up(event_id: str, text: str = "aren't you connected to waku memories?",
+              **event) -> dict:
+    """A plain message in a thread, as `message.channels` delivers it."""
+    return {"team_id": "T0ANA", "type": "event_callback", "event_id": event_id,
+            "event": {"type": "message", "user": "U0ANA", "channel": "C0DEMO",
+                      "text": text, "ts": "1700000000.000300",
+                      "thread_ts": "1700000000.000100", **event}}
+
+
+def test_a_follow_up_in_a_thread_the_agent_is_in_reaches_the_agent(harness, slack):
+    """A person answered the agent in its thread without @Waku, and nothing
+    came back."""
+    from hosted.gateway.slack_thread import FOLLOW_UP_HEAD
+
+    slack.users = {"U0ANA": "Ana"}
+
+    async def body():
+        ana = connect_readable(harness, "sub-ana", "T0ANA")
+        await post(harness, mention("T0ANA", "Ev0001"))
+        await post(harness, follow_up("Ev0002"))
+        return harness.store.pending_events(ana.id)
+
+    first, second = _run(harness, body)
+    assert second.session_id == first.session_id == "slack:C0DEMO:1700000000.000100"
+    assert second.payload["text"] == (FOLLOW_UP_HEAD.format(who="Ana")
+                                      + "\naren't you connected to waku memories?")
+    assert "SILENT" in second.payload["text"], "people also talk to each other there"
+    assert second.payload["reply_to"] == {"channel": "C0DEMO",
+                                          "thread_ts": "1700000000.000100"}
+
+
+@pytest.mark.parametrize("envelope", [
+    follow_up("Ev0002", thread_ts="1699990000.000001"),          # a thread it was never in
+    follow_up("Ev0002", text="<@U0BOT> again"),                  # arrives as app_mention too
+    follow_up("Ev0002", bot_id="B0WAKU"),                        # the agent's own reply
+    follow_up("Ev0002", subtype="message_changed"),              # an edit
+    follow_up("Ev0002", thread_ts="1700000000.000300"),          # not a reply: a new message
+], ids=["another-thread", "a-mention", "a-bot", "an-edit", "top-level"])
+def test_a_message_that_is_not_a_follow_up_is_dropped(harness, envelope):
+    async def body():
+        ana = connect_readable(harness, "sub-ana", "T0ANA")
+        await post(harness, mention("T0ANA", "Ev0001"))
+        status, _ = await post(harness, envelope)
+        return status, harness.store.pending_events(ana.id)
+
+    status, events = _run(harness, body)
+    assert status == 200
+    assert [event.external_id for event in events] == ["Ev0001"]

@@ -403,6 +403,14 @@ class ControlDb:
             self._conn.commit()
             return cursor.rowcount == 1
 
+    def has_session(self, tenant_id: str, session_id: str) -> bool:
+        """Whether this tenant was ever given an event of this conversation.
+        A Slack thread the agent was mentioned in is one."""
+        with self._lock:
+            return self._conn.execute(
+                "SELECT 1 FROM tenant_events WHERE tenant_id = ? AND session_id = ? LIMIT 1",
+                (tenant_id, session_id)).fetchone() is not None
+
     def pending_events(self, tenant_id: str) -> list[TenantEvent]:
         """This tenant's events that its container does not have yet, in the
         order they arrived."""

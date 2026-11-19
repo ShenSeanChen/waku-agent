@@ -150,6 +150,37 @@ def event_row(envelope: dict) -> dict | None:
                         "reply_to": {"channel": channel, "thread_ts": thread}}}
 
 
+def follow_up_row(envelope: dict, bot_user_id: str) -> dict | None:
+    """What a plain message in a thread becomes, or None. `_route` keeps it
+    only for a thread the agent was mentioned in before.
+
+    On 2026-11-19 a person answered the agent in its own thread without
+    writing @Waku again, and nothing came back: Slack sends `app_mention` for
+    a mention only. With `message.channels` and `message.groups` it also sends
+    every message of a channel the bot is in. A message that mentions the bot
+    arrives both ways, so it is left to `event_row`. An edit, a deletion, a
+    join and a bot's own message are not a person writing.
+    """
+    event = envelope.get("event")
+    if not isinstance(event, dict) or event.get("type") != "message":
+        return None
+    if event.get("subtype") or event.get("bot_id"):
+        return None
+    event_id, team_id = envelope.get("event_id"), envelope.get("team_id")
+    channel, ts, thread = event.get("channel"), event.get("ts"), event.get("thread_ts")
+    if not all(isinstance(value, str) and value for value in (event_id, channel, ts, thread)):
+        return None
+    if thread == ts or event.get("user_team", team_id) != team_id:
+        return None
+    text = str(event.get("text") or "")
+    if bot_user_id and f"<@{bot_user_id}" in text:
+        return None
+    return {"source": "slack", "external_id": event_id,
+            "session_id": f"slack:{channel}:{thread}",
+            "payload": {"text": text, "sender": {"id": str(event.get("user") or "")},
+                        "reply_to": {"channel": channel, "thread_ts": thread}}}
+
+
 class SlackUnreachable(RuntimeError):
     """Slack did not answer with a JSON object. The message holds no token."""
 
@@ -510,17 +541,24 @@ class SlackRoutes:
             self._store.delete_slack_install(team_id)
             _LOG.info("tenant=%s: Slack team=%s removed the app", tenant_id, team_id)
             return
-        row = event_row(envelope)
+        row, mentioned = event_row(envelope), True
+        if row is None:
+            # A message with no mention, in a thread the agent is already in.
+            install = self._store.slack_install(tenant_id)
+            row = follow_up_row(envelope, install.bot_user_id if install else "")
+            mentioned = False
+            if row is not None and not self._store.has_session(tenant_id, row["session_id"]):
+                row = None
         tenant = self._store.tenant_by_id(tenant_id)
         if row is None or tenant is None or tenant.status != "active":
             return
-        row["payload"]["text"] = await self._with_thread(tenant_id, event)
+        row["payload"]["text"] = await self._with_thread(tenant_id, event, mentioned)
         if self._store.add_event(tenant_id, **row):
             # A tick now, so the mention does not wait for the next one.
             self._wake()
 
 
-    async def _with_thread(self, tenant_id: str, event: dict) -> str:
+    async def _with_thread(self, tenant_id: str, event: dict, mentioned: bool = True) -> str:
         """The mention as the agent reads it: the thread above it and the
         names in it (slack_thread.py). The mention's own text when the stored
         token does not open."""
@@ -532,7 +570,7 @@ class SlackRoutes:
             return str(event.get("text") or "")
         return await self._threads.compose(
             token=token, team_id=install.team_id, bot_user_id=install.bot_user_id,
-            event=event)
+            event=event, mentioned=mentioned)
 
 
 _ERROR_CODE = re.compile(r"[a-z0-9_]{1,64}")
