@@ -79,9 +79,20 @@ def _send_message(args: dict, address: Address | None) -> str:
         return ALLOW
     target = outbox.parse_address(to)
     if target is not None and (target in outbox.owner_addresses()
-                               or (target == address and reply_is_free(address))):
+                               or (target == address and reply_is_free(address))
+                               or _same_slack_channel(target, address)):
         return ALLOW
     return ASK
+
+
+def _same_slack_channel(target: Address, address: Address | None) -> bool:
+    """A message to the channel a hosted run's Slack thread is in. The same
+    people read the channel and its thread, so it is a reply by another
+    route: "remind me in the channel, not in this thread"."""
+    return (address is not None and target[0] == "slack" == address[0]
+            and _hosted_slack(address)
+            and bool(target[1].get("channel"))
+            and target[1].get("channel") == address[1].get("channel"))
 
 
 def _connect_tool(args: dict, address: Address | None) -> str:

@@ -1395,3 +1395,5 @@ def test_a_slack_reply_on_hosted_waku_needs_no_yes(home, monkeypatch):
                           thread) == "allow", "a message back into the same thread"
     assert approvals.mode("send_message", {"to": "slack:C77", "body": "hi"},
                           thread) == "ask", "another channel is still a write"
+    assert approvals.mode("send_message", {"to": "slack:C09", "body": "stretch"},
+                          thread) == "allow", "the channel this thread is in"

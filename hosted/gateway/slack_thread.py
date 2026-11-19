@@ -44,6 +44,11 @@ MENTION_HEAD_ALONE = "[{who} mentions you in Slack:]"
 FOLLOW_UP_HEAD = ("[{who} wrote this in a thread you are part of, without mentioning you. "
                   "Answer if it is addressed to you or follows up on what you said. If "
                   "people are talking to each other, reply with the single word SILENT.]")
+# Where the message is. On 2026-11-19 a person in #dev asked for a reminder
+# "in the main dev channel, not in this thread", and the agent asked them for
+# the channel's id: nothing had told it which channel it was in.
+WHERE = ("[This is the Slack channel {name}. Its address is slack:{channel}: a message "
+         "sent there appears in the channel itself, outside this thread.]")
 YOU = "Waku (you)"
 SOMEONE = "someone"
 
@@ -57,6 +62,7 @@ class ThreadReader:
     def __init__(self, api) -> None:
         self._api = api
         self._names: dict[tuple[str, str], str] = {}
+        self._channels: dict[tuple[str, str], str] = {}
 
     async def compose(self, *, token: str, team_id: str, bot_user_id: str,
                       event: dict, mentioned: bool = True) -> str:
@@ -110,7 +116,23 @@ class ThreadReader:
             head = FOLLOW_UP_HEAD.format(who=who)
         else:
             head = (MENTION_HEAD if thread else MENTION_HEAD_ALONE).format(who=who)
-        return f"{THREAD_HEAD}\n{thread}\n\n{head}\n{asked}" if thread else f"{head}\n{asked}"
+        where = WHERE.format(name=await self._channel(token, team_id, channel),
+                             channel=channel)
+        body = f"{THREAD_HEAD}\n{thread}\n\n{head}\n{asked}" if thread else f"{head}\n{asked}"
+        return f"{where}\n{body}"
+
+    async def _channel(self, token: str, team_id: str, channel: str) -> str:
+        """`#name`, or `with the id <id>` when Slack does not say the name
+        (it needs `channels:read` or `groups:read`)."""
+        key = (team_id, channel)
+        if key not in self._channels:
+            answer = await self._api.channel_info(token, channel)
+            found = answer.get("channel") if answer.get("ok") is True else None
+            name = found.get("name") if isinstance(found, dict) else None
+            if not (isinstance(name, str) and name.strip()):
+                return f"with the id {channel}"
+            self._channels[key] = "#" + name.strip()[:80]
+        return self._channels[key]
 
     @staticmethod
     async def _author(message: dict, name) -> str:

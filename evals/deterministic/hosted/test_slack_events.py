@@ -404,6 +404,11 @@ def connect_readable(harness: Harness, sub: str, team: str):
     return tenant
 
 
+# The line that says where the message is, for a workspace whose scopes do
+# not give the channel's name: the id is known without asking Slack.
+NO_NAME = ("[This is the Slack channel with the id C0DEMO. Its address is slack:C0DEMO: a "
+           "message sent there appears in the channel itself, outside this thread.]")
+
 THREAD = [
     {"user": "U0SEAN", "ts": "1699999999.5",
      "text": "<@U0EMILY> the board messages feel deep, four clicks to see one"},
@@ -421,6 +426,7 @@ def test_a_mention_in_a_thread_reaches_the_agent_with_the_thread_above_it(harnes
     suggestion?", and the agent could see nothing from Emily."""
     slack.replies_answer = {"ok": True, "messages": THREAD}
     slack.users = {"U0SEAN": "Sean Chen", "U0EMILY": "Emily Tsai"}
+    slack.channels = {"C0DEMO": "dev"}
 
     async def body():
         ana = connect_readable(harness, "sub-ana", "T0ANA")
@@ -431,6 +437,8 @@ def test_a_mention_in_a_thread_reaches_the_agent_with_the_thread_above_it(harnes
 
     [event] = _run(harness, body)
     assert event.payload["text"].splitlines() == [
+        "[This is the Slack channel #dev. Its address is slack:C0DEMO: a message sent "
+        + "there appears in the channel itself, outside this thread.]",
         THREAD_HEAD,
         "Sean Chen: @Emily Tsai the board messages feel deep, four clicks to see one",
         "Emily Tsai: Board messages are not in the memory system yet & that is why",
@@ -453,7 +461,7 @@ def test_a_mention_outside_a_thread_reads_no_thread(harness, slack):
         return harness.store.pending_events(ana.id)
 
     [event] = _run(harness, body)
-    assert event.payload["text"] == ("[Ana mentions you in Slack:]\n"
+    assert event.payload["text"] == (NO_NAME + "\n[Ana mentions you in Slack:]\n"
                                      "remind the channel on Friday at 09:00")
     assert slack.calls("/conversations.replies") == []
 
@@ -468,7 +476,7 @@ def test_a_workspace_without_the_new_scopes_still_gets_its_mention(harness, slac
 
     status, [event] = _run(harness, body)
     assert status == 200
-    assert event.payload["text"] == ("[someone mentions you in Slack:]\n"
+    assert event.payload["text"] == (NO_NAME + "\n[someone mentions you in Slack:]\n"
                                      "remind the channel on Friday at 09:00")
 
 
@@ -498,7 +506,7 @@ def test_a_follow_up_in_a_thread_the_agent_is_in_reaches_the_agent(harness, slac
 
     first, second = _run(harness, body)
     assert second.session_id == first.session_id == "slack:C0DEMO:1700000000.000100"
-    assert second.payload["text"] == (FOLLOW_UP_HEAD.format(who="Ana")
+    assert second.payload["text"] == (NO_NAME + "\n" + FOLLOW_UP_HEAD.format(who="Ana")
                                       + "\naren't you connected to waku memories?")
     assert "SILENT" in second.payload["text"], "people also talk to each other there"
     assert second.payload["reply_to"] == {"channel": "C0DEMO",

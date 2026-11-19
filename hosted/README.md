@@ -528,7 +528,7 @@ the workspace that will own it. In the app's settings:
 | Page | Field | Value |
 |---|---|---|
 | OAuth & Permissions | Redirect URLs | `https://agent.waku.one/slack/oauth/callback` |
-| OAuth & Permissions | Bot Token Scopes | `app_mentions:read`, `chat:write`, `channels:history`, `groups:history`, `users:read`, `reactions:write` |
+| OAuth & Permissions | Bot Token Scopes | `app_mentions:read`, `chat:write`, `channels:history`, `groups:history`, `users:read`, `reactions:write`, `channels:read`, `groups:read` |
 | Event Subscriptions | Request URL | `https://agent.waku.one/v1/triggers/slack` |
 | Event Subscriptions | Subscribe to bot events | `app_mention`, `app_uninstalled`, `message.channels`, `message.groups` |
 | Manage Distribution | Activate Public Distribution | on, so another workspace can add the app |

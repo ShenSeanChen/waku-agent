@@ -63,7 +63,7 @@ SETUP_PATH = "/setup"
 # (slack_thread.py). A workspace that added the app before they were asked for
 # keeps working without them, and gets them when its person adds the app again.
 SCOPES = ("app_mentions:read", "chat:write", "channels:history", "groups:history",
-          "users:read", "reactions:write")
+          "users:read", "reactions:write", "channels:read", "groups:read")
 # What the bot puts on a message the moment it is kept for the agent, so the
 # person sees it was heard before the answer is written. A container that was
 # stopped takes some seconds to start, and until 2026-11-19 nothing in Slack
@@ -281,6 +281,10 @@ class SlackApi:
     async def add_reaction(self, token: str, channel: str, ts: str, name: str) -> dict:
         return await self._post("reactions.add",
                                 data={"channel": channel, "timestamp": ts, "name": name},
+                                headers={"Authorization": f"Bearer {token}"})
+
+    async def channel_info(self, token: str, channel: str) -> dict:
+        return await self._post("conversations.info", data={"channel": channel},
                                 headers={"Authorization": f"Bearer {token}"})
 
     async def user_info(self, token: str, user_id: str) -> dict:
