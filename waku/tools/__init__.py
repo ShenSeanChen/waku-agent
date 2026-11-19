@@ -4,6 +4,7 @@ Apple ecosystem (WAKU_APPLE_TOOLS=1) and MCP servers (.waku/mcp.json)."""
 
 from __future__ import annotations
 
+import os
 import sqlite3
 from collections.abc import Callable
 
@@ -52,6 +53,14 @@ def build_registry(conn: sqlite3.Connection, settings: Settings, memory=None,
     # take the owner's yes first, whatever the environment allows.
     for tool in connectors.make_tools(settings.home):
         registry.register(tool)
+    # Hosted Waku only (spec 029 D): read the Slack channel a run was started
+    # from, through the platform, which holds the workspace's token.
+    base_url, platform_token = (os.getenv("WAKU_PLATFORM_BASE_URL", ""),
+                                os.getenv("WAKU_PLATFORM_TOKEN", ""))
+    if os.getenv("WAKU_HOSTED", "") == "1" and base_url and platform_token:
+        from waku.tools import slack_history
+
+        registry.register(slack_history.make_tool(settings.home, base_url, platform_token))
     # Web search — pairs with create_event for the multi-tool loop demo
     # ("find the World Cup games left and add them to my calendar").
     registry.register(search.make_tool())
