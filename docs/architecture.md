@@ -184,7 +184,9 @@ flowchart LR
   team id maps to. The container's Slack sender has no token: with
   `WAKU_HOSTED=1` it posts the reply to the platform
   (`waku/alwayson/senders/slack.py`), and the gateway sends it with the token
-  it keeps encrypted in `control.db`.
+  it keeps encrypted in `control.db`. The container's `slack_history` tool
+  (`waku/tools/slack_history.py`, hosted only) asks the platform the same way
+  for the recent messages of the channel a run is in.
 
 A run never sends. Its reply becomes one row in the `outbox` table, and the
 dispatcher sends the row to the Telegram chat, the Slack thread or the GitHub
