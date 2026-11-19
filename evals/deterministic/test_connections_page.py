@@ -126,7 +126,6 @@ def test_a_cards_drawing_is_a_file_the_dashboard_serves(home):
     for card in cards:
         assert card["logo"] == "" or (static / card["logo"]).is_file(), card
     assert _card(_page(), "app-notion")["logo"] == _card(_page(), "notion")["logo"] != ""
-    assert _card(_page(), "app-linear")["logo"] == "", "no drawing yet: the card shows a letter"
 
 
 def test_a_starter_connector_nobody_added_offers_connect(home):

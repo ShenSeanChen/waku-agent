@@ -108,7 +108,8 @@ _TREG_STATE = {
 # shows the first letter of its name.
 _REGISTRY_LOGO = "logos/connections/{key}.svg"
 _STARTER_LOGOS = {"notion": "logos/connections/notion.svg",
-                  "github": "logos/connections/github.svg"}
+                  "github": "logos/connections/github.svg",
+                  "linear": "logos/connections/linear.svg"}
 _WAKU_LOGO = "waku-mark.svg"
 
 

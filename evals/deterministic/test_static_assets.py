@@ -22,9 +22,9 @@ JS_FILES = sorted((STATIC / "js").glob("*.js"))
 JS_SRC = "\n".join(f.read_text() for f in JS_FILES)
 # The registry's cards, plus the MCP sign-in cards (spec 007 E), which are not
 # .env integrations and so are not in the registry.
-# GitHub is a starter connector (waku/connectors.toml), not a registry row.
+# GitHub and Linear are starter connectors (waku/connectors.toml), not registry rows.
 CONNECTION_LOGOS = ({f"{integration.key}.svg" for integration in INTEGRATIONS}
-                    | {f"{treg.NAME}.svg", "github.svg"})
+                    | {f"{treg.NAME}.svg", "github.svg", "linear.svg"})
 
 # JS keywords / builtins / DOM globals an inline handler may call without a js/
 # definition. Kept small on purpose — anything else must be a real app function.

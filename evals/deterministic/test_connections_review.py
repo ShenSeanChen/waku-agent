@@ -134,6 +134,32 @@ def test_env_example_names_each_slack_value_once():
 
 # ---- 2. a logo on every card ---------------------------------------------------
 
+def test_every_card_on_a_persons_own_machine_has_a_logo_and_no_letter(home):
+    """The script draws the first letter of a card's name only when the card
+    has no logo. No card is left without one."""
+    for card in _all(dashboard.connections_page_data()):
+        assert card["logo"] and (STATIC / card["logo"]).is_file(), card["id"]
+
+
+def test_the_linear_card_and_its_place_in_the_tools_row_show_linears_mark(home, monkeypatch):
+    page = dashboard.connections_page_data()
+    assert _card(page, "app-linear")["logo"] == "logos/connections/linear.svg"
+    svg = (STATIC / "logos" / "connections" / "linear.svg").read_text(encoding="utf-8")
+    assert svg.startswith("<svg ") and "<title>Linear</title>" in svg
+
+    connectors.add(home, "linear", url=LINEAR)
+    real = dashboard._mcp_row
+
+    def signed_in(*args):
+        row = real(*args)
+        row["account"] = "as sean@example.com"
+        return row
+
+    monkeypatch.setattr(dashboard, "_mcp_row", signed_in)
+    assert dashboard.tools_info()["connected"] == [
+        {"id": "app-linear", "name": "Linear", "logo": "logos/connections/linear.svg"}]
+
+
 def test_slack_and_github_cards_show_their_mark(home):
     page = dashboard.connections_page_data()
 
@@ -147,7 +173,7 @@ def test_the_marks_this_change_adds_say_where_they_came_from():
     """A third-party mark is not a Waku brand file. The README beside the
     logos names each one's source and licence."""
     readme = (STATIC / "logos" / "connections" / "README.md").read_text(encoding="utf-8")
-    for name in ("slack.svg", "github.svg"):
+    for name in ("slack.svg", "github.svg", "linear.svg"):
         assert (STATIC / "logos" / "connections" / name).is_file()
         assert f"`{name}`" in readme, f"{name} has no source in the README"
 

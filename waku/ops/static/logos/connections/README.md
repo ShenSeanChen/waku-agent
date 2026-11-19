@@ -14,8 +14,12 @@ a third-party CDN at runtime.
   release. Slack's is its mark in one colour, not the four-colour one.
   Simple Icons dropped Slack in a later release, which is why this file does
   not come from 16.21.0.
-- Linear has no file here. Its card shows the first letter of its name until
-  a mark from Linear's own brand page is added.
+- `linear.svg` uses the path of Linear's own logomark: `logo-dark.svg` in
+  <https://static.linear.app/design-assets/Linear-Brand-Assets.zip?v=3>, the
+  archive that <https://linear.app/brand> links as "Download Linear logo",
+  fetched on 2026-11-19. The path and its colour are Linear's, unchanged. The
+  white tile around it is a Waku presentation wrapper. Linear's brand page
+  sets the terms of use; the mark is not CC0 and not MIT.
 - `tavily.svg` uses the `tavily-color` artwork from
   [Lobe Icons 1.90.0](https://github.com/lobehub/lobe-icons), licensed under MIT.
   Copyright (c) 2023 LobeHub.
