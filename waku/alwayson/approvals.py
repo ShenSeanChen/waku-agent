@@ -153,6 +153,9 @@ MODES: dict[str, str | Callable[[dict, Address | None], str]] = {
     "connect_tool": _connect_tool,
     "disconnect_tool": _disconnect_tool,
     "connector_status": ALLOW,   # it reads this machine's own files
+    # It reads the channel the run is in, which the people there already read
+    # (spec 029, decision 5). Hosted Waku only.
+    "slack_history": ALLOW,
 }
 
 

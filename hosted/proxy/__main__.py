@@ -16,6 +16,8 @@ the /treg/mcp/ relay on the same site (spec 004 E; hosted/proxy/treg.py).
 POST /slack/send, on the same site, takes a container's outgoing Slack message
 and hands it to the gateway, which holds the Slack tokens (spec 026 C3;
 hosted/proxy/slack.py). No Slack token is ever in this process.
+POST /slack/history, beside it, takes a container's request for the recent
+messages of the channel its run is in, and the gateway reads them (spec 029 D).
 
 POST /connect/<name>/mcp takes a container's MCP message for a connector the
 tenant signed in to, and hands it to the gateway, which holds that sign-in's
@@ -45,7 +47,7 @@ from hosted.proxy.connect import ConnectCalls
 from hosted.proxy.gateway_client import TokenCache
 from hosted.proxy.internal import serve_spend
 from hosted.proxy.ledger import Ledger
-from hosted.proxy.slack import SlackSend
+from hosted.proxy.slack import SlackHistory, SlackSend
 from hosted.proxy.treg import TregRelay
 from hosted.proxy.turns import TurnCharges
 from hosted.proxy.upstream import AnthropicUpstream
@@ -84,6 +86,9 @@ async def main() -> None:
             # slack_not_configured, so this proxy has nothing to configure.
             slack=SlackSend(resolve=tokens.resolve,
                             gateway_socket=config.gateway_socket).handle,
+            # Spec 029 D: the same, for reading the channel a run is in.
+            slack_history=SlackHistory(resolve=tokens.resolve,
+                                       gateway_socket=config.gateway_socket).handle,
             connect=connectors.handle, connect_link=connectors.link)
         runner = web.AppRunner(proxy.build(), access_log=None)
         await runner.setup()

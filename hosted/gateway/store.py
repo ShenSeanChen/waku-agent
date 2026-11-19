@@ -435,6 +435,18 @@ class ControlDb:
                 "SELECT 1 FROM tenant_events WHERE tenant_id = ? AND session_id = ? LIMIT 1",
                 (tenant_id, session_id)).fetchone() is not None
 
+    def has_slack_channel(self, tenant_id: str, channel: str) -> bool:
+        """Whether this tenant was ever given a Slack event from this channel:
+        the agent was mentioned there, in the channel or in one of its
+        threads. `channel` is matched exactly, as the middle part of the
+        conversation's id `slack:<channel>:<thread>`."""
+        prefix = f"slack:{channel}:"
+        with self._lock:
+            return self._conn.execute(
+                "SELECT 1 FROM tenant_events WHERE tenant_id = ? AND source = 'slack' "
+                "AND substr(session_id, 1, ?) = ? LIMIT 1",
+                (tenant_id, len(prefix), prefix)).fetchone() is not None
+
     def pending_events(self, tenant_id: str) -> list[TenantEvent]:
         """This tenant's events that its container does not have yet, in the
         order they arrived."""

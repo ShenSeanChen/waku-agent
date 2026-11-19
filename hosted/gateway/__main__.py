@@ -152,6 +152,7 @@ async def main() -> None:
         token_server = await internal.serve_token_lookup(
             config.gateway_socket, store,
             slack_send=slack.relay.send if slack is not None else None,
+            slack_history=slack.history.read if slack is not None else None,
             connect=connector_relay)
         admin_server = await admin.serve_admin(config.admin_socket, gateway)
         runner = build_runner(gateway.build())

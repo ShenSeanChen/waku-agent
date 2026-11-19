@@ -760,6 +760,12 @@ class FakeSlack:
         # What reading a thread and looking up a person answer. The default
         # is a workspace that added the app before those scopes were asked for.
         self.replies_answer: dict = {"ok": False, "error": "missing_scope"}
+        # What reading a channel's history answers (spec 029 D).
+        self.history_answer: dict = {"ok": False, "error": "missing_scope"}
+        # A channel's whole history, in any order. When a test sets it,
+        # conversations.history serves it as Slack does: newest first, from
+        # `oldest` on, `limit` to a page, with `next_cursor` while more wait.
+        self.history_messages: list[dict] | None = None
         self.users: dict[str, str] = {}
         self.channels: dict[str, str] = {}
         self._server: ThreadingHTTPServer | None = None
@@ -771,6 +777,17 @@ class FakeSlack:
 
     def calls(self, path: str) -> list[dict]:
         return [request for request in self.requests if request["path"] == path]
+
+    def history_page(self, sent: dict) -> dict:
+        """One page of `history_messages`, the way conversations.history
+        pages: newest first, nothing older than `oldest`."""
+        oldest = float(sent.get("oldest") or 0)
+        found = sorted((m for m in self.history_messages if float(m["ts"]) >= oldest),
+                       key=lambda m: float(m["ts"]), reverse=True)
+        start, size = int(sent.get("cursor") or 0), int(sent.get("limit") or 100)
+        page, more = found[start:start + size], start + size < len(found)
+        return {"ok": True, "messages": page, "has_more": more,
+                "response_metadata": {"next_cursor": str(start + size) if more else ""}}
 
     def start(self) -> None:
         recorder = self
@@ -792,8 +809,12 @@ class FakeSlack:
                 answers = {"/oauth.v2.access": recorder.oauth_answer,
                            "/chat.postMessage": recorder.post_answer,
                            "/conversations.replies": recorder.replies_answer,
+                           "/conversations.history": recorder.history_answer,
                            "/reactions.add": {"ok": True}}
                 answer = answers.get(self.path, {"ok": False, "error": "unknown_method"})
+                if (self.path == "/conversations.history"
+                        and recorder.history_messages is not None):
+                    answer = recorder.history_page(sent)
                 if self.path == "/conversations.info":
                     named = recorder.channels.get(sent.get("channel", ""))
                     answer = ({"ok": True, "channel": {"name": named}}

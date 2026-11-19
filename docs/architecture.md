@@ -184,7 +184,10 @@ flowchart LR
   team id maps to. The container's Slack sender has no token: with
   `WAKU_HOSTED=1` it posts the reply to the platform
   (`waku/alwayson/senders/slack.py`), and the gateway sends it with the token
-  it keeps encrypted in `control.db`.
+  it keeps encrypted in `control.db`. The container's `slack_history` tool
+  (`waku/tools/slack_history.py`, hosted only) asks the platform the same way
+  for messages of the channel a run is in: the last ones, a window of days,
+  or one person's.
 - **A connector on hosted waku is signed in to by the gateway** (spec 029,
   `hosted/gateway/connect.py`). The gateway registers itself with Notion or
   Linear, sends the person's browser to the vendor's sign-in page, and keeps
