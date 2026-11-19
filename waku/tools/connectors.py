@@ -141,7 +141,23 @@ def starter_for(spec: dict) -> dict | None:
                 None)
 
 
-MEMORY, STARTER, OWN = "memory", "starter", "own"
+MEMORY, STARTER, OWN, PLATFORM = "memory", "starter", "own", "platform"
+
+
+def hosted() -> bool:
+    """True in a hosted container, which is started with WAKU_HOSTED=1."""
+    return os.getenv("WAKU_HOSTED", "") == "1"
+
+
+def platform_relayed(spec: dict) -> bool:
+    """Whether a server in mcp.json is a connector the hosted platform calls
+    for this container (spec 029): on hosted Waku, an address under
+    /connect/ on the platform the container already sends its model calls
+    to. The container holds no token for such a server. The platform holds
+    the person's sign-in, makes each call, and decides there which tools run."""
+    base = os.getenv("WAKU_PLATFORM_BASE_URL", "").rstrip("/")
+    url = str(spec.get("url") or "") if isinstance(spec, dict) else ""
+    return hosted() and bool(base) and url.startswith(base + "/connect/")
 
 
 @dataclass(frozen=True)
@@ -153,6 +169,9 @@ class Connector:
       starter   a server on the starter list: `writes` says which tools ask
       own       any other server: a tool asks unless the server marks it
                 read-only
+      platform  a connector the hosted platform calls for this container
+                (spec 029): its tools run here, and the platform refuses the
+                ones that write
     """
     name: str
     kind: str
@@ -175,6 +194,8 @@ def connector_of(home: Path, server: str) -> Connector | None:
         return None
     if is_waku_memory(spec):
         return Connector(server, MEMORY)
+    if platform_relayed(spec):
+        return Connector(server, PLATFORM)
     listed = starter_for(spec)
     if listed is not None:
         return Connector(server, STARTER, tuple(listed["writes"]))
@@ -749,9 +770,54 @@ def _approved(home: Path) -> bool:
     return run is not None and bool(run.approved_key)
 
 
+# ---- hosted Waku: the sign-in is on the platform's page (spec 029) -------------
+
+HOSTED_LINK_PATH = "/connect/link"
+HOSTED_CONNECT = ("Open this link and sign in to {title}. It asks you to sign in to Waku "
+                  "first if you are not signed in:\n{url}\nWhen the page says {title} is "
+                  "connected, its tools are there in my next answer.")
+HOSTED_CONNECTED = ("{title} is already connected. To sign in to it again, open:\n{url}")
+HOSTED_NOT_LISTED = ("Not connected: on hosted Waku the connectors are {names}. Another "
+                     "server cannot be added here.")
+HOSTED_UNAVAILABLE = "Not connected: the sign-in link could not be made just now. Try again."
+HOSTED_WRITES = ("Not changed: on hosted Waku a connector's tools that change something "
+                 "do not run yet, and there is no switch for it.")
+HOSTED_DISCONNECT = ("Not disconnected: on hosted Waku a connector is disconnected from "
+                     "your Waku account's page, and that button is not built yet.")
+
+
+def hosted_connect(target: str, post: Callable | None = None) -> str:
+    """What "connect Notion" answers in a hosted container: the link to the
+    platform's page that starts the sign-in. The container cannot take a
+    sign-in itself: the vendor would send the browser back to a port on a
+    computer the person's browser cannot reach. Nothing is connected by this
+    call, so it needs no yes: the person signs in, on the vendor's own page."""
+    from waku.alwayson.senders import SendFailed, post_json
+
+    base = os.getenv("WAKU_PLATFORM_BASE_URL", "").rstrip("/")
+    token = os.getenv("WAKU_PLATFORM_TOKEN", "")
+    if not base or not token:
+        return HOSTED_UNAVAILABLE
+    try:
+        answer = (post or post_json)(base + HOSTED_LINK_PATH,
+                                     {"server": (target or "").strip().lower()[:64]},
+                                     {"Authorization": f"Bearer {token}"})
+    except SendFailed:
+        return HOSTED_UNAVAILABLE
+    if answer.get("ok") is True and isinstance(answer.get("url"), str):
+        words = HOSTED_CONNECTED if answer.get("connected") else HOSTED_CONNECT
+        return words.format(title=str(answer.get("title") or target), url=answer["url"])
+    if answer.get("error") == "not_listed" and isinstance(answer.get("available"), list):
+        return HOSTED_NOT_LISTED.format(
+            names=" and ".join(str(name) for name in answer["available"]) or "none")
+    return HOSTED_UNAVAILABLE
+
+
 def make_tools(home: Path, sign_in: Callable = start_sign_in) -> list[Tool]:
     def connect_tool(name_or_url: str = "", writes: str = "") -> str:
         writes = (writes or "").strip().lower()
+        if hosted():
+            return HOSTED_WRITES if writes else hosted_connect(name_or_url)
         if writes:
             if writes not in ("ask", "allow"):
                 return "Not changed: `writes` is 'ask' or 'allow'."
@@ -775,6 +841,8 @@ def make_tools(home: Path, sign_in: Callable = start_sign_in) -> list[Tool]:
 
     def disconnect_tool(name: str = "") -> str:
         name = (name or "").strip()
+        if hosted():
+            return HOSTED_DISCONNECT
         try:
             if not _approved(home):
                 return NEEDS_YES.format(done="Not disconnected",
