@@ -87,6 +87,21 @@ small_model = "google/gemma-4-26b-a4b-it:free"
 key_url = "https://openrouter.ai/keys"
 price = [1.0, 3.0]
 
+# llm.buzz: another one-key gateway, OpenAI-compatible. Its ids are
+# vendor-namespaced like openrouter's; the defaults are ones the live catalog
+# (https://llm.buzz/models) lists.
+
+[llm_buzz]
+kind = "openai"
+key_env = "LLM_BUZZ_API_KEY"
+base_url = "https://api.llm.buzz/api/v1"
+model = "anthropic/claude-sonnet-5"
+small_model = "anthropic/claude-haiku-5.5"
+flagship = "anthropic/claude-opus-5.5"
+fast = "openai/gpt-5-mini"
+key_url = "https://app.llm.buzz"
+price = [1.6, 8.0]
+
 # Google's Pro tier is not "gemini-3.5-pro" (that id 404s); the current Pro
 # is gemini-3.1-pro-preview.
 
