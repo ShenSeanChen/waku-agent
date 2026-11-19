@@ -7,8 +7,9 @@ loops: the idle loop (sweep.py) and the scheduler (scheduler.py, spec 026):
                             "listens on 127.0.0.1 only", and that is not a
                             default -- it is the reason the gateway is not on
                             the tenant bridge and a container cannot reach it.
-  run/gateway/gateway.sock  what the proxy asks: whose token this is, and
-                            to post a container's Slack message with the
+  run/gateway/gateway.sock  what the proxy asks: whose token this is, to
+                            post a container's Slack message, and to make
+                            a container's call to a connector, each with a
                             token only this process holds (internal.py).
   run/admin/admin.sock      tenant.sh, upgrade.sh --now and restore.sh.
   run/proxy/proxy.sock      NOT served here -- the gateway is its CLIENT.
@@ -47,6 +48,7 @@ from hosted.gateway import admin, internal
 from hosted.gateway.app import Gateway
 from hosted.gateway.config import config_from_env
 from hosted.gateway.connect import Connect, VendorApi
+from hosted.gateway.connect_mcp import McpRelay
 from hosted.gateway.container_api import ContainerApi
 from hosted.gateway.forward import ContainerForwarder
 from hosted.gateway.identity import JwksVerifier
@@ -113,10 +115,22 @@ async def main() -> None:
         # Spec 029: sign-in to Notion and Linear. It needs the key that seals
         # a token and nothing a person copies from a vendor's settings page:
         # the gateway registers itself with each vendor at the first sign-in.
-        connectors = None
+        connectors = connector_relay = None
         if config.connect_key is not None:
             connectors = Connect(key=config.connect_key, apex_host=config.apex_host,
                                  store=store, api=VendorApi(session))
+            # Spec 029 B: the relay makes a container's calls with the tokens
+            # Connect keeps. When a person's connectors change, the vendor
+            # session kept for them is dropped and their running container's
+            # mcp.json is written again.
+            connector_relay = McpRelay(connect=connectors, session=session,
+                                       apex_host=config.apex_host)
+
+            async def connectors_changed(tenant_id: str, server: str) -> None:
+                connector_relay.forget(tenant_id, server)
+                await launcher.reprovision(tenant_id)
+
+            connectors.on_change = connectors_changed
             _LOG.info("connectors: on (%s)", ", ".join(connectors.vendors))
         else:
             _LOG.warning("connectors: off, their routes answer 503: %s",
@@ -138,7 +152,8 @@ async def main() -> None:
         token_server = await internal.serve_token_lookup(
             config.gateway_socket, store,
             slack_send=slack.relay.send if slack is not None else None,
-            slack_history=slack.history.read if slack is not None else None)
+            slack_history=slack.history.read if slack is not None else None,
+            connect=connector_relay)
         admin_server = await admin.serve_admin(config.admin_socket, gateway)
         runner = build_runner(gateway.build())
         await runner.setup()

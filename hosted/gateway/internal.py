@@ -1,7 +1,7 @@
 """run/gateway/gateway.sock -- what the proxy may ask the gateway.
 
 The proxy is the one service tenant code can reach directly, so it gets no
-access to control.db. It asks three things here, and nothing else:
+access to control.db. It asks five things here, and nothing else:
 
   token       it sends a SHA-256 hash and gets back a tenant id and a status,
               and the tenant's Waku Memory key so it can charge that person's
@@ -12,12 +12,19 @@ access to control.db. It asks three things here, and nothing else:
               token stays in this process.
 
   slack_history  it sends a tenant id it resolved itself and a channel, and
-              the gateway reads that channel's recent messages with that
-              tenant's Slack token (spec 029 D). It gets back names and
-              text, or an error code.
+              the gateway reads that channel's messages with that tenant's
+              Slack token (spec 029 D). It gets back names and text, or an
+              error code.
+  connect_mcp   it sends a tenant id it resolved itself, a connector's name
+                and one MCP message from that tenant's container, and the
+                gateway makes the call with that tenant's sign-in (spec 029
+                B1). It gets back the answer. The vendor's token stays in
+                this process.
+  connect_link  it sends a tenant id and a connector's name, and gets back
+                the address where that person starts the sign-in (B3).
 
-It cannot enumerate tenants, read a session, read a Slack token, or issue
-anything.
+It cannot enumerate tenants, read a session, read a Slack token or a
+connector's token, or issue anything.
 """
 
 from __future__ import annotations
@@ -27,6 +34,7 @@ from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 from hosted import jsonsock
+from hosted.gateway.connect_mcp import McpRelay
 from hosted.ports.control import ControlStore
 
 GATEWAY_SOCKET_MODE = 0o660
@@ -38,6 +46,8 @@ TOKEN_FIELDS = frozenset({"op", "hash"})
 SLACK_SEND_FIELDS = frozenset({"op", "tenant", "channel", "text", "thread_ts"})
 SLACK_HISTORY_FIELDS = frozenset({"op", "tenant", "channel", "thread_ts", "limit",
                                   "days", "person"})
+CONNECT_MCP_FIELDS = frozenset({"op", "tenant", "server", "message"})
+CONNECT_LINK_FIELDS = frozenset({"op", "tenant", "server"})
 
 # (tenant id, channel, text, thread_ts) -> {"ok": True} or {"ok": False,
 # "error": code}. hosted/gateway/slack.SlackRelay.send.
@@ -50,10 +60,30 @@ SlackHistory = Callable[[str, str, str, int, int, str], Awaitable[dict]]
 
 async def serve_token_lookup(path: Path, store: ControlStore, *,
                              slack_send: SlackSend | None = None,
-                             slack_history: SlackHistory | None = None) -> asyncio.Server:
+                             slack_history: SlackHistory | None = None,
+                             connect: McpRelay | None = None) -> asyncio.Server:
     """`slack_send` is the relay, or None when Slack is not configured: the
     operation then answers that, and the socket is otherwise the same.
-    `slack_history` is the reader, on the same terms."""
+    `slack_history` is the reader and `connect` is the connectors' relay, or
+    None on the same terms."""
+    async def connect_mcp(request: dict) -> dict:
+        unknown = sorted(set(request) - CONNECT_MCP_FIELDS)
+        if unknown:
+            return {"error": f"connect_mcp does not take {unknown}"}
+        if connect is None:
+            return {"ok": False, "error": "connectors_not_configured"}
+        # The relay checks every value's shape itself.
+        return await connect.call(request.get("tenant", ""), request.get("server"),
+                                  request.get("message"))
+
+    async def connect_link(request: dict) -> dict:
+        unknown = sorted(set(request) - CONNECT_LINK_FIELDS)
+        if unknown:
+            return {"error": f"connect_link does not take {unknown}"}
+        if connect is None:
+            return {"ok": False, "error": "connectors_not_configured"}
+        return connect.link(request.get("tenant", ""), request.get("server"))
+
     async def send(request: dict) -> dict:
         unknown = sorted(set(request) - SLACK_SEND_FIELDS)
         if unknown:
@@ -76,16 +106,20 @@ async def serve_token_lookup(path: Path, store: ControlStore, *,
                                    request.get("days", 0), request.get("person", ""))
 
     async def handler(request: dict) -> dict:
-        # Three allowed questions, named here; everything else refused. A list
+        # Five allowed questions, named here; everything else refused. A list
         # of forbidden ops would need editing every time the store grows a
         # method.
         if request.get("op") == "slack_send":
             return await send(request)
         if request.get("op") == "slack_history":
             return await history(request)
+        if request.get("op") == "connect_mcp":
+            return await connect_mcp(request)
+        if request.get("op") == "connect_link":
+            return await connect_link(request)
         if request.get("op") != "token":
-            return {"error": "this socket answers three questions: op=token, "
-                             "op=slack_send and op=slack_history"}
+            return {"error": "this socket answers five questions: op=token, op=slack_send, "
+                             "op=slack_history, op=connect_mcp and op=connect_link"}
         unknown = sorted(set(request) - TOKEN_FIELDS)
         if unknown:
             return {"error": f"token does not take {unknown}"}

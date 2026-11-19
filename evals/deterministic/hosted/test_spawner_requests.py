@@ -24,9 +24,14 @@ GOOD_TOKEN = "T" * 43
 SPEC_OPERATIONS = {"provision", "start", "stop", "list", "tenants", "task"}
 SPEC_TASKS = {"backup", "restore", "archive", "inspect", "inspect-stop"}
 SPEC_KEYS = {
-    "provision": {"op", "tenant_id", "project_id"},
+    # Widened in spec 029 B2, deliberately: `connectors` names the connectors
+    # the tenant signed in to, each one a name on hosted/core/connectors.py's
+    # closed list, so provisioning can write them into the tenant's mcp.json.
+    # Optional on both.
+    "provision": {"op", "tenant_id", "project_id", "connectors"},
     # memory_key is spec 004 A3: optional, so it is in _KEYS and not _REQUIRED.
-    "start": {"op", "tenant_id", "project_id", "timezone", "token", "memory_key"},
+    "start": {"op", "tenant_id", "project_id", "timezone", "token", "memory_key",
+              "connectors"},
     "stop": {"op", "tenant_id"},
     "list": {"op"},
     # Added in group F (F3b). `list` answers "may the gateway forward to this
@@ -92,12 +97,15 @@ _VALUES = {
     "token": GOOD_TOKEN,
     "task": "backup",
     "memory_key": "mem_sk_" + "M" * 43,
+    "connectors": ("notion",),
 }
 
 
 def payload_for(op: str, **overrides) -> dict:
     """The minimal valid payload for `op`, derived from `_KEYS`."""
     payload = {key: (op if key == "op" else _VALUES[key]) for key in requests._KEYS[op]}
+    if "connectors" in payload:
+        payload["connectors"] = list(payload["connectors"])     # a list on the wire
     payload.update(overrides)
     return payload
 

@@ -498,7 +498,7 @@ class Gateway:
         if self._connect.vendor(server) is None:
             return answers.json_error(400, connect.DISCONNECT_BODY)
         return answers.json_ok({"ok": True,
-                                "disconnected": self._connect.disconnect(tenant.id, server)})
+                                "disconnected": await self._connect.disconnect(tenant.id, server)})
 
     # --- "Add to Slack" (spec 026 C1) -----------------------------------
 
