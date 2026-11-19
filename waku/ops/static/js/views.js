@@ -320,6 +320,20 @@ async function saveProvider(provider){
 }
 function stProvider(){ return (D.settings || {}).provider || "anthropic"; }
 
+// A registry row's state as the connection dialog shows it, in the words the
+// cards use (waku/ops/connections_page.py, STATES). The dialog reads the row
+// itself, because Test connection answers with a row and not with a card.
+function connectionStatusDisplay(status){
+  const state = (status && status.state) || "not_configured";
+  if (state === "connected") return {label: "connected", className: "connected"};
+  if (state === "error") return {label: "error", className: "error"};
+  // Every required field is filled and nothing has tried it yet. That is
+  // not a warning, so it does not take the colour of one.
+  if (state === "configured") return {label: "configured · not tested", className: "configured"};
+  if (state === "installed_but_unconfigured") return {label: "needs setup", className: "needs-setup"};
+  return {label: "not connected", className: "not-configured"};
+}
+
 // The Connections page (spec 030). `connections_page` in /api/data holds
 // every card, in its group, with its state and its one button
 // (waku/ops/connections_page.py decides all of it). This file draws them.
