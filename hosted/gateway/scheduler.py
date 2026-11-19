@@ -20,6 +20,13 @@ not hand over stays `pending`, and the next tick offers it again. The
 container stores an event under UNIQUE(source, external_id), so an event
 offered twice is one run.
 
+A KICK IS A TICK NOW (spec 026 C2). A Slack mention that waited for the next
+tick would wait up to 30 seconds before its container even started, so the
+handler that stored it calls `kick`. The container a kick starts is usually
+not listening yet when the tick ends, so a kick ticks again every
+KICK_RETRY_SECONDS, at most KICK_TRIES times, until no event is waiting. Ticks
+never overlap: a kick and the loop take the same lock.
+
 A TICK THAT RAISES DOES NOT END THE LOOP, and one tenant's failure does not
 hold up another's: tenants are served side by side, and each failure is one
 line in the log.
@@ -42,6 +49,10 @@ TICK_SECONDS = 30
 # The most events one request carries. The rest go with the next tick, oldest
 # first, so a tenant with a long queue cannot build one very large request.
 HAND_OVER_BATCH = 50
+# After a kick: how long between tries, and how many. Twenty seconds in all,
+# which is longer than a container takes to listen and shorter than a tick.
+KICK_RETRY_SECONDS = 2.0
+KICK_TRIES = 10
 
 
 class Scheduler:
@@ -55,9 +66,45 @@ class Scheduler:
         self._now = now
         self._interval = interval
         self._sleep = sleep
+        self._ticking = asyncio.Lock()
+        self._kick: asyncio.Task | None = None
+        self._kick_again = False
+
+    def kick(self) -> None:
+        """Tick now, from inside the event loop, without waiting for it. One
+        kick runs at a time; a kick that arrives while one runs makes that
+        one start its tries again, so the new event gets the full count."""
+        if self._kick is not None and not self._kick.done():
+            self._kick_again = True
+            return
+        self._kick = asyncio.get_running_loop().create_task(self._kicked())
+
+    async def _kicked(self) -> None:
+        tries = 0
+        while tries < KICK_TRIES:
+            if self._kick_again:
+                self._kick_again, tries = False, 0
+            tries += 1
+            try:
+                await self.tick()
+            except Exception:  # noqa: BLE001 -- see the module docstring
+                _LOG.exception("a kicked scheduler tick failed")
+            if not self._kick_again and not self._store.tenants_with_pending_events():
+                return
+            await self._sleep(KICK_RETRY_SECONDS)
+
+    async def settled(self) -> None:
+        """Wait for the kick under way, if there is one. For shutdown and for
+        a test that needs to see what a kick did."""
+        while self._kick is not None and not self._kick.done():
+            await asyncio.wait([self._kick])
 
     async def tick(self) -> None:
         """One pass over every tenant with an event waiting or a wakeup due."""
+        async with self._ticking:
+            await self._tick()
+
+    async def _tick(self) -> None:
         due = set(self._store.due_wakeups(self._now()))
         waiting = self._store.tenants_with_pending_events()
         tenant_ids = waiting + sorted(due - set(waiting))

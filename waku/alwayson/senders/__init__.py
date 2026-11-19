@@ -1,8 +1,9 @@
 """One sender per channel. A sender delivers one outbox row and returns, or
 raises SendFailed. Only the dispatcher calls a sender (spec 023, decision 5).
 
-Telegram and Slack are one HTTPS request each through the standard library.
-GitHub is one `gh issue comment`.
+Telegram and Slack are one HTTP request each through the standard library.
+GitHub is one `gh issue comment`. On hosted Waku the Slack request goes to
+the platform, which holds the workspace's token (senders/slack.py).
 """
 
 from __future__ import annotations
@@ -62,6 +63,12 @@ def configured(settings) -> dict[str, Callable[[Message], None]]:
     senders: dict[str, Callable[[Message], None]] = {"github": github.make()}
     if settings.telegram_token:
         senders["telegram"] = telegram.make(settings.telegram_token)
-    if bot_token := os.getenv("SLACK_BOT_TOKEN", ""):
+    base_url = os.getenv("WAKU_PLATFORM_BASE_URL", "")
+    platform_token = os.getenv("WAKU_PLATFORM_TOKEN", "")
+    if os.getenv("WAKU_HOSTED", "") == "1" and base_url and platform_token:
+        # Hosted Waku: the platform holds the workspace's Slack token and
+        # posts for this container (senders/slack.py, make_hosted).
+        senders["slack"] = slack.make_hosted(base_url, platform_token)
+    elif bot_token := os.getenv("SLACK_BOT_TOKEN", ""):
         senders["slack"] = slack.make(bot_token)
     return senders

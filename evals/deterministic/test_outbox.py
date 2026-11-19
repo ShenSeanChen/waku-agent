@@ -407,6 +407,102 @@ def test_retry_when_slack_answers_200_with_an_error():
     assert "xoxb-test" not in str(failed.value)
 
 
+# --- hosted Waku: the platform holds the Slack token (spec 026 C3) ---------
+
+PLATFORM = "http://10.88.0.1:8788"
+
+
+def test_once_the_hosted_slack_sender_posts_to_the_platform_and_holds_no_slack_token():
+    from waku.alwayson.senders import slack
+
+    calls = []
+
+    def post(url, payload, headers):
+        calls.append((url, payload, headers))
+        return {"ok": True}
+
+    send = slack.make_hosted(PLATFORM + "/", "platform-token", post=post)
+    send(_message("slack", {"channel": "C1", "thread_ts": "1700.0001"}, "hello Ana"))
+    send(_message("slack", {"channel": "C1"}, "hello channel"))
+
+    assert calls == [
+        ("http://10.88.0.1:8788/slack/send",
+         {"channel": "C1", "text": "hello Ana", "thread_ts": "1700.0001"},
+         {"Authorization": "Bearer platform-token"}),
+        ("http://10.88.0.1:8788/slack/send",
+         {"channel": "C1", "text": "hello channel"},
+         {"Authorization": "Bearer platform-token"}),
+    ]
+
+
+def test_once_the_hosted_slack_sender_splits_a_long_message():
+    from waku.alwayson.senders import slack
+
+    texts = []
+    slack.make_hosted(PLATFORM, "platform-token", post=lambda url, payload, headers: (
+        texts.append(payload["text"]) or {"ok": True}))(
+            _message("slack", {"channel": "C1"}, "a" * 9000))
+
+    assert [len(t) for t in texts] == [4000, 4000, 1000]
+
+
+@pytest.mark.parametrize("answer, expected", [
+    ({"ok": False, "error": "not_installed"}, "not_installed"),
+    ({"ok": False, "error": "channel_not_found"}, "channel_not_found"),
+    ({"ok": False}, "no reason"),
+    ({}, "no reason"),
+    ({"type": "error", "error": {"type": "authentication_error"}}, "no reason"),
+])
+def test_retry_when_the_platform_does_not_say_ok(answer, expected):
+    from waku.alwayson.senders import SendFailed, slack
+
+    with pytest.raises(SendFailed) as failed:
+        slack.make_hosted(PLATFORM, "platform-token", post=lambda *a: answer)(
+            _message("slack", {"channel": "C1"}))
+    assert expected in str(failed.value)
+    assert "platform-token" not in str(failed.value)
+
+
+def test_a_hosted_container_sends_slack_through_the_platform(monkeypatch, tmp_path):
+    """WAKU_HOSTED=1 with the platform's address and token picks the hosted
+    sender, and a SLACK_BOT_TOKEN in the same environment is not used."""
+    from waku.alwayson import senders
+    from waku.alwayson.senders import slack
+    from waku.config import Settings
+
+    made = []
+    monkeypatch.setattr(slack, "make_hosted", lambda base, token: made.append(
+        ("hosted", base, token)) or "hosted sender")
+    monkeypatch.setattr(slack, "make", lambda token: made.append(
+        ("own app", token)) or "own sender")
+
+    def configured(**env):
+        for name in ("WAKU_HOSTED", "WAKU_PLATFORM_BASE_URL", "WAKU_PLATFORM_TOKEN",
+                     "SLACK_BOT_TOKEN"):
+            monkeypatch.delenv(name, raising=False)
+        for name, value in env.items():
+            monkeypatch.setenv(name, value)
+        made.clear()
+        settings = Settings(home=tmp_path, telegram_token="")
+        return senders.configured(settings).get("slack"), list(made)
+
+    hosted = {"WAKU_HOSTED": "1", "WAKU_PLATFORM_BASE_URL": PLATFORM,
+              "WAKU_PLATFORM_TOKEN": "platform-token"}
+    assert configured(**hosted) == ("hosted sender", [("hosted", PLATFORM, "platform-token")])
+    assert configured(**hosted, SLACK_BOT_TOKEN="xoxb-own") == (
+        "hosted sender", [("hosted", PLATFORM, "platform-token")])
+    # On a person's own machine nothing changes: the bot token, or no sender.
+    assert configured(SLACK_BOT_TOKEN="xoxb-own") == ("own sender", [("own app", "xoxb-own")])
+    assert configured(SLACK_BOT_TOKEN="xoxb-own", WAKU_PLATFORM_BASE_URL=PLATFORM,
+                      WAKU_PLATFORM_TOKEN="platform-token") == (
+        "own sender", [("own app", "xoxb-own")])
+    assert configured() == (None, [])
+    # A hosted container on a deployment with no free tier has no platform
+    # address, so it has no hosted sender.
+    assert configured(WAKU_HOSTED="1") == (None, [])
+    assert configured(WAKU_HOSTED="1", WAKU_PLATFORM_BASE_URL=PLATFORM) == (None, [])
+
+
 class FakeGh:
     """Stands in for the `gh` CLI: it lists the issue's comments and records
     every comment it is asked to post."""

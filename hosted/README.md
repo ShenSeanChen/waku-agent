@@ -40,8 +40,8 @@ which carries them. Neither license grants any right in them.
 |---|---|
 | `core/` | pure logic: tenant ids, route policy, quota, idle, provisioning, request validation |
 | `ports/` | the four replaceable seams, as Protocols and nothing else. The implementations live beside the service that owns each one |
-| `gateway/` | the front door: login, sessions, routing by host, `control.db`, the idle loop, and the scheduler that wakes a stopped tenant for an event or a timer |
-| `proxy/` | the metering proxy in front of the model API, and `ledger.db` |
+| `gateway/` | the front door: login, sessions, routing by host, `control.db`, the idle loop, the scheduler that wakes a stopped tenant for an event or a timer, and the public Slack app's install, events and send relay |
+| `proxy/` | the metering proxy in front of the model API, `ledger.db`, and the two routes a container reaches the platform through: treg and outgoing Slack |
 | `spawner/` | the one process that talks to Docker |
 | `image/` | the tenant and services Dockerfiles, their allowlist ignore files, and the seccomp profile every container runs under |
 | `templates/` | the hosted `SOUL.md` and the gateway's own pages |
@@ -337,8 +337,8 @@ Memory changes nothing.
 ## The chat API other surfaces call
 
 `POST https://agent.waku.one/v1/chat` sends one message to a person's own Waku
-Agent (spec 004). The waku.one Waku Agent tab calls it, and Slack will. It is
-called server to server:
+Agent (spec 004). The waku.one Waku Agent tab calls it. It is called server to
+server:
 
 ```bash
 curl -N https://agent.waku.one/v1/chat \
@@ -481,6 +481,113 @@ opens `/memories/<id>` in a new tab as before.
 
 The framing origin is read from `document.referrer`, so the waku.one page must
 not send `Referrer-Policy: no-referrer`; without a referrer nothing is posted.
+
+## Slack: the public Waku app
+
+One Slack app serves every person on the deployment (spec 026, group C). Ana
+signs in at `https://agent.waku.one/setup`, presses "Add to Slack" and
+approves in her workspace. From then on "@Waku remind the channel on Friday
+at 09:00" in a channel reaches her agent, and the agent answers in the
+thread, including while her container is stopped.
+
+This is the hosted setup. A person who runs waku themselves creates their own
+Slack app with Socket Mode instead; see
+[integrations](../docs/integrations.md#slack-two-setups).
+
+```
+Slack --POST /v1/triggers/slack--> gateway --> tenant_events --> scheduler --> container
+container --POST /slack/send--> proxy --gateway.sock--> gateway --chat.postMessage--> Slack
+```
+
+| Route | On | What it does |
+|---|---|---|
+| `GET /setup` | the apex | shows three steps and which are done: Sign in, Add to Slack, Mention @Waku |
+| `GET /slack/install` | the apex | sends a signed-in person to Slack's approval page, with a `state` bound to their tenant that works once, for 10 minutes |
+| `GET /slack/oauth/callback` | the apex | checks the `state` and the browser's own session, exchanges Slack's code for the workspace's bot token, and stores it |
+| `POST /v1/triggers/slack` | the apex | takes every workspace's events. It checks Slack's signature over the raw body, refuses a timestamp more than 5 minutes from now, and stores a mention as one row in `tenant_events` under Slack's event id |
+| `POST /slack/send` | the proxy, on the tenant network | takes a container's outgoing message with the container's platform token, and has the gateway post it. A tenant may send 30 a minute; one more answers 429, and the container tries it again after 10 seconds and then a minute |
+
+A bad signature answers 403 and writes nothing. A workspace no tenant
+connected answers 200 and writes nothing. A stored mention asks the scheduler
+for a tick at once, and the tick is repeated every 2 seconds, at most 10
+times, until the container has the event.
+
+**The bot token never enters a container.** The gateway stores each
+workspace's token in `control.db`, encrypted with AES-256-GCM under
+`WAKU_SLACK_TOKEN_KEY`. The key is in `config/gateway.env` and nowhere else,
+and `backup.sh` copies `control.db` and not `config/`, so a backup holds no
+token that works. A container's message names a channel and a text. The
+proxy finds the tenant from the platform token, and the gateway posts with
+that tenant's token, which Slack accepts only in that tenant's workspace.
+
+### Turning it on
+
+Create the Slack app once at <https://api.slack.com/apps>, from scratch, in
+the workspace that will own it. In the app's settings:
+
+| Page | Field | Value |
+|---|---|---|
+| OAuth & Permissions | Redirect URLs | `https://agent.waku.one/slack/oauth/callback` |
+| OAuth & Permissions | Bot Token Scopes | `app_mentions:read`, `chat:write` |
+| Event Subscriptions | Request URL | `https://agent.waku.one/v1/triggers/slack` |
+| Event Subscriptions | Subscribe to bot events | `app_mention`, `app_uninstalled` |
+| Manage Distribution | Activate Public Distribution | on, so another workspace can add the app |
+
+Leave Socket Mode off. Slack checks the Request URL when you save it, so the
+gateway has to be running with the four values below first.
+
+Copy three values from the app's Basic Information page into
+`/srv/waku/config/gateway.env`, as root:
+
+```
+WAKU_SLACK_CLIENT_ID=<Client ID>
+WAKU_SLACK_CLIENT_SECRET=<Client Secret>
+WAKU_SLACK_SIGNING_SECRET=<Signing Secret>
+```
+
+`install.sh` wrote the fourth line, `WAKU_SLACK_TOKEN_KEY`, with a key it
+generated on the VM. A VM installed before spec 026 has no such line, because
+`install.sh` and `upgrade.sh` keep an existing `gateway.env`. Add it once:
+
+```bash
+sudo bash -c 'printf "WAKU_SLACK_TOKEN_KEY=%s\n" \
+  "$(od -An -N32 -tx1 /dev/urandom | tr -d " \n")" >> /srv/waku/config/gateway.env'
+```
+
+Never replace that key: the tokens already stored would stop opening, and
+each person would have to add the app again. Then start the gateway on the
+new file. A plain `restart` keeps the old environment, so recreate it:
+
+```bash
+sudo docker compose --env-file /srv/waku/config/install.env \
+  -f /srv/waku/src/hosted/deploy/compose.yaml --project-name waku \
+  up -d --force-recreate gateway
+```
+
+The gateway's log then says `Slack: on`. With a value missing it says `Slack:
+off` and names the missing names, the gateway serves everything else, and
+`/slack/install`, `/slack/oauth/callback` and `/v1/triggers/slack` answer 503
+with the same names.
+
+### Limits
+
+- **One workspace has one tenant, and one tenant has one workspace.** A
+  workspace stays with the person who connected it first, and everyone who
+  mentions the agent there uses that person's agent. A second install by the
+  same person replaces their workspace.
+- **Every channel the bot is invited to is heard.** The hosted app has no
+  channel allowlist. A mention by a person from another workspace, in a
+  shared channel, is dropped.
+- **Replies need the free tier.** `POST /slack/send` is a route on the
+  metering proxy, and a container knows the proxy's address only on a
+  deployment installed with `--free-model`.
+- **A restore onto a new VM needs `WAKU_SLACK_TOKEN_KEY` carried over by
+  hand**, because no backup holds it. Without it each person is asked to
+  reconnect ([Restoring](#restoring)).
+- **Slack reviews a public app** before more than a handful of workspaces
+  can add it.
+- **None of this has run against Slack.** The evals use a fake Slack on
+  loopback.
 
 ## The free tier
 
@@ -850,11 +957,12 @@ run. A browser cannot call either route: the gateway refuses `POST
 container answers them only when it was started with `WAKU_HOSTED=1`, which
 the spawner sets on a tenant container and not on an inspect container.
 
-Three limits as of this change. Nothing writes a row into `tenant_events`
-yet: chat, the embed and Slack arrive in later groups of spec 026. A hosted
-container has no sender, so a run that a timer starts answers in its
-conversation's history and sends nothing. And a wakeup is stored only at an
-idle stop: a container stopped by an eviction at the cap, by `upgrade.sh
+Three limits as of this change. Only a Slack mention writes a row into
+`tenant_events` ([Slack](#slack-the-public-waku-app)): chat and the embed
+arrive in group B of spec 026. A hosted container sends to Slack and nowhere
+else, so a run that a timer starts in a conversation that is not a Slack
+thread answers in that conversation's history and sends nothing. And a wakeup
+is stored only at an idle stop: a container stopped by an eviction at the cap, by `upgrade.sh
 --now` or by a VM reboot keeps the wakeup stored at its last idle stop, so a
 timer set after that fires when the tenant next opens the dashboard.
 
@@ -972,6 +1080,13 @@ row that was just written sits in `state.db-wal` until SQLite moves it into
 `state.db`, and a file copy of `state.db` alone would miss it. The staged file
 is a whole database, so `restore.sh` copies it back as a file.
 
+**One thing is left out on purpose: `WAKU_SLACK_TOKEN_KEY`.** `control.db` is
+backed up and holds each workspace's Slack token encrypted. The key that opens
+them is a line in `/srv/waku/config/gateway.env`, and `config/` is never backed
+up, so a copy of the repository holds no Slack token that works. Keep a copy
+of that one line somewhere other than the VM and the repository. `backup.sh
+--all` prints a line saying so every night.
+
 `backup.sh` and `restore.sh` share one `flock` on the staging directory, so a
 backup and a restore never run at once. List what is in the repository with
 restic's own environment, which is exactly what `config/backup.env` holds:
@@ -990,6 +1105,15 @@ tenant container, stop the gateway and the proxy, replace `control.db` and
 `ledger.db`, start both services, then restore every tenant one at a time. It
 checks the control snapshot before it stops anything, so a repository that is
 empty or unreachable costs a refusal and no downtime.
+
+**After a restore onto another VM, Slack needs its key.** The restored
+`control.db` holds Slack tokens that open only with the old VM's
+`WAKU_SLACK_TOKEN_KEY`. Copy that line into the new VM's
+`/srv/waku/config/gateway.env` and recreate the gateway, and every workspace
+stays connected. Without it the gateway still starts, logs how many tokens it
+cannot open, and shows each affected person "Reconnect Slack" on `/setup`;
+adding the app again stores a new token. `restore.sh --all` prints a line
+saying so.
 
 Two refusals you may meet, and what each one means:
 
@@ -1087,8 +1211,11 @@ What you cannot get back this way: the archives of tenants deleted in the last
 ```
 /srv/waku/
   src/        this checkout. install.sh, the Compose file and the scripts
-  config/     one env file per service, plus backup.env. Root-only, mode 0600
-  control/    control.db: tenants, sessions, tokens. Owned by uid 10002
+  config/     one env file per service, plus backup.env. Root-only, mode 0600.
+              gateway.env holds the Slack app's secrets and the key that
+              encrypts Slack tokens in control.db
+  control/    control.db: tenants, sessions, tokens, waiting events and each
+              tenant's Slack workspace. Owned by uid 10002
   ledger/     ledger.db: the spend ledger. Owned by uid 10003
   tenants/    one directory per tenant, home and env. Owned by uid 10001
   staging/    the handoff area backup.sh and restore.sh share

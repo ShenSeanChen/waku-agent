@@ -149,7 +149,7 @@ gateway outside it keeps running, and the two talk over HTTP.
 
 ```mermaid
 flowchart LR
-  SRC["An event for a tenant<br/>(chat, Slack: later groups)"] -->|insert only| TE[("tenant_events<br/>control.db")]
+  SRC["A Slack mention<br/>POST /v1/triggers/slack<br/>(chat: a later group)"] -->|"verify, insert,<br/>tick now"| TE[("tenant_events<br/>control.db")]
   TW[("tenant_wakeups<br/>control.db")]
   subgraph GW["Gateway, hosted/, always running"]
     TE --> S["Scheduler<br/>every 30 s"]
@@ -164,6 +164,8 @@ flowchart LR
   IL -->|"GET /api/alwayson/next"| CT
   IL -->|"earliest timer"| TW
   IL -->|"stop, unless it<br/>reports work"| CT
+  W -->|"POST /slack/send<br/>through the proxy"| RL["Slack relay<br/>holds each workspace's token"]
+  RL -->|chat.postMessage| SLK["Slack"]
 ```
 
 - **`POST /api/events`** stores each event the gateway hands over as one
@@ -176,6 +178,13 @@ flowchart LR
   above zero, and starts it again at the timer's time.
 - **Both routes answer 404 without `WAKU_HOSTED=1`**, so a dashboard on a
   person's own machine has neither, and starts no worker.
+- **Slack on hosted waku is one public app** (spec 026 C,
+  `hosted/gateway/slack.py`). Slack posts every workspace's mentions to the
+  gateway, which checks the signature and stores each one for the tenant its
+  team id maps to. The container's Slack sender has no token: with
+  `WAKU_HOSTED=1` it posts the reply to the platform
+  (`waku/alwayson/senders/slack.py`), and the gateway sends it with the token
+  it keeps encrypted in `control.db`.
 
 A run never sends. Its reply becomes one row in the `outbox` table, and the
 dispatcher sends the row to the Telegram chat, the Slack thread or the GitHub

@@ -396,3 +396,114 @@ def test_a_sleeping_tenants_event_reaches_the_stock_dashboards_inbox(
                      '{"text": "remind the channel on Friday at 09:00"}', "pending")]
     assert pending == []
     assert report == {"next_timer_at": None, "events": 1, "outbox": 0, "running": 0}
+
+
+# --- a kick: a tick now, for an event that just arrived (spec 026 C2) ------
+
+def _kicked_rig(rig, sleep) -> Scheduler:
+    return Scheduler(store=rig.store, launcher=rig.launcher,
+                     containers=ContainerApi(rig.session), now=rig.clock, sleep=sleep)
+
+
+def test_a_kick_hands_a_new_event_over_without_waiting_for_the_loop(tmp_path, container):
+    slept: list[float] = []
+
+    async def sleep(seconds):
+        slept.append(seconds)
+
+    async def run():
+        async with Rig(tmp_path, port=container.port) as rig:
+            scheduler = _kicked_rig(rig, sleep)
+            ana = rig.tenant()
+            rig.add(ana.id)
+            scheduler.kick()
+            await scheduler.settled()
+            return rig.store.pending_events(ana.id)
+
+    assert asyncio.run(run()) == []
+    assert container.handed == [[EVENT]]
+    assert slept == []      # handed on the first try, so nothing was waited for
+
+
+def test_a_kick_tries_again_every_two_seconds_until_the_container_takes_the_event(
+        tmp_path, container):
+    """The container a kick starts is not ready when the first tick ends.
+    Here it refuses the first two hand-overs and takes the third."""
+    container.events_status = 503
+    slept: list[float] = []
+
+    async def sleep(seconds):
+        slept.append(seconds)
+        if len(slept) == 2:
+            container.events_status = 200
+
+    async def run():
+        async with Rig(tmp_path, port=container.port) as rig:
+            scheduler = _kicked_rig(rig, sleep)
+            ana = rig.tenant()
+            rig.add(ana.id)
+            scheduler.kick()
+            await scheduler.settled()
+            return rig, ana, rig.store.pending_events(ana.id)
+
+    rig, ana, pending = asyncio.run(run())
+    assert slept == [2.0, 2.0]
+    assert pending == []
+    assert len(container.handed) == 3
+    assert [r["tenant_id"] for r in ops(rig.spawner, "start")] == [ana.id]
+
+
+def test_a_kick_gives_up_after_ten_tries_and_leaves_the_event_for_the_loop(tmp_path,
+                                                                           container):
+    container.events_status = 503
+    slept: list[float] = []
+
+    async def sleep(seconds):
+        slept.append(seconds)
+
+    async def run():
+        async with Rig(tmp_path, port=container.port) as rig:
+            scheduler = _kicked_rig(rig, sleep)
+            ana = rig.tenant()
+            rig.add(ana.id)
+            scheduler.kick()
+            await scheduler.settled()
+            return [event.external_id for event in rig.store.pending_events(ana.id)]
+
+    assert asyncio.run(run()) == ["Ev0001"]
+    assert len(container.handed) == 10
+    assert slept == [2.0] * 10
+
+
+def test_a_second_kick_joins_the_one_under_way_and_no_two_ticks_overlap(tmp_path,
+                                                                        container):
+    """Two mentions arrive together. One kick runs, the second event gets its
+    own full count of tries, and the tenant's container is started once."""
+    container.events_status = 503
+    slept: list[float] = []
+    rigs: list[Rig] = []
+
+    async def sleep(seconds):
+        slept.append(seconds)
+        if len(slept) == 4:
+            # A second event, and its kick, in the middle of the first's tries.
+            rig = rigs[0]
+            rig.add(rig.ana.id, external_id="Ev0002")
+            rig.kicker.kick()
+
+    async def run():
+        async with Rig(tmp_path, port=container.port) as rig:
+            rigs.append(rig)
+            rig.kicker = _kicked_rig(rig, sleep)
+            rig.ana = rig.tenant()
+            rig.add(rig.ana.id)
+            rig.kicker.kick()
+            rig.kicker.kick()
+            await rig.kicker.settled()
+            return rig
+
+    rig = asyncio.run(run())
+    # Four tries, then the count starts again: ten more.
+    assert len(slept) == 14
+    assert len(container.handed) == 14
+    assert len(ops(rig.spawner, "start")) == 1

@@ -352,4 +352,12 @@ waku_log "removing archives older than 30 days"
 find "$WAKU_ROOT/archive" -maxdepth 2 -type f -name '*.tar.zst' -mtime +30 -delete
 
 [ -z "$failures" ] || waku_die "these tenants were not backed up:$failures"
+# ONE LINE, EVERY NIGHT, ABOUT THE ONE THING THIS BACKUP LEAVES OUT ON PURPOSE.
+# control.db is in the snapshot and holds each workspace's Slack token sealed
+# with a key; the key is a line in config/gateway.env, and config/ is never
+# backed up, so a stolen snapshot holds no token that works (spec 026 C). The
+# cost is that a restore onto another VM cannot open those tokens unless the
+# operator carried the key over, and the only time to copy it is while this VM
+# still exists.
+waku_log "not in this backup: WAKU_SLACK_TOKEN_KEY, the line in $WAKU_ROOT/config/gateway.env that opens the Slack tokens in control.db. Keep a copy of that line somewhere else, or a restore onto another VM disconnects every Slack workspace."
 waku_log "backup finished"

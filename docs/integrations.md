@@ -102,6 +102,35 @@ needs a server Waku runs, and is not built here.
 Each Telegram chat, Slack thread and GitHub issue is its own conversation.
 Two messages sent to one conversation within 3 seconds become one run.
 
+### Slack: two setups
+
+Which one you use depends on where your agent runs.
+
+| | You run waku yourself | Hosted waku, at agent.waku.one |
+|---|---|---|
+| The Slack app | your own, created at api.slack.com for your workspace | one public Waku app for everyone |
+| How you connect | copy two tokens into `.env` | sign in, press "Add to Slack", approve |
+| How a mention arrives | Socket Mode: your machine calls Slack, so it needs no public address | Slack posts to `https://agent.waku.one/v1/triggers/slack` |
+| Where the bot token is | `SLACK_BOT_TOKEN` in your `.env` | encrypted on the server. Your agent's container never has it |
+| Who is heard | a person in your workspace, in a channel in `SLACK_ALLOWED_CHANNELS` | a person in your workspace, in any channel the bot was invited to |
+| While your agent is not running | nothing hears a mention: `waku serve` has to be running | the mention is stored and starts your agent |
+
+**Your own app.** Create a Slack app with Socket Mode on, the bot scopes
+`app_mentions:read` and `chat:write`, and the bot event `app_mention`. Install
+it to your workspace, `pip install 'waku-agent[slack]'`, and set
+`SLACK_APP_TOKEN` (starts `xapp-`), `SLACK_BOT_TOKEN` (starts `xoxb-`) and
+`SLACK_ALLOWED_CHANNELS`, a comma-separated list of channel ids, in `.env`.
+Then run `waku serve`. An empty `SLACK_ALLOWED_CHANNELS` hears nobody.
+
+**The public app.** Open `https://agent.waku.one/setup`, sign in, press "Add
+to Slack" and choose your workspace. Invite `@Waku` to a channel and mention
+it. Nothing is installed and no token is copied. An operator who runs hosted
+waku for other people sets the app up once:
+[hosted/README.md](../hosted/README.md#slack-the-public-waku-app).
+
+Both setups write the same row for a mention and answer in the same thread,
+so a conversation reads the same in either.
+
 The reply goes back where the message came from: the Telegram chat, the Slack
 thread, or a comment on the GitHub issue through `gh issue comment`. Slack
 needs the bot scope `chat:write` for that. A reply to a place other people
