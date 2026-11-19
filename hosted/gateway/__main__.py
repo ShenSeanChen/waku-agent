@@ -46,6 +46,7 @@ from hosted.core import idle, quota
 from hosted.gateway import admin, internal
 from hosted.gateway.app import Gateway
 from hosted.gateway.config import config_from_env
+from hosted.gateway.connect import Connect, VendorApi
 from hosted.gateway.container_api import ContainerApi
 from hosted.gateway.forward import ContainerForwarder
 from hosted.gateway.identity import JwksVerifier
@@ -109,11 +110,22 @@ async def main() -> None:
             slack.check_tokens()
         else:
             _LOG.warning("Slack: off, its routes answer 503: %s", config.slack_problem)
+        # Spec 029: sign-in to Notion and Linear. It needs the key that seals
+        # a token and nothing a person copies from a vendor's settings page:
+        # the gateway registers itself with each vendor at the first sign-in.
+        connectors = None
+        if config.connect_key is not None:
+            connectors = Connect(key=config.connect_key, apex_host=config.apex_host,
+                                 store=store, api=VendorApi(session))
+            _LOG.info("connectors: on (%s)", ", ".join(connectors.vendors))
+        else:
+            _LOG.warning("connectors: off, their routes answer 503: %s",
+                         config.connect_problem)
         gateway = Gateway(config=config, store=store, launcher=launcher,
                           verifier=verifier, forward=forwarder, turns=turns,
                           plans=plans,
                           memory_keys=WakuMemoryKeys(session, config.supabase_audience),
-                          slack=slack)
+                          slack=slack, connect=connectors)
         # Adopt what is already running before the first request arrives, so
         # no container is orphaned and every idle timer starts fresh.
         try:

@@ -23,7 +23,10 @@ owns the classes they build.
 from __future__ import annotations
 
 import asyncio
+import base64
+import dataclasses
 import gzip
+import hashlib
 import json
 import socket
 import threading
@@ -38,9 +41,11 @@ from aiohttp import web
 from cryptography.hazmat.primitives.asymmetric import ec
 
 from hosted.core import idle, quota
+from hosted.core.connectors import VENDORS, Vendor
 from hosted.core.tenant import address_for_project
 from hosted.gateway.app import Gateway
 from hosted.gateway.config import GatewayConfig, SlackSettings
+from hosted.gateway.connect import Connect, VendorApi
 from hosted.gateway.forward import ContainerForwarder
 from hosted.gateway.identity import JwksVerifier
 from hosted.gateway.launch import Launcher
@@ -335,6 +340,9 @@ class Harness:
         self.slack_settings: SlackSettings | None = None
         self._fake_slack: FakeSlack | None = None
         self.woken = 0
+        # Spec 029: set by use_connect.
+        self.connect: Connect | None = None
+        self._fake_vendors: dict[str, FakeVendor] = {}
         # What a wake also calls, when a test wires a real Scheduler's kick.
         self.on_wake = lambda: None
         self.config = GatewayConfig(
@@ -357,7 +365,27 @@ class Harness:
                        launcher=self.launcher, verifier=self.verifier,
                        forward=self.forwarder, turns=self.turns,
                        plans=self.plans, memory_keys=self.memory_keys,
-                       slack=self.slack, now=self.clock)
+                       slack=self.slack, connect=self.connect, now=self.clock)
+
+    def use_connect(self, **fakes: FakeVendor) -> None:
+        """Turn the connector routes on, with each named vendor's address
+        moved to a fake on loopback: use_connect(notion=fake). Before
+        start(), for use_real_forwarding's reason."""
+        assert self._runner is None, "call use_connect before start()"
+        self._fake_vendors = dict(fakes)
+
+    def vendors(self) -> dict[str, Vendor]:
+        """The real list, with each faked vendor's address on loopback."""
+        return {name: dataclasses.replace(VENDORS[name], url=fake.url + "/mcp")
+                for name, fake in self._fake_vendors.items()}
+
+    def _wire_connect(self) -> None:
+        if self.session is None:
+            self.session = aiohttp.ClientSession(auto_decompress=False)
+        self.connect = Connect(
+            key=bytes.fromhex(SLACK_TOKEN_KEY), apex_host=APEX, store=self.store,
+            api=VendorApi(self.session), vendors=self.vendors(), now=self.clock)
+        self.gateway = self._build_gateway()
 
     def use_slack(self, fake: FakeSlack, settings: SlackSettings | None = None) -> None:
         """Turn the Slack routes on, in front of a fake Slack. Before start(),
@@ -428,6 +456,8 @@ class Harness:
             self._wire_real_forwarding()
         if self._fake_slack is not None:
             self._wire_slack()
+        if self._fake_vendors:
+            self._wire_connect()
         self._runner = web.AppRunner(self.gateway.build())
         await self._runner.setup()
         site = web.TCPSite(self._runner, "127.0.0.1", 0)
@@ -780,6 +810,177 @@ class FakeSlack:
                 self.send_header("Content-Length", str(len(body)))
                 self.end_headers()
                 self.wfile.write(body)
+
+        self._server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.port = self._server.server_address[1]
+        threading.Thread(target=self._server.serve_forever, daemon=True).start()
+
+    def stop(self) -> None:
+        if self._server is not None:
+            self._server.shutdown()
+            self._server.server_close()
+            self._server = None
+
+
+# --- spec 029: a fake vendor ----------------------------------------------
+
+# Not a real token's shape, so no secret scanner reads one as a credential.
+VENDOR_CLIENT_SECRET = "fake-vendor-client-secret"
+
+
+def pkce_challenge(verifier: str) -> str:
+    digest = hashlib.sha256(verifier.encode("ascii")).digest()
+    return base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
+
+
+class FakeVendor:
+    """A vendor's sign-in server on loopback: the two discovery documents,
+    dynamic client registration and the token endpoint, with PKCE checked.
+
+    The sign-in page itself is a person's browser, so a test plays it: it
+    reads the address /connect/start redirects to and calls `approve` with
+    that address's query, which returns the code the vendor would send back.
+
+    It records every request, and it compresses an answer for a client that
+    takes gzip, as a real vendor does."""
+
+    def __init__(self, title: str = "vendor") -> None:
+        self.title = title
+        self.requests: list[dict] = []
+        # client id -> the registration this server issued.
+        self.clients: dict[str, dict] = {}
+        # code -> the sign-in a person approved.
+        self.codes: dict[str, dict] = {}
+        # refresh token -> how many times it was issued, so each is distinct.
+        self.refresh_tokens: set[str] = set()
+        self.access_tokens: set[str] = set()
+        self.issued = 0
+        self.expires_in: int | None = 3600
+        # What discovery says, changed by a test that moves an address away.
+        self.metadata_changes: dict = {}
+        self.resource_changes: dict = {}
+        # A token answer a test sets in place of the real one.
+        self.token_answer: dict | None = None
+        self.register_answer: dict | None = None
+        self.send_refresh_token = True
+        self._server: ThreadingHTTPServer | None = None
+        self.port = 0
+
+    @property
+    def url(self) -> str:
+        return f"http://127.0.0.1:{self.port}"
+
+    def calls(self, path: str) -> list[dict]:
+        return [request for request in self.requests if request["path"] == path]
+
+    def approve(self, query: dict) -> str:
+        """The person presses Allow. `query` is what /connect/start sent the
+        browser to the sign-in page with."""
+        code = f"code-{len(self.codes) + 1}"
+        self.codes[code] = dict(query)
+        return code
+
+    def _tokens(self) -> dict:
+        self.issued += 1
+        access = f"{self.title}-access-{self.issued}"
+        self.access_tokens.add(access)
+        answer = {"access_token": access, "token_type": "Bearer"}
+        if self.expires_in is not None:
+            answer["expires_in"] = self.expires_in
+        if self.send_refresh_token:
+            refresh = f"{self.title}-refresh-{self.issued}"
+            self.refresh_tokens.add(refresh)
+            answer["refresh_token"] = refresh
+        return answer
+
+    def _token(self, sent: dict) -> tuple[int, dict]:
+        if self.token_answer is not None:
+            return 400 if "error" in self.token_answer else 200, self.token_answer
+        client = self.clients.get(sent.get("client_id", ""))
+        if client is None or sent.get("client_secret") != client["client_secret"]:
+            return 401, {"error": "invalid_client"}
+        if sent.get("grant_type") == "authorization_code":
+            approved = self.codes.pop(sent.get("code", ""), None)
+            if (approved is None or approved.get("client_id") != sent["client_id"]
+                    or approved.get("redirect_uri") != sent.get("redirect_uri")
+                    or approved.get("code_challenge")
+                    != pkce_challenge(sent.get("code_verifier", ""))):
+                return 400, {"error": "invalid_grant"}
+            return 200, self._tokens()
+        if sent.get("grant_type") == "refresh_token":
+            # Rotating: a refresh token works once.
+            if sent.get("refresh_token") not in self.refresh_tokens:
+                return 400, {"error": "invalid_grant"}
+            self.refresh_tokens.discard(sent["refresh_token"])
+            return 200, self._tokens()
+        return 400, {"error": "unsupported_grant_type"}
+
+    def _get(self, path: str) -> tuple[int, dict]:
+        if path == "/.well-known/oauth-protected-resource":
+            return 200, {"resource": self.url, "authorization_servers": [self.url],
+                         **self.resource_changes}
+        if path == "/.well-known/oauth-authorization-server":
+            return 200, {
+                "issuer": self.url, "authorization_endpoint": f"{self.url}/authorize",
+                "token_endpoint": f"{self.url}/token",
+                "registration_endpoint": f"{self.url}/register",
+                "code_challenge_methods_supported": ["S256"], **self.metadata_changes}
+        return 404, {"error": "not_found"}
+
+    def _post(self, path: str, sent: dict, headers) -> tuple[int, dict]:
+        if path == "/register":
+            if self.register_answer is not None:
+                return 400, self.register_answer
+            client_id = f"client-{len(self.clients) + 1}"
+            self.clients[client_id] = {**sent, "client_id": client_id,
+                                       "client_secret": VENDOR_CLIENT_SECRET}
+            return 201, self.clients[client_id]
+        if path == "/token":
+            return self._token(sent)
+        return self.handle_other(path, sent, headers)
+
+    def handle_other(self, path: str, sent: dict, headers) -> tuple[int, dict]:
+        return 404, {"error": "not_found"}
+
+    def start(self) -> None:
+        recorder = self
+
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, *args):
+                """Silence BaseHTTPRequestHandler's stderr log line."""
+
+            def _send(self, status: int, answer: dict) -> None:
+                body = json.dumps(answer).encode("utf-8")
+                zipped = "gzip" in self.headers.get("Accept-Encoding", "")
+                if zipped:
+                    body = gzip.compress(body)
+                self.send_response(status)
+                self.send_header("Content-Type", "application/json")
+                if zipped:
+                    self.send_header("Content-Encoding", "gzip")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def do_GET(self):
+                recorder.requests.append({"method": "GET", "path": self.path, "body": {},
+                                          "authorization": ""})
+                self._send(*recorder._get(self.path))
+
+            def do_POST(self):
+                length = int(self.headers.get("Content-Length", 0))
+                raw = self.rfile.read(length).decode("utf-8")
+                if "json" in self.headers.get("Content-Type", ""):
+                    sent = json.loads(raw or "{}")
+                else:
+                    sent = {k: v[0] for k, v in urllib.parse.parse_qs(raw).items()}
+                recorder.requests.append({
+                    "method": "POST", "path": self.path, "body": sent,
+                    "authorization": self.headers.get("Authorization", ""),
+                    "headers": {k.lower(): v for k, v in self.headers.items()}})
+                answer = recorder._post(self.path, sent, self.headers)
+                if answer is not None:
+                    self._send(*answer)
 
         self._server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         self.port = self._server.server_address[1]

@@ -39,7 +39,7 @@ from aiohttp import web
 
 from hosted import log
 from hosted.core import policy, quota
-from hosted.gateway import answers, embed, guards, sessions, setup_page, slack
+from hosted.gateway import answers, connect, embed, guards, sessions, setup_page, slack
 from hosted.gateway.config import GatewayConfig
 from hosted.gateway.identity import NotSignedIn
 from hosted.gateway.launch import (
@@ -244,8 +244,13 @@ class Gateway:
                  plans: dict[str, quota.Plan] | None = None,
                  memory_keys: MemoryKeys | None = None,
                  slack: slack.SlackRoutes | None = None,
+                 connect: connect.Connect | None = None,
                  now: Callable[[], float] = time.time) -> None:
         self._config = config
+        # Spec 029: None when config/gateway.env has no key to seal a
+        # connector's tokens with. Every connector route then answers 503
+        # with config.connect_problem.
+        self._connect = connect
         # Spec 026 C: None when config/gateway.env lacks one of the four Slack
         # values. Every Slack route then answers 503 with config.slack_problem.
         self._slack = slack
@@ -419,6 +424,12 @@ class Gateway:
             return self._slack_install(request)
         if request.method == "GET" and path == slack.CALLBACK_PATH:
             return await self._slack_callback(request)
+        if request.method == "GET" and path == connect.START_PATH:
+            return await self._connect_start(request)
+        if request.method == "GET" and path == connect.CALLBACK_PATH:
+            return await self._connect_callback(request)
+        if request.method == "POST" and path == connect.DISCONNECT_PATH:
+            return await self._connect_disconnect(request)
         if request.method == "GET" and path == "/":
             return answers.redirect("/login")
         return answers.refusal(request, 404, answers.NOT_FOUND)
@@ -433,7 +444,61 @@ class Gateway:
             outcome=request.query.get("slack", ""),
             login_url="/login",
             dashboard_url=(f"https://{tenant.id}.{self._config.apex_host}/"
-                           if tenant else ""))
+                           if tenant else ""),
+            connectors=[(vendor.name, vendor.title, state)
+                        for vendor, state in self._connector_states(tenant)],
+            connect_outcome=request.query.get("connect", ""),
+            connect_server=request.query.get("server", ""))
+
+    # --- "Connect Notion" (spec 029 A2) ---------------------------------
+
+    def _connector_states(self, tenant: Tenant | None) -> list:
+        """(vendor, state) for the setup page; nothing when connectors are off."""
+        if self._connect is None:
+            return []
+        states = self._connect.states(tenant.id if tenant else None)
+        return [(vendor, states[name]) for name, vendor in self._connect.vendors.items()]
+
+    async def _connect_start(self, request: web.Request) -> web.Response:
+        """GET /connect/start?server=<name>: the "Connect" link. A GET, for
+        /slack/install's reason: it is a link a person follows, it changes
+        nothing but the state it issues, and the vendor's own page asks the
+        person before anything is granted."""
+        if self._connect is None:
+            return connect.not_configured(self._config.connect_problem)
+        tenant = self._apex_tenant(request)
+        if tenant is None:
+            return answers.redirect(f"https://{self._config.apex_host}/login")
+        return await self._connect.start(tenant.id, request.query.get("server", ""))
+
+    async def _connect_callback(self, request: web.Request) -> web.Response:
+        """GET /connect/callback: the vendor sends the browser back here. The
+        session cookie is SameSite=Lax, so it rides this top-level navigation,
+        and the callback checks it against the state."""
+        if self._connect is None:
+            return connect.not_configured(self._config.connect_problem)
+        tenant = self._apex_tenant(request)
+        return await self._connect.callback(request, tenant.id if tenant else None)
+
+    async def _connect_disconnect(self, request: web.Request) -> web.Response:
+        """POST /connect/disconnect {"server": "<name>"}: forget this person's
+        sign-in to one vendor. A POST behind the gateway's Origin and JSON
+        checks, because it changes something: a link on another site must not
+        be able to disconnect a person's Notion."""
+        if self._connect is None:
+            return connect.not_configured(self._config.connect_problem)
+        tenant = self._apex_tenant(request)
+        if tenant is None:
+            return answers.json_error(401, answers.NO_SESSION)
+        try:
+            payload = await request.json()
+        except ValueError:
+            payload = None
+        server = payload.get("server") if isinstance(payload, dict) else None
+        if self._connect.vendor(server) is None:
+            return answers.json_error(400, connect.DISCONNECT_BODY)
+        return answers.json_ok({"ok": True,
+                                "disconnected": self._connect.disconnect(tenant.id, server)})
 
     # --- "Add to Slack" (spec 026 C1) -----------------------------------
 

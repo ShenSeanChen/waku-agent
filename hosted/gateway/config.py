@@ -165,6 +165,30 @@ def slack_from(env: Mapping[str, str]) -> tuple[SlackSettings | None, str]:
         token_key=bytes.fromhex(values["WAKU_SLACK_TOKEN_KEY"])), ""
 
 
+def connect_key_from(env: Mapping[str, str]) -> tuple[bytes | None, str]:
+    """(the key that seals a connector's tokens, "") or (None, why not).
+
+    Spec 029 seals each person's Notion or Linear tokens with the key that
+    already seals a workspace's Slack token, WAKU_SLACK_TOKEN_KEY. It is one
+    key because it has one job, sealing what control.db must not hold in the
+    clear, and because install.sh already writes it: connectors need no new
+    line in config/gateway.env. Each sealed value is bound to its own row, so
+    a Slack token does not open as a connector's. Connectors need this one
+    value and none of the other three Slack values. It never raises, for
+    slack_from's reason."""
+    value = (env.get("WAKU_SLACK_TOKEN_KEY") or "").strip()
+    if not value:
+        return None, "config/gateway.env is missing WAKU_SLACK_TOKEN_KEY"
+    try:
+        SecretBox.from_hex(value)
+    except ValueError as exc:
+        return None, f"WAKU_SLACK_TOKEN_KEY in config/gateway.env is not usable: {exc}"
+    return bytes.fromhex(value), ""
+
+
+# What a GatewayConfig built by hand says about connectors: off, no key.
+CONNECT_NOT_CONFIGURED = "config/gateway.env is missing WAKU_SLACK_TOKEN_KEY"
+
 # What a GatewayConfig built by hand says about Slack: off, all four missing.
 SLACK_NOT_CONFIGURED = f"config/gateway.env is missing {', '.join(SLACK_ENV_NAMES)}"
 
@@ -193,6 +217,10 @@ class GatewayConfig:
     # `slack_problem` then says why in words an operator can act on.
     slack: SlackSettings | None = None
     slack_problem: str = SLACK_NOT_CONFIGURED
+    # Spec 029. `connect_key` is None when the connector routes are off, and
+    # `connect_problem` then says why.
+    connect_key: bytes | None = field(default=None, repr=False)
+    connect_problem: str = CONNECT_NOT_CONFIGURED
 
 
 def config_from_env(env: Mapping[str, str]) -> GatewayConfig:
@@ -203,6 +231,7 @@ def config_from_env(env: Mapping[str, str]) -> GatewayConfig:
             f"config/gateway.env is missing {missing}. install.sh writes this "
             "file; every name in config.REQUIRED_ENV_NAMES must be in it.")
     slack, slack_problem = slack_from(env)
+    connect_key, connect_problem = connect_key_from(env)
     return GatewayConfig(
         apex_host=env["WAKU_APEX_HOST"].strip().lower(),
         bind_host=env["WAKU_GATEWAY_BIND"],
@@ -222,4 +251,6 @@ def config_from_env(env: Mapping[str, str]) -> GatewayConfig:
         idle_seconds=idle_seconds_from(env.get("WAKU_IDLE_MINUTES")),
         slack=slack,
         slack_problem=slack_problem,
+        connect_key=connect_key,
+        connect_problem=connect_problem,
     )
