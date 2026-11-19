@@ -101,6 +101,11 @@ def _connect_tool(args: dict, address: Address | None) -> str:
     and so does every call that changes whether a connector's writes ask."""
     from waku.tools import connectors
 
+    if connectors.hosted():
+        # On hosted Waku the tool connects nothing: it answers with the link
+        # to the platform's sign-in page, or says what is not built
+        # (connectors.hosted_connect). Nobody there could say yes.
+        return ALLOW
     if str(args.get("writes") or "").strip():
         return ASK
     try:
@@ -108,6 +113,14 @@ def _connect_tool(args: dict, address: Address | None) -> str:
     except connectors.Refused:
         return ALLOW
     return ASK
+
+
+def _disconnect_tool(args: dict, address: Address | None) -> str:
+    """It asks, except on hosted Waku, where the tool removes nothing and
+    says where a connector is disconnected."""
+    from waku.tools import connectors
+
+    return ALLOW if connectors.hosted() else ASK
 
 
 # The tools whose mode nothing in the environment changes (spec 025, decision
@@ -138,7 +151,7 @@ MODES: dict[str, str | Callable[[dict, Address | None], str]] = {
     "create_note": ALLOW,
     "send_message": _send_message,
     "connect_tool": _connect_tool,
-    "disconnect_tool": ASK,
+    "disconnect_tool": _disconnect_tool,
     "connector_status": ALLOW,   # it reads this machine's own files
 }
 
@@ -184,6 +197,9 @@ def mode(tool: str, args: dict, address: Address | None = None,
 
       4. The owner let this connector write without asking: the tool runs.
       5. Waku Memory: the tool runs. Saving a memory is the agent's own job.
+         A connector the hosted platform calls for this container (spec 029):
+         the tool runs here, and the platform refuses the ones that write,
+         because nobody on hosted Waku can be asked yet.
       6. A server on the starter list: a tool matching the entry's `writes`
          asks, and every other tool runs. The list decides, not the server.
       7. Any other server: a tool the server marks read-only (`readOnlyHint`)
@@ -209,6 +225,8 @@ def mode(tool: str, args: dict, address: Address | None = None,
     if connector is not None and rule_for(connector.name) in allowed:
         return ALLOW
     if kind == "memory":
+        return ALLOW
+    if kind == "platform":
         return ALLOW
     if kind == "starter":
         writes = any(fnmatchcase(own_name or tool, pattern) for pattern in connector.writes)

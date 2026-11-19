@@ -169,6 +169,38 @@ class Launcher:
                          "start provisions again", record.id, exc)
         return (record, True)
 
+    def _connectors(self, tenant_id: str) -> dict:
+        """The connectors this tenant signed in to, as the keyword the
+        spawner takes, or nothing when there are none (spec 029 B2). One that
+        needs a new sign-in stays listed: its tools then say so."""
+        names = tuple(row.server for row in self._store.connections(tenant_id))
+        return {"connectors": names} if names else {}
+
+    async def reprovision(self, tenant_id: str) -> bool:
+        """Write a running tenant's list of connectors again, after the
+        person signed in to one or disconnected one (spec 029 B2). True when
+        the spawner was asked.
+
+        The container is not restarted. Its agent reads mcp.json before each
+        run and builds itself again when the list changed. A stopped tenant
+        needs nothing: every start provisions. A failure is logged and left,
+        for the same reason: the next start writes the list.
+        """
+        tenant = self._store.tenant_by_id(tenant_id)
+        if tenant is None or tenant_id not in self._addresses:
+            return False
+        try:
+            # connectors is sent even when empty here: the spawner's default
+            # is the empty list, which removes the last entry.
+            await self._spawner.provision(
+                tenant.id, tenant.project_id,
+                **(self._connectors(tenant.id) or {"connectors": ()}))
+        except (SpawnerError, OSError) as exc:
+            _LOG.warning("tenant=%s: the connector list was not written (%s); the "
+                         "next start writes it", tenant_id, exc)
+            return False
+        return True
+
     async def start(self, tenant: Tenant) -> RunningContainer:
         """Issue a fresh token and ask the spawner for a container.
 
@@ -256,7 +288,8 @@ class Launcher:
             running = await asyncio.wait_for(
                 self._spawner.start(tenant.id, tenant.project_id,
                                     tenant.timezone, token,
-                                    self._store.memory_key(tenant.id)),
+                                    self._store.memory_key(tenant.id),
+                                    **self._connectors(tenant.id)),
                 idle.START_TIMEOUT_SECONDS)
         except SpawnerBusy as exc:
             self._forget_running(tenant.id)
