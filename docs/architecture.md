@@ -93,6 +93,12 @@ a memory. The turn card says how many it kept.
 
 ### MEMORY.md vs state.db
 
+The local stores also match literal CJK keywords of two or more characters
+inside continuous text, so a query for `上海` finds `我现在住在上海`.
+FTS matches rank before contains-only matches, and English keeps whole-word
+matching. This fallback scans local rows for CJK queries; it adds no index,
+dependency or database migration and still applies the caller's result limit.
+
 Some assistants (e.g. Hermes) keep long-term memory as a single `MEMORY.md`
 markdown file. Waku keeps the *queryable* source in `state.db` (the `facts` and
 `episodes` tables, keyword-searchable via FTS5) **and** regenerates a readable
