@@ -528,7 +528,7 @@ the workspace that will own it. In the app's settings:
 | Page | Field | Value |
 |---|---|---|
 | OAuth & Permissions | Redirect URLs | `https://agent.waku.one/slack/oauth/callback` |
-| OAuth & Permissions | Bot Token Scopes | `app_mentions:read`, `chat:write` |
+| OAuth & Permissions | Bot Token Scopes | `app_mentions:read`, `chat:write`, `channels:history`, `groups:history`, `users:read` |
 | Event Subscriptions | Request URL | `https://agent.waku.one/v1/triggers/slack` |
 | Event Subscriptions | Subscribe to bot events | `app_mention`, `app_uninstalled` |
 | Manage Distribution | Activate Public Distribution | on, so another workspace can add the app |
@@ -575,6 +575,13 @@ with the same names.
   workspace stays with the person who connected it first, and everyone who
   mentions the agent there uses that person's agent. A second install by the
   same person replaces their workspace.
+- **A mention in a thread is read with the thread above it, and with
+  nothing else.** The gateway asks Slack for that one thread, at most 30
+  messages, and for the names in it (`slack_thread.py`). It reads no other
+  thread and no channel history, and it has 2 seconds: past that the mention
+  goes to the agent alone. A workspace that added the app before the three
+  reading scopes were asked for gets its mentions without the thread until
+  its person adds the app again.
 - **Every channel the bot is invited to is heard.** The hosted app has no
   channel allowlist. A mention by a person from another workspace, in a
   shared channel, is dropped.
