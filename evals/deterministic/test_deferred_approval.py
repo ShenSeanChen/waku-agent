@@ -21,7 +21,7 @@ from evals.helpers import ScriptedClient, make_waku, response, text_block, tool_
 from waku.alwayson import approvals, events, outbox, runs
 from waku.alwayson.dispatcher import Dispatcher
 from waku.alwayson.senders import github as github_sender
-from waku.alwayson.worker import OWNER_READS, AgentRun, Worker
+from waku.alwayson.worker import CHAT_STYLE, OWNER_READS, AgentRun, Worker
 from waku.db import connect
 
 THURSDAY = datetime(2026, 11, 19, 9, 0, 0, tzinfo=UTC)
@@ -667,7 +667,7 @@ def test_yes_inside_a_sentence_is_an_ordinary_message(home, conn):
     assert recorder.executed == []
     assert runs.get(conn, run_id).status == "parked"
     assert recorder.runs == [
-        ("telegram:42", f"yes but change the wording first\n\n{OWNER_READS}")]
+        ("telegram:42", f"yes but change the wording first\n\n{CHAT_STYLE}\n\n{OWNER_READS}")]
 
 
 def test_expire_after_72_hours_a_yes_runs_nothing(home, conn):

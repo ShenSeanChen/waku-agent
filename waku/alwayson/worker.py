@@ -281,9 +281,28 @@ def shared_place(batch: list[Event]) -> bool:
     return address is not None and not approvals.is_private(address)
 
 
+# What a run reads when its reply goes to a chat. On 2026-11-19 the hosted
+# agent answered a two-line question in Slack with a page of headings and
+# lists, and its person wrote back "you talk too much man". It also said a
+# reminder was set "for 21:26" to a person whose clock said 1:26 pm.
+CHAT_STYLE = ("[This is a chat. Answer the way a person texts a colleague: one to three "
+              "short sentences, in plain words. No headings, and no list unless you are "
+              "asked for one. If the full answer is long, give the short one and offer "
+              "the rest. Say a time the way a person says it, with am or pm.]")
+CHATS = frozenset({"slack", "telegram"})
+
+
+def in_chat(batch: list[Event]) -> bool:
+    """Whether a run's reply goes to a chat, where people write short."""
+    address = reply_address(batch)
+    return address is not None and address[0] in CHATS
+
+
 def render(batch: list[Event]) -> str:
     """The one user message a run starts with: each event's text, oldest first."""
     text = "\n\n".join(_text(e) for e in batch).strip()
+    if in_chat(batch):
+        text = f"{text}\n\n{CHAT_STYLE}"
     if to_owner(batch):
         return f"{text}\n\n{OWNER_READS}"
     return f"{text}\n\n{SHARED_PLACE}" if shared_place(batch) else text

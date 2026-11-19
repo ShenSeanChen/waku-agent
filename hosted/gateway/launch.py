@@ -145,6 +145,18 @@ class Launcher:
         found = self._store.tenant_by_sub(sub)
         if found is not None:
             self.require_active(found)
+            # No page lets a person choose a zone yet, so `UTC` here means
+            # "none was recorded": a tenant first made by a route that sends
+            # no zone. On 2026-11-19 such a tenant's agent told its person a
+            # reminder was "set for 21:26" at 1:26 pm. A sign-in from a
+            # browser with a real zone fills it in, once. When /account
+            # exists, a zone chosen there is not UTC-by-default and is never
+            # touched here.
+            zone = tenant_core.normalise_timezone(timezone)
+            if found.timezone == "UTC" and zone != "UTC":
+                self._store.set_timezone(found.id, zone)
+                _LOG.info("tenant=%s zone recorded: %s", found.id, zone)
+                found = self._store.tenant_by_sub(sub) or found
             return (found, False)
         record = self._store.create_tenant(
             sub=sub, email=email, timezone=tenant_core.normalise_timezone(timezone))
