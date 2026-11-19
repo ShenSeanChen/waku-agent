@@ -171,18 +171,23 @@ def test_chat_connect_treg_runs_in_the_dashboard(stubbed):
     assert kind == "done" and "stub: treg connected" in ev["reply"]
 
 
-def test_the_connections_page_and_first_run_offer_treg():
-    """The page reads `mcp_connections` from /api/data, and its Connect button
-    sends `/connect <key>` through the chat. The first-run screen offers treg
-    next to Waku Memory."""
-    import inspect
+def test_the_connections_page_and_first_run_offer_treg(tmp_path, monkeypatch):
+    """The page's treg card comes from `treg.card`, and its Connect button
+    sends `/connect <key>` through the chat (spec 030 composes the card in
+    waku/ops/connections_page.py). The first-run screen offers treg next to
+    Waku Memory."""
     from pathlib import Path
 
-    from waku.ops import dashboard
+    from waku.ops import connections_page, dashboard
 
-    assert '"mcp_connections": [treg.card(home)]' in inspect.getsource(dashboard.collect)
+    monkeypatch.setenv("WAKU_HOME", str(tmp_path))
+    monkeypatch.delenv("TREG_API_KEY", raising=False)
+    card = connections_page.treg_card(treg.card(tmp_path))
+    assert card["action"] == {"kind": "chat", "label": "Connect", "target": "treg"}
+    cards = [c for group in dashboard.connections_page_data()["groups"] for c in group["cards"]]
+    assert [c["id"] for c in cards].count("treg") == 1
     static = Path(dashboard.__file__).parent / "static"
     views = (static / "js" / "views.js").read_text(encoding="utf-8")
-    assert "d.mcp_connections" in views and "`/connect ${key}`" in views
+    assert "connectInChat('${t}')" in views and "`/connect ${key}`" in views
     setup = (static / "js" / "setup.js").read_text(encoding="utf-8")
     assert "/connect waku-memory" in setup and "/connect treg" in setup

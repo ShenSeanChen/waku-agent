@@ -123,7 +123,12 @@ def test_a_person_who_connected_slack_sees_every_step_done_and_their_workspace(h
     # "Ana & Co".
     assert "Ana &amp; Co" in page and "Ana & Co" not in page
     assert "Slack is connected." in page
-    assert links(page) == ["/slack/install", f"https://{tenant}.{APEX}/"]
+    # Two ways back to Slack's approval page: the same workspace approved
+    # again comes first and is the main button, a different one is the quiet one.
+    assert links(page) == ["/slack/install", "/slack/install", f"https://{tenant}.{APEX}/"]
+    assert re.findall(r'<a data-slot="button"( class="secondary")? href="/slack/install">([^<]+)</a>',
+                      page) == [("", "Update permissions"),
+                                (' class="secondary"', "Connect a different workspace")]
     assert SLACK_BOT_TOKEN not in page
 
 

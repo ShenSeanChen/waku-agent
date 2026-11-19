@@ -136,6 +136,11 @@ BACKGROUND_AWARE = {
     "observe.js": {
         "loadObservability": r'background\s*\?\s*\{headers:\s*BG\}\s*:\s*undefined',
     },
+    # spec 030: on hosted Waku the page asks the gateway about Slack after a
+    # refresh, and a refresh is a timer's poll most of the time
+    "hosted.js": {
+        "loadHostedSlack": r'fetch\("/hosted/slack",\s*background\s*\?\s*\{headers:\s*BG\}\s*:\s*undefined\)',
+    },
 }
 
 def _read(name: str) -> str:
@@ -271,6 +276,7 @@ NETWORK_CALLERS = {
     ("judgment.js", "runJudgmentArena"): "user",
     ("main.js", "refresh"): "background",
     ("observe.js", "loadObservability"): "background",
+    ("hosted.js", "loadHostedSlack"): "background",   # spec 030: the Slack card's facts, from the gateway
     ("observe.js", "obsJudge"): "user",   # spec 015: the "Judge this turn" click
     ("main.js", "stopMic"): "user",
     ("memory.js", "saveFact"): "user",
@@ -279,9 +285,9 @@ NETWORK_CALLERS = {
     ("memory.js", "saveSkill"): "user",
     ("memorychoice.js", "chooseMemory"): "user",   # a click on the first-run Waku Memory card (spec 020)
     ("waiting.js", "cancelWaiting"): "user",   # the Cancel button on a row of the Waiting card
-    ("connectors.js", "addConnector"): "user",      # the Add button of the Connectors card (spec 025)
-    ("connectors.js", "removeConnector"): "user",   # the Remove button on a row of that card
-    ("connectors.js", "setConnectorWrites"): "user",   # the switch on a row of that card
+    ("connectors.js", "addConnector"): "user",      # Connect on a starter card, and Add by address (spec 025)
+    ("connectors.js", "removeConnector"): "user",   # Remove in a server's Manage dialog
+    ("connectors.js", "setConnectorWrites"): "user",   # the writes switch in that dialog
     ("models.js", "saveSettings"): "user",
     ("models.js", "loadModelList"): "user",
     ("models.js", "switchModel"): "user",

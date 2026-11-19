@@ -65,7 +65,7 @@ It listens to whichever of these three you configure in `.env`:
 | Source | Set | What is heard |
 |---|---|---|
 | Telegram | `TELEGRAM_BOT_TOKEN`, `TELEGRAM_ALLOWED_USER` | every message from an allowed user |
-| Slack | `SLACK_APP_TOKEN`, `SLACK_BOT_TOKEN`, `SLACK_ALLOWED_CHANNELS`, and `pip install 'waku-agent[slack]'`. The app comes from a manifest: see "Slack from a manifest" below | an @mention in an allowed channel of your workspace |
+| Slack | `SLACK_APP_TOKEN`, `SLACK_BOT_TOKEN`, `SLACK_ALLOWED_CHANNELS`, and `pip install 'waku-agent[slack]'`. The Slack card on the dashboard's Connections page sets the same three values. The app comes from a manifest: see "Slack from a manifest" below | an @mention in an allowed channel of your workspace |
 | GitHub | `WAKU_GITHUB_REPOS`, and `gh auth login` once | an open issue with the label `waku`; with `WAKU_GITHUB_LOGIN`, a comment that mentions that login, from an owner, member or collaborator |
 
 Slack uses Socket Mode and GitHub is polled through the `gh` CLI every 60
@@ -184,8 +184,8 @@ A server counts as a starter one by its address, not by its name. To let a
 whole connector write without a question, write "let Linear write without
 asking": the agent asks you once more, and after your yes the rule is stored
 in `state.db` and survives a restart. "Make Linear ask before it writes" takes
-it back, and so does removing the connector. The "Connectors" card has the
-same switch on each row. `WAKU_APPROVE_ASK` and `WAKU_APPROVE_ALLOW` still win
+it back, and so does removing the connector. On the dashboard, the card's Manage button on
+the Connections page has the same switch. `WAKU_APPROVE_ASK` and `WAKU_APPROVE_ALLOW` still win
 over all of this. Connecting and disconnecting a server always wait for your
 yes, whatever those two lists say.
 
@@ -349,7 +349,7 @@ same `/connect treg` in the chat.
 A hosted Waku Agent on waku.one needs none of this: its container reaches treg
 through the platform's relay, and the calls are charged to its credits
 ([hosted/README.md](../hosted/README.md)). To use your own treg account there
-instead, click Configure on the treg card and paste an org-scoped treg key:
+instead, click Manage on the treg card and paste an org-scoped treg key:
 calls then go straight to `https://treg.to/mcp/` and treg bills your account,
 not your credits. Clear the key to go back to the relay.
 
@@ -377,7 +377,7 @@ pip install -e '.[mcp]'
 ```
 
 One command adds any Model Context Protocol server, and its tools appear to
-the agent, namespaced `<server>_<tool>` (and in the dashboard's Tools ▸ MCP tab):
+the agent, namespaced `<server>_<tool>` (and on the dashboard's Tools page):
 
 ```bash
 waku mcp add linear                                  # a name on the starter list: prints the sign-in link and opens your browser
@@ -398,9 +398,11 @@ request. Waku runs no marketplace.
 There are two more ways to add a remote server, and both take a starter name
 or an address, never a command:
 
-- **The dashboard.** Tools ▸ MCP has a "Connectors" card with one button for
-  each starter entry, an address field, the sign-in link while one waits, and
-  a Remove button on each server.
+- **The dashboard.** The Connections page has a card for each starter entry
+  under "Apps Waku can use", with a Connect button, and shows the sign-in link
+  while one waits. "Add a server by address", under "For developers" at the foot of the page,
+  takes any other address. A connected server's card has a Manage button, which
+  opens its writes switch and Remove.
 - **Chat, under `waku serve`.** Write "connect Linear" or "connect
   https://mcp.example.com/mcp".
   The agent asks the owner first (see "Always-on: waku serve" above), and after the yes it

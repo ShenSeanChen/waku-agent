@@ -561,6 +561,11 @@ def collect() -> dict:
         # MCP servers that sign in on their own page rather than through an
         # .env field (spec 007 E). Files only: no browser, no network.
         "mcp_connections": [treg.card(home)],
+        # Whether this dashboard runs in a hosted container (WAKU_HOSTED=1).
+        # The page then asks the gateway about Slack (spec 030).
+        "hosted": handover.enabled(),
+        # The Connections page itself: cards in groups (spec 030).
+        "connections_page": connections_page_data(),
         "tools": tools_info(events),
         # The outside memory, for the Memory page's "which memory is which".
         "waku_memory": waku_memory_info(settings),
@@ -588,7 +593,8 @@ def waiting_data() -> dict:
 
 
 def connectors_data() -> dict:
-    """The "Connectors" card (spec 025): every MCP server Waku would connect,
+    """The servers behind the Connections page's cards (spec 025, moved there
+    by spec 030): every MCP server Waku would connect,
     with its account and its tool count, and the sign-in link while one
     waits. Reads files and this process's own state; opens nothing."""
     from waku.tools import connectors
@@ -612,21 +618,46 @@ def connectors_data() -> dict:
         # How many of its tools ask first, once an agent has listed them.
         own = [t for t in tools if (getattr(t, "mcp", None) or ("",))[0] == row["name"]]
         row["asks"] = connectors.asking(home, row["name"], own) if own else None
+        # Waku Memory and treg each have a card of their own on Connections
+        # (spec 030), so their server is not drawn a second time.
+        row["own_card"] = kind == connectors.MEMORY or row["name"] == treg.NAME
+        row["memory"] = kind == connectors.MEMORY
         rows.append(row)
     waiting = connectors.sign_in_waiting(home)
-    added = {str(spec.get("url", "")).rstrip("/") for spec in mcp_servers(home)}
+    # A server counts as a starter connector by its address, never by its name.
+    at = {str(spec.get("url", "")).rstrip("/"): str(spec.get("name", ""))
+          for spec in reversed(mcp_servers(home)) if spec.get("url")}
     return {
-        # The starter list as buttons; one that is connected is marked.
+        # The starter list; `server` names the entry of mcp.json at the
+        # connector's address, and is empty until somebody adds it.
         "starter": [{"name": entry["name"], "title": entry["title"], "docs": entry["docs"],
-                     "added": entry["url"].rstrip("/") in added}
+                     "added": entry["url"].rstrip("/") in at,
+                     "server": at.get(entry["url"].rstrip("/"), "")}
                     for entry in connectors.starter().values()],
         # A hosted container's servers are set when the person signs in, and
         # the hosted gateway blocks the three routes (hosted/core/policy.py).
-        "available": settings.provider != "waku-platform",
+        # The container is hosted whatever provider its person picked.
+        "available": settings.provider != "waku-platform" and not handover.enabled(),
         "servers": rows,
         "sign_in": ({"name": waiting.name, "link": waiting.link}
                     if waiting is not None and waiting.link else None),
     }
+
+
+def connections_page_data() -> dict:
+    """The Connections page (spec 030): every card, in its group, with its
+    state and its one button. `waku/ops/connections_page.py` composes it from
+    the registry, treg's card, the servers a person connected and Waku
+    Memory. Reads files and this process's own state; opens nothing."""
+    from waku.ops import connections_page
+
+    settings = load_settings()
+    return connections_page.page(
+        [asdict(view) for view in list_connections()],
+        [treg.card(settings.home)],
+        connectors_data(),
+        waku_memory_info(settings),
+        hosted=handover.enabled())
 
 
 def connectors_add(payload: dict) -> dict:
@@ -825,7 +856,7 @@ def mcp_servers(home: Path) -> list[dict]:
 
 
 def _mcp_row(home: Path, spec: dict, live, tools: list) -> dict:
-    """One server as the MCP tab lists it. `connected` and `tools` are None
+    """One server as the Connections page lists it. `connected` and `tools` are None
     until a chat turn has built the agent: the page never opens a connection
     of its own."""
     from waku.tools.mcp_cli import _auth_file, _identity
@@ -980,15 +1011,27 @@ def tools_info(events: list[dict] | None = None) -> dict:
             from waku.tools import experimental as experimental_tools
 
             tools += experimental_tools.make_tools(settings)
+    # Where each ability comes from (spec 030): None for a tool that is
+    # built in, or the card on the Connections page that controls it.
+    from waku.ops import connections_page
+
+    page = connections_page_data()
+    servers = connectors_data()
+    origin = connections_page.tool_sources([t.name for t in tools], page, servers)
     for t in tools:
         catalog.append({"name": t.name, "description": t.description,
-                        "source": _tool_source(t.name, mcp["servers"])})
+                        "source": _tool_source(t.name, mcp["servers"]),
+                        "from": origin[t.name]})
     catalog.sort(key=lambda c: (c["source"], c["name"]))
     from waku.tools.experimental import PLANNED
 
     mcp["rows"] = [_mcp_row(settings.home, spec, live, tools) for spec in specs]
     return {"catalog": catalog, "mcp": mcp, "hooks": hooks_info(settings.home, events),
             "apple_on": settings.apple_tools,
+            # Starter connections nobody connected, listed once on the page.
+            "not_connected": connections_page.not_connected(page),
+            # What is connected right now, with logos: the page's first row.
+            "connected": connections_page.connected(page),
             "planned": PLANNED}   # whiteboard boxes not wired in yet (coming soon)
 
 
@@ -1431,7 +1474,7 @@ class Handler(BaseHTTPRequestHandler):
             # Spec 024: what waits in this home, the lists `waku waiting` prints.
             self._send(json.dumps(waiting_data()).encode(), "application/json")
         elif self.path == "/api/connectors":
-            # Spec 025: the "Connectors" card's servers and waiting sign-in.
+            # Spec 025: the connected servers and the waiting sign-in.
             self._send(json.dumps(connectors_data()).encode(), "application/json")
         elif self.path == "/api/judgment-arena":
             from waku.ops import judgment_arena, judgment_cases  # noqa: PLC0415
