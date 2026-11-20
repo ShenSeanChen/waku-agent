@@ -30,8 +30,10 @@ SPEC_KEYS = {
     # Optional on both.
     "provision": {"op", "tenant_id", "project_id", "connectors"},
     # memory_key is spec 004 A3: optional, so it is in _KEYS and not _REQUIRED.
+    # memory_space is spec 032 A4: the team space a team home saves into.
+    # Optional, and only a team home's start carries it.
     "start": {"op", "tenant_id", "project_id", "timezone", "token", "memory_key",
-              "connectors"},
+              "connectors", "memory_space"},
     "stop": {"op", "tenant_id"},
     "list": {"op"},
     # Added in group F (F3b). `list` answers "may the gateway forward to this
@@ -98,6 +100,7 @@ _VALUES = {
     "task": "backup",
     "memory_key": "mem_sk_" + "M" * 43,
     "connectors": ("notion",),
+    "memory_space": "0b0f3c1e-8a0e-4c58-9d55-0d2b5b1f7a11",
 }
 
 

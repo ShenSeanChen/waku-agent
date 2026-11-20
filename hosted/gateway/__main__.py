@@ -93,8 +93,12 @@ async def main() -> None:
         # The Launcher asks a container what work it has left before an idle
         # stop, and the scheduler hands a tenant's waiting events over.
         containers = ContainerApi(session)
+        # Spec 032: what seals and opens a team's Waku Memory key. It needs
+        # the key that seals a Slack token; without one no team home exists.
+        home_keys = (HomeKeys(store, SecretBox(config.connect_key))
+                     if config.connect_key is not None else None)
         launcher = Launcher(store=store, spawner=spawner, fleet=fleet,
-                            containers=containers)
+                            containers=containers, home_keys=home_keys)
         forwarder = ContainerForwarder(
             launcher=launcher, turns=turns, plans=plans,
             proxy_socket=config.proxy_socket, session=session)
@@ -142,10 +146,10 @@ async def main() -> None:
         # waku.one's calls carry, and the key that seals what control.db must
         # not hold in the clear: a team's Waku Memory key is one such value.
         homes = None
-        if config.platform_secret and config.connect_key is not None:
+        if config.platform_secret and home_keys is not None:
             homes = TeamHomeRoutes(
                 secret=config.platform_secret, apex_host=config.apex_host, store=store,
-                keys=HomeKeys(store, SecretBox(config.connect_key)), now=time.time)
+                keys=home_keys, now=time.time)
             _LOG.info("team homes: on. waku.one calls https://%s%s",
                       config.apex_host, TEAM_HOMES_PATH)
         else:
@@ -170,7 +174,8 @@ async def main() -> None:
             config.gateway_socket, store,
             slack_send=slack.relay.send if slack is not None else None,
             slack_history=slack.history.read if slack is not None else None,
-            connect=connector_relay)
+            connect=connector_relay,
+            memory_key=home_keys.memory_key if home_keys is not None else None)
         admin_server = await admin.serve_admin(config.admin_socket, gateway)
         runner = build_runner(gateway.build())
         await runner.setup()

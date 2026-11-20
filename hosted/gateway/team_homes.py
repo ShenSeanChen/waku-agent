@@ -12,7 +12,8 @@ key. Three things are here:
             in for a sign-in at /slack/install, because the owner's browser
             arrives from waku.one with no session here.
   keys      HomeKeys: the agent's key, sealed into control.db with the
-            gateway's SecretBox.
+            gateway's SecretBox and opened only to start the home's container
+            and to charge its model calls.
 
 THE CALLER IS waku.one's API, NOT A BROWSER. Every request carries
 `Authorization: Bearer <WAKU_AGENT_PLATFORM_SECRET>`, the one secret the two
@@ -39,8 +40,8 @@ from aiohttp import web
 from hosted import log
 from hosted.core.tenant import is_memory_key
 from hosted.gateway import answers, sessions
-from hosted.gateway.secretbox import SecretBox
-from hosted.ports.control import ControlStore, TeamHome
+from hosted.gateway.secretbox import SecretBox, Unreadable
+from hosted.ports.control import ControlStore, TeamHome, Tenant
 
 _LOG = log.get(__name__)
 
@@ -138,6 +139,32 @@ class HomeKeys:
         """The agent's key. Raises Unreadable when the gateway's sealing key
         does not open it."""
         return self._box.open(home.key_sealed, bound_to=seal_binding(home.space_id))
+
+    def memory_key(self, tenant_id: str) -> str:
+        """The Waku Memory key this tenant's model calls are charged with: a
+        team home's own agent key, a person's own key, or "" when there is
+        none. A team home never falls back to a person's key."""
+        home = self._store.team_home_for_tenant(tenant_id)
+        if home is None:
+            tenant = self._store.tenant_by_id(tenant_id)
+            if tenant is not None and tenant.kind == "team":
+                return ""
+            return self._store.memory_key(tenant_id)
+        try:
+            return self.open(home)
+        except Unreadable:
+            _LOG.error("tenant=%s: the stored key of space=%s does not open with "
+                       "WAKU_SLACK_TOKEN_KEY", tenant_id, home.space_id)
+            return ""
+
+    def for_start(self, tenant: Tenant) -> tuple[str, str]:
+        """(Waku Memory key, space id) a team home's container starts with.
+        Raises Unreadable when the home is missing or its key does not open:
+        a team's agent is not started without its own key."""
+        home = self._store.team_home_for_tenant(tenant.id)
+        if home is None:
+            raise Unreadable("this team tenant has no home")
+        return self.open(home), home.space_id
 
 
 class HomeTickets:

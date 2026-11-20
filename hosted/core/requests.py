@@ -21,6 +21,7 @@ from hosted.core.tenant import (
     is_memory_key,
     is_project_id,
     is_proxy_token,
+    is_space_id,
     is_tenant_id,
 )
 
@@ -34,8 +35,10 @@ _KEYS: dict[str, frozenset[str]] = {
     "provision": frozenset({"op", "tenant_id", "project_id", "connectors"}),
     # memory_key is optional (spec 004): a tenant whose Waku Memory key has not
     # been minted yet still starts, without one.
+    # memory_space is optional too (spec 032 A4): the team space a team home
+    # saves into. A person's start does not carry it.
     "start": frozenset({"op", "tenant_id", "project_id", "timezone", "token", "memory_key",
-                        "connectors"}),
+                        "connectors", "memory_space"}),
     "stop": frozenset({"op", "tenant_id"}),
     "list": frozenset({"op"}),
     "tenants": frozenset({"op"}),
@@ -74,6 +77,7 @@ class SpawnerRequest:
     task: str = ""
     memory_key: str = ""
     connectors: tuple[str, ...] = ()
+    memory_space: str = ""
 
 
 def parse(payload: object) -> SpawnerRequest:
@@ -113,6 +117,12 @@ def parse(payload: object) -> SpawnerRequest:
     if "memory_key" in payload and not is_memory_key(memory_key):
         raise Invalid("memory_key is not a Waku Memory key")
 
+    memory_space = payload.get("memory_space", "")
+    if "memory_space" in payload and not is_space_id(memory_space):
+        # It becomes a line of a container's environment, so only a uuid is
+        # taken.
+        raise Invalid("memory_space is not a team space's id")
+
     connectors = payload.get("connectors", [])
     if (not isinstance(connectors, list) or len(set(map(str, connectors))) != len(connectors)
             or not all(is_connector_name(name) for name in connectors)):
@@ -126,4 +136,5 @@ def parse(payload: object) -> SpawnerRequest:
 
     return SpawnerRequest(op=op, tenant_id=tenant_id, project_id=project_id,
                           timezone=timezone, token=token, task=task,
-                          memory_key=memory_key, connectors=tuple(connectors))
+                          memory_key=memory_key, connectors=tuple(connectors),
+                          memory_space=memory_space)

@@ -5,7 +5,8 @@ access to control.db. It asks five things here, and nothing else:
 
   token       it sends a SHA-256 hash and gets back a tenant id and a status,
               and the tenant's Waku Memory key so it can charge that person's
-              credits (spec 004 D).
+              credits (spec 004 D). For a team home the key is its space's
+              agent's, so Waku Memory charges the space's payer (spec 032 A4).
   slack_send  it sends a tenant id it resolved itself, a channel and a text,
               and the gateway posts the message with that tenant's Slack
               token (spec 026 C3). It gets back `ok` or an error code. The
@@ -61,11 +62,20 @@ SlackHistory = Callable[[str, str, str, int, int, str], Awaitable[dict]]
 async def serve_token_lookup(path: Path, store: ControlStore, *,
                              slack_send: SlackSend | None = None,
                              slack_history: SlackHistory | None = None,
-                             connect: McpRelay | None = None) -> asyncio.Server:
+                             connect: McpRelay | None = None,
+                             memory_key: Callable[[str], str] | None = None,
+                             ) -> asyncio.Server:
     """`slack_send` is the relay, or None when Slack is not configured: the
     operation then answers that, and the socket is otherwise the same.
     `slack_history` is the reader and `connect` is the connectors' relay, or
-    None on the same terms."""
+    None on the same terms. `memory_key` answers the key a tenant's model
+    calls are charged with (team_homes.HomeKeys.memory_key, which knows a
+    team home from a person). Left out, every tenant is a person and the
+    key is the one in memory_key."""
+
+    def key_of(tenant_id: str) -> str:
+        return (memory_key(tenant_id) if memory_key is not None
+                else store.memory_key(tenant_id))
     async def connect_mcp(request: dict) -> dict:
         unknown = sorted(set(request) - CONNECT_MCP_FIELDS)
         if unknown:
@@ -132,8 +142,10 @@ async def serve_token_lookup(path: Path, store: ControlStore, *,
         tenant_id, status = found
         # The person's Waku Memory key (spec 004 D): the proxy charges each
         # call to their credits with it, so a charge can only land on them.
+        # A team home's is its space's agent's key (spec 032 A4): the same
+        # key its container holds, so a charge lands on the space's payer.
         return {"tenant": tenant_id, "status": status,
-                "memory_key": store.memory_key(tenant_id)}
+                "memory_key": key_of(tenant_id)}
 
     # The directory, the way admin.serve_admin does it. F1's Compose mounts
     # run/gateway/ so the deployment never needs this -- but without it the

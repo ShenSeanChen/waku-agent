@@ -31,6 +31,7 @@ from hosted.core.tenant import (
     is_memory_key,
     is_project_id,
     is_proxy_token,
+    is_space_id,
     is_tenant_id,
     tenant_dirs,
 )
@@ -299,8 +300,12 @@ def unavailable_tools_env(config: SpawnerConfig) -> list[str]:
     return [f"WAKU_UNAVAILABLE_TOOLS={','.join(TREG_UNAVAILABLE_TOOLS)}"]
 
 
+MEMORY_SPACE_ENV = "WAKU_MEMORY_SPACE"
+
+
 def tenant_container(config: SpawnerConfig, *, tenant_id: str, project_id: int,
-                     timezone: str, token: str, memory_key: str = "") -> dict:
+                     timezone: str, token: str, memory_key: str = "",
+                     memory_space: str = "") -> dict:
     """The create body for one tenant's dashboard.
 
     The four checks at the top are not belt and braces over core/requests.py:
@@ -325,6 +330,8 @@ def tenant_container(config: SpawnerConfig, *, tenant_id: str, project_id: int,
         raise ValueError("not a proxy token")
     if memory_key and not is_memory_key(memory_key):
         raise ValueError("not a Waku Memory key")
+    if memory_space and not is_space_id(memory_space):
+        raise ValueError("not a team space's id")
     dirs = tenant_dirs(config.tenant_root, tenant_id)
     address = address_for_project(project_id)
     host = _isolation(config)
@@ -367,7 +374,14 @@ def tenant_container(config: SpawnerConfig, *, tenant_id: str, project_id: int,
             # The person's own Waku Memory key (spec 004), read by mcp.json's
             # waku_memory server through auth_env. Theirs, revocable on
             # waku.one, and present only once the gateway has minted it.
+            # A team home (spec 032) gets its space's agent's key here, and
+            # never a person's.
             *([f"WAKU_MEMORY_API_KEY={memory_key}"] if memory_key else []),
+            # The team space a team home saves into (spec 032 A4). Stock
+            # waku's remember_via sends it as `space`, so a save made with
+            # the agent's key becomes a team memory every member reads. A
+            # person's container does not get it.
+            *([f"{MEMORY_SPACE_ENV}={memory_space}"] if memory_space else []),
             # treg's tools the relay refuses, so the model is told not to
             # call them (spec 009 E). Only where the relay runs.
             *unavailable_tools_env(config),

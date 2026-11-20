@@ -117,11 +117,14 @@ class FakeSpawner:
 
     async def start(self, tenant_id: str, project_id: int, timezone: str,
                     token: str, memory_key: str = "",
-                    connectors: tuple[str, ...] | None = None) -> RunningContainer:
+                    connectors: tuple[str, ...] | None = None,
+                    memory_space: str | None = None) -> RunningContainer:
         request = {"op": "start", "tenant_id": tenant_id,
                    "project_id": project_id, "timezone": timezone, "token": token}
         if memory_key:
             request["memory_key"] = memory_key
+        if memory_space is not None:
+            request["memory_space"] = memory_space
         if connectors is not None:
             request["connectors"] = list(connectors)
         self.requests.append(request)
@@ -330,8 +333,11 @@ class Harness:
         self.store = ControlDb(tmp_path / "control.db", now=self.clock)
         self.spawner = spawner
         self.fleet = idle.Fleet(self.clock, max_running=max_running)
+        # Spec 032: what opens a team home's key, with the fake sealing key.
+        self.home_keys = HomeKeys(self.store, SecretBox(bytes.fromhex(SLACK_TOKEN_KEY)))
         self.launcher = Launcher(store=self.store, spawner=spawner,
-                                 fleet=self.fleet, now=self.clock)
+                                 fleet=self.fleet, now=self.clock,
+                                 home_keys=self.home_keys)
         self.turns = quota.TurnWindow(self.clock)
         self.plans = quota.DEFAULT_PLANS
         self.verifier = JwksVerifier(
@@ -353,7 +359,6 @@ class Harness:
         self._fake_vendors: dict[str, FakeVendor] = {}
         # Spec 032: set by use_team_homes.
         self.team_homes: TeamHomeRoutes | None = None
-        self.home_keys: HomeKeys | None = None
         # What a wake also calls, when a test wires a real Scheduler's kick.
         self.on_wake = lambda: None
         self.config = GatewayConfig(
@@ -384,7 +389,6 @@ class Harness:
         and the fake sealing key (spec 032)."""
         self.config = dataclasses.replace(
             self.config, platform_secret=secret or PLATFORM_SECRET, platform_problem="")
-        self.home_keys = HomeKeys(self.store, SecretBox(bytes.fromhex(SLACK_TOKEN_KEY)))
         self.team_homes = TeamHomeRoutes(
             secret=self.config.platform_secret, apex_host=APEX, store=self.store,
             keys=self.home_keys, now=self.clock)
