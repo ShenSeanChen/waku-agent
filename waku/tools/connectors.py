@@ -741,13 +741,17 @@ def status(home: Path) -> str:
         servers = [s for s in _read(home)["servers"] if isinstance(s, dict) and s.get("name")]
     except Refused as refused:
         return f"The connector list could not be read: {refused}"
+    # In a hosted container the starter list is not what can be connected:
+    # the platform's own list is, and it is the last line of the answer.
+    offer = [hosted_offer_line(hosted_offered())] if hosted() else []
     if not servers:
-        return "No connector is added yet. A starter name connects one: " + ", ".join(starter())
+        return "\n".join(["No connector is connected yet.", *offer]) if offer else (
+            "No connector is added yet. A starter name connects one: " + ", ".join(starter()))
     waiting = sign_in_waiting(home)
     lines = []
     for spec in servers:
         name = str(spec["name"])
-        listed = starter_for(spec)
+        listed = starter_for(spec) or (starter().get(name) if platform_relayed(spec) else None)
         title = listed["title"] if listed else name
         if not needs_sign_in(home, spec):
             lines.append(f"{title} ({name}): connected.")
@@ -758,7 +762,7 @@ def status(home: Path) -> str:
         else:
             lines.append(f"{title} ({name}): not connected. It is added and nobody has "
                          "signed in. Connecting it again makes a new sign-in link.")
-    return "\n".join(lines)
+    return "\n".join(lines + offer)
 
 
 def _approved(home: Path) -> bool:
@@ -813,7 +817,86 @@ def hosted_connect(target: str, post: Callable | None = None) -> str:
     return HOSTED_UNAVAILABLE
 
 
-def make_tools(home: Path, sign_in: Callable = start_sign_in) -> list[Tool]:
+def hosted_offered(post: Callable | None = None) -> tuple[str, ...] | None:
+    """The titles of the connectors this platform offers, asked of the
+    platform, or None when it did not say.
+
+    The starter list is not asked: it is what a person's own machine can
+    connect, and it names GitHub, which hosted Waku does not offer. On
+    2026-11-19 the hosted agent read that list in connect_tool's description,
+    offered to connect GitHub, and then refused. The platform's own list is
+    in hosted/, which this file cannot import, so the answer comes over the
+    same route that makes a sign-in link: asked about no connector, the
+    platform says which ones it has."""
+    from waku.alwayson.senders import SendFailed, post_json
+
+    base = os.getenv("WAKU_PLATFORM_BASE_URL", "").rstrip("/")
+    token = os.getenv("WAKU_PLATFORM_TOKEN", "")
+    if not base or not token:
+        return None
+    try:
+        answer = (post or post_json)(base + HOSTED_LINK_PATH, {"server": ""},
+                                     {"Authorization": f"Bearer {token}"})
+    except SendFailed:
+        return None
+    names = answer.get("available")
+    if answer.get("error") != "not_listed" or not isinstance(names, list):
+        return None
+    return tuple(str(name) for name in names if isinstance(name, str) and name)
+
+
+def hosted_offer_line(offered: tuple[str, ...] | None) -> str:
+    """One sentence that says what can be connected on this server. The
+    model reads it in connector_status's answer and in connect_tool's
+    description, so it is the only place the names are put into words."""
+    if offered is None:
+        return ("Which connectors this server offers could not be read just now, so do "
+                "not offer to connect one.")
+    if not offered:
+        return "No connector can be connected on this server yet."
+    return (f"On this server {' and '.join(offered)} can be connected. No other service "
+            "can be connected here yet.")
+
+
+def hosted_descriptions(offered: tuple[str, ...] | None) -> tuple[str, str, str]:
+    """What connector_status and connect_tool tell the model in a hosted
+    container, and the words under connect_tool's one argument. They name the
+    platform's connectors and no others."""
+    example = f", e.g. {offered[0].lower()}" if offered else ""
+    return (
+        "Which services can be connected on this server, and which of them are "
+        "connected now, read at the moment of the call. " + hosted_offer_line(offered)
+        + " Use it whenever the user asks if a service is connected or can be "
+        "connected. Never answer that from the conversation. It changes nothing.",
+        "Give the user the link where they sign in to a service, so its tools can be "
+        "used. " + hosted_offer_line(offered) + " Offer to connect only a service "
+        "named here. When the user asks for any other service, do not call this tool "
+        "and do not offer it: say in one sentence that the service cannot be "
+        "connected here yet. A link works once and for a few minutes, so never "
+        "repeat a link from earlier in the conversation: call this tool again.",
+        f"The service's name{example}",
+    )
+
+
+def make_tools(home: Path, sign_in: Callable = start_sign_in,
+               offered: Callable[[], tuple[str, ...] | None] = hosted_offered) -> list[Tool]:
+    """`offered` is asked once, in a hosted container only: which connectors
+    the platform has. The three tools are the same everywhere; what
+    connector_status and connect_tool tell the model is not."""
+    tools = _tools(home, sign_in)
+    if hosted():
+        status_words, connect_words, name_words = hosted_descriptions(offered())
+        by_name = {tool.name: tool for tool in tools}
+        by_name["connector_status"].description = status_words
+        by_name["connect_tool"].description = connect_words
+        by_name["connect_tool"].input_schema = {
+            "type": "object",
+            "properties": {"name_or_url": {"type": "string", "description": name_words}},
+            "required": ["name_or_url"]}
+    return tools
+
+
+def _tools(home: Path, sign_in: Callable) -> list[Tool]:
     def connect_tool(name_or_url: str = "", writes: str = "") -> str:
         writes = (writes or "").strip().lower()
         if hosted():

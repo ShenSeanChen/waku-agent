@@ -48,7 +48,7 @@ from hosted.core.tenant import (
 )
 from hosted.ports.runtime import RunningContainer
 from hosted.spawner import template, xfsquota
-from hosted.spawner.engine import Engine
+from hosted.spawner.engine import Engine, EngineError
 
 _LOG = log.get(__name__)
 
@@ -410,8 +410,21 @@ class DockerRuntime:
             ids.append(tenant_id)
         return sorted(set(ids))
 
+    async def _tenant_image_id(self) -> str:
+        """The id the tenant image tag names now, or "" when the daemon
+        cannot say. With "" no container is called stale: a restart that
+        nobody can justify is worse than a container that waits for its idle
+        stop."""
+        try:
+            return await self._engine.image_id(self._config.tenant_image)
+        except EngineError as exc:
+            _LOG.warning("could not read the id of %s (%s); no container is "
+                         "reported stale", self._config.tenant_image, exc)
+            return ""
+
     async def list(self) -> list[RunningContainer]:
         running = []
+        current = await self._tenant_image_id()
         for entry in await self._engine.containers(
                 label=f"{template.LABEL_KIND}={template.KIND_TENANT}"):
             tenant_id = (entry.get("Labels") or {}).get(template.LABEL_TENANT, "")
@@ -444,8 +457,15 @@ class DockerRuntime:
                 _LOG.warning("tenant=%s has address %r, which no project id "
                              "derives; not listing it", tenant_id, address)
                 continue
+            # ImageID is the image the container was CREATED from. upgrade.sh
+            # rebuilds the tag under a running container, and then the two
+            # ids differ until the container is replaced.
+            created_from = entry.get("ImageID")
+            stale = bool(current and isinstance(created_from, str)
+                         and created_from and created_from != current)
             running.append(RunningContainer(tenant_id=tenant_id, address=address,
-                                            port=template.DASHBOARD_PORT))
+                                            port=template.DASHBOARD_PORT,
+                                            stale=stale))
         return running
 
     async def _refuse_if_busy(self, tenant_id: str) -> None:

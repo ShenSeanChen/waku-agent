@@ -257,6 +257,15 @@ class Engine:
     async def inspect(self, container: str) -> dict:
         return await self._call("GET", f"/containers/{container}/json", expect=(200,))
 
+    async def image_id(self, name: str) -> str:
+        """The id of the image a tag names now, or "" when no image has that
+        tag. A rebuild moves the tag to a new id, and a container keeps the
+        id it was created from, so comparing the two tells an old container
+        from a new one."""
+        answer = await self._call("GET", f"/images/{name}/json", expect=(200, 404))
+        found = answer.get("Id") if isinstance(answer, dict) else None
+        return found if isinstance(found, str) else ""
+
     async def logs(self, container: str) -> str:
         """The container's output, DEMULTIPLEXED, as text an operator can read.
 
