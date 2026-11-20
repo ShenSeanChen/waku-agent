@@ -719,9 +719,9 @@ variable.
 - **None of this has run against waku.one, Slack or Waku Memory.** The evals
   use a fake Slack and a fake spawner on loopback.
 
-## Connectors: Notion and Linear
+## Connectors: Notion, Linear and GitHub
 
-A person on hosted waku signs in to Notion or Linear from
+A person on hosted waku signs in to Notion, Linear or GitHub from
 `https://agent.waku.one/setup` (spec 029). Ana presses "Connect Notion",
 approves on Notion's own page, and comes back to `/setup` with "Notion is
 connected." The gateway then holds her Notion tokens.
@@ -736,18 +736,18 @@ sign-in comes back to a port on their own computer
 | `GET /connect/callback` | the apex | checks the `state` and the browser's own session, exchanges the vendor's code for the person's tokens, and stores them |
 | `POST /connect/disconnect` | the apex | takes `{"server": "<name>"}` from a signed-in person and deletes their tokens for that vendor |
 | `POST /connect/<name>/mcp` | the proxy, on the tenant network | takes one MCP message from a container with the container's platform token, and has the gateway make the call with that tenant's sign-in. A tenant may send 60 a minute to one connector; one more answers 429 |
-| `POST /connect/link` | the proxy, on the tenant network | answers the `/connect/start` address for one connector, so "connect Notion" in a chat can give the person the link |
+| `POST /connect/link` | the proxy, on the tenant network | answers the `/connect/start` address for one connector, so "connect Notion" in a chat can give the person the link. Asked for a name that is not a connector here, it answers the titles of the ones that are. A container's agent asks once when it builds its tools, so `connect_tool` and `connector_status` name these connectors to the model and no others |
 
 ```
 container --POST /connect/notion/mcp--> proxy --gateway.sock--> gateway --> mcp.notion.com
 ```
 
-`<name>` is `notion` or `linear` (`hosted/core/connectors.py`). A person
-cannot add another address: the gateway calls a connector from the platform's
-own network. GitHub is not on the list, because it takes a personal access
-token.
+`<name>` is `notion`, `linear` or `github` (`hosted/core/connectors.py`). A
+person cannot add another address: the gateway calls a connector from the
+platform's own network. GitHub is on a server's list only when that server
+holds a GitHub App's client id and secret ("GitHub" below).
 
-**The gateway registers itself with each vendor.** At the first sign-in to a
+**The gateway registers itself with Notion and Linear.** At the first sign-in to a
 vendor it reads the vendor's sign-in addresses, registers as a client with the
 one redirect address `https://agent.waku.one/connect/callback` (dynamic
 client registration), and keeps that registration in `control.db` for every
@@ -787,6 +787,60 @@ gateway restarted. It reads the vendor's answer to its end, as JSON or as an
 event stream, compressed or not, and returns at most 1 MiB of it as plain
 JSON. A message from a container is at most 48 KB.
 
+### GitHub
+
+GitHub's MCP server does not let a client register itself: "Dynamic Client
+Registration is NOT supported by Remote GitHub MCP Server at this time"
+([host integration](https://github.com/github/github-mcp-server/blob/main/docs/host-integration.md),
+read 2026-11-19). The operator registers one GitHub App, once, and the
+gateway signs every person in through it. It is a GitHub App and not an OAuth
+App because an OAuth App's only scope for a private repository, `repo`, also
+writes.
+
+Register the app at github.com: your profile picture, **Settings**,
+**Developer settings**, **GitHub Apps**, **New GitHub App**.
+
+| Field | Value |
+|---|---|
+| GitHub App name | a name nobody else has, for example `Waku Agent` |
+| Homepage URL | `https://agent.waku.one` |
+| Callback URL | `https://agent.waku.one/connect/callback` |
+| Expire user authorization tokens | ticked |
+| Request user authorization (OAuth) during installation | not ticked. Ticked, GitHub sends a browser to the callback without the gateway's `state`, and the page answers "That link expired" |
+| Enable Device Flow | not ticked |
+| Webhook, Active | not ticked |
+| Repository permissions | **Contents**, **Issues**, **Pull requests** and **Metadata**: "Read-only". Every other permission: "No access" |
+| Where can this GitHub App be installed? | "Any account", so a person can install it on their own repositories |
+
+Press **Create GitHub App**. On the app's page, copy the **Client ID** and
+press **Generate a new client secret**. Put both into
+`/srv/waku/config/gateway.env`, as root, and restart the gateway:
+
+```
+WAKU_GITHUB_CLIENT_ID=<Client ID>
+WAKU_GITHUB_CLIENT_SECRET=<the client secret>
+```
+
+The gateway's log then says `connectors: on (notion, linear, github)`.
+Without both values it says why GitHub is not offered, `/setup` has no GitHub
+card, and an agent asked to connect GitHub answers that it cannot be
+connected here yet.
+
+A person presses "Connect GitHub" on `/setup` and approves on github.com. The
+agent then reads the repositories the app is installed on, so the person also
+installs the app from its public page, `https://github.com/apps/<the app's
+name>`, on the account or the repositories the agent may read.
+
+**Reading is enforced three times.** The app's permissions are read-only, so
+GitHub refuses a write with the person's token. The gateway calls
+`https://api.githubcopilot.com/mcp/readonly`, where GitHub's server offers no
+tool that writes. And the gateway refuses a `tools/call` whose tool matches
+GitHub's write patterns before GitHub is called, as it does for Notion.
+
+GitHub's token lasts eight hours and its refresh token six months. The
+gateway renews the token in its last minute and keeps the new refresh token,
+because GitHub ends the old one when it is used.
+
 ### Turning it on
 
 Connectors are on when `config/gateway.env` has a usable
@@ -808,7 +862,7 @@ or `connectors: off` with the reason, and the three routes then answer 503.
   A write tool whose name matches none of the vendor's write patterns would
   run: the patterns list verbs, and a verb can be missing.
 - **Calls are not charged credits.** There is no limit by plan: every person
-  may connect both.
+  may connect all three.
 - **No button disconnects yet.** `POST /connect/disconnect` is the route; the
   Connections page (spec 030) is where its button goes.
 - **Disconnecting deletes the gateway's copy of the tokens and does not
@@ -817,8 +871,11 @@ or `connectors: off` with the reason, and the three routes then answer 503.
 - **A restore onto a new VM needs `WAKU_SLACK_TOKEN_KEY` carried over by
   hand**, as for Slack. Without it each person signs in to their connectors
   again, and the gateway registers with each vendor again.
-- **None of this has run against Notion or Linear.** The evals use a fake
-  vendor on loopback. Whether each vendor's registration accepts
+- **Removing the two GitHub values takes GitHub off the list** and leaves
+  each person's sealed tokens in `control.db`. Their `github` tools answer an
+  error until the values are back.
+- **None of this has run against Notion, Linear or GitHub.** The evals use a
+  fake vendor on loopback. Whether each vendor's registration accepts
   `https://agent.waku.one/connect/callback` as a redirect address is not
   verified.
 
@@ -1126,21 +1183,34 @@ Each tick, in order:
 
 **An automatic upgrade can cut off a chat turn in progress.** `upgrade.sh`
 recreates the gateway when its image changed, and every turn streams through
-the gateway. The timer never passes `--now`, so a running tenant keeps the old
-tenant image until their container next starts.
+the gateway. The timer never passes `--now`, so no tenant container is
+restarted by the upgrade itself.
 
-**A running tenant moves to the new image after 15 minutes idle.** Once a
-minute the gateway stops every tenant container that has had nothing in flight
-and no request other than a background poll for the idle window, and logs one
-`idle stop tenant=<id>` line for each. The tenant's next message starts a new
-container from the current tenant image. A gateway restart adopts the
-containers already running and starts their idle clocks fresh. A tenant who
-keeps chatting keeps the old image until they pause for the window, or until
-an operator runs `upgrade.sh --now`, which restarts every running tenant at
-once and can cut off a turn in progress.
+**A running tenant moves to the new image between two turns.** A container
+keeps the image it was created from, and an upgrade rebuilds the tenant image
+under it. Once a minute the gateway asks the spawner which running containers
+were created from an older build than the one the image tag names now. It
+stops each of those that has nothing in flight, has had no request other than
+a background poll for 60 seconds (`STALE_QUIET_SECONDS` in
+`hosted/core/idle.py`), and reports no run in progress, no unfinished event
+and no unsent message. It logs one `stale stop tenant=<id>` line for each. The
+container's next timer is stored first, as at an idle stop, and the tenant's
+next message or that timer starts a new container from the current image. A
+person who sends a message every few minutes therefore runs the new code about
+a minute or two after an upgrade, at the cost of one container start. A
+container that reports work, or that does not answer the question, is not
+stopped this way: it waits for the idle stop below. `upgrade.sh --now` still
+restarts every running tenant at once and can cut off a turn in progress.
+
+**An idle container stops after 15 minutes.** Once a minute the gateway also
+stops every tenant container that has had nothing in flight and no request
+other than a background poll for the idle window, and logs one `idle stop
+tenant=<id>` line for each. The tenant's next message starts a new container
+from the current tenant image. A gateway restart adopts the containers already
+running and starts their idle clocks fresh.
 
 **The first open after a stop starts the container, and waits for it.** The
-request that finds a tenant stopped (after an idle stop or `upgrade.sh --now`)
+request that finds a tenant stopped (after an idle stop, a stale stop or `upgrade.sh --now`)
 waits up to 60 seconds for the spawner to provision and start the container
 (`START_TIMEOUT_SECONDS` in `hosted/core/idle.py`), then up to 30 more for the
 dashboard inside to accept a connection (`READY_TIMEOUT_SECONDS`): the spawner
@@ -1195,9 +1265,10 @@ Three limits as of this change. Only a Slack mention writes a row into
 arrive in group B of spec 026. A hosted container sends to Slack and nowhere
 else, so a run that a timer starts in a conversation that is not a Slack
 thread answers in that conversation's history and sends nothing. And a wakeup
-is stored only at an idle stop: a container stopped by an eviction at the cap, by `upgrade.sh
---now` or by a VM reboot keeps the wakeup stored at its last idle stop, so a
-timer set after that fires when the tenant next opens the dashboard.
+is stored only at an idle stop or a stale stop: a container stopped by an
+eviction at the cap, by `upgrade.sh --now` or by a VM reboot keeps the wakeup
+stored at its last such stop, so a timer set after that fires when the tenant
+next opens the dashboard.
 
 **Changing the window.** Set `WAKU_IDLE_MINUTES` in `config/gateway.env` to a
 whole number of minutes, at least 1, and restart the gateway; it reads the

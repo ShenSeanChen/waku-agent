@@ -33,6 +33,13 @@ endpoint. Each has to be on the origin of the vendor's own MCP address
 (hosted/core/connectors.py), or the sign-in does not start: the gateway never
 calls, and never sends a person to, an address a response chose.
 
+GITHUB IS NOT REGISTERED WITH HERE (spec 029 F). Its server takes sign-in
+only from a GitHub App registered at GitHub beforehand, so there is nothing
+to discover and nothing to register: the app's client id and secret come from
+config/gateway.env, and GitHub's two sign-in addresses come from this code's
+own list. Without the two values GitHub is not on this server's list at all.
+The sign-in, the sealed tokens and the renewal are the same as Notion's.
+
 NOTHING HERE LOGS OR RETURNS A TOKEN, A CODE, A CLIENT SECRET OR A VERIFIER.
 A log line carries a tenant id, a vendor's name and a short error code.
 """
@@ -87,7 +94,9 @@ DISCONNECT_BODY = 'Send {"server": "<name>"} as a POST.'
 CONNECTED, DENIED, EXPIRED, FAILED = "connected", "denied", "expired", "failed"
 
 # The errors with which a vendor says a refresh token will never work again.
-GRANT_ENDED = frozenset({"invalid_grant", "invalid_client", "unauthorized_client"})
+# `bad_refresh_token` is GitHub's word for it.
+GRANT_ENDED = frozenset({"invalid_grant", "invalid_client", "unauthorized_client",
+                         "bad_refresh_token"})
 
 _GZIP_MAGIC = b"\x1f\x8b"
 _ERROR_CODE = re.compile(r"[a-z0-9_]{1,64}")
@@ -261,7 +270,10 @@ class VendorApi:
             "token_endpoint_auth_method": "client_secret_post"})
 
     async def _token(self, what: str, client: Client, fields: dict) -> dict:
-        data = {**fields, "client_id": client.client_id}
+        # An empty field is left out: `resource` is, for a vendor whose
+        # documentation does not name it (GitHub).
+        data = {**{name: value for name, value in fields.items() if value},
+                "client_id": client.client_id}
         if client.client_secret:
             data["client_secret"] = client.client_secret
         return await self._ask(what, "POST", client.token_endpoint, data=data)
@@ -350,12 +362,20 @@ class Connect:
 
     def __init__(self, *, key: bytes, apex_host: str, store: ControlStore, api: VendorApi,
                  vendors: Mapping[str, Vendor] = VENDORS,
+                 clients: Mapping[str, tuple[str, str]] | None = None,
                  now: Callable[[], float] = time.time) -> None:
+        """`clients` is {a vendor's name: (client id, client secret)} for a
+        vendor that takes sign-in only from a client registered beforehand
+        (config.connect_clients_from). Such a vendor is on this server's list
+        only with its client: without one, every route, the setup page and
+        "connect GitHub" in chat treat it as a name that is not a connector."""
         self._box = SecretBox(key)
         self._apex = apex_host
         self._store = store
         self._api = api
-        self._vendors = dict(vendors)
+        self._clients = dict(clients or {})
+        self._vendors = {name: vendor for name, vendor in dict(vendors).items()
+                         if not vendor.authorize_url or name in self._clients}
         self._now = now
         self._sign_ins = SignIns(now)
         # One registration at a time per vendor, and one renewal at a time
@@ -398,7 +418,18 @@ class Connect:
     async def _client(self, vendor: Vendor) -> Client:
         """The gateway's registration with this vendor: the one kept in
         control.db, or a new one when there is none, when it was made for
-        another redirect address, or when the key does not open it."""
+        another redirect address, or when the key does not open it.
+
+        A vendor with a client registered beforehand has that client and the
+        addresses of this code's own list. Nothing is asked of the vendor,
+        and nothing is stored."""
+        if vendor.authorize_url:
+            client_id, client_secret = self._clients[vendor.name]
+            scheme, host, _ = _origin(vendor.authorize_url)
+            return Client(client_id=client_id, client_secret=client_secret,
+                          issuer=f"{scheme}://{host}",
+                          authorization_endpoint=vendor.authorize_url,
+                          token_endpoint=vendor.token_url)
         lock = self._registering.setdefault(vendor.name, asyncio.Lock())
         async with lock:
             kept = self._store.connect_client(vendor.name)
@@ -443,11 +474,14 @@ class Connect:
                          tenant_id, vendor.name, exc)
             return self._back(FAILED, vendor.name)
         state, challenge = self._sign_ins.issue(tenant_id, vendor.name)
-        query = urllib.parse.urlencode({
-            "response_type": "code", "client_id": client.client_id,
-            "redirect_uri": self.redirect_uri, "state": state,
-            "code_challenge": challenge, "code_challenge_method": "S256",
-            "scope": vendor.scope, "resource": vendor.url})
+        fields = {"response_type": "code", "client_id": client.client_id,
+                  "redirect_uri": self.redirect_uri, "state": state,
+                  "code_challenge": challenge, "code_challenge_method": "S256"}
+        if vendor.scope:
+            fields["scope"] = vendor.scope
+        if self._resource(vendor):
+            fields["resource"] = vendor.url
+        query = urllib.parse.urlencode(fields)
         joiner = "&" if "?" in client.authorization_endpoint else "?"
         return answers.redirect(f"{client.authorization_endpoint}{joiner}{query}")
 
@@ -479,7 +513,7 @@ class Connect:
                 return self._back(FAILED, vendor.name)
             answer = await self._api.exchange(
                 client, code=request.query.get("code", ""), verifier=found.verifier,
-                redirect_uri=self.redirect_uri, resource=vendor.url)
+                redirect_uri=self.redirect_uri, resource=self._resource(vendor))
         except VendorUnreachable as exc:
             _LOG.warning("tenant=%s: sign-in to %s failed: %s",
                          found.tenant_id, vendor.name, exc)
@@ -493,6 +527,13 @@ class Connect:
         _LOG.info("tenant=%s: connected %s", found.tenant_id, vendor.name)
         await self._changed(found.tenant_id, vendor.name)
         return self._back(CONNECTED, vendor.name)
+
+    @staticmethod
+    def _resource(vendor: Vendor) -> str:
+        """The `resource` a sign-in names (RFC 8707): the vendor's MCP
+        address, or "" for a vendor whose sign-in server is not its MCP
+        server's and whose documentation names no such field (GitHub)."""
+        return "" if vendor.authorize_url else vendor.url
 
     @staticmethod
     def _back(outcome: str, server: str) -> web.Response:
@@ -555,7 +596,8 @@ class Connect:
                 raise ReconnectNeeded(server)
             client = await self._client(vendor)
             answer = await self._api.refresh(
-                client, refresh_token=tokens["refresh_token"], resource=vendor.url)
+                client, refresh_token=tokens["refresh_token"],
+                resource=self._resource(vendor))
             renewed = _tokens_from(answer, self._now(), keep_refresh=tokens["refresh_token"])
             if renewed is None:
                 code = _error_code(answer)

@@ -72,7 +72,8 @@ def test_each_operation_answers_the_shape_the_specs_table_names():
     assert answer == {"address": "10.88.0.2", "port": 7777}
     assert ask({"op": "stop", "tenant_id": TENANT})[0] == {"ok": True}
     assert ask({"op": "list"})[0] == {
-        "containers": [{"tenant_id": TENANT, "address": "10.88.0.2", "port": 7777}]}
+        "containers": [{"tenant_id": TENANT, "address": "10.88.0.2", "port": 7777,
+                        "stale": False}]}
     # The PRODUCER half of the `tenants` wire contract. Its key is agreed with
     # SpawnerClient.tenant_ids and was asserted by neither side, so renaming it
     # here was green and a SpawnerError on the VM.

@@ -11,6 +11,12 @@ class RunningContainer:
     tenant_id: str
     address: str
     port: int
+    # True when the container was created from an older build of the tenant
+    # image than the one the tag names now. Only `list` sets it, because only
+    # the spawner can see image ids. An upgrade rebuilds the image under a
+    # running container, and the gateway stops a stale container between
+    # turns (Launcher.stop_stale) so the next message runs the new code.
+    stale: bool = False
 
 
 class TenantRuntime(Protocol):

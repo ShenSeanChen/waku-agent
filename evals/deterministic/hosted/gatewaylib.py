@@ -100,6 +100,11 @@ class FakeSpawner:
         # Tenant ids the spawner has containers for but `list` would never
         # report: see tenant_ids below.
         self.labelled_only: list[str] = []
+        # Tenant ids whose container `list` reports as created from an older
+        # build of the tenant image. A test adds an id to say "an upgrade
+        # rebuilt the image under this container"; a start takes it out,
+        # because every start creates a container from the current image.
+        self.old_image: set[str] = set()
 
     def _port(self) -> int:
         if not self.ports:
@@ -131,6 +136,7 @@ class FakeSpawner:
         await asyncio.sleep(self.start_delay)
         if self.fail_start is not None:
             raise self.fail_start
+        self.old_image.discard(tenant_id)
         container = RunningContainer(
             tenant_id=tenant_id,
             address=self.address or address_for_project(project_id),
@@ -160,7 +166,8 @@ class FakeSpawner:
 
     async def list(self) -> list[RunningContainer]:
         self.requests.append({"op": "list"})
-        return list(self.running.values())
+        return [dataclasses.replace(c, stale=c.tenant_id in self.old_image)
+                for c in self.running.values()]
 
     async def tenant_ids(self) -> list[str]:
         """Every labelled tenant container, UNFILTERED -- the real spawner's
@@ -359,6 +366,8 @@ class Harness:
         self._fake_vendors: dict[str, FakeVendor] = {}
         # Spec 032: set by use_team_homes.
         self.team_homes: TeamHomeRoutes | None = None
+        # Spec 029 F: the GitHub App's client, as config/gateway.env gives it.
+        self.connect_clients: dict[str, tuple[str, str]] = {}
         # What a wake also calls, when a test wires a real Scheduler's kick.
         self.on_wake = lambda: None
         self.config = GatewayConfig(
@@ -403,15 +412,24 @@ class Harness:
 
     def vendors(self) -> dict[str, Vendor]:
         """The real list, with each faked vendor's address on loopback."""
-        return {name: dataclasses.replace(VENDORS[name], url=fake.url + "/mcp")
-                for name, fake in self._fake_vendors.items()}
+        moved = {}
+        for name, fake in self._fake_vendors.items():
+            changes = {"url": fake.url + "/mcp"}
+            if VENDORS[name].authorize_url:
+                # GitHub: its two sign-in addresses are this code's own, so
+                # they move to the fake too.
+                changes |= {"authorize_url": fake.url + "/authorize",
+                            "token_url": fake.url + "/token"}
+            moved[name] = dataclasses.replace(VENDORS[name], **changes)
+        return moved
 
     def _wire_connect(self) -> None:
         if self.session is None:
             self.session = aiohttp.ClientSession(auto_decompress=False)
         self.connect = Connect(
             key=bytes.fromhex(SLACK_TOKEN_KEY), apex_host=APEX, store=self.store,
-            api=VendorApi(self.session), vendors=self.vendors(), now=self.clock)
+            api=VendorApi(self.session), vendors=self.vendors(),
+            clients=self.connect_clients, now=self.clock)
         self.gateway = self._build_gateway()
 
     def use_slack(self, fake: FakeSlack, settings: SlackSettings | None = None) -> None:

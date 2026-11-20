@@ -205,8 +205,10 @@ def test_the_agents_mcp_client_reads_notion_through_the_proxy(
                                              "notion_notion-create-pages"]
     assert answer == "notion ran notion-search"
     [call] = notion.mcp_calls("tools/call")
-    assert call["body"]["params"] == {"name": "notion-search",
-                                      "arguments": {"query": "roadmap"}}
+    # Field by field: mcp 2.2.0, which uv.lock pins, also sends an empty
+    # `_meta` in a call's params, and mcp 2.3.0, which CI installs, does not.
+    params = call["body"]["params"]
+    assert (params["name"], params["arguments"]) == ("notion-search", {"query": "roadmap"})
     # The vendor was called with the person's token, and the container's
     # platform token went no further than the proxy.
     assert call["authorization"] == "Bearer notion-access-1"
@@ -339,7 +341,7 @@ def test_a_disabled_tenants_container_is_refused(tmp_path, sock_dir, notion):
 def test_only_a_listed_connector_and_only_a_post_of_one_message(tmp_path, sock_dir, notion):
     async def body(rig):
         _, token = await rig.person("ana", "notion")
-        return (await rig.post(token, SEARCH, "github"),
+        return (await rig.post(token, SEARCH, "slack"),
                 await rig.post(token, SEARCH, "notion%2F..%2Fslack"),
                 await rig.post(token, SEARCH, method="GET"),
                 await rig.post(token, SEARCH, method="DELETE"),
@@ -529,6 +531,25 @@ def test_an_unreachable_vendor_is_a_sentence_and_no_log_line_holds_a_token(
 
 
 # --- B3: where a person starts the sign-in ---------------------------------------------
+
+def test_a_container_learns_which_connectors_the_platform_offers(
+        tmp_path, sock_dir, notion, linear, monkeypatch):
+    """The MIT agent asks the real proxy and gateway, as it does when it
+    builds its tools in a hosted container."""
+    from waku.tools import connectors
+
+    async def body(rig):
+        _, token = await rig.person("ana")
+        monkeypatch.setenv("WAKU_PLATFORM_BASE_URL", rig.base)
+        monkeypatch.setenv("WAKU_PLATFORM_TOKEN", token)
+        return await asyncio.to_thread(connectors.hosted_offered)
+
+    assert _run(tmp_path, sock_dir, body, notion=notion, linear=linear) == (
+        "Notion", "Linear")
+    # A platform with one connector says one.
+    (tmp_path / "second").mkdir()
+    assert _run(tmp_path / "second", sock_dir, body, linear=linear) == ("Linear",)
+
 
 def test_the_link_is_the_start_address_on_the_apex(tmp_path, sock_dir, notion, linear):
     async def body(rig):

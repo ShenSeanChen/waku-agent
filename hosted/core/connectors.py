@@ -1,15 +1,18 @@
 """The connectors a person on hosted Waku can sign in to (spec 029).
 
-Two vendors in v1, Notion and Linear. Each is the vendor's own hosted MCP
-server, and each takes sign-in from a client that registers itself (dynamic
-client registration). GitHub is left out: it takes a personal access token,
-and a token typed into this platform's page is the spec's open question 3.
+Notion, Linear and GitHub. Each is the vendor's own hosted MCP server.
+
+Notion and Linear take sign-in from a client that registers itself (dynamic
+client registration). GitHub does not: its server takes sign-in only from a
+GitHub App registered with GitHub beforehand, so its entry names GitHub's two
+sign-in addresses, and the gateway offers it only when it holds that app's
+client id and secret (hosted/gateway/config.py).
 
 A person cannot add another address. The gateway calls a connector with the
 platform's network position, so the list is closed and changes by pull
 request.
 
-THIS IS A SECOND COPY OF TWO ENTRIES OF waku/connectors.toml, the list the
+THIS IS A SECOND COPY OF THREE ENTRIES OF waku/connectors.toml, the list the
 local agent uses (spec 025). hosted/ and waku/ never import each other, and
 the services image has no waku/ in it, so the address and the `writes`
 patterns are written here again. evals/deterministic/hosted/
@@ -37,12 +40,26 @@ class Vendor:
               way a shell matches a file name. Such a tool does not run on
               hosted Waku yet: nobody there can be asked first (spec 029,
               group C)
+
+    The last three are for a vendor that takes sign-in only from a client
+    registered with it beforehand, and are empty for every other vendor:
+
+      authorize_url  the vendor's sign-in page
+      token_url      where a code, and later a refresh token, is exchanged
+      note           one sentence for the setup page about what the agent
+                     can reach there
+
+    Both addresses are from the vendor's documentation. Nothing the vendor
+    answers at run time moves them.
     """
     name: str
     title: str
     url: str
     scope: str
     writes: tuple[str, ...]
+    authorize_url: str = ""
+    token_url: str = ""
+    note: str = ""
 
     def is_write(self, tool: str) -> bool:
         return any(fnmatchcase(tool, pattern) for pattern in self.writes)
@@ -69,6 +86,27 @@ VENDORS: dict[str, Vendor] = {vendor.name: vendor for vendor in (
             "create_*", "save_*", "update_*", "delete_*", "remove_*", "add_*",
             "archive_*", "retire_*", "restore_*", "merge_*", "resolve_*", "submit_*",
             "share_*", "unshare_*", "mark_*", "prepare_*")),
+    Vendor(
+        name="github", title="GitHub",
+        # The read-only address of GitHub's server: "/readonly - Default
+        # toolset in read-only mode", where it offers no tool that writes.
+        # https://github.com/github/github-mcp-server/blob/main/docs/remote-server.md,
+        # 2026-11-19.
+        url="https://api.githubcopilot.com/mcp/readonly",
+        # A GitHub App's sign-in takes no scope: what a token may do is the
+        # app's own permissions, which are set to read-only at GitHub when
+        # the app is registered (hosted/README.md, "GitHub").
+        scope="",
+        writes=(
+            "create_*", "update_*", "delete_*", "remove_*", "add_*", "merge_*", "push_*",
+            "fork_*", "*_write", "request_*", "assign_*", "actions_run_*", "run_*",
+            "rerun_*", "cancel_*", "dismiss_*", "mark_*", "manage_*", "star_*",
+            "unstar_*"),
+        # https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/generating-a-user-access-token-for-a-github-app,
+        # 2026-11-19.
+        authorize_url="https://github.com/login/oauth/authorize",
+        token_url="https://github.com/login/oauth/access_token",
+        note="It reads the repositories the Waku app is installed on at GitHub."),
 )}
 
 

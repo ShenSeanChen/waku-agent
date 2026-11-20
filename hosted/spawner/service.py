@@ -55,7 +55,8 @@ async def handle(runtime: DockerRuntime, payload: dict) -> dict:
             return {"ok": True}
         if request.op == "list":
             return {"containers": [
-                {"tenant_id": c.tenant_id, "address": c.address, "port": c.port}
+                {"tenant_id": c.tenant_id, "address": c.address, "port": c.port,
+                 "stale": c.stale}
                 for c in await runtime.list()]}
         if request.op == "tenants":
             return {"tenant_ids": await runtime.tenant_ids()}

@@ -534,11 +534,94 @@ class Launcher:
             _LOG.warning("tenant=%s has reported work for %d minutes with no "
                          "request; stopping it", tenant_id,
                          self._fleet.seconds_idle(tenant_id) // 60)
+        self._keep_wakeup(tenant_id, left)
+        return True
+
+    async def stop_stale(self) -> list[str]:
+        """Stop every container that runs an older build of the tenant image
+        than the current one, as soon as it is between two turns. Returns the
+        tenant ids stopped. The idle loop calls this once a minute.
+
+        WHY THE IDLE STOP IS NOT ENOUGH. upgrade.sh rebuilds the tenant image
+        and leaves running containers alone, and a start is what moves a
+        tenant to the new image. A person who sends a message every few
+        minutes never reaches the idle window, so they kept the old code for
+        as long as they kept talking.
+
+        WHO KNOWS A CONTAINER IS STALE. The spawner: its `list` compares the
+        image each container was created from with the image the tag names
+        now. This asks `list` on every sweep, because an upgrade does not
+        always restart the gateway.
+
+        A TURN IS NEVER CUT. A stale container is stopped only when all of
+        these hold, and the last check has no await between it and the stop:
+
+          the fleet   nothing in flight, and no non-background request for
+                      idle.STALE_QUIET_SECONDS
+          the book    the address is the object recorded before `list` was
+                      asked, so no start finished meanwhile and the answer
+                      is about this container
+          its report  no run, no event and no outgoing message waits. A
+                      container that gives no report is left for the idle
+                      stop, which is the only path that may stop one blind.
+
+        The stop is an idle stop in every other way: the container's next
+        timer is stored first, its token is revoked, and the next message or
+        the stored wakeup starts a new container from the current image.
+        """
+        known = dict(self._addresses)
+        if not known:
+            return []
+        try:
+            listed = await self._spawner.list()
+        except (SpawnerError, OSError) as exc:
+            _LOG.warning("could not ask the spawner which containers run an "
+                         "old image: %s", exc)
+            return []
+        stopped: list[str] = []
+        for container in sorted(listed, key=lambda c: c.tenant_id):
+            running = known.get(container.tenant_id)
+            if not container.stale or running is None:
+                continue
+            if not await self._between_turns(running):
+                continue
+            _LOG.info("stale stop tenant=%s: its container runs an older "
+                      "image and nothing is in progress", running.tenant_id)
+            await self.stop(running.tenant_id)
+            stopped.append(running.tenant_id)
+        return stopped
+
+    def _still_and_quiet(self, running: RunningContainer) -> bool:
+        return (self._addresses.get(running.tenant_id) is running
+                and self._fleet.quiet_for(running.tenant_id,
+                                          idle.STALE_QUIET_SECONDS))
+
+    async def _between_turns(self, running: RunningContainer) -> bool:
+        """Whether a stale container may be stopped now. When the answer is
+        yes, its next timer is already in tenant_wakeups, as _settled leaves
+        it for an idle stop."""
+        tenant_id = running.tenant_id
+        if not self._still_and_quiet(running):
+            return False
+        if self._containers is None:
+            return True
+        left = idle.work_left(await self._containers.next_work(running))
+        if not self._still_and_quiet(running):
+            # A request arrived, or the container was replaced, while it
+            # was answering.
+            return False
+        if left is None or left.busy:
+            return False
+        self._keep_wakeup(tenant_id, left)
+        return True
+
+    def _keep_wakeup(self, tenant_id: str, left: idle.WorkLeft) -> None:
+        """Store a container's earliest timer before it is stopped, or delete
+        the stored one when it has none."""
         if left.wakeup is None:
             self._store.clear_wakeup(tenant_id)
         else:
             self._store.set_wakeup(tenant_id, left.wakeup)
-        return True
 
     def _forget_running(self, tenant_id: str) -> None:
         self._addresses.pop(tenant_id, None)
