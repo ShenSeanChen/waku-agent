@@ -1032,21 +1032,34 @@ Each tick, in order:
 
 **An automatic upgrade can cut off a chat turn in progress.** `upgrade.sh`
 recreates the gateway when its image changed, and every turn streams through
-the gateway. The timer never passes `--now`, so a running tenant keeps the old
-tenant image until their container next starts.
+the gateway. The timer never passes `--now`, so no tenant container is
+restarted by the upgrade itself.
 
-**A running tenant moves to the new image after 15 minutes idle.** Once a
-minute the gateway stops every tenant container that has had nothing in flight
-and no request other than a background poll for the idle window, and logs one
-`idle stop tenant=<id>` line for each. The tenant's next message starts a new
-container from the current tenant image. A gateway restart adopts the
-containers already running and starts their idle clocks fresh. A tenant who
-keeps chatting keeps the old image until they pause for the window, or until
-an operator runs `upgrade.sh --now`, which restarts every running tenant at
-once and can cut off a turn in progress.
+**A running tenant moves to the new image between two turns.** A container
+keeps the image it was created from, and an upgrade rebuilds the tenant image
+under it. Once a minute the gateway asks the spawner which running containers
+were created from an older build than the one the image tag names now. It
+stops each of those that has nothing in flight, has had no request other than
+a background poll for 60 seconds (`STALE_QUIET_SECONDS` in
+`hosted/core/idle.py`), and reports no run in progress, no unfinished event
+and no unsent message. It logs one `stale stop tenant=<id>` line for each. The
+container's next timer is stored first, as at an idle stop, and the tenant's
+next message or that timer starts a new container from the current image. A
+person who sends a message every few minutes therefore runs the new code about
+a minute or two after an upgrade, at the cost of one container start. A
+container that reports work, or that does not answer the question, is not
+stopped this way: it waits for the idle stop below. `upgrade.sh --now` still
+restarts every running tenant at once and can cut off a turn in progress.
+
+**An idle container stops after 15 minutes.** Once a minute the gateway also
+stops every tenant container that has had nothing in flight and no request
+other than a background poll for the idle window, and logs one `idle stop
+tenant=<id>` line for each. The tenant's next message starts a new container
+from the current tenant image. A gateway restart adopts the containers already
+running and starts their idle clocks fresh.
 
 **The first open after a stop starts the container, and waits for it.** The
-request that finds a tenant stopped (after an idle stop or `upgrade.sh --now`)
+request that finds a tenant stopped (after an idle stop, a stale stop or `upgrade.sh --now`)
 waits up to 60 seconds for the spawner to provision and start the container
 (`START_TIMEOUT_SECONDS` in `hosted/core/idle.py`), then up to 30 more for the
 dashboard inside to accept a connection (`READY_TIMEOUT_SECONDS`): the spawner
@@ -1101,9 +1114,10 @@ Three limits as of this change. Only a Slack mention writes a row into
 arrive in group B of spec 026. A hosted container sends to Slack and nowhere
 else, so a run that a timer starts in a conversation that is not a Slack
 thread answers in that conversation's history and sends nothing. And a wakeup
-is stored only at an idle stop: a container stopped by an eviction at the cap, by `upgrade.sh
---now` or by a VM reboot keeps the wakeup stored at its last idle stop, so a
-timer set after that fires when the tenant next opens the dashboard.
+is stored only at an idle stop or a stale stop: a container stopped by an
+eviction at the cap, by `upgrade.sh --now` or by a VM reboot keeps the wakeup
+stored at its last such stop, so a timer set after that fires when the tenant
+next opens the dashboard.
 
 **Changing the window.** Set `WAKU_IDLE_MINUTES` in `config/gateway.env` to a
 whole number of minutes, at least 1, and restart the gateway; it reads the
