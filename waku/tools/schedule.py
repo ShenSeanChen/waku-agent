@@ -75,7 +75,7 @@ def make_tool(home: Path, session_id: Callable[[], str] | None = None,
     zone that does not depend on the machine the test runs on."""
 
     def schedule_task(when: str = "", note: str = "", repeat: str = "") -> str:
-        from waku.alwayson import outbox, timers
+        from waku.alwayson import approvals, outbox, timers
         from waku.alwayson.worker import serving
         from waku.db import connect
 
@@ -129,6 +129,13 @@ def make_tool(home: Path, session_id: Callable[[], str] | None = None,
         if every:
             said = (f"Timer {timer_id} repeats {every}, first on {at}. It sets its next "
                     "time by itself, so do not set it again.")
+        if address and not approvals.is_private(address):
+            # On 2026-11-20 the hosted agent, asked in a Slack channel for a
+            # daily brief, told its person "I'll send it to you privately".
+            # Nothing can: the woken run answers where this run came from.
+            said += (" The run it wakes answers here, in this same conversation, where "
+                     "several people read it. It cannot send a private message, so do "
+                     "not say that it will.")
         if not address:
             said += (" My reply then has nowhere to go: WAKU_OWNER is not set, so Waku does "
                      "not know where the owner is reached.")
