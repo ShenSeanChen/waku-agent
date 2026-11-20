@@ -9,7 +9,9 @@ One Slack app serves every workspace. Four things happen here:
             workspace's team id to the tenant.
   events    POST /v1/triggers/slack: Slack posts every workspace's mentions
             here. A signed request becomes one row in tenant_events for the
-            tenant its team id maps to.
+            tenant its team id maps to: the person who added the app, or the
+            home of a team space's agent (spec 032), whose events start with
+            a line that names the space.
   relay     SlackRelay.send: a tenant's container asks for a message to be
             posted, and the gateway posts it with that tenant's token. The
             token never enters a container.
@@ -63,7 +65,7 @@ from hosted.core.tenant import is_tenant_id, token_hash
 from hosted.gateway import answers, sessions
 from hosted.gateway.config import SlackSettings
 from hosted.gateway.secretbox import SecretBox, Unreadable
-from hosted.gateway.slack_thread import BUDGET_SECONDS, ThreadReader
+from hosted.gateway.slack_thread import BUDGET_SECONDS, ThreadReader, with_team_space
 from hosted.ports.control import ControlStore, TeamHome
 
 _LOG = log.get(__name__)
@@ -897,7 +899,15 @@ class SlackRoutes:
         tenant = self._store.tenant_by_id(tenant_id)
         if row is None or tenant is None or tenant.status != "active":
             return
-        row["payload"]["text"] = await self._with_thread(tenant_id, event, mentioned)
+        text = await self._with_thread(tenant_id, event, mentioned)
+        home = self._store.team_home_for_tenant(tenant_id)
+        if home is not None:
+            # Spec 032 A6: this workspace's channels are answered by a team
+            # space's agent. Added here and not in _with_thread, so the line
+            # is there whichever way the thread was or was not read.
+            text = with_team_space(text, space_name=home.space_name,
+                                   agent_name=home.agent_name)
+        row["payload"]["text"] = text
         if self._store.add_event(tenant_id, **row):
             # A tick now, so the mention does not wait for the next one.
             self._wake()
