@@ -76,7 +76,8 @@ class SpawnerClient:
 
     async def start(self, tenant_id: str, project_id: int, timezone: str,
                     token: str, memory_key: str = "",
-                    connectors: tuple[str, ...] = ()) -> RunningContainer:
+                    connectors: tuple[str, ...] = (),
+                    memory_space: str = "") -> RunningContainer:
         payload = {"op": "start", "tenant_id": tenant_id, "project_id": project_id,
                    "timezone": timezone, "token": token}
         if memory_key:
@@ -85,6 +86,9 @@ class SpawnerClient:
             payload["memory_key"] = memory_key
         if connectors:
             payload["connectors"] = list(connectors)
+        if memory_space:
+            # Spec 032 A4: only a team home's start carries its space.
+            payload["memory_space"] = memory_space
         answer = await self._ask(payload, timeout=START_ASK_TIMEOUT)
         return self._container(tenant_id, answer)
 

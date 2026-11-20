@@ -1,7 +1,7 @@
 """control.db -- tenants, sessions, proxy tokens, and each tenant's waiting
 events and next wakeup, the Slack workspace each tenant connected (spec
-026), and each tenant's sign-in to a connector (spec 029). The gateway's
-alone.
+026), each tenant's sign-in to a connector (spec 029), and the home of each
+team space's agent (spec 032). The gateway's alone.
 
 On the VM, control/ is owned by UID 10002 with mode 0700, so the one-writer
 rule is enforced by file ownership rather than by convention. The proxy never
@@ -9,11 +9,12 @@ opens this file: it asks over run/gateway/gateway.sock (internal.py) and gets
 back a tenant id and a status, and nothing else.
 
 Neither a cookie value nor a proxy token's plaintext is stored: those are
-hashes. Two credentials are stored. A tenant's Waku Memory key is in
-plaintext (set_memory_key says why). A workspace's Slack bot token is sealed
-with a key that is not in this file (hosted/gateway/secretbox.py), so a copy
-of this file cannot post to anybody's Slack. A connector's tokens, and the
-gateway's own registration with the vendor, are sealed the same way.
+hashes. Three kinds of credential are stored. A person's Waku Memory key is
+in plaintext (set_memory_key says why). A workspace's Slack bot token is
+sealed with a key that is not in this file (hosted/gateway/secretbox.py), so a
+copy of this file cannot post to anybody's Slack. A connector's tokens, the
+gateway's own registration with the vendor, and the Waku Memory key of a team
+space's agent (team_home) are sealed the same way.
 """
 
 from __future__ import annotations
@@ -34,7 +35,14 @@ from hosted.core.tenant import (
     normalise_timezone,
     token_hash,
 )
-from hosted.ports.control import ConnectClient, Connection, SlackInstall, Tenant, TenantEvent
+from hosted.ports.control import (
+    ConnectClient,
+    Connection,
+    SlackInstall,
+    TeamHome,
+    Tenant,
+    TenantEvent,
+)
 
 SESSION_TTL_SECONDS = 30 * 24 * 3600
 
@@ -61,7 +69,9 @@ CREATE TABLE IF NOT EXISTS tenant (
   timezone    TEXT NOT NULL DEFAULT 'UTC',
   status      TEXT NOT NULL DEFAULT 'active',
   project_id  INTEGER NOT NULL UNIQUE,
-  created_at  REAL NOT NULL
+  created_at  REAL NOT NULL,
+  -- Spec 032: 'person', or 'team' for the home of a team space's agent.
+  kind        TEXT NOT NULL DEFAULT 'person'
 );
 CREATE TABLE IF NOT EXISTS session (
   hash        TEXT PRIMARY KEY,
@@ -145,9 +155,37 @@ CREATE TABLE IF NOT EXISTS connect_token (
   needs_reconnect INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (tenant_id, server)
 );
+-- Spec 032 A1: the home of one team space's agent. One space has one home,
+-- and the home is the tenant tenant_id names, whose kind is 'team'.
+-- key_sealed is the agent's Waku Memory key, encrypted by SecretBox and
+-- bound to the space's id. It is never stored in memory_key.
+CREATE TABLE IF NOT EXISTS team_home (
+  space_id    TEXT PRIMARY KEY,
+  tenant_id   TEXT NOT NULL UNIQUE,
+  space_name  TEXT NOT NULL,
+  agent_id    TEXT NOT NULL,
+  agent_name  TEXT NOT NULL,
+  return_url  TEXT NOT NULL,
+  key_sealed  BLOB NOT NULL,
+  created_at  REAL NOT NULL,
+  updated_at  REAL NOT NULL
+);
 """
 
-_COLUMNS = "id, sub, email, timezone, status, project_id, created_at"
+# A column added to a table after its first release. CREATE TABLE IF NOT
+# EXISTS leaves a table that exists as it is, and upgrade.sh runs no
+# migration on control.db, so the gateway adds each missing column when it
+# opens the file: (table, column, the column's definition).
+ADDED_COLUMNS = (
+    ("tenant", "kind", "TEXT NOT NULL DEFAULT 'person'"),
+)
+
+_COLUMNS = "id, sub, email, timezone, status, project_id, created_at, kind"
+_HOME_COLUMNS = ("space_id, tenant_id, space_name, agent_id, agent_name, return_url, "
+                 "key_sealed")
+# What a team tenant's `sub` starts with. A person's sub is the uuid their
+# sign-in carries, so no sign-in can name a team's row.
+TEAM_SUB_PREFIX = "team:"
 _SLACK_COLUMNS = "team_id, tenant_id, team_name, bot_user_id, token_sealed, needs_reconnect"
 _EVENT_COLUMNS = ("id, tenant_id, source, external_id, session_id, payload, status, "
                   "received_at")
@@ -193,6 +231,11 @@ class ControlDb:
             for pragma in PRAGMAS:
                 self._conn.execute(pragma)
             self._conn.executescript(SCHEMA)
+            for table, column, definition in ADDED_COLUMNS:
+                have = {row[1] for row in self._conn.execute(f"PRAGMA table_info({table})")}
+                if column not in have:
+                    self._conn.execute(
+                        f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
             self._conn.commit()
 
     def close(self) -> None:
@@ -247,18 +290,26 @@ class ControlDb:
         because the alternative is reuse and reuse is what this prevents.
         """
         with self._lock:
-            used = [r[0] for r in self._conn.execute(
-                "SELECT project_id FROM tenant "
-                "UNION ALL SELECT project_id FROM retired_project_id")]
-            record = Tenant(id=new_tenant_id(), sub=sub, email=email,
-                            timezone=normalise_timezone(timezone), status="active",
-                            project_id=next_project_id(used), created_at=self._now())
-            self._conn.execute(
-                f"INSERT INTO tenant ({_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (record.id, record.sub, record.email, record.timezone, record.status,
-                 record.project_id, record.created_at))
+            record = self._insert_tenant_locked(sub=sub, email=email, timezone=timezone)
             self._conn.commit()
             return record
+
+    def _insert_tenant_locked(self, *, sub: str, email: str, timezone: str,
+                              kind: str = "person") -> Tenant:
+        """The insert half of create_tenant, so set_team_home can make a
+        team's tenant and its team_home row in one transaction."""
+        used = [r[0] for r in self._conn.execute(
+            "SELECT project_id FROM tenant "
+            "UNION ALL SELECT project_id FROM retired_project_id")]
+        record = Tenant(id=new_tenant_id(), sub=sub, email=email,
+                        timezone=normalise_timezone(timezone), status="active",
+                        project_id=next_project_id(used), created_at=self._now(),
+                        kind=kind)
+        self._conn.execute(
+            f"INSERT INTO tenant ({_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (record.id, record.sub, record.email, record.timezone, record.status,
+             record.project_id, record.created_at, record.kind))
+        return record
 
     def tenant_by_sub(self, sub: str) -> Tenant | None:
         with self._lock:
@@ -649,6 +700,69 @@ class ControlDb:
             self._conn.commit()
         return removed > 0
 
+    # --- spec 032: team homes --------------------------------------------
+
+    @staticmethod
+    def _home(row: sqlite3.Row | None) -> TeamHome | None:
+        if row is None:
+            return None
+        return TeamHome(row[0], row[1], row[2], row[3], row[4], row[5], bytes(row[6]))
+
+    def set_team_home(self, *, space_id: str, space_name: str, agent_id: str,
+                      agent_name: str, return_url: str,
+                      key_sealed: bytes) -> tuple[TeamHome, bool]:
+        """Make the home of this space's agent, or replace what a home that
+        exists holds. Returns (the home, whether this call made it).
+
+        A new home is a new tenant of kind `team` and one team_home row,
+        written in one transaction: a tenant with no home would be a
+        container nothing could give a key to. A space that has a home keeps
+        its tenant, so its disk and its waiting events stay, and gets the new
+        names, return address and sealed key."""
+        with self._lock:
+            found = self._home(self._conn.execute(
+                f"SELECT {_HOME_COLUMNS} FROM team_home WHERE space_id = ?",
+                (space_id,)).fetchone())
+            now = self._now()
+            if found is None:
+                try:
+                    tenant = self._insert_tenant_locked(
+                        sub=TEAM_SUB_PREFIX + space_id, email="", timezone="UTC",
+                        kind="team")
+                    self._conn.execute(
+                        f"INSERT INTO team_home ({_HOME_COLUMNS}, created_at, updated_at) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        (space_id, tenant.id, space_name, agent_id, agent_name,
+                         return_url, key_sealed, now, now))
+                except BaseException:
+                    self._conn.rollback()
+                    raise
+                tenant_id = tenant.id
+            else:
+                tenant_id = found.tenant_id
+                self._conn.execute(
+                    "UPDATE team_home SET space_name = ?, agent_id = ?, agent_name = ?, "
+                    "return_url = ?, key_sealed = ?, updated_at = ? WHERE space_id = ?",
+                    (space_name, agent_id, agent_name, return_url, key_sealed, now,
+                     space_id))
+            self._conn.commit()
+            return (TeamHome(space_id, tenant_id, space_name, agent_id, agent_name,
+                             return_url, key_sealed), found is None)
+
+    def team_home(self, space_id: str) -> TeamHome | None:
+        """The home of this space's agent, or None."""
+        with self._lock:
+            return self._home(self._conn.execute(
+                f"SELECT {_HOME_COLUMNS} FROM team_home WHERE space_id = ?",
+                (space_id,)).fetchone())
+
+    def team_home_for_tenant(self, tenant_id: str) -> TeamHome | None:
+        """The home this tenant is, or None for a person's tenant."""
+        with self._lock:
+            return self._home(self._conn.execute(
+                f"SELECT {_HOME_COLUMNS} FROM team_home WHERE tenant_id = ?",
+                (tenant_id,)).fetchone())
+
     def delete_tenant(self, tenant_id: str) -> None:
         """The row goes; the archive keeps the files for 30 days.
 
@@ -670,5 +784,6 @@ class ControlDb:
             self._conn.execute("DELETE FROM tenant_wakeups WHERE tenant_id = ?", (tenant_id,))
             self._conn.execute("DELETE FROM slack_install WHERE tenant_id = ?", (tenant_id,))
             self._conn.execute("DELETE FROM connect_token WHERE tenant_id = ?", (tenant_id,))
+            self._conn.execute("DELETE FROM team_home WHERE tenant_id = ?", (tenant_id,))
             self._conn.execute("DELETE FROM tenant WHERE id = ?", (tenant_id,))
             self._conn.commit()

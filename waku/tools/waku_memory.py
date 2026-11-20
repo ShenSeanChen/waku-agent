@@ -23,6 +23,9 @@ for a turn in it, and it sends again any fact an earlier send failed on
 (spec 021 amendment E2). The report and `save_note` still send. The server is found in the bridge's merged list, so
 a plugin's server and an mcp.json entry are found the same way.
 
+With WAKU_MEMORY_SPACE set to a team space's id, every one of those sends
+names that space, so the memory belongs to the team and not to the agent.
+
 `waku connect waku-memory` (or `/connect waku-memory` in the dashboard chat)
 connects without the plugin: it adds the server to WAKU_HOME/mcp.json next to
 any servers already there, then signs you in once in your browser. Its tools
@@ -89,6 +92,10 @@ def _server(bridge) -> str | None:
 
 
 CREDIT_LIMIT_CODE = "credit_limit_reached"
+# The id of the team space this agent saves into, or unset for a person's own
+# agent. Not a secret and not a setting a person chooses: whoever runs the
+# agent for a team sets it beside that team's agent's WAKU_MEMORY_API_KEY.
+SPACE_ENV = "WAKU_MEMORY_SPACE"
 
 
 class CreditsUsedUp(RuntimeError):
@@ -114,7 +121,16 @@ def remember_via(bridge):
         # A research report (spec 007) names its own kind, `semantic`.
         if kind is None:
             kind = "reference" if scope.startswith("project:") else "fact"
-        text = bridge.call(server, "memory.remember", {"body": body, "kind": kind, "scope": scope})
+        args = {"body": body, "kind": kind, "scope": scope}
+        # An agent that belongs to a team space saves into that space. Waku
+        # Memory takes `space` only from the space's own agent; without it a
+        # save made with the agent's key is the agent's own memory, which no
+        # member of the team reads. Read on each save, so it follows the
+        # environment the process has now.
+        space = os.getenv(SPACE_ENV, "").strip()
+        if space:
+            args["space"] = space
+        text = bridge.call(server, "memory.remember", args)
         try:
             return json.loads(text)["memory"]["id"]
         except (ValueError, KeyError, TypeError):

@@ -39,6 +39,11 @@
 # names. $slack_token_key is the one secret this function prints; install.sh
 # makes it with waku_new_key and pipes this into waku_write_config, which
 # creates the file 0600 before a byte of it is written.
+#
+# WAKU_AGENT_PLATFORM_SECRET (spec 032) IS WRITTEN EMPTY too. It is shared
+# with waku.one, so install.sh cannot make it: the operator enters the same
+# value in both places by hand (hosted/README.md, "Team homes"). Until then
+# the gateway's /v1/team-homes routes answer 503.
 waku_gateway_env() {
   cat <<EOF
 WAKU_APEX_HOST=$domain
@@ -65,6 +70,7 @@ WAKU_SLACK_SIGNING_SECRET=
 WAKU_SLACK_TOKEN_KEY=$slack_token_key
 WAKU_GITHUB_CLIENT_ID=
 WAKU_GITHUB_CLIENT_SECRET=
+WAKU_AGENT_PLATFORM_SECRET=
 EOF
 }
 

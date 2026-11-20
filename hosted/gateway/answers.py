@@ -160,11 +160,14 @@ def starting_page(path: str) -> web.Response:
     return harden(response)
 
 
-def html_error(status: int, message: str) -> web.Response:
+def html_error(status: int, message: str, *, retry: bool = True) -> web.Response:
     """A page navigation that fails gets a sentence and a way back, not a
     JSON body the browser renders as text (spec, "Error shape"). It wears the
-    sign-in page's card, so it is recognisably Waku rather than bare HTML."""
-    body = _page(message, action="<p><a href=\"/\">Try again</a></p>")
+    sign-in page's card, so it is recognisably Waku rather than bare HTML.
+
+    `retry=False` leaves the link out, for a person whose way back is on
+    another site: "Try again" leads to this host's sign-in page."""
+    body = _page(message, action="<p><a href=\"/\">Try again</a></p>" if retry else "")
     return harden(web.Response(status=status, text=body,
                                content_type="text/html", charset="utf-8"))
 

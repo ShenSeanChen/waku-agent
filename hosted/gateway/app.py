@@ -48,6 +48,7 @@ from hosted.gateway import (
     setup_page,
     slack,
     slack_state,
+    team_homes,
 )
 from hosted.gateway.config import GatewayConfig
 from hosted.gateway.identity import NotSignedIn
@@ -254,8 +255,13 @@ class Gateway:
                  memory_keys: MemoryKeys | None = None,
                  slack: slack.SlackRoutes | None = None,
                  connect: connect.Connect | None = None,
+                 team_homes: team_homes.TeamHomeRoutes | None = None,
                  now: Callable[[], float] = time.time) -> None:
         self._config = config
+        # Spec 032: None when config/gateway.env has no platform secret, or
+        # no key to seal a team's Waku Memory key with. Every route under
+        # /v1/team-homes then answers 503 with the reason.
+        self._team_homes = team_homes
         # Spec 029: None when config/gateway.env has no key to seal a
         # connector's tokens with. Every connector route then answers 503
         # with config.connect_problem.
@@ -406,6 +412,15 @@ class Gateway:
             if (path == CONVERSATIONS_API_PATH
                     or path.startswith(CONVERSATIONS_API_PATH + "/")):
                 return await self._conversations_api(request, path)
+            if path == team_homes.PATH or path.startswith(team_homes.PATH + "/"):
+                # Before the CSRF pair, like the bearer routes: waku.one's
+                # API calls these with the platform secret and no Origin.
+                if self._team_homes is None:
+                    return team_homes.not_configured(
+                        self._config.platform_problem
+                        if not self._config.platform_secret
+                        else self._config.connect_problem)
+                return await self._team_homes.handle(request, path)
         if guards.csrf_refusal(request, host):
             return answers.refusal(request, guards.UNSUPPORTED_MEDIA, answers.NOT_JSON)
         if host == self._config.apex_host:
@@ -521,9 +536,20 @@ class Gateway:
     def _slack_install(self, request: web.Request) -> web.Response:
         """GET /slack/install: the "Add to Slack" link. A GET, because it is a
         link a person follows; it changes nothing but the state it issues, and
-        Slack's own page asks the person before anything is installed."""
+        Slack's own page asks the person before anything is installed.
+
+        Like /auth/enter, `?home=<ticket>` must never reach an access log."""
         if self._slack is None:
             return slack.not_configured(self._config.slack_problem)
+        if "home" in request.query:
+            # Spec 032 A3: an owner of a team space, sent here by waku.one
+            # with a ticket and no session. The ticket is read once, and a
+            # session in this browser is neither needed nor used.
+            home = (self._team_homes.redeem_ticket(request.query.get("home", ""))
+                    if self._team_homes is not None else None)
+            if home is None:
+                return answers.html_error(410, slack.HOME_LINK_ENDED, retry=False)
+            return self._slack.start_home(home)
         tenant = self._apex_tenant(request)
         if tenant is None:
             return answers.redirect(f"https://{self._config.apex_host}/login")

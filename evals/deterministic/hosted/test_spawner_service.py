@@ -31,10 +31,11 @@ class FakeRuntime:
                           + ((connectors,) if connectors else ()))
 
     async def start(self, tenant_id, project_id, timezone, token, memory_key="",
-                    connectors=()):
+                    connectors=(), memory_space=""):
         self.calls.append(("start", tenant_id, project_id, timezone, token)
                           + ((memory_key,) if memory_key else ())
-                          + ((connectors,) if connectors else ()))
+                          + ((connectors,) if connectors else ())
+                          + ((memory_space,) if memory_space else ()))
         return RunningContainer(tenant_id=tenant_id, address="10.88.0.2", port=7777)
 
     async def stop(self, tenant_id):
@@ -142,6 +143,7 @@ _VALID = {
     "token": TOKEN,
     "task": "backup",
     "memory_key": "mem_sk_" + "v" * 43,
+    "memory_space": "0b0f3c1e-8a0e-4c58-9d55-0d2b5b1f7a11",
     "connectors": ["notion"],
 }
 

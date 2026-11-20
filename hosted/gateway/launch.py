@@ -36,6 +36,7 @@ from typing import TYPE_CHECKING
 from hosted import log
 from hosted.core import idle
 from hosted.core import tenant as tenant_core
+from hosted.gateway.secretbox import Unreadable
 from hosted.gateway.spawner_client import SpawnerBusy, SpawnerClient, SpawnerError
 from hosted.ports.control import ControlStore, Tenant
 from hosted.ports.runtime import RunningContainer
@@ -44,6 +45,7 @@ if TYPE_CHECKING:
     # For the annotation only: container_api imports forward, and forward
     # imports this module.
     from hosted.gateway.container_api import ContainerApi
+    from hosted.gateway.team_homes import HomeKeys
 
 _LOG = log.get(__name__)
 
@@ -71,8 +73,12 @@ class StartTimedOut(StartFailed):
 class Launcher:
     def __init__(self, *, store: ControlStore, spawner: SpawnerClient,
                  fleet: idle.Fleet, now: Callable[[], float] = time.time,
-                 containers: ContainerApi | None = None) -> None:
+                 containers: ContainerApi | None = None,
+                 home_keys: HomeKeys | None = None) -> None:
         self._store = store
+        # Spec 032 A4: what opens a team home's sealed Waku Memory key. None
+        # means this gateway has no sealing key, and no team home starts.
+        self._home_keys = home_keys
         self._spawner = spawner
         self._fleet = fleet
         # Spec 026: how stop_idle asks a container what work it has left.
@@ -280,17 +286,39 @@ class Launcher:
         if event is not None:
             event.set()
 
+    def _memory(self, tenant: Tenant) -> tuple[str, dict]:
+        """(the Waku Memory key this tenant's container starts with, the
+        extra keywords of its start).
+
+        A person's container gets the person's own key and nothing else. A
+        team home's gets its space's agent's key, opened from team_home, and
+        the space it saves into (spec 032 A4). Raises Unreadable when a team
+        home's key cannot be opened: it never starts on a person's key or
+        with no key, because either would run the team's agent as something
+        it is not."""
+        if tenant.kind != "team":
+            return self._store.memory_key(tenant.id), {}
+        if self._home_keys is None:
+            raise Unreadable("this gateway has no key to open a team's key with")
+        key, space_id = self._home_keys.for_start(tenant)
+        return key, {"memory_space": space_id}
+
     async def _start_locked(self, tenant: Tenant) -> RunningContainer:
         event = self._start_event(tenant.id)
         self._fleet.set_status(tenant.id, idle.STARTING)
         token = self._store.issue_token(tenant.id)
         try:
+            memory_key, team = self._memory(tenant)
             running = await asyncio.wait_for(
                 self._spawner.start(tenant.id, tenant.project_id,
-                                    tenant.timezone, token,
-                                    self._store.memory_key(tenant.id),
-                                    **self._connectors(tenant.id)),
+                                    tenant.timezone, token, memory_key,
+                                    **self._connectors(tenant.id), **team),
                 idle.START_TIMEOUT_SECONDS)
+        except Unreadable as exc:
+            self._forget_running(tenant.id)
+            # The reason and never the key. The spawner was not asked.
+            _LOG.error("team home tenant=%s was not started: %s", tenant.id, exc)
+            raise StartFailed(idle.START_TIMEOUT_MESSAGE) from exc
         except SpawnerBusy as exc:
             self._forget_running(tenant.id)
             raise InMaintenance(idle.MAINTENANCE_MESSAGE) from exc

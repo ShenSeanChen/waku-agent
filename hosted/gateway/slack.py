@@ -9,13 +9,26 @@ One Slack app serves every workspace. Four things happen here:
             workspace's team id to the tenant.
   events    POST /v1/triggers/slack: Slack posts every workspace's mentions
             here. A signed request becomes one row in tenant_events for the
-            tenant its team id maps to.
+            tenant its team id maps to: the person who added the app, or the
+            home of a team space's agent (spec 032), whose events start with
+            a line that names the space.
   relay     SlackRelay.send: a tenant's container asks for a message to be
             posted, and the gateway posts it with that tenant's token. The
             token never enters a container.
   history   SlackHistory.read: a tenant's container asks for the recent
             messages of the channel its run is in, and the gateway reads
             them with that tenant's token (spec 029 D).
+
+A TEAM HOME HAS NO PERSON TO SIGN IN (spec 032, decision 2). An owner of a
+team space presses "Add Waku to Slack" on waku.one, and their browser arrives
+at GET /slack/install?home=<ticket> with no session here. The ticket stands in
+for the sign-in: waku.one got it from POST /v1/team-homes (team_homes.py), and
+it names one home, works once and ends after ten minutes. The install page
+then sets a cookie that lasts ten minutes, and the callback requires that
+cookie together with the `state`. That keeps the rule below for a browser
+with no session: the browser that finishes an install is the one that began
+it. After Slack's page the browser goes to the home's own return address on
+waku.one, whether the owner approved or cancelled.
 
 THE STATE IS WHAT TIES AN INSTALL TO A PERSON. Slack returns whatever `state`
 it was given, so the gateway issues one per start: random, bound to the
@@ -48,12 +61,12 @@ import aiohttp
 from aiohttp import web
 
 from hosted import log
-from hosted.core.tenant import is_tenant_id
+from hosted.core.tenant import is_tenant_id, token_hash
 from hosted.gateway import answers, sessions
 from hosted.gateway.config import SlackSettings
 from hosted.gateway.secretbox import SecretBox, Unreadable
-from hosted.gateway.slack_thread import BUDGET_SECONDS, ThreadReader
-from hosted.ports.control import ControlStore
+from hosted.gateway.slack_thread import BUDGET_SECONDS, ThreadReader, with_team_space
+from hosted.ports.control import ControlStore, TeamHome
 
 _LOG = log.get(__name__)
 
@@ -75,6 +88,14 @@ SCOPES = ("app_mentions:read", "chat:write", "channels:history", "groups:history
 # said that anything was happening.
 SEEN_REACTION = "eyes"
 STATE_TTL_SECONDS = 600
+# What the install page of a team home sets before it sends the browser to
+# Slack, and what the callback asks for with the `state` (spec 032 A3). It
+# lasts as long as the state does. __Host-: Secure, Path=/ and no Domain, so
+# only this host ever receives it.
+HOME_COOKIE = "__Host-waku_slack_home"
+HOME_LINK_ENDED = ("This link to add Waku to Slack has ended or was already used. "
+                   "Go back to your team space on waku.one and press "
+                   '"Add Waku to Slack" again.')
 # One request to Slack. The person's browser, or Slack's own three-second
 # limit on an event, is waiting behind it.
 TIMEOUT_SECONDS = 10
@@ -203,30 +224,35 @@ class OAuthStates:
     the check goes. A tenant has one state at a time: a new start ends the
     earlier one, which also bounds this dict by the number of tenants. A
     gateway restart forgets them all, and the person starts again.
+
+    A state issued for a team home also holds the hash of the cookie its
+    install page set (`browser`). A person's state holds "", and the callback
+    asks for that person's session instead.
     """
 
     def __init__(self, now: Callable[[], float],
                  ttl: float = STATE_TTL_SECONDS) -> None:
         self._now = now
         self._ttl = ttl
-        self._states: dict[str, tuple[str, float]] = {}
+        self._states: dict[str, tuple[str, float, str]] = {}
 
-    def issue(self, tenant_id: str) -> str:
+    def issue(self, tenant_id: str, browser: str = "") -> str:
         now = self._now()
-        for state in [s for s, (owner, expires) in self._states.items()
+        for state in [s for s, (owner, expires, _) in self._states.items()
                       if owner == tenant_id or expires <= now]:
             self._states.pop(state, None)
         state = sessions.new_secret()
-        self._states[state] = (tenant_id, now + self._ttl)
+        self._states[state] = (tenant_id, now + self._ttl, browser)
         return state
 
-    def redeem(self, state: str) -> str | None:
-        """The tenant this state was issued to, once, or None."""
+    def redeem(self, state: str) -> tuple[str, str] | None:
+        """(the tenant this state was issued to, the hash of its install
+        page's cookie or ""), once, or None."""
         found = self._states.pop(state, None)
         if found is None:
             return None
-        tenant_id, expires = found
-        return tenant_id if self._now() < expires else None
+        tenant_id, expires, browser = found
+        return (tenant_id, browser) if self._now() < expires else None
 
 
 _GZIP_MAGIC = b"\x1f\x8b"
@@ -684,6 +710,23 @@ class SlackRoutes:
             "state": self._states.issue(tenant_id), "redirect_uri": self.redirect_uri})
         return answers.redirect(f"{AUTHORIZE_URL}?{query}")
 
+    def start_home(self, home: TeamHome) -> web.Response:
+        """Send the browser of a team space's owner to Slack's approval page
+        (spec 032 A3). The caller redeemed the ticket that names `home`.
+
+        The cookie is what the callback will ask this browser for. Only its
+        hash is kept, beside the state, so the gateway's memory holds no
+        value a browser could present."""
+        browser = sessions.new_secret()
+        query = urllib.parse.urlencode({
+            "client_id": self._settings.client_id, "scope": ",".join(SCOPES),
+            "state": self._states.issue(home.tenant_id, token_hash(browser)),
+            "redirect_uri": self.redirect_uri})
+        response = answers.redirect(f"{AUTHORIZE_URL}?{query}")
+        sessions.set_session_cookie(response, HOME_COOKIE, browser,
+                                    max_age=STATE_TTL_SECONDS)
+        return response
+
     async def callback(self, request: web.Request,
                        session_tenant: str | None) -> web.Response:
         """Slack sent the browser back. `session_tenant` is the active tenant
@@ -692,7 +735,13 @@ class SlackRoutes:
         Like /auth/enter, this route's query holds a code, so it must never
         reach an access log.
         """
-        owner = self._states.redeem(request.query.get("state", ""))
+        found = self._states.redeem(request.query.get("state", ""))
+        owner, browser = found if found is not None else (None, "")
+        home = self._store.team_home_for_tenant(owner) if owner and browser else None
+        if owner is not None and browser:
+            # A state made for a team home. It is finished here or not at
+            # all: a session never stands in for the install page's cookie.
+            return await self._home_callback(request, home, browser)
         if request.query.get("error"):
             # The person pressed Cancel. The state went with it, above.
             return self._back(DENIED)
@@ -729,6 +778,65 @@ class SlackRoutes:
     @staticmethod
     def _back(outcome: str) -> web.Response:
         return answers.redirect(f"{SETUP_PATH}?slack={outcome}")
+
+    async def _home_callback(self, request: web.Request, home: TeamHome | None,
+                             browser: str) -> web.Response:
+        """The callback of an install a team home's ticket began.
+
+        The browser goes to the home's return address whatever happened, and
+        waku.one reads the result with GET /v1/team-homes/{space_id}. Nothing
+        is installed unless this browser holds the cookie the install page
+        set, Slack answered one workspace's bot token, and no other tenant
+        holds that workspace."""
+        if home is None:
+            # The home was removed while its owner was on Slack's page.
+            return self._home_done(None)
+        sent = request.cookies.get(HOME_COOKIE, "")
+        if not sent or not hmac.compare_digest(token_hash(sent), browser):
+            _LOG.info("space=%s: Slack callback refused: this browser did not open "
+                      "the install page", home.space_id)
+            return self._home_done(home)
+        if request.query.get("error"):
+            _LOG.info("space=%s: the Slack install was cancelled", home.space_id)
+            return self._home_done(home)
+        try:
+            answer = await self._api.oauth_access(
+                code=request.query.get("code", ""), redirect_uri=self.redirect_uri,
+                client_id=self._settings.client_id,
+                client_secret=self._settings.client_secret)
+        except SlackUnreachable as exc:
+            _LOG.warning("space=%s: Slack install failed: %s", home.space_id, exc)
+            return self._home_done(home)
+        found = _install_from(answer)
+        if found is None:
+            _LOG.info("space=%s: Slack install refused: %s", home.space_id,
+                      _error_code(answer) or "not one workspace's bot token")
+            return self._home_done(home)
+        token, team_id, team_name, bot_user_id = found
+        stored = self._store.set_slack_install(
+            home.tenant_id, team_id=team_id, team_name=team_name,
+            bot_user_id=bot_user_id,
+            token_sealed=self._box.seal(token, bound_to=seal_binding(team_id)))
+        if not stored:
+            # Another tenant holds this workspace: a person's own install, or
+            # another space's home. It is left exactly as it is, and the
+            # token is dropped and not revoked, for the reason in callback().
+            # Moving a person's workspace to a home is spec 032 group E.
+            _LOG.info("space=%s: Slack team=%s already belongs to another tenant; "
+                      "nothing was changed", home.space_id, team_id)
+            return self._home_done(home)
+        _LOG.info("space=%s: tenant=%s connected Slack team=%s", home.space_id,
+                  home.tenant_id, team_id)
+        return self._home_done(home)
+
+    @staticmethod
+    def _home_done(home: TeamHome | None) -> web.Response:
+        """Back to the space's page on waku.one, with the install page's
+        cookie deleted. A home that is gone has no page to go back to."""
+        response = (answers.redirect(home.return_url) if home is not None
+                    else answers.html_error(410, HOME_LINK_ENDED, retry=False))
+        sessions.clear_session_cookie(response, HOME_COOKIE)
+        return response
 
     # --- events ---------------------------------------------------------
 
@@ -791,7 +899,15 @@ class SlackRoutes:
         tenant = self._store.tenant_by_id(tenant_id)
         if row is None or tenant is None or tenant.status != "active":
             return
-        row["payload"]["text"] = await self._with_thread(tenant_id, event, mentioned)
+        text = await self._with_thread(tenant_id, event, mentioned)
+        home = self._store.team_home_for_tenant(tenant_id)
+        if home is not None:
+            # Spec 032 A6: this workspace's channels are answered by a team
+            # space's agent. Added here and not in _with_thread, so the line
+            # is there whichever way the thread was or was not read.
+            text = with_team_space(text, space_name=home.space_name,
+                                   agent_name=home.agent_name)
+        row["payload"]["text"] = text
         if self._store.add_event(tenant_id, **row):
             # A tick now, so the mention does not wait for the next one.
             self._wake()

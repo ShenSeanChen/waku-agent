@@ -15,6 +15,10 @@ Reading a thread needs `channels:history` (public channels) or
 that added the app before those scopes were asked for has none of them.
 Nothing here fails for it: Slack answers `missing_scope`, and the mention goes
 to the agent as it would have, with the bot's own id replaced by its name.
+
+A workspace that belongs to a team space's home gets one more line, first:
+"You are Waku, the agent of the team space Acme. What you save here is read by
+every member of Acme." (spec 032, with_team_space).
 """
 
 from __future__ import annotations
@@ -49,6 +53,12 @@ FOLLOW_UP_HEAD = ("[{who} wrote this in a thread you are part of, without mentio
 # the channel's id: nothing had told it which channel it was in.
 WHERE = ("[This is the Slack channel {name}. Its address is slack:{channel}: a message "
          "sent there appears in the channel itself, outside this thread.]")
+# The first line of every channel event of a team home (spec 032, decision
+# 2). The agent of a team space answers everybody in the channel and saves
+# into the space, so it is told whose agent it is before anything else.
+TEAM_SPACE = ("[You are {agent}, the agent of the team space {space}. What you save here "
+              "is read by every member of {space}.]")
+TEAM_NAME_CHARS = 80
 YOU = "Waku (you)"
 SOMEONE = "someone"
 
@@ -192,6 +202,23 @@ class ThreadReader:
             return SOMEONE
         self._names[key] = found[:80]
         return self._names[key]
+
+
+def _on_one_line(name: str) -> str:
+    """A name a person typed on waku.one, as it goes into a bracketed line:
+    one line, no bracket that could close the line or start another, and at
+    most TEAM_NAME_CHARS characters."""
+    flat = " ".join(name.replace("[", " ").replace("]", " ").split())
+    return flat[:TEAM_NAME_CHARS].strip()
+
+
+def with_team_space(text: str, *, space_name: str, agent_name: str) -> str:
+    """A channel event's text with the line that names the team space in
+    front of it. slack.SlackRoutes._route calls it for a team home and for
+    no other tenant."""
+    line = TEAM_SPACE.format(agent=_on_one_line(agent_name) or "Waku",
+                             space=_on_one_line(space_name) or "this team")
+    return f"{line}\n{text}"
 
 
 def _own_name(text: str, bot_user_id: str) -> str:

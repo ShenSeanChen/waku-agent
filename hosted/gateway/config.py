@@ -17,6 +17,9 @@ secrets, so config/gateway.env is one now. install.sh has always written it
 0600 in a directory only root can enter, and Compose hands it to the gateway
 as an env_file; nothing reads it from the repository. SlackSettings keeps all
 three out of its repr, and no message in this module quotes a value.
+
+SO IS WAKU_AGENT_PLATFORM_SECRET (spec 032): the one secret waku.one and this
+gateway both hold. Whoever has it can make a team home here.
 """
 
 from __future__ import annotations
@@ -76,6 +79,10 @@ REQUIRED_ENV_NAMES = (
     # not a connector on this server.
     "WAKU_GITHUB_CLIENT_ID",
     "WAKU_GITHUB_CLIENT_SECRET",
+    # Spec 032: the secret waku.one sends with each call to /v1/team-homes.
+    # In MAY_BE_ABSENT: without it the gateway starts and those routes
+    # answer 503.
+    "WAKU_AGENT_PLATFORM_SECRET",
 )
 
 # The Slack app's client id, client secret and signing secret, which the
@@ -91,7 +98,8 @@ SLACK_ENV_NAMES = ("WAKU_SLACK_CLIENT_ID", "WAKU_SLACK_CLIENT_SECRET",
 # it would take every tenant down on the upgrade that added the embedded chat.
 # Absent or empty, the allowlist is DEFAULT_EMBED_ORIGINS.
 MAY_BE_ABSENT = frozenset({"WAKU_EMBED_ORIGINS", "WAKU_IDLE_MINUTES", *SLACK_ENV_NAMES,
-                           "WAKU_GITHUB_CLIENT_ID", "WAKU_GITHUB_CLIENT_SECRET"})
+                           "WAKU_GITHUB_CLIENT_ID", "WAKU_GITHUB_CLIENT_SECRET",
+                           "WAKU_AGENT_PLATFORM_SECRET"})
 
 # waku.one's three hosts. http://localhost:3000, for developing waku.one's own
 # page against a real gateway, is never in the default: an operator who wants
@@ -192,6 +200,32 @@ def connect_key_from(env: Mapping[str, str]) -> tuple[bytes | None, str]:
     return bytes.fromhex(value), ""
 
 
+PLATFORM_SECRET_ENV = "WAKU_AGENT_PLATFORM_SECRET"
+# The fewest characters the shared secret may have. `openssl rand -hex 32`
+# writes 64. A shorter value is a typo or a placeholder, and a guessable one
+# would let any caller hand the gateway a key and get a home for it.
+PLATFORM_SECRET_MIN_CHARS = 32
+
+
+def platform_secret_from(env: Mapping[str, str]) -> tuple[str, str]:
+    """(the secret waku.one's calls must carry, "") or ("", why not).
+
+    THE SAME VALUE IS SET ON waku.one, as its own WAKU_AGENT_PLATFORM_SECRET
+    (spec 032, decision 2). The reason names the variable and quotes no
+    value. It never raises, for slack_from's reason: a gateway.env from
+    before spec 032 has no such line."""
+    value = (env.get(PLATFORM_SECRET_ENV) or "").strip()
+    if not value:
+        return "", f"config/gateway.env is missing {PLATFORM_SECRET_ENV}"
+    if len(value) < PLATFORM_SECRET_MIN_CHARS or any(ch.isspace() for ch in value):
+        return "", (f"{PLATFORM_SECRET_ENV} in config/gateway.env is not usable: write "
+                    f"at least {PLATFORM_SECRET_MIN_CHARS} characters with no space")
+    return value, ""
+
+
+# What a GatewayConfig built by hand says about team homes: off, no secret.
+PLATFORM_NOT_CONFIGURED = f"config/gateway.env is missing {PLATFORM_SECRET_ENV}"
+
 # The client id and client secret of the GitHub App, which the operator
 # copies from the app's page at github.com (hosted/README.md, "GitHub").
 GITHUB_ENV_NAMES = ("WAKU_GITHUB_CLIENT_ID", "WAKU_GITHUB_CLIENT_SECRET")
@@ -261,6 +295,10 @@ class GatewayConfig:
     # `github_problem` then says why GitHub is not offered.
     connect_clients: Mapping[str, tuple[str, str]] = field(default_factory=dict, repr=False)
     github_problem: str = GITHUB_NOT_CONFIGURED
+    # Spec 032. `platform_secret` is "" when the team-home routes are off,
+    # and `platform_problem` then says why.
+    platform_secret: str = field(default="", repr=False)
+    platform_problem: str = PLATFORM_NOT_CONFIGURED
 
 
 def config_from_env(env: Mapping[str, str]) -> GatewayConfig:
@@ -273,6 +311,7 @@ def config_from_env(env: Mapping[str, str]) -> GatewayConfig:
     slack, slack_problem = slack_from(env)
     connect_key, connect_problem = connect_key_from(env)
     connect_clients, github_problem = connect_clients_from(env)
+    platform_secret, platform_problem = platform_secret_from(env)
     return GatewayConfig(
         apex_host=env["WAKU_APEX_HOST"].strip().lower(),
         bind_host=env["WAKU_GATEWAY_BIND"],
@@ -296,4 +335,6 @@ def config_from_env(env: Mapping[str, str]) -> GatewayConfig:
         connect_problem=connect_problem,
         connect_clients=connect_clients,
         github_problem=github_problem,
+        platform_secret=platform_secret,
+        platform_problem=platform_problem,
     )

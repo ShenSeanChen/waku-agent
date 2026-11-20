@@ -524,7 +524,10 @@ def test_a_gateway_env_from_before_spec_008_still_starts():
     # Spec 029 F added the GitHub App's two; test_connect_github.py pins
     # what their absence does.
     github = {"WAKU_GITHUB_CLIENT_ID", "WAKU_GITHUB_CLIENT_SECRET"}
-    absent = {"WAKU_EMBED_ORIGINS", "WAKU_IDLE_MINUTES"} | slack | github
+    # Spec 032 added the platform secret; test_team_home_routes.py pins what
+    # its absence does.
+    absent = {"WAKU_EMBED_ORIGINS", "WAKU_IDLE_MINUTES",
+              "WAKU_AGENT_PLATFORM_SECRET"} | slack | github
     assert set(env) == set(REQUIRED_ENV_NAMES) - absent
     assert MAY_BE_ABSENT == absent
     assert config_from_env(env).embed_origins == DEFAULT_EMBED_ORIGINS
