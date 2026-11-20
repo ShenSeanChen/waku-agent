@@ -6,7 +6,7 @@
 Read this before opening a PR or filing an issue: most of what is already
 known-broken is below, and half of it already has a fix in flight.
 
-**Last updated:** 2026-11-17
+**Last updated:** 2026-11-20
 
 ---
 
@@ -26,9 +26,9 @@ and one worker answers them one conversation at a time. A message that arrives
 during a restart is answered after it. Each reply is a row in the `outbox`
 table, and a dispatcher sends it to the Telegram chat, the Slack thread or the
 GitHub issue it answers, retrying a failed delivery four times. `send_message`
-writes a row in the same table. `schedule_task` sets a one-time timer: the
+writes a row in the same table. `schedule_task` sets a timer that fires once, or repeats every day or every weekday at a time on the person's clock (spec 033): the
 agent names a time and a note, and `waku serve` starts a run with that note in
-the same conversation within about 5 seconds of that time. A tool call that writes
+the same conversation within about 5 seconds of that time. "Send me a brief every morning at 9" sets one repeating timer, and each morning's run reads the connected services, memory and the team board and sends one short message where it was asked. A tool call that writes
 to someone else waits for a yes, and so does a reply to a GitHub issue or a
 Slack channel and a write through an MCP server (spec 025: a server on the
 starter list asks for its writes, any other server for every tool it does
@@ -43,7 +43,7 @@ workspace or repository.
 
 A person connects an MCP server of their own in one step (spec 025): `waku mcp add`, a card on the Connections page, or "connect Linear" in chat under `waku serve`, which asks the owner first. The starter list holds Linear, Notion and GitHub, and `waku connections` checks the Slack tokens and names a missing scope. The sign-in to a vendor's server, the three starter servers and a Slack app made from the manifest have run against a stub sign-in and a fake Slack only, never against the live services.
 
-**3,944 deterministic evals pass offline**, with no API key; 60 more are live
+**4,739 deterministic evals pass offline**, with no API key; 60 more are live
 evals that skip without one. CI runs the offline tier on every PR along with
 ruff, the skills validator, and a check that `.env.example` still matches the
 integrations registry.
@@ -72,7 +72,7 @@ Nothing here is a surprise. If you hit one of these, the issue exists.
 | Slack, Gmail and Google Drive are not on the starter list: each vendor's server takes sign-in only from a client registered with it beforehand, and Waku registers itself at sign-in | — | — |
 | The owner can approve only in a private Telegram chat named in `WAKU_OWNER`. Without one, a call that needs a yes is refused. Slack cannot carry the answer, because `waku serve` hears no Slack direct message | — | — |
 | The model reads a call that waits for a yes as "A plugin hook stopped this call before it ran", followed by the real reason | — | — |
-| A timer `schedule_task` sets fires only while `waku serve` runs, or in a hosted container; `waku` and `waku dashboard` on your own machine do not fire it. A timer cannot repeat. On hosted waku a stopped container is started for a timer or a Slack mention, and nothing else wakes it yet: no chat or embed message is stored as an event (spec 026, group B). A hosted container sends to Slack only, so a run a timer starts outside a Slack thread sends nothing. This path has run against a fake spawner, a fake clock and a fake Slack only, never on the VM. The same is true of the restart that moves a running hosted container to a new image between two turns after an upgrade: it has never compared image ids on a real Docker daemon | — | — |
+| A timer `schedule_task` sets fires only while `waku serve` runs, or in a hosted container; `waku` and `waku dashboard` on your own machine do not fire it. A repeating timer and the daily brief have run against a fake clock and no model only: no live morning, no live Slack, and no brief a model wrote has been read. On hosted waku a stopped container is started for a timer or a Slack mention, and nothing else wakes it yet: no chat or embed message is stored as an event (spec 026, group B). A hosted container sends to Slack only, so a run a timer starts outside a Slack thread sends nothing. This path has run against a fake spawner, a fake clock and a fake Slack only, never on the VM. The same is true of the restart that moves a running hosted container to a new image between two turns after an upgrade: it has never compared image ids on a real Docker daemon | — | — |
 | The public Waku Slack app ("Add to Slack" on hosted waku) is built and has never run against Slack: the Slack app itself is not created, and `config/gateway.env` on the VM has none of its four values. One workspace maps to one tenant, and the hosted app has no channel allowlist. That tenant is a person, or the home of a team space's agent (spec 032, group A: `POST` and `GET /v1/team-homes` for waku.one, a team's Waku Memory key sealed in `control.db`, and a container that saves into the team's space). A team home has run against a fake Slack and a fake spawner only: `WAKU_AGENT_PLATFORM_SECRET` is set nowhere, `DELETE` answers 405, a workspace a person's install holds is not moved, and the bot hears no direct message. The Slack card on a hosted dashboard has been drawn from a stub answer only, and it has no Disconnect | — | — |
 | Google Calendar sign-in has no bundled OAuth client, so `waku connect google` needs your own `~/.waku/credentials.json` | — | — |
 

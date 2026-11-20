@@ -196,8 +196,24 @@ run starts 3 seconds later, as for any message. A timer set in `waku` or the
 dashboard while `waku serve` runs can be up to 30 seconds late. The run
 answers in the conversation that set the timer. A timer set in `waku` or the
 dashboard answers `WAKU_OWNER`. A run that finds nothing worth sending sends
-nothing. A timer fires once, and a timer that comes due while `waku serve` is
-stopped fires at the next start.
+nothing. A timer fires once unless you ask for a repeat, and a timer that comes
+due while `waku serve` is stopped fires at the next start.
+
+Ask "remind me to stretch every weekday at 15:00" and the agent sets one timer
+that repeats, every day or every weekday, at that time on your clock. Waku
+sets each next day itself, so a day that fails does not stop the days after
+it. When `waku serve` was stopped at the time, the timer fires at the next
+start if that is less than 12 hours later, and otherwise waits for the next
+day: a week away gives you one reminder, not seven. `waku waiting` shows
+"every weekday at 15:00, next Monday 23 November 15:00", and `waku waiting
+cancel t3` ends it.
+
+Ask "send me a brief every morning at 9" and the timer's note starts with
+"Daily brief". Each morning the run reads every service you connected, your
+memory, and your team's memories and board when you have them, and sends one
+short message to the chat or thread where you asked: what waits for your
+answer, what is due, and what changed since yesterday. A service that is not
+connected is left out without a word.
 
 `waku waiting` lists what waits: the timers that have not fired, the calls
 that wait for your yes, and the messages that are queued or could not be

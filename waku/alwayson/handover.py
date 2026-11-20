@@ -74,7 +74,10 @@ def next_work(conn: sqlite3.Connection) -> dict:
     """What this container still has to do.
 
       next_timer_at  when the earliest pending timer is due (UTC, ISO 8601),
-                     or None
+                     or None. A repeating timer stays pending with its next
+                     occurrence as its due time (spec 033), so after today's
+                     brief fired this is tomorrow's, and the gateway starts
+                     the container again for it
       events         events no run has finished with yet
       outbox         outgoing messages not sent yet
       running        runs in flight

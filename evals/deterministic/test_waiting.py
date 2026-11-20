@@ -399,7 +399,7 @@ def test_dashboard_data_carries_the_same_three_lists(home, conn, monkeypatch):
     assert data["timers"][0] == {
         "id": f"t{timer_id}", "when": "2026-11-19T09:00:00+00:00",
         "what": "Check whether issue 12 is still open.", "where": "telegram:42",
-        "status": "pending"}
+        "status": "pending", "repeat": "", "zone": ""}
     json.dumps(data)   # the route sends it as JSON
 
 
