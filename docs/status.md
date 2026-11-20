@@ -6,7 +6,7 @@
 Read this before opening a PR or filing an issue: most of what is already
 known-broken is below, and half of it already has a fix in flight.
 
-**Last updated:** 2026-11-17
+**Last updated:** 2026-11-20
 
 ---
 
@@ -68,7 +68,7 @@ Nothing here is a surprise. If you hit one of these, the issue exists.
 | A message `send_message` queues waits until `waku serve` runs; `waku` and `waku dashboard` do not send it | — | — |
 | `waku serve` can deliver a chat reply twice when it dies after the channel accepted the reply and before the row is marked `sent` | — | — |
 | `waku serve` and the dashboard's Telegram cannot share one bot token: Telegram allows one poller, and the second one stays idle. `waku serve` says "telegram is blocked" on the line that lists its sources; the dashboard does not | — | — |
-| The sign-in link that `connect_tool` and the Connections page give works only on the computer Waku runs on, because the server sends the browser back to a port on that computer. On a hosted dashboard these cards read "not available here". There a person signs in to Notion or Linear at `agent.waku.one/setup` (spec 029, group A), and to GitHub, read-only, on a server that holds a GitHub App's client id and secret (group F), the gateway keeps the tokens, and the agent calls the connector's read tools through the metering proxy. A tool that writes is refused there, because nobody on hosted Waku can be asked first yet (spec 029, group C). This has run against a fake vendor only, never against Notion, Linear or GitHub | — | — |
+| The sign-in link that `connect_tool` and the Connections page give works only on the computer Waku runs on, because the server sends the browser back to a port on that computer. On a hosted dashboard these cards read "not available here". There a person signs in to Notion or Linear at `agent.waku.one/setup` (spec 029, group A), and to GitHub, read-only, on a server that holds a GitHub App's client id and secret (group F), the gateway keeps the tokens, and the agent calls the connector's read tools through the metering proxy. A tool that writes is refused there, because nobody on hosted Waku can be asked first yet (spec 029, group C). This has run against a fake vendor only, never against Notion, Linear or GitHub. On a server that holds a Google client's id and secret, a person also connects one Gmail mailbox there, and the agent searches it, reads a thread and writes a draft reply with `mail_search`, `mail_read` and `mail_draft` (spec 031, part A). Nothing sends a mail, new mail does not wake the agent, and it has run against a fake Google only | — | — |
 | Slack, Gmail and Google Drive are not on the starter list: each vendor's server takes sign-in only from a client registered with it beforehand, and Waku registers itself at sign-in | — | — |
 | The owner can approve only in a private Telegram chat named in `WAKU_OWNER`. Without one, a call that needs a yes is refused. Slack cannot carry the answer, because `waku serve` hears no Slack direct message | — | — |
 | The model reads a call that waits for a yes as "A plugin hook stopped this call before it ran", followed by the real reason | — | — |

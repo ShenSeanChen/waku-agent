@@ -13,6 +13,7 @@ Slack app configured.
 
 Under the steps the page lists the connectors a person can sign in to (spec
 029): Notion, Linear and, when this server holds its GitHub App, GitHub.
+Gmail is listed when this server holds its Google client (spec 031).
 Each has "Connect", or "Connected" once the gateway holds that person's
 tokens. The Connections page (spec 030) replaces this list.
 
@@ -86,6 +87,10 @@ def _connectors(signed_in: bool, connectors: list[tuple[str, str, str]]) -> str:
         start = f"{connect.START_PATH}?server={name}"
         if not signed_in:
             detail, action = "Sign in first.", ""
+        elif state == "connected" and name in VENDORS and not VENDORS[name].mcp:
+            # Gmail: what the agent can do there is the vendor's own note.
+            detail = f"{title} is connected."
+            action = _button(start, f"Sign in to {title} again", secondary=True)
         elif state == "connected":
             detail = (f"Your agent can read {title}. It cannot change anything there "
                       "yet: a change needs your yes, and that is not built here.")

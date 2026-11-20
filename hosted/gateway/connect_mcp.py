@@ -237,7 +237,9 @@ class McpRelay:
         "message": <the JSON-RPC answer, or None for a notification>}, or
         {"ok": False, "error": <code>} for a message that is not one."""
         vendor = self._connect.vendor(server)
-        if (vendor is None or not is_tenant_id(tenant_id) or not isinstance(message, dict)
+        # A vendor that is not an MCP server (Gmail) has no address to relay to.
+        if (vendor is None or not vendor.mcp
+                or not is_tenant_id(tenant_id) or not isinstance(message, dict)
                 or message.get("jsonrpc") != "2.0"
                 or not isinstance(message.get("method"), str)):
             return {"ok": False, "error": "bad_request"}

@@ -414,7 +414,8 @@ class Harness:
         """The real list, with each faked vendor's address on loopback."""
         moved = {}
         for name, fake in self._fake_vendors.items():
-            changes = {"url": fake.url + "/mcp"}
+            # Gmail is an API under the fake's own origin, not an MCP address.
+            changes = {"url": fake.url + ("/mcp" if VENDORS[name].mcp else "")}
             if VENDORS[name].authorize_url:
                 # GitHub: its two sign-in addresses are this code's own, so
                 # they move to the fake too.
@@ -1059,6 +1060,11 @@ class FakeVendor:
             return self._token(sent)
         return self.handle_other(path, sent, headers)
 
+    def handle_get(self, target: str, headers) -> tuple[int, dict] | None:
+        """A GET that is not discovery, for a fake that also plays the
+        vendor's API (FakeGoogle). None means it is not one."""
+        return None
+
     def handle_other(self, path: str, sent: dict, headers) -> tuple[int, dict]:
         return 404, {"error": "not_found"}
 
@@ -1083,9 +1089,11 @@ class FakeVendor:
                 self.wfile.write(body)
 
             def do_GET(self):
-                recorder.requests.append({"method": "GET", "path": self.path, "body": {},
-                                          "authorization": ""})
-                self._send(*recorder._get(self.path))
+                recorder.requests.append({
+                    "method": "GET", "path": self.path, "body": {},
+                    "authorization": self.headers.get("Authorization", "")})
+                found = recorder.handle_get(self.path, self.headers)
+                self._send(*(found or recorder._get(self.path)))
 
             def do_POST(self):
                 length = int(self.headers.get("Content-Length", 0))

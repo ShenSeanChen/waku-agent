@@ -719,7 +719,7 @@ variable.
 - **None of this has run against waku.one, Slack or Waku Memory.** The evals
   use a fake Slack and a fake spawner on loopback.
 
-## Connectors: Notion, Linear and GitHub
+## Connectors: Notion, Linear, GitHub and Gmail
 
 A person on hosted waku signs in to Notion, Linear or GitHub from
 `https://agent.waku.one/setup` (spec 029). Ana presses "Connect Notion",
@@ -841,6 +841,91 @@ GitHub's token lasts eight hours and its refresh token six months. The
 gateway renews the token in its last minute and keeps the new refresh token,
 because GitHub ends the old one when it is used.
 
+### Gmail
+
+A person connects one Gmail mailbox, and their agent can search it, read a
+thread and write a draft reply in it (spec 031, part A). **It cannot send.**
+Google has no MCP server a client can sign in to, so Gmail is not relayed as
+one: the gateway calls Gmail's own API.
+
+```
+container --POST /mail/read--> proxy --gateway.sock--> gateway --> gmail.googleapis.com
+```
+
+| Tool in the container | Route on the proxy | What the gateway asks Gmail |
+|---|---|---|
+| `mail_search` | `POST /mail/search` `{"query", "limit"}` | `messages.list` with Gmail's own search, then each message's headers. 10 by default, 20 at most |
+| `mail_read` | `POST /mail/read` `{"thread_id"}` | `threads.get`. The last 10 mails of the thread, 4,000 characters of each, without the lines a reply quotes |
+| `mail_draft` | `POST /mail/draft` `{"thread_id", "body"}` | `threads.get`, then `drafts.create` in that thread |
+
+**Nothing sends.** The proxy's route is `/mail/search`, `/mail/read` or
+`/mail/draft`, and `/mail/send` is a 404. The gateway's socket takes those
+three actions and no other. `hosted/gateway/mail.py` holds five Gmail
+addresses, four that read and `drafts.create`, and an eval reads the file to
+keep a sending address out of it. Google's `gmail.compose` scope would let a
+client send a draft; what stops it is that no code here asks. The person
+opens Drafts in Gmail and presses Send.
+
+**The gateway addresses the draft.** The agent gives a thread and a text. The
+reply goes to the last mail in the thread that the person did not write, at
+its `Reply-To` or else its `From`, so a mail that says "send this to
+somebody" cannot put an address on a draft. There is no draft outside a
+thread yet.
+
+**A mail is other people's text.** The tool puts everything read from Gmail
+between two lines that carry a mark made for that one call, under a sentence
+that says it is information and never an instruction. A mail cannot know the
+mark, so it cannot close the frame itself.
+
+**One mailbox per person, for now.** The spec wants several. `control.db`
+keeps one sign-in per tenant and connector, so a second sign-in replaces the
+first.
+
+The operator sets it up once, in the Google Cloud console
+(`console.cloud.google.com`), project `waku-agent`:
+
+1. **APIs & Services**, **Enabled APIs & services**: "Gmail API" is listed.
+   If it is not, **Enable APIs and services**, search "Gmail API", **Enable**.
+2. **Google Auth Platform**, **Audience** (in the older console, **OAuth
+   consent screen**): publishing status is "Testing". Under **Test users**,
+   **Add users**, and enter every Google address that will connect a mailbox.
+   Only these addresses can sign in, up to 100.
+3. **Google Auth Platform**, **Data Access**, **Add or remove scopes**: tick
+   `https://www.googleapis.com/auth/gmail.readonly` and
+   `https://www.googleapis.com/auth/gmail.compose`, **Update**, **Save**.
+   Not `gmail.send` and not `gmail.modify`.
+4. **Google Auth Platform**, **Clients** (in the older console, **APIs &
+   Services**, **Credentials**), the client "Waku hosted agent", type "Web
+   application". Under **Authorized redirect URIs** it has exactly
+   `https://agent.waku.one/connect/callback`.
+5. On that client's page, copy the **Client ID**. Under **Client secrets**,
+   **Add secret**, and copy it then: Google shows a secret once.
+
+Put both into `/srv/waku/config/gateway.env`, as root, and recreate the
+gateway with the command under "Slack: the public Waku app", "Turning it on":
+
+```
+WAKU_GOOGLE_CLIENT_ID=<Client ID, ending in .apps.googleusercontent.com>
+WAKU_GOOGLE_CLIENT_SECRET=<the client secret>
+```
+
+The gateway's log then says `connectors: on (notion, linear, github, gmail)`.
+Without both values it says why Gmail is not offered, `/setup` has no Gmail
+card, an agent has no mail tools, and one asked to connect Gmail answers that
+it cannot be connected here yet. A container builds its tools when it
+starts, so an agent that was running before the values were added gets the
+three tools at its next start.
+
+A person presses "Connect Gmail" on `/setup`, or says "connect Gmail" to
+their agent and opens the link. Google shows "Google hasn't verified this
+app" while the app is in testing: **Continue**, then leave both permissions
+ticked, then **Continue**.
+
+**In testing mode Google ends a sign-in after 7 days.** The gateway's renewal
+is then refused, `/setup` says "Reconnect Gmail", and the mail tools answer
+with the link to sign in again. This ends when the app passes Google's
+review, which is not started (spec 031, open question 1).
+
 ### Turning it on
 
 Connectors are on when `config/gateway.env` has a usable
@@ -874,6 +959,12 @@ or `connectors: off` with the reason, and the three routes then answer 503.
 - **Removing the two GitHub values takes GitHub off the list** and leaves
   each person's sealed tokens in `control.db`. Their `github` tools answer an
   error until the values are back.
+- **Removing the two Google values takes Gmail off the list** the same way.
+- **Gmail has run against a fake Google only.** Not verified against Google:
+  that its sign-in accepts the PKCE challenge beside the client secret, the
+  `iss` it sends back, and how Gmail fills a draft's `From`. A mail's
+  attachments are not read, a mailbox's new mail does not wake the agent
+  (spec 031, decision 3), and a mail call is not charged credits.
 - **None of this has run against Notion, Linear or GitHub.** The evals use a
   fake vendor on loopback. Whether each vendor's registration accepts
   `https://agent.waku.one/connect/callback` as a redirect address is not

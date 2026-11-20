@@ -526,8 +526,11 @@ def test_a_gateway_env_from_before_spec_008_still_starts():
     github = {"WAKU_GITHUB_CLIENT_ID", "WAKU_GITHUB_CLIENT_SECRET"}
     # Spec 032 added the platform secret; test_team_home_routes.py pins what
     # its absence does.
+    # Spec 031 A added the Google client's two; test_mail_gmail.py pins what
+    # their absence does.
+    google = {"WAKU_GOOGLE_CLIENT_ID", "WAKU_GOOGLE_CLIENT_SECRET"}
     absent = {"WAKU_EMBED_ORIGINS", "WAKU_IDLE_MINUTES",
-              "WAKU_AGENT_PLATFORM_SECRET"} | slack | github
+              "WAKU_AGENT_PLATFORM_SECRET"} | slack | github | google
     assert set(env) == set(REQUIRED_ENV_NAMES) - absent
     assert MAY_BE_ABSENT == absent
     assert config_from_env(env).embed_origins == DEFAULT_EMBED_ORIGINS

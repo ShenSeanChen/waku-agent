@@ -39,6 +39,8 @@ to discover and nothing to register: the app's client id and secret come from
 config/gateway.env, and GitHub's two sign-in addresses come from this code's
 own list. Without the two values GitHub is not on this server's list at all.
 The sign-in, the sealed tokens and the renewal are the same as Notion's.
+Gmail is signed in to the same way, with the Google client's two values
+(spec 031).
 
 NOTHING HERE LOGS OR RETURNS A TOKEN, A CODE, A CLIENT SECRET OR A VERIFIER.
 A log line carries a tenant id, a vendor's name and a short error code.
@@ -481,6 +483,9 @@ class Connect:
             fields["scope"] = vendor.scope
         if self._resource(vendor):
             fields["resource"] = vendor.url
+        # Google: "offline" and "consent", without which it answers no
+        # refresh token. The names and values are this code's own.
+        fields.update(vendor.authorize_extra)
         query = urllib.parse.urlencode(fields)
         joiner = "&" if "?" in client.authorization_endpoint else "?"
         return answers.redirect(f"{client.authorization_endpoint}{joiner}{query}")
