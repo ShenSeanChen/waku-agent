@@ -45,6 +45,9 @@ class Item:
     what: str      # the timer's note, what the call will do, or the message
     where: str     # the conversation it belongs to, or where the message goes
     status: str    # pending, parked, queued or dead
+    repeat: str = ""   # a repeating timer's rule: "every day at 09:00". Its
+                       # `when` is the next time it fires
+    zone: str = ""     # the time zone that rule's time of day is in
 
 
 @dataclass(frozen=True)
@@ -71,7 +74,7 @@ def listing(conn: sqlite3.Connection) -> Waiting:
     queued = conn.execute(
         "SELECT * FROM outbox WHERE status IN ('pending', 'dead') ORDER BY id").fetchall()
     return Waiting(
-        timers=[Item(f"t{t.id}", t.due_at, t.note, t.session_id, t.status)
+        timers=[Item(f"t{t.id}", t.due_at, t.note, t.session_id, t.status, t.every, t.zone)
                 for t in map(timers._timer, pending)],
         calls=[_call_item(run) for run in runs.parked(conn)],
         messages=[Item(f"m{m.id}", m.next_attempt_at, m.body[:_MAX_WORDS_CHARS],
@@ -114,6 +117,8 @@ USAGE = """\
 waku waiting               list the timers, calls and messages that wait
 waku waiting cancel <id>   cancel one: t3 is a timer, r7 a waiting call, m12 a message"""
 NOTHING = "Nothing waits."
+# Said after a repeating timer is cancelled: one cancel ends every later day.
+STOPS = " It does not repeat any more."
 
 
 def spoken(stamp: str, tz: tzinfo | None = None) -> str:
@@ -123,6 +128,15 @@ def spoken(stamp: str, tz: tzinfo | None = None) -> str:
     except ValueError:
         return stamp
     return f"{moment:%A} {moment.day} {moment:%B %H:%M}"
+
+
+def timer_when(item: Item, tz: tzinfo | None = None) -> str:
+    """When a timer fires, as a person reads it. A repeating timer says its
+    rule first: "every day at 09:00, next Friday 20 November 09:00". Its next
+    time is said in its own zone, the one its time of day is in."""
+    if not item.repeat:
+        return spoken(item.when, tz)
+    return f"{item.repeat}, next {spoken(item.when, timers.zone_of(item.zone))}"
 
 
 def render(found: Waiting, tz: tzinfo | None = None) -> str:
@@ -136,7 +150,7 @@ def render(found: Waiting, tz: tzinfo | None = None) -> str:
             lines.extend([title, *rows, ""])
 
     section("Timers that have not fired",
-            [f"  {i.id:<5} {spoken(i.when, tz)}   {i.what}" for i in found.timers])
+            [f"  {i.id:<5} {timer_when(i, tz)}   {i.what}" for i in found.timers])
     section("Calls that wait for your yes",
             [f"  {i.id:<5} asked {spoken(i.when, tz)}   {i.what}" for i in found.calls])
     section("Messages that are queued or could not be sent",
@@ -164,7 +178,7 @@ def main(argv: list[str]) -> int:
         except NotWaiting as exc:
             print(exc)
             return 1
-        print(f"Cancelled {item.id}: {item.what}")
+        print(f"Cancelled {item.id}: {item.what}" + (STOPS if item.repeat else ""))
         return 0
     finally:
         conn.close()

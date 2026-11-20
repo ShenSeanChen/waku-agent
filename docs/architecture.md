@@ -124,7 +124,7 @@ of them in the session `slack:<channel>:<thread>`. The rows end `done`, or
 - **`state.db` is in WAL mode**, so the dashboard reads it while
   `waku serve` writes.
 
-A run sets its own follow-up with `schedule_task(when, note)`, which writes
+A run sets its own follow-up with `schedule_task(when, note, repeat)`, which writes
 one row into the `timers` table. Ana writes "@waku check issue 12 on Thursday
 at 09:00", and the run answers "I will check issue 12 on Thursday at 09:00".
 
@@ -134,12 +134,26 @@ at 09:00", and the run answers "I will check issue 12 on Thursday at 09:00".
   seconds, whichever is shorter, and `schedule_task` wakes it when it sets a
   timer, so a timer fires within 2 seconds of its time. The run that follows reads the note as
   the reason it woke, and replies in the conversation that set the timer.
-- **A timer fires once.** The event's external id is `timer:<id>`, so a
-  process that dies between writing the event and marking the timer `fired`
-  writes no second event.
+- **A timer without `repeat` fires once.** The event's external id is
+  `timer:<id>`, so a process that dies between writing the event and marking
+  the timer `fired` writes no second event.
+- **A timer with `repeat` is one row that stays `pending`** (spec 033).
+  `repeat` is `daily` or `weekdays`. When the timer is due, the loop writes
+  one event whose external id is `timer:<id>:<date>`, the date in the
+  person's time zone, and moves `due_at` to the next occurrence. The loop does
+  this and the model does not, so a run that fails does not end the series.
+  The next occurrence is worked out from the local date and time in the
+  stored zone, so 09:00 stays 09:00 when the clocks change. A loop that was
+  stopped for a week fires the latest occurrence it missed when that one is
+  under 12 hours old, skips every older one, and fires the next at its time.
+  One cancel in `waku waiting` ends every later day.
+- **A daily brief is a repeating timer whose note starts with "Daily
+  brief".** The run it wakes reads `BRIEF_PROMPT` in
+  `waku/alwayson/worker.py`: read every connected service, memory and the
+  team board, and reply with one short message in the conversation that asked.
 - **`when` is an absolute time** in the time zone of the machine. The tool
-  refuses a time in the past and a time more than one year away. No timer
-  repeats: a run that wants to check again sets a new one.
+  refuses a time in the past and a time more than one year away. With
+  `repeat`, `when` is the first occurrence.
 - **A timer waits while `waku serve` is down** and fires at the next start.
 
 A hosted container runs the same parts inside the dashboard process (spec

@@ -12,8 +12,15 @@ It names no process and no table, because the model repeats what it is given
 
 `when` is an absolute time. A time without an offset is read in the time zone
 of this machine, which is the person's. The tool refuses a time in the past
-and a time more than one year away. A timer fires once: a run that wants to
-check again sets a new one.
+and a time more than one year away.
+
+Without `repeat` a timer fires once. With `repeat` (spec 033) it is `daily` or
+`weekdays`: `when` is the first time it fires, and the time on the person's
+clock at `when` is the time of every later day. The timer loop sets the next
+occurrence itself (waku/alwayson/timers.py), so the model sets a repeating
+timer once and never again. A daily brief is such a timer whose note starts
+with "Daily brief": the run it wakes is given the steps of the brief
+(BRIEF_PROMPT in waku/alwayson/worker.py).
 """
 
 from __future__ import annotations
@@ -67,23 +74,37 @@ def make_tool(home: Path, session_id: Callable[[], str] | None = None,
     """`now` and `tz` are for the evals: a clock that a test moves, and a time
     zone that does not depend on the machine the test runs on."""
 
-    def schedule_task(when: str = "", note: str = "") -> str:
-        from waku.alwayson import outbox, timers
+    def schedule_task(when: str = "", note: str = "", repeat: str = "") -> str:
+        from waku.alwayson import approvals, outbox, timers
         from waku.alwayson.worker import serving
         from waku.db import connect
 
         note = (note or "").strip()
+        repeat = (repeat or "").strip().lower()
         due = _parse(when, tz)
         if due is None:
             return f"Not set: Waku cannot read '{when}' as a time. {_FORM}."
         if not note:
             return "Not set: the note is empty. Say what to do when the timer is due."
+        if repeat and repeat not in timers.REPEATS:
+            return (f"Not set: `repeat` is 'daily' or 'weekdays', and '{repeat}' is neither. "
+                    "Leave it out for a timer that fires once.")
         current = (now or outbox.utc_now)()
         if due <= current:
             return (f"Not set: {when} is in the past. It is now "
                     f"{current.astimezone(due.tzinfo):%Y-%m-%dT%H:%M}.")
         if due > _one_year_after(current):
             return f"Not set: {when} is more than one year away."
+        zone = ""
+        if repeat:
+            # The zone's name keeps 09:00 at 09:00 when the clocks change. A
+            # machine that does not say its zone's name gives its offset.
+            zone = (timers.zone_name(tz) if tz else timers.local_zone_name()
+                    or timers.zone_name(due.tzinfo))
+            if not timers.repeats_on(due.astimezone(timers.zone_of(zone)).date(), repeat):
+                # "Every weekday at 9" said on a Friday evening starts on Monday.
+                due = timers.next_occurrence(
+                    due, repeat, f"{due.astimezone(timers.zone_of(zone)):%H:%M}", zone)
 
         # The woken run answers in the conversation this run came from. A
         # timer set in the terminal or the dashboard has no such address, so
@@ -96,13 +117,25 @@ def make_tool(home: Path, session_id: Callable[[], str] | None = None,
         try:
             timer_id = timers.insert(
                 conn, due_at=due, session_id=session_id() if session_id else "default",
-                note=note, address=address, idempotency_key=key, now=current)
+                note=note, address=address, idempotency_key=key, now=current,
+                repeat=repeat, zone=zone)
+            every = timers.get(conn, timer_id).every if timer_id and repeat else ""
         finally:
             conn.close()
-        at = _spoken(due, current)
+        at = _spoken(due.astimezone(timers.zone_of(zone)) if zone else due, current)
         if timer_id is None:
             return f"The timer for {at} was already set by an earlier attempt of this run."
         said = f"Timer {timer_id} is set for {at}."
+        if every:
+            said = (f"Timer {timer_id} repeats {every}, first on {at}. It sets its next "
+                    "time by itself, so do not set it again.")
+        if address and not approvals.is_private(address):
+            # On 2026-11-20 the hosted agent, asked in a Slack channel for a
+            # daily brief, told its person "I'll send it to you privately".
+            # Nothing can: the woken run answers where this run came from.
+            said += (" The run it wakes answers here, in this same conversation, where "
+                     "several people read it. It cannot send a private message, so do "
+                     "not say that it will.")
         if not address:
             said += (" My reply then has nowhere to go: WAKU_OWNER is not set, so Waku does "
                      "not know where the owner is reached.")
@@ -117,9 +150,13 @@ def make_tool(home: Path, session_id: Callable[[], str] | None = None,
             "conversation with `note` as the reason. Use when you or the user want "
             "something done or checked later ('on Thursday', 'in two hours', 'tomorrow "
             "morning'). " + _FORM + ", in the user's time zone; work it out from the "
-            "current date and time. The timer fires once, so a recurring check sets a "
-            "new timer each time. Write the note for your later self: it is all you "
-            "will be told."
+            "current date and time. Without `repeat` the timer fires once. With "
+            "`repeat` it fires every day or every weekday at the time of day in `when`, "
+            "and `when` is the first time: set a repeating timer once and never again. "
+            "Write the note for your later self: it is all you will be told. For a "
+            "regular brief ('send me a brief every morning at 9') set one repeating "
+            "timer whose note starts with 'Daily brief', followed by anything the user "
+            "wants it to cover; you are given the steps of the brief when it is due."
         ),
         input_schema={
             "type": "object",
@@ -129,6 +166,8 @@ def make_tool(home: Path, session_id: Callable[[], str] | None = None,
                 "note": {"type": "string",
                          "description": "What to do or check then, with every name and "
                                         "number it needs"},
+                "repeat": {"type": "string", "enum": ["daily", "weekdays"],
+                           "description": "Leave out for a timer that fires once"},
             },
             "required": ["when", "note"],
         },

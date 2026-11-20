@@ -42,7 +42,7 @@ def make_tools(home: Path, session_id: Callable[[], str] | None = None,
                                                      found.messages)))
 
     def list_waiting() -> str:
-        from waku.alwayson.waiting import spoken
+        from waku.alwayson.waiting import spoken, timer_when
 
         conn, found = visible()
         conn.close()
@@ -51,7 +51,7 @@ def make_tools(home: Path, session_id: Callable[[], str] | None = None,
         lines = []
         if found.timers:
             lines.append("Timers:")
-            lines += [f"  {i.id}: {spoken(i.when, tz)}. {i.what}" for i in found.timers]
+            lines += [f"  {i.id}: {timer_when(i, tz)}. {i.what}" for i in found.timers]
         if found.calls:
             lines.append("Calls that wait for a yes:")
             lines += [f"  {i.id}: {i.what} (asked {spoken(i.when, tz)})" for i in found.calls]
@@ -74,7 +74,7 @@ def make_tools(home: Path, session_id: Callable[[], str] | None = None,
                 item = waiting.cancel(conn, wanted)
             except waiting.NotWaiting:
                 return f"Not cancelled: '{id}' is not waiting any more."
-            return f"Cancelled {item.id}: {item.what}"
+            return f"Cancelled {item.id}: {item.what}" + (waiting.STOPS if item.repeat else "")
         finally:
             conn.close()
 
@@ -95,7 +95,8 @@ def make_tools(home: Path, session_id: Callable[[], str] | None = None,
             description=(
                 "Cancel one timer, one call that waits for a yes, or one unsent message, "
                 "by the id list_waiting gave (t3, r7 or m12). Use when the user asks to "
-                "cancel a reminder or a pending request. Call list_waiting first when you "
+                "cancel a reminder or a pending request, or to stop a repeating timer "
+                "such as a daily brief: one cancel ends every later day. Call list_waiting first when you "
                 "do not have the id."
             ),
             input_schema={

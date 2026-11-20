@@ -28,7 +28,8 @@ function waitingCard(d){
   if (!(w.timers.length + w.calls.length + w.messages.length))
     return note ? uiCard(note, {title: "Waiting"}) : "";
   return uiCard(note +
-    waitingRows("Timers that have not fired", w.timers, i => `due ${waitingWhen(i.when)}`) +
+    waitingRows("Timers that have not fired", w.timers,
+      i => i.repeat ? `${esc(i.repeat)}, next ${waitingWhen(i.when)}` : `due ${waitingWhen(i.when)}`) +
     waitingRows("Calls that wait for your yes", w.calls, i => `asked ${waitingWhen(i.when)}`) +
     waitingRows("Messages that are queued or could not be sent", w.messages,
       i => `${esc(i.status)}, to ${esc(i.where)}`),
