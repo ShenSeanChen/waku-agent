@@ -280,11 +280,18 @@ def test_a_spawner_that_refuses_does_not_undo_the_sign_in(harness, notion):
 
 # --- the container's side: waku/ (MIT) ----------------------------------------------
 
+OFFERED = {"ok": False, "error": "not_listed", "available": ["Notion", "Linear"]}
+
+
 @pytest.fixture
 def hosted_env(monkeypatch):
+    from waku.alwayson import senders
+
     monkeypatch.setenv("WAKU_HOSTED", "1")
     monkeypatch.setenv("WAKU_PLATFORM_BASE_URL", PROXY)
     monkeypatch.setenv("WAKU_PLATFORM_TOKEN", "wkp_test")
+    # The platform, asked which connectors it has. No test here reaches PROXY.
+    monkeypatch.setattr(senders, "post_json", lambda url, payload, headers: dict(OFFERED))
 
 
 def test_the_agent_is_built_again_when_provisioning_changes_the_list(tmp_path, hosted_env):
@@ -409,3 +416,111 @@ def test_on_a_persons_own_machine_connect_tool_is_unchanged(tmp_path, monkeypatc
     assert approvals.mode("connect_tool", {"name_or_url": "notion"}) == approvals.ASK
     assert approvals.mode("disconnect_tool", {"name": "notion"}) == approvals.ASK
     assert "needs the owner's yes" in _connect_tool(tmp_path).fn(name_or_url="notion")
+
+
+# --- the model is told what this server can connect, and nothing else ---------------
+#
+# 2026-11-19, Slack: the hosted agent offered "shall I connect GitHub?", was
+# told yes, and then answered that hosted Waku has only Notion and Linear. It
+# had read the starter list of a person's own machine in connect_tool's
+# description.
+
+def _told(tmp_path, offered=lambda: ("Notion", "Linear")) -> dict:
+    """What each connector tool tells the model: its description and the
+    words under its arguments."""
+    return {tool.name: tool.description + " " + json.dumps(tool.input_schema)
+            for tool in connectors.make_tools(tmp_path, offered=offered)}
+
+
+def test_a_hosted_agent_is_told_only_the_connectors_this_server_offers(
+        tmp_path, hosted_env):
+    told = _told(tmp_path)
+    for name in ("connector_status", "connect_tool"):
+        assert "On this server Notion and Linear can be connected." in told[name]
+        assert "No other service can be connected here yet." in told[name]
+    everything = " ".join(told.values()).lower()
+    # No name from the starter list that the platform did not give, and no
+    # way in that hosted Waku does not have.
+    assert "github" not in everything and "starter" not in everything
+    assert "https" not in everything and "writes" not in everything
+    assert "do not offer it" in told["connect_tool"]
+
+
+def test_the_names_are_the_platforms_and_not_a_list_in_this_file(tmp_path, hosted_env):
+    told = _told(tmp_path, offered=lambda: ("Linear",))
+    assert "On this server Linear can be connected." in told["connect_tool"]
+    assert "notion" not in " ".join(told.values()).lower()
+    assert "e.g. linear" in told["connect_tool"]
+
+
+def test_the_tools_ask_the_platform_once_when_they_are_built(tmp_path, hosted_env,
+                                                             monkeypatch):
+    from waku.alwayson import senders
+
+    asked: list[tuple] = []
+
+    def post(url, payload, headers):
+        asked.append((url, payload, headers))
+        return {"ok": False, "error": "not_listed", "available": ["Linear"]}
+
+    monkeypatch.setattr(senders, "post_json", post)
+    told = {tool.name: tool.description for tool in connectors.make_tools(tmp_path)}
+    assert asked == [(f"{PROXY}/connect/link", {"server": ""},
+                      {"Authorization": "Bearer wkp_test"})]
+    assert "On this server Linear can be connected." in told["connect_tool"]
+
+
+@pytest.mark.parametrize("answer", [
+    None,                                               # the platform did not answer
+    {"ok": False, "error": "connectors_not_configured"},
+    {"ok": False, "error": "not_listed", "available": "Notion"},
+    {"ok": True, "title": "", "url": "https://x.example/"},
+])
+def test_a_platform_that_names_no_list_means_no_offer(tmp_path, hosted_env, monkeypatch,
+                                                      answer):
+    from waku.alwayson import senders
+
+    def post(url, payload, headers):
+        if answer is None:
+            raise senders.SendFailed("HTTP 503")
+        return answer
+
+    monkeypatch.setattr(senders, "post_json", post)
+    assert connectors.hosted_offered() is None
+    told = " ".join(tool.description for tool in connectors.make_tools(tmp_path)).lower()
+    assert "do not offer to connect one" in told
+    for name in ("notion", "linear", "github"):
+        assert name not in told
+
+
+def test_a_platform_with_no_connector_says_so(tmp_path, hosted_env):
+    told = _told(tmp_path, offered=lambda: ())
+    assert "No connector can be connected on this server yet." in told["connect_tool"]
+
+
+def test_connector_status_on_hosted_ends_with_what_can_be_connected(tmp_path, hosted_env):
+    """The sentence a hosted agent used to read here named the starter list:
+    "A starter name connects one: linear, notion, github"."""
+    status = next(tool for tool in connectors.make_tools(tmp_path)
+                  if tool.name == "connector_status").fn
+    offer = ("On this server Notion and Linear can be connected. No other service can "
+             "be connected here yet.")
+    assert status() == "No connector is connected yet.\n" + offer
+    sync_connectors(tmp_path, PROXY, ["notion"])
+    assert status() == "Notion (notion): connected.\n" + offer
+
+
+def test_on_a_persons_own_machine_the_tools_say_what_they_said(tmp_path, monkeypatch):
+    monkeypatch.delenv("WAKU_HOSTED", raising=False)
+
+    def never():
+        raise AssertionError("a person's own machine asks no platform")
+
+    tools = {tool.name: tool for tool in connectors.make_tools(tmp_path, offered=never)}
+    assert "starter list (linear, notion, github)" in tools["connect_tool"].description
+    assert "the server's https address" in tools["connect_tool"].description
+    assert set(tools["connect_tool"].input_schema["properties"]) == {"name_or_url", "writes"}
+    assert tools["connector_status"].description.startswith(
+        "Whether each connected service (Notion, Linear, any MCP server) can be used")
+    assert tools["connector_status"].fn() == (
+        "No connector is added yet. A starter name connects one: linear, notion, github")
