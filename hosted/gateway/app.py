@@ -536,9 +536,20 @@ class Gateway:
     def _slack_install(self, request: web.Request) -> web.Response:
         """GET /slack/install: the "Add to Slack" link. A GET, because it is a
         link a person follows; it changes nothing but the state it issues, and
-        Slack's own page asks the person before anything is installed."""
+        Slack's own page asks the person before anything is installed.
+
+        Like /auth/enter, `?home=<ticket>` must never reach an access log."""
         if self._slack is None:
             return slack.not_configured(self._config.slack_problem)
+        if "home" in request.query:
+            # Spec 032 A3: an owner of a team space, sent here by waku.one
+            # with a ticket and no session. The ticket is read once, and a
+            # session in this browser is neither needed nor used.
+            home = (self._team_homes.redeem_ticket(request.query.get("home", ""))
+                    if self._team_homes is not None else None)
+            if home is None:
+                return answers.html_error(410, slack.HOME_LINK_ENDED, retry=False)
+            return self._slack.start_home(home)
         tenant = self._apex_tenant(request)
         if tenant is None:
             return answers.redirect(f"https://{self._config.apex_host}/login")
