@@ -40,7 +40,7 @@ which carries them. Neither license grants any right in them.
 |---|---|
 | `core/` | pure logic: tenant ids, route policy, quota, idle, provisioning, request validation, the connector list |
 | `ports/` | the four replaceable seams, as Protocols and nothing else. The implementations live beside the service that owns each one |
-| `gateway/` | the front door: login, sessions, routing by host, `control.db`, the idle loop, the scheduler that wakes a stopped tenant for an event or a timer, the public Slack app's install, events and send relay, and the sign-in to a connector |
+| `gateway/` | the front door: login, sessions, routing by host, `control.db`, the idle loop, the scheduler that wakes a stopped tenant for an event or a timer, the public Slack app's install, events and send relay, the sign-in to a connector, and the home of a team space's agent |
 | `proxy/` | the metering proxy in front of the model API, `ledger.db`, and the routes a container reaches the platform through: treg, outgoing Slack and a connector's tools |
 | `spawner/` | the one process that talks to Docker |
 | `image/` | the tenant and services Dockerfiles, their allowlist ignore files, and the seccomp profile every container runs under |
@@ -575,9 +575,10 @@ with the same names.
 ### Limits
 
 - **One workspace has one tenant, and one tenant has one workspace.** A
-  workspace stays with the person who connected it first, and everyone who
-  mentions the agent there uses that person's agent. A second install by the
-  same person replaces their workspace.
+  workspace stays with the tenant that connected it first, and everyone who
+  mentions the agent there uses that tenant's agent. The tenant is a person,
+  or the home of a team space's agent ([Team homes](#team-homes-a-team-spaces-agent-in-slack)).
+  A second install by the same tenant replaces its workspace.
 - **A mention in a thread arrives with the thread above it, and with
   nothing else.** The gateway asks Slack for that one thread, at most 30
   messages, and for the names in it (`slack_thread.py`). It has 2 seconds:
@@ -624,6 +625,99 @@ with the same names.
   can add it.
 - **None of this has run against Slack.** The evals use a fake Slack on
   loopback.
+
+## Team homes: a team space's agent in Slack
+
+A team space on waku.one has an agent of its own, with its own Waku Memory
+key. A team home is where that agent runs on this deployment: one more
+tenant, marked as a team, with its own container, disk and platform token
+(spec 032, group A). Ana is an owner of the team space Acme. She presses "Add
+Waku to Slack" on Acme's page on waku.one and approves in the workspace "Acme
+HQ". From then on "@Waku remember that the launch moved to 3 December" in a
+channel of Acme HQ reaches Acme's agent, on Acme's key, and not the agent of
+any person.
+
+```
+waku.one API --POST /v1/team-homes--> gateway: tenant (kind team) + team_home (key sealed)
+Ana's browser --GET /slack/install?home=<ticket>--> Slack's page --> /slack/oauth/callback --> Acme's page on waku.one
+Slack --POST /v1/triggers/slack--> gateway --> tenant_events of Acme's home --> scheduler --> Acme's container
+```
+
+| Route | On | What it does |
+|---|---|---|
+| `POST /v1/team-homes` | the apex | makes the home of one space's agent from `space_id`, `space_name`, `agent_id`, `agent_name`, `memory_key`, `memory_api_url` and `return_url`. It answers `201` with `home_id` (the tenant's id) and `install_url`, and starts no container. A second call for the same space keeps the tenant and replaces the key |
+| `GET /v1/team-homes/{space_id}` | the apex | answers `home_id`, `slack` (the workspace's `team_id` and `team_name`, or `null` until Slack's page was completed) and `refused` (always `null` for now). `404` when the space has no home |
+| `DELETE /v1/team-homes/{space_id}` | the apex | answers `405` and changes nothing. Removing a home is group B of spec 032 |
+| `GET /slack/install?home=<ticket>` | the apex | sends the owner's browser to Slack's approval page. The ticket names one home, works once and ends after 10 minutes. The page sets a cookie that lasts 10 minutes, and the callback installs only when that cookie and the `state` arrive together |
+
+waku.one's API is the only caller of the three `/v1/team-homes` routes. Each
+request carries `Authorization: Bearer <WAKU_AGENT_PLATFORM_SECRET>`. The
+gateway compares the value in constant time and answers 401 to anything else,
+before it reads the path or the body. It logs no request body.
+
+**The team's key is sealed, and a person's key is not.** The gateway stores
+the agent's Waku Memory key in `control.db`, in `team_home`, encrypted with
+AES-256-GCM under `WAKU_SLACK_TOKEN_KEY` and bound to the space's id. A
+backup of `control.db` holds no team key that works. The key leaves the
+gateway in two places. A start request carries it to the spawner, which sets
+`WAKU_MEMORY_API_KEY` and `WAKU_MEMORY_SPACE=<space id>` in the home's
+container. The proxy receives it when it resolves the home's platform token,
+and charges the home's model calls with it. A home whose key does not open
+is not started.
+
+**What the agent saves belongs to the team.** With `WAKU_MEMORY_SPACE` set,
+stock waku sends `space` with every `memory.remember` it makes itself: a
+fact `save_note` saves, a fact consolidation keeps and a research report.
+Every Slack event of a home starts with one line: "You are Waku, the agent of
+the team space Acme. What you save here is read by every member of Acme."
+
+### Turning it on
+
+Make one secret and enter it in two places by hand: in
+`/srv/waku/config/gateway.env` on the VM, and on waku.one as its own
+`WAKU_AGENT_PLATFORM_SECRET`. waku.one also needs `WAKU_AGENT_PLATFORM_URL`,
+which is `https://agent.waku.one`.
+
+```bash
+openssl rand -hex 32          # 64 characters; the gateway refuses fewer than 32
+```
+
+```
+WAKU_AGENT_PLATFORM_SECRET=<the value>
+```
+
+Never paste the value into a chat, an issue or a commit: whoever holds it can
+make a team home here. The routes also need `WAKU_SLACK_TOKEN_KEY`, and the
+install page needs the three other Slack values
+([Slack](#slack-the-public-waku-app)). Then recreate the gateway, as for
+Slack. Its log says `team homes: on`. With the secret missing it says `team
+homes: off`, and every `/v1/team-homes` route answers 503 and names the
+variable.
+
+### Limits
+
+- **A workspace that a person's own install holds is left as it is.** An
+  owner who approves that workspace for a team space changes nothing, and
+  `GET /v1/team-homes/{space_id}` keeps answering `slack: null`. The same is
+  true of a workspace another space's home holds. Moving a workspace, and
+  saying which space holds it, are groups B and E of spec 032.
+- **A replaced key reaches a running container at its next start.** A second
+  `POST` stores the new key and does not restart the home (group B).
+- **`return_url` is checked for its shape only**: `https`, or `http` on
+  localhost. `memory_api_url` is not checked against this deployment's own
+  Waku Memory address. Both are group B. Until then the platform secret is
+  what keeps a browser from being sent somewhere else.
+- **A home has no page and no sign-in.** Nobody opens its dashboard, and
+  `tenant.sh` names it by its tenant id: its email is empty.
+- **Direct messages to the bot are not heard yet** (group C), and a reply
+  carries no link to the memory it saved (group F).
+- **The model's own `memory.remember` tool call carries no `space`** unless
+  the model writes one. Only the three sends named above add it.
+- **A restore onto a new VM needs `WAKU_SLACK_TOKEN_KEY` carried over by
+  hand**, as for Slack. Without it no team key opens and no home starts,
+  until waku.one sends each key again with a new `POST`.
+- **None of this has run against waku.one, Slack or Waku Memory.** The evals
+  use a fake Slack and a fake spawner on loopback.
 
 ## Connectors: Notion and Linear
 
@@ -1351,10 +1445,12 @@ What you cannot get back this way: the archives of tenants deleted in the last
 /srv/waku/
   src/        this checkout. install.sh, the Compose file and the scripts
   config/     one env file per service, plus backup.env. Root-only, mode 0600.
-              gateway.env holds the Slack app's secrets and the key that
-              encrypts Slack tokens in control.db
-  control/    control.db: tenants, sessions, tokens, waiting events and each
-              tenant's Slack workspace. Owned by uid 10002
+              gateway.env holds the Slack app's secrets, the secret
+              waku.one's calls carry, and the key that encrypts Slack tokens
+              and each team's Waku Memory key in control.db
+  control/    control.db: tenants, sessions, tokens, waiting events, each
+              tenant's Slack workspace and each team space's home. Owned by
+              uid 10002
   ledger/     ledger.db: the spend ledger. Owned by uid 10003
   tenants/    one directory per tenant, home and env. Owned by uid 10001
   staging/    the handoff area backup.sh and restore.sh share

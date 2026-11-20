@@ -188,6 +188,15 @@ flowchart LR
   (`waku/tools/slack_history.py`, hosted only) asks the platform the same way
   for messages of the channel a run is in: the last ones, a window of days,
   or one person's.
+- **A team space's agent has a home on hosted waku** (spec 032 group A,
+  `hosted/gateway/team_homes.py`). waku.one calls `POST /v1/team-homes` with
+  the space and its agent's Waku Memory key, and the gateway makes one more
+  tenant, marked as a team, and keeps the key encrypted in `control.db`. A
+  workspace an owner adds from that home maps to the home's tenant, so a
+  mention in its channels runs in the home's container, on the team's key
+  and with `WAKU_MEMORY_SPACE` set. `remember_via`
+  (`waku/tools/waku_memory.py`) then sends that value as `space`, and the
+  memory belongs to the team.
 - **A connector on hosted waku is signed in to by the gateway** (spec 029,
   `hosted/gateway/connect.py`). The gateway registers itself with Notion or
   Linear, sends the person's browser to the vendor's sign-in page, and keeps
