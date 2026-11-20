@@ -349,6 +349,8 @@ class Harness:
         # Spec 029: set by use_connect.
         self.connect: Connect | None = None
         self._fake_vendors: dict[str, FakeVendor] = {}
+        # Spec 029 F: the GitHub App's client, as config/gateway.env gives it.
+        self.connect_clients: dict[str, tuple[str, str]] = {}
         # What a wake also calls, when a test wires a real Scheduler's kick.
         self.on_wake = lambda: None
         self.config = GatewayConfig(
@@ -382,15 +384,24 @@ class Harness:
 
     def vendors(self) -> dict[str, Vendor]:
         """The real list, with each faked vendor's address on loopback."""
-        return {name: dataclasses.replace(VENDORS[name], url=fake.url + "/mcp")
-                for name, fake in self._fake_vendors.items()}
+        moved = {}
+        for name, fake in self._fake_vendors.items():
+            changes = {"url": fake.url + "/mcp"}
+            if VENDORS[name].authorize_url:
+                # GitHub: its two sign-in addresses are this code's own, so
+                # they move to the fake too.
+                changes |= {"authorize_url": fake.url + "/authorize",
+                            "token_url": fake.url + "/token"}
+            moved[name] = dataclasses.replace(VENDORS[name], **changes)
+        return moved
 
     def _wire_connect(self) -> None:
         if self.session is None:
             self.session = aiohttp.ClientSession(auto_decompress=False)
         self.connect = Connect(
             key=bytes.fromhex(SLACK_TOKEN_KEY), apex_host=APEX, store=self.store,
-            api=VendorApi(self.session), vendors=self.vendors(), now=self.clock)
+            api=VendorApi(self.session), vendors=self.vendors(),
+            clients=self.connect_clients, now=self.clock)
         self.gateway = self._build_gateway()
 
     def use_slack(self, fake: FakeSlack, settings: SlackSettings | None = None) -> None:

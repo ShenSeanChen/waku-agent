@@ -115,10 +115,13 @@ async def main() -> None:
         # Spec 029: sign-in to Notion and Linear. It needs the key that seals
         # a token and nothing a person copies from a vendor's settings page:
         # the gateway registers itself with each vendor at the first sign-in.
+        # GitHub is the exception (group F): it is offered only with the
+        # client id and secret of a GitHub App, from gateway.env.
         connectors = connector_relay = None
         if config.connect_key is not None:
             connectors = Connect(key=config.connect_key, apex_host=config.apex_host,
-                                 store=store, api=VendorApi(session))
+                                 store=store, api=VendorApi(session),
+                                 clients=config.connect_clients)
             # Spec 029 B: the relay makes a container's calls with the tokens
             # Connect keeps. When a person's connectors change, the vendor
             # session kept for them is dropped and their running container's
@@ -132,6 +135,8 @@ async def main() -> None:
 
             connectors.on_change = connectors_changed
             _LOG.info("connectors: on (%s)", ", ".join(connectors.vendors))
+            if "github" not in connectors.vendors:
+                _LOG.info("connectors: GitHub is not offered: %s", config.github_problem)
         else:
             _LOG.warning("connectors: off, their routes answer 503: %s",
                          config.connect_problem)

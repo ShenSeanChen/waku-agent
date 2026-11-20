@@ -71,6 +71,11 @@ REQUIRED_ENV_NAMES = (
     "WAKU_SLACK_CLIENT_SECRET",
     "WAKU_SLACK_SIGNING_SECRET",
     "WAKU_SLACK_TOKEN_KEY",
+    # Spec 029 F: the GitHub App a person signs in to GitHub through.
+    # GITHUB_ENV_NAMES below, and in MAY_BE_ABSENT: without both, GitHub is
+    # not a connector on this server.
+    "WAKU_GITHUB_CLIENT_ID",
+    "WAKU_GITHUB_CLIENT_SECRET",
 )
 
 # The Slack app's client id, client secret and signing secret, which the
@@ -85,7 +90,8 @@ SLACK_ENV_NAMES = ("WAKU_SLACK_CLIENT_ID", "WAKU_SLACK_CLIENT_SECRET",
 # has no WAKU_EMBED_ORIGINS line, and a gateway that refused to start without
 # it would take every tenant down on the upgrade that added the embedded chat.
 # Absent or empty, the allowlist is DEFAULT_EMBED_ORIGINS.
-MAY_BE_ABSENT = frozenset({"WAKU_EMBED_ORIGINS", "WAKU_IDLE_MINUTES", *SLACK_ENV_NAMES})
+MAY_BE_ABSENT = frozenset({"WAKU_EMBED_ORIGINS", "WAKU_IDLE_MINUTES", *SLACK_ENV_NAMES,
+                           "WAKU_GITHUB_CLIENT_ID", "WAKU_GITHUB_CLIENT_SECRET"})
 
 # waku.one's three hosts. http://localhost:3000, for developing waku.one's own
 # page against a real gateway, is never in the default: an operator who wants
@@ -186,6 +192,35 @@ def connect_key_from(env: Mapping[str, str]) -> tuple[bytes | None, str]:
     return bytes.fromhex(value), ""
 
 
+# The client id and client secret of the GitHub App, which the operator
+# copies from the app's page at github.com (hosted/README.md, "GitHub").
+GITHUB_ENV_NAMES = ("WAKU_GITHUB_CLIENT_ID", "WAKU_GITHUB_CLIENT_SECRET")
+# A client id is letters, digits and dots ("Iv23li..."), and a secret is hex.
+# A value with anything else in it is a line pasted wrong.
+_CLIENT_VALUE = re.compile(r"[A-Za-z0-9._-]{8,128}")
+
+
+def connect_clients_from(env: Mapping[str, str]) -> tuple[dict[str, tuple[str, str]], str]:
+    """({connector name: (client id, client secret)}, "") for each vendor
+    that takes sign-in only from a client registered beforehand, or ({}, why
+    GitHub is not among them). GitHub is the one such vendor (spec 029 F).
+
+    The reason names a name and quotes no value. It never raises, for
+    slack_from's reason: a typo here must cost GitHub and nothing else."""
+    values = {name: (env.get(name) or "").strip() for name in GITHUB_ENV_NAMES}
+    missing = [name for name, value in values.items() if not value]
+    if missing:
+        return {}, f"config/gateway.env is missing {', '.join(missing)}"
+    bad = [name for name, value in values.items() if not _CLIENT_VALUE.fullmatch(value)]
+    if bad:
+        return {}, f"{', '.join(bad)} in config/gateway.env is not a value GitHub issues"
+    return {"github": (values["WAKU_GITHUB_CLIENT_ID"],
+                       values["WAKU_GITHUB_CLIENT_SECRET"])}, ""
+
+
+# What a GatewayConfig built by hand says about GitHub: off, both missing.
+GITHUB_NOT_CONFIGURED = f"config/gateway.env is missing {', '.join(GITHUB_ENV_NAMES)}"
+
 # What a GatewayConfig built by hand says about connectors: off, no key.
 CONNECT_NOT_CONFIGURED = "config/gateway.env is missing WAKU_SLACK_TOKEN_KEY"
 
@@ -221,6 +256,11 @@ class GatewayConfig:
     # `connect_problem` then says why.
     connect_key: bytes | None = field(default=None, repr=False)
     connect_problem: str = CONNECT_NOT_CONFIGURED
+    # Spec 029 F. The client each connector that needs one signs in with, by
+    # connector name: {"github": (client id, client secret)}, or empty, and
+    # `github_problem` then says why GitHub is not offered.
+    connect_clients: Mapping[str, tuple[str, str]] = field(default_factory=dict, repr=False)
+    github_problem: str = GITHUB_NOT_CONFIGURED
 
 
 def config_from_env(env: Mapping[str, str]) -> GatewayConfig:
@@ -232,6 +272,7 @@ def config_from_env(env: Mapping[str, str]) -> GatewayConfig:
             "file; every name in config.REQUIRED_ENV_NAMES must be in it.")
     slack, slack_problem = slack_from(env)
     connect_key, connect_problem = connect_key_from(env)
+    connect_clients, github_problem = connect_clients_from(env)
     return GatewayConfig(
         apex_host=env["WAKU_APEX_HOST"].strip().lower(),
         bind_host=env["WAKU_GATEWAY_BIND"],
@@ -253,4 +294,6 @@ def config_from_env(env: Mapping[str, str]) -> GatewayConfig:
         slack_problem=slack_problem,
         connect_key=connect_key,
         connect_problem=connect_problem,
+        connect_clients=connect_clients,
+        github_problem=github_problem,
     )

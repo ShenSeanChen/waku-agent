@@ -12,9 +12,9 @@ list item and a word beside it: done, todo, or off when this server has no
 Slack app configured.
 
 Under the steps the page lists the connectors a person can sign in to (spec
-029): Notion and Linear, each with "Connect", or "Connected" once the gateway
-holds that person's tokens. The Connections page (spec 030) replaces this
-list.
+029): Notion, Linear and, when this server holds its GitHub App, GitHub.
+Each has "Connect", or "Connected" once the gateway holds that person's
+tokens. The Connections page (spec 030) replaces this list.
 
 EVERYTHING THAT IS NOT THIS FILE'S OWN TEXT IS ESCAPED. The workspace's name
 comes from Slack, and the outcome in `?slack=` comes from a URL anybody can
@@ -28,6 +28,7 @@ from pathlib import Path
 
 from aiohttp import web
 
+from hosted.core.connectors import VENDORS
 from hosted.gateway import answers, connect, slack
 from hosted.ports.control import SlackInstall
 
@@ -95,6 +96,10 @@ def _connectors(signed_in: bool, connectors: list[tuple[str, str, str]]) -> str:
         else:
             detail = f"Sign in on {title}'s own page. Waku never sees your password."
             action = _button(start, f"Connect {title}")
+        # What the agent can reach there, for a vendor that has such a
+        # sentence (GitHub: the repositories its app is installed on).
+        note = VENDORS[name].note if signed_in and name in VENDORS else ""
+        detail = f"{detail} {note}".strip()
         done = "done" if signed_in and state == "connected" else "todo"
         items += (f'    <li data-connector="{html.escape(name, quote=True)}" '
                   f'data-state="{done}"><span class="number"></span>'

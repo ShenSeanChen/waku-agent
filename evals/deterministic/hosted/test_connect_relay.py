@@ -339,7 +339,7 @@ def test_a_disabled_tenants_container_is_refused(tmp_path, sock_dir, notion):
 def test_only_a_listed_connector_and_only_a_post_of_one_message(tmp_path, sock_dir, notion):
     async def body(rig):
         _, token = await rig.person("ana", "notion")
-        return (await rig.post(token, SEARCH, "github"),
+        return (await rig.post(token, SEARCH, "slack"),
                 await rig.post(token, SEARCH, "notion%2F..%2Fslack"),
                 await rig.post(token, SEARCH, method="GET"),
                 await rig.post(token, SEARCH, method="DELETE"),
