@@ -642,7 +642,7 @@ sign-in comes back to a port on their own computer
 | `GET /connect/callback` | the apex | checks the `state` and the browser's own session, exchanges the vendor's code for the person's tokens, and stores them |
 | `POST /connect/disconnect` | the apex | takes `{"server": "<name>"}` from a signed-in person and deletes their tokens for that vendor |
 | `POST /connect/<name>/mcp` | the proxy, on the tenant network | takes one MCP message from a container with the container's platform token, and has the gateway make the call with that tenant's sign-in. A tenant may send 60 a minute to one connector; one more answers 429 |
-| `POST /connect/link` | the proxy, on the tenant network | answers the `/connect/start` address for one connector, so "connect Notion" in a chat can give the person the link |
+| `POST /connect/link` | the proxy, on the tenant network | answers the `/connect/start` address for one connector, so "connect Notion" in a chat can give the person the link. Asked for a name that is not a connector here, it answers the titles of the ones that are. A container's agent asks once when it builds its tools, so `connect_tool` and `connector_status` name these connectors to the model and no others |
 
 ```
 container --POST /connect/notion/mcp--> proxy --gateway.sock--> gateway --> mcp.notion.com
