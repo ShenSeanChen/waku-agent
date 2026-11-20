@@ -160,8 +160,10 @@ def sync_connectors(home: Path, platform_base_url: str, connectors: list[str]) -
             return False
     else:
         config = {}
-    ours = {name: connector_server(platform_base_url, name) for name in VENDORS}
-    wanted = [name for name in VENDORS if name in connectors]
+    # Only a connector that is an MCP server has an entry (Gmail has none).
+    listed = [name for name, vendor in VENDORS.items() if vendor.mcp]
+    ours = {name: connector_server(platform_base_url, name) for name in listed}
+    wanted = [name for name in listed if name in connectors]
     kept = [s for s in servers
             if not (isinstance(s, dict) and s.get("name") in ours
                     and s.get("url") == ours[s["name"]]["url"]

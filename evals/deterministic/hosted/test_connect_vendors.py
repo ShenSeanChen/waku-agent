@@ -26,13 +26,19 @@ def _starter() -> dict:
         return tomllib.load(handle)
 
 
-def test_the_list_is_notion_linear_and_github_and_nothing_else():
-    assert set(VENDORS) == {"notion", "linear", "github"}
+def test_the_list_is_notion_linear_github_and_gmail_and_nothing_else():
+    assert set(VENDORS) == {"notion", "linear", "github", "gmail"}
+    # Gmail is the one that is not an MCP server (spec 031), so it has no
+    # entry in the starter list and is not compared with one below.
+    assert [name for name, vendor in VENDORS.items() if not vendor.mcp] == ["gmail"]
 
 
 def test_each_vendor_is_the_starter_lists_entry():
     starter = _starter()
     for name, vendor in VENDORS.items():
+        if not vendor.mcp:
+            assert name not in starter
+            continue
         entry = starter[name]
         assert (vendor.name, vendor.title) == (entry["name"], entry["title"])
         assert list(vendor.writes) == entry["writes"]

@@ -2,6 +2,12 @@
 
 Notion, Linear and GitHub. Each is the vendor's own hosted MCP server.
 
+Gmail is the fourth, and it is not an MCP server (spec 031): Google has none
+a client can sign in to, so the gateway calls Gmail's own API
+(hosted/gateway/mail.py). Its entry is here because the sign-in, the sealed
+tokens and the renewal are the same as GitHub's. It is never written into a
+container's mcp.json, and the MCP relay refuses it.
+
 Notion and Linear take sign-in from a client that registers itself (dynamic
 client registration). GitHub does not: its server takes sign-in only from a
 GitHub App registered with GitHub beforehand, so its entry names GitHub's two
@@ -12,7 +18,7 @@ A person cannot add another address. The gateway calls a connector with the
 platform's network position, so the list is closed and changes by pull
 request.
 
-THIS IS A SECOND COPY OF THREE ENTRIES OF waku/connectors.toml, the list the
+THE THREE MCP ENTRIES ARE A SECOND COPY OF waku/connectors.toml, the list the
 local agent uses (spec 025). hosted/ and waku/ never import each other, and
 the services image has no waku/ in it, so the address and the `writes`
 patterns are written here again. evals/deterministic/hosted/
@@ -51,6 +57,10 @@ class Vendor:
                      the origin of authorize_url
       note           one sentence for the setup page about what the agent
                      can reach there
+      mcp            False for a vendor that is not an MCP server (Gmail).
+                     `url` is then the origin of the vendor's API
+      authorize_extra  fields the vendor's sign-in page needs beside the
+                     standard ones, as (name, value) pairs
 
     Both addresses are from the vendor's documentation. Nothing the vendor
     answers at run time moves them.
@@ -64,6 +74,8 @@ class Vendor:
     token_url: str = ""
     issuer: str = ""
     note: str = ""
+    mcp: bool = True
+    authorize_extra: tuple[tuple[str, str], ...] = ()
 
     def is_write(self, tool: str) -> bool:
         return any(fnmatchcase(tool, pattern) for pattern in self.writes)
@@ -116,6 +128,25 @@ VENDORS: dict[str, Vendor] = {vendor.name: vendor for vendor in (
         # The first real sign-in was refused while this was the bare origin.
         issuer="https://github.com/login/oauth",
         note="It reads the repositories the Waku app is installed on at GitHub."),
+    Vendor(
+        name="gmail", title="Gmail",
+        # Gmail's API, not an MCP address. hosted/gateway/mail.py calls five
+        # addresses under it, and none of them sends a mail.
+        url="https://gmail.googleapis.com", mcp=False,
+        # Spec 031, decision 1: read, and write drafts. Not gmail.send and
+        # not gmail.modify.
+        scope=("https://www.googleapis.com/auth/gmail.readonly "
+               "https://www.googleapis.com/auth/gmail.compose"),
+        writes=(),
+        # https://developers.google.com/identity/protocols/oauth2/web-server,
+        # as known on 2026-11-20. Not read from Google at run time.
+        authorize_url="https://accounts.google.com/o/oauth2/v2/auth",
+        token_url="https://oauth2.googleapis.com/token",
+        issuer="https://accounts.google.com",
+        # Google answers a refresh token only for "offline" access, and only
+        # on a sign-in that shows its consent page.
+        authorize_extra=(("access_type", "offline"), ("prompt", "consent")),
+        note="It reads this mailbox and writes drafts in it. It cannot send."),
 )}
 
 
@@ -123,3 +154,9 @@ def is_connector_name(name: object) -> bool:
     """Whether `name` is on the list. The one check every route, the gateway's
     socket and the spawner make before a name reaches a path or a file."""
     return isinstance(name, str) and name in VENDORS
+
+
+def is_mcp_connector(name: object) -> bool:
+    """Whether `name` is a connector that is an MCP server: one a container's
+    mcp.json may name and the MCP relay may call. Gmail is not."""
+    return is_connector_name(name) and VENDORS[name].mcp

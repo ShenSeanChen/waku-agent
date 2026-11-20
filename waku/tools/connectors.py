@@ -743,8 +743,12 @@ def status(home: Path) -> str:
         return f"The connector list could not be read: {refused}"
     # In a hosted container the starter list is not what can be connected:
     # the platform's own list is, and it is the last line of the answer.
-    offer = [hosted_offer_line(hosted_offered())] if hosted() else []
-    if not servers:
+    offered = hosted_offered() if hosted() else None
+    offer = [hosted_offer_line(offered)] if hosted() else []
+    # Gmail is not a server in mcp.json: the platform says whether this
+    # person signed in to it (spec 031).
+    mail = hosted_mail_lines(offered) if hosted() else []
+    if not servers and not mail:
         return "\n".join(["No connector is connected yet.", *offer]) if offer else (
             "No connector is added yet. A starter name connects one: " + ", ".join(starter()))
     waiting = sign_in_waiting(home)
@@ -762,7 +766,28 @@ def status(home: Path) -> str:
         else:
             lines.append(f"{title} ({name}): not connected. It is added and nobody has "
                          "signed in. Connecting it again makes a new sign-in link.")
-    return "\n".join(lines + offer)
+    return "\n".join(lines + mail + offer)
+
+
+def hosted_mail_lines(offered: tuple[str, ...] | None, post: Callable | None = None) -> list:
+    """Whether this person's Gmail is connected, as connector_status's line
+    for it, or nothing on a server that has no Gmail. The platform answers
+    it on the route that makes a sign-in link."""
+    from waku.alwayson.senders import SendFailed, post_json
+
+    base = os.getenv("WAKU_PLATFORM_BASE_URL", "").rstrip("/")
+    token = os.getenv("WAKU_PLATFORM_TOKEN", "")
+    if not offered or "Gmail" not in offered or not base or not token:
+        return []
+    try:
+        answer = (post or post_json)(base + HOSTED_LINK_PATH, {"server": "gmail"},
+                                     {"Authorization": f"Bearer {token}"})
+    except SendFailed:
+        return []
+    if answer.get("ok") is not True:
+        return []
+    return ["Gmail (gmail): connected." if answer.get("connected") is True
+            else "Gmail (gmail): not connected."]
 
 
 def _approved(home: Path) -> bool:

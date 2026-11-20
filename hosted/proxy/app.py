@@ -47,6 +47,9 @@ SLACK_HISTORY_PATH = "/slack/history"
 # the sign-in address (spec 029 B; hosted/proxy/connect.py).
 CONNECT_MCP_PATH = "/connect/{name}/mcp"
 CONNECT_LINK_PATH = "/connect/link"
+# Where a container's three mail tools ask (spec 031 A; hosted/proxy/mail.py).
+# The three actions are the whole route: /mail/send matches nothing.
+MAIL_PATH = "/mail/{action:search|read|draft}"
 RATE_WINDOW_SECONDS = 60.0
 # Waku-agent spec 011 B1: what one chat turn was charged.
 CHARGES_PATH = re.compile(r"/v1/turns/([^/]+)/charges")
@@ -157,7 +160,8 @@ class MeteringProxy:
                  slack: Handler | None = None,
                  slack_history: Handler | None = None,
                  connect: Handler | None = None,
-                 connect_link: Handler | None = None) -> None:
+                 connect_link: Handler | None = None,
+                 mail: Handler | None = None) -> None:
         self._config = config
         self._ledger = ledger
         self._resolve = resolve
@@ -171,6 +175,7 @@ class MeteringProxy:
         self._slack_history = slack_history
         self._connect = connect
         self._connect_link = connect_link
+        self._mail = mail
         self._turns = turns if turns is not None else TurnCharges(monotonic)
         self._in_flight: dict[str, int] = defaultdict(int)
         self._recent: dict[str, deque[float]] = defaultdict(deque)
@@ -190,6 +195,8 @@ class MeteringProxy:
             app.router.add_route("*", CONNECT_LINK_PATH, self._connect_link)
         if self._connect is not None:
             app.router.add_route("*", CONNECT_MCP_PATH, self._connect)
+        if self._mail is not None:
+            app.router.add_route("*", MAIL_PATH, self._mail)
         app.router.add_route("*", "/{tail:.*}", self._dispatch)
         return app
 

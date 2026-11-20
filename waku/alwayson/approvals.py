@@ -156,6 +156,12 @@ MODES: dict[str, str | Callable[[dict, Address | None], str]] = {
     # It reads the channel the run is in, which the people there already read
     # (spec 029, decision 5). Hosted Waku only.
     "slack_history": ALLOW,
+    # The person's own mailbox on hosted Waku (spec 031 A). Two read it. The
+    # third writes a draft there, which reaches nobody until the person
+    # presses Send in Gmail themselves. No tool sends.
+    "mail_search": ALLOW,
+    "mail_read": ALLOW,
+    "mail_draft": ALLOW,
 }
 
 

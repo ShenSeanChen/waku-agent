@@ -8,8 +8,9 @@ loops: the idle loop (sweep.py) and the scheduler (scheduler.py, spec 026):
                             default -- it is the reason the gateway is not on
                             the tenant bridge and a container cannot reach it.
   run/gateway/gateway.sock  what the proxy asks: whose token this is, to
-                            post a container's Slack message, and to make
-                            a container's call to a connector, each with a
+                            post a container's Slack message, to make a
+                            container's call to a connector, and to read
+                            or draft in its person's mailbox, each with a
                             token only this process holds (internal.py).
   run/admin/admin.sock      tenant.sh, upgrade.sh --now and restore.sh.
   run/proxy/proxy.sock      NOT served here -- the gateway is its CLIENT.
@@ -53,6 +54,7 @@ from hosted.gateway.container_api import ContainerApi
 from hosted.gateway.forward import ContainerForwarder
 from hosted.gateway.identity import JwksVerifier
 from hosted.gateway.launch import Launcher
+from hosted.gateway.mail import GmailApi, Mail
 from hosted.gateway.memory_keys import WakuMemoryKeys
 from hosted.gateway.scheduler import TICK_SECONDS, Scheduler
 from hosted.gateway.secretbox import SecretBox
@@ -124,7 +126,7 @@ async def main() -> None:
         # the gateway registers itself with each vendor at the first sign-in.
         # GitHub is the exception (group F): it is offered only with the
         # client id and secret of a GitHub App, from gateway.env.
-        connectors = connector_relay = None
+        connectors = connector_relay = mail = None
         if config.connect_key is not None:
             connectors = Connect(key=config.connect_key, apex_host=config.apex_host,
                                  store=store, api=VendorApi(session),
@@ -136,14 +138,27 @@ async def main() -> None:
             connector_relay = McpRelay(connect=connectors, session=session,
                                        apex_host=config.apex_host)
 
+            # Spec 031 A: a container's mail calls, made with the Google
+            # token Connect keeps. Built only with the Google client's two
+            # values: without them Gmail is not a connector here.
+            if "gmail" in connectors.vendors:
+                mail = Mail(connect=connectors, api=GmailApi(session),
+                            apex_host=config.apex_host)
+
             async def connectors_changed(tenant_id: str, server: str) -> None:
                 connector_relay.forget(tenant_id, server)
+                if mail is not None and server == "gmail":
+                    # A new sign-in may be to another mailbox.
+                    mail.forget(tenant_id)
+                    return
                 await launcher.reprovision(tenant_id)
 
             connectors.on_change = connectors_changed
             _LOG.info("connectors: on (%s)", ", ".join(connectors.vendors))
             if "github" not in connectors.vendors:
                 _LOG.info("connectors: GitHub is not offered: %s", config.github_problem)
+            if "gmail" not in connectors.vendors:
+                _LOG.info("connectors: Gmail is not offered: %s", config.google_problem)
         else:
             _LOG.warning("connectors: off, their routes answer 503: %s",
                          config.connect_problem)
@@ -180,6 +195,7 @@ async def main() -> None:
             slack_send=slack.relay.send if slack is not None else None,
             slack_history=slack.history.read if slack is not None else None,
             connect=connector_relay,
+            mail=mail.handle if mail is not None else None,
             memory_key=home_keys.memory_key if home_keys is not None else None)
         admin_server = await admin.serve_admin(config.admin_socket, gateway)
         runner = build_runner(gateway.build())
