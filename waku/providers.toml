@@ -87,6 +87,19 @@ small_model = "google/gemma-4-26b-a4b-it:free"
 key_url = "https://openrouter.ai/keys"
 price = [1.0, 3.0]
 
+# Atlas Cloud -- an OpenAI-compatible gateway over LLM, image and video models.
+# GET /v1/models is public and lists per-model prices, so the catalog supplies
+# exact rates and `price` is only the fallback. Ids are "<lab>/<model>".
+
+[atlascloud]
+kind = "openai"
+key_env = "ATLASCLOUD_API_KEY"
+base_url = "https://api.atlascloud.ai/v1"
+model = "deepseek-ai/deepseek-v4-flash"
+small_model = "deepseek-ai/deepseek-v4-flash"
+key_url = "https://console.atlascloud.ai/api-keys"
+price = [0.14, 0.28]
+
 # Google's Pro tier is not "gemini-3.5-pro" (that id 404s); the current Pro
 # is gemini-3.1-pro-preview.
 
