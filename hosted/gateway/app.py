@@ -48,6 +48,7 @@ from hosted.gateway import (
     setup_page,
     slack,
     slack_state,
+    team_homes,
 )
 from hosted.gateway.config import GatewayConfig
 from hosted.gateway.identity import NotSignedIn
@@ -254,8 +255,13 @@ class Gateway:
                  memory_keys: MemoryKeys | None = None,
                  slack: slack.SlackRoutes | None = None,
                  connect: connect.Connect | None = None,
+                 team_homes: team_homes.TeamHomeRoutes | None = None,
                  now: Callable[[], float] = time.time) -> None:
         self._config = config
+        # Spec 032: None when config/gateway.env has no platform secret, or
+        # no key to seal a team's Waku Memory key with. Every route under
+        # /v1/team-homes then answers 503 with the reason.
+        self._team_homes = team_homes
         # Spec 029: None when config/gateway.env has no key to seal a
         # connector's tokens with. Every connector route then answers 503
         # with config.connect_problem.
@@ -406,6 +412,15 @@ class Gateway:
             if (path == CONVERSATIONS_API_PATH
                     or path.startswith(CONVERSATIONS_API_PATH + "/")):
                 return await self._conversations_api(request, path)
+            if path == team_homes.PATH or path.startswith(team_homes.PATH + "/"):
+                # Before the CSRF pair, like the bearer routes: waku.one's
+                # API calls these with the platform secret and no Origin.
+                if self._team_homes is None:
+                    return team_homes.not_configured(
+                        self._config.platform_problem
+                        if not self._config.platform_secret
+                        else self._config.connect_problem)
+                return await self._team_homes.handle(request, path)
         if guards.csrf_refusal(request, host):
             return answers.refusal(request, guards.UNSUPPORTED_MEDIA, answers.NOT_JSON)
         if host == self._config.apex_host:

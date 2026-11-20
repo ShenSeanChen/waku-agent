@@ -55,10 +55,13 @@ from hosted.gateway.identity import JwksVerifier
 from hosted.gateway.launch import Launcher
 from hosted.gateway.memory_keys import WakuMemoryKeys
 from hosted.gateway.scheduler import TICK_SECONDS, Scheduler
+from hosted.gateway.secretbox import SecretBox
 from hosted.gateway.slack import EVENTS_PATH, SlackApi, SlackRoutes
 from hosted.gateway.spawner_client import SpawnerClient
 from hosted.gateway.store import ControlDb
 from hosted.gateway.sweep import IdleLoop
+from hosted.gateway.team_homes import PATH as TEAM_HOMES_PATH
+from hosted.gateway.team_homes import HomeKeys, TeamHomeRoutes
 
 _LOG = log.get(__name__)
 
@@ -135,11 +138,25 @@ async def main() -> None:
         else:
             _LOG.warning("connectors: off, their routes answer 503: %s",
                          config.connect_problem)
+        # Spec 032: the home of a team space's agent. It needs the secret
+        # waku.one's calls carry, and the key that seals what control.db must
+        # not hold in the clear: a team's Waku Memory key is one such value.
+        homes = None
+        if config.platform_secret and config.connect_key is not None:
+            homes = TeamHomeRoutes(
+                secret=config.platform_secret, apex_host=config.apex_host, store=store,
+                keys=HomeKeys(store, SecretBox(config.connect_key)), now=time.time)
+            _LOG.info("team homes: on. waku.one calls https://%s%s",
+                      config.apex_host, TEAM_HOMES_PATH)
+        else:
+            _LOG.warning("team homes: off, their routes answer 503: %s",
+                         config.platform_problem if not config.platform_secret
+                         else config.connect_problem)
         gateway = Gateway(config=config, store=store, launcher=launcher,
                           verifier=verifier, forward=forwarder, turns=turns,
                           plans=plans,
                           memory_keys=WakuMemoryKeys(session, config.supabase_audience),
-                          slack=slack, connect=connectors)
+                          slack=slack, connect=connectors, team_homes=homes)
         # Adopt what is already running before the first request arrives, so
         # no container is orphaned and every idle timer starts fresh.
         try:

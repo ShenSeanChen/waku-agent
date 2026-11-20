@@ -521,7 +521,10 @@ def test_a_gateway_env_from_before_spec_008_still_starts():
     # test_slack_install.py pins what their absence does.
     slack = {"WAKU_SLACK_CLIENT_ID", "WAKU_SLACK_CLIENT_SECRET",
              "WAKU_SLACK_SIGNING_SECRET", "WAKU_SLACK_TOKEN_KEY"}
-    absent = {"WAKU_EMBED_ORIGINS", "WAKU_IDLE_MINUTES"} | slack
+    # Spec 032 added the platform secret; test_team_home_routes.py pins what
+    # its absence does.
+    absent = {"WAKU_EMBED_ORIGINS", "WAKU_IDLE_MINUTES",
+              "WAKU_AGENT_PLATFORM_SECRET"} | slack
     assert set(env) == set(REQUIRED_ENV_NAMES) - absent
     assert MAY_BE_ABSENT == absent
     assert config_from_env(env).embed_origins == DEFAULT_EMBED_ORIGINS

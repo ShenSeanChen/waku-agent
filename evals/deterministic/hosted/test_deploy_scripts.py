@@ -907,8 +907,13 @@ def test_no_env_file_install_writes_holds_a_value_compose_would_misread(tmp_path
     # The three values from the Slack app's settings page are the rest (spec
     # 026 C): install.sh has no flag for them either, and empty is the Slack
     # routes switched off (hosted/README.md, "Slack").
+    #
+    # WAKU_AGENT_PLATFORM_SECRET is the last (spec 032): it is shared with
+    # waku.one, so install.sh cannot make it, and empty is the team-home
+    # routes switched off (hosted/README.md, "Team homes").
     may_be_empty = {"WAKU_DNS_MODULE_VERSION", "WAKU_TREG_TOKEN", "WAKU_SLACK_CLIENT_ID",
-                    "WAKU_SLACK_CLIENT_SECRET", "WAKU_SLACK_SIGNING_SECRET"}
+                    "WAKU_SLACK_CLIENT_SECRET", "WAKU_SLACK_SIGNING_SECRET",
+                    "WAKU_AGENT_PLATFORM_SECRET"}
     for function in ("waku_install_env", "waku_gateway_env",
                      "waku_spawner_env", "waku_proxy_env"):
         for name, raw in _env_body(tmp_path, function).items():

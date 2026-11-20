@@ -49,8 +49,10 @@ from hosted.gateway.connect import Connect, VendorApi
 from hosted.gateway.forward import ContainerForwarder
 from hosted.gateway.identity import JwksVerifier
 from hosted.gateway.launch import Launcher
+from hosted.gateway.secretbox import SecretBox
 from hosted.gateway.slack import SlackApi, SlackRoutes
 from hosted.gateway.store import ControlDb
+from hosted.gateway.team_homes import HomeKeys, TeamHomeRoutes
 from hosted.ports.runtime import RunningContainer
 
 
@@ -349,6 +351,9 @@ class Harness:
         # Spec 029: set by use_connect.
         self.connect: Connect | None = None
         self._fake_vendors: dict[str, FakeVendor] = {}
+        # Spec 032: set by use_team_homes.
+        self.team_homes: TeamHomeRoutes | None = None
+        self.home_keys: HomeKeys | None = None
         # What a wake also calls, when a test wires a real Scheduler's kick.
         self.on_wake = lambda: None
         self.config = GatewayConfig(
@@ -371,7 +376,19 @@ class Harness:
                        launcher=self.launcher, verifier=self.verifier,
                        forward=self.forwarder, turns=self.turns,
                        plans=self.plans, memory_keys=self.memory_keys,
-                       slack=self.slack, connect=self.connect, now=self.clock)
+                       slack=self.slack, connect=self.connect,
+                       team_homes=self.team_homes, now=self.clock)
+
+    def use_team_homes(self, secret: str | None = None) -> None:
+        """Turn the /v1/team-homes routes on, with the fake platform secret
+        and the fake sealing key (spec 032)."""
+        self.config = dataclasses.replace(
+            self.config, platform_secret=secret or PLATFORM_SECRET, platform_problem="")
+        self.home_keys = HomeKeys(self.store, SecretBox(bytes.fromhex(SLACK_TOKEN_KEY)))
+        self.team_homes = TeamHomeRoutes(
+            secret=self.config.platform_secret, apex_host=APEX, store=self.store,
+            keys=self.home_keys, now=self.clock)
+        self.gateway = self._build_gateway()
 
     def use_connect(self, **fakes: FakeVendor) -> None:
         """Turn the connector routes on, with each named vendor's address
@@ -734,6 +751,9 @@ SLACK_CLIENT_ID = "1111.2222"
 SLACK_CLIENT_SECRET = "fake-client-secret"
 SLACK_SIGNING_SECRET = "fake-signing-secret"
 SLACK_TOKEN_KEY = "0f" * 32
+# Spec 032. Not a real secret or key: the shapes, filled with one letter.
+PLATFORM_SECRET = "fake-platform-secret-" + "p" * 24
+AGENT_MEMORY_KEY = "mem_sk_" + "A" * 43
 
 
 def slack_settings(**changes) -> SlackSettings:
