@@ -625,9 +625,9 @@ with the same names.
 - **None of this has run against Slack.** The evals use a fake Slack on
   loopback.
 
-## Connectors: Notion and Linear
+## Connectors: Notion, Linear and GitHub
 
-A person on hosted waku signs in to Notion or Linear from
+A person on hosted waku signs in to Notion, Linear or GitHub from
 `https://agent.waku.one/setup` (spec 029). Ana presses "Connect Notion",
 approves on Notion's own page, and comes back to `/setup` with "Notion is
 connected." The gateway then holds her Notion tokens.
@@ -648,12 +648,12 @@ sign-in comes back to a port on their own computer
 container --POST /connect/notion/mcp--> proxy --gateway.sock--> gateway --> mcp.notion.com
 ```
 
-`<name>` is `notion` or `linear` (`hosted/core/connectors.py`). A person
-cannot add another address: the gateway calls a connector from the platform's
-own network. GitHub is not on the list, because it takes a personal access
-token.
+`<name>` is `notion`, `linear` or `github` (`hosted/core/connectors.py`). A
+person cannot add another address: the gateway calls a connector from the
+platform's own network. GitHub is on a server's list only when that server
+holds a GitHub App's client id and secret ("GitHub" below).
 
-**The gateway registers itself with each vendor.** At the first sign-in to a
+**The gateway registers itself with Notion and Linear.** At the first sign-in to a
 vendor it reads the vendor's sign-in addresses, registers as a client with the
 one redirect address `https://agent.waku.one/connect/callback` (dynamic
 client registration), and keeps that registration in `control.db` for every
@@ -693,6 +693,60 @@ gateway restarted. It reads the vendor's answer to its end, as JSON or as an
 event stream, compressed or not, and returns at most 1 MiB of it as plain
 JSON. A message from a container is at most 48 KB.
 
+### GitHub
+
+GitHub's MCP server does not let a client register itself: "Dynamic Client
+Registration is NOT supported by Remote GitHub MCP Server at this time"
+([host integration](https://github.com/github/github-mcp-server/blob/main/docs/host-integration.md),
+read 2026-11-19). The operator registers one GitHub App, once, and the
+gateway signs every person in through it. It is a GitHub App and not an OAuth
+App because an OAuth App's only scope for a private repository, `repo`, also
+writes.
+
+Register the app at github.com: your profile picture, **Settings**,
+**Developer settings**, **GitHub Apps**, **New GitHub App**.
+
+| Field | Value |
+|---|---|
+| GitHub App name | a name nobody else has, for example `Waku Agent` |
+| Homepage URL | `https://agent.waku.one` |
+| Callback URL | `https://agent.waku.one/connect/callback` |
+| Expire user authorization tokens | ticked |
+| Request user authorization (OAuth) during installation | not ticked. Ticked, GitHub sends a browser to the callback without the gateway's `state`, and the page answers "That link expired" |
+| Enable Device Flow | not ticked |
+| Webhook, Active | not ticked |
+| Repository permissions | **Contents**, **Issues**, **Pull requests** and **Metadata**: "Read-only". Every other permission: "No access" |
+| Where can this GitHub App be installed? | "Any account", so a person can install it on their own repositories |
+
+Press **Create GitHub App**. On the app's page, copy the **Client ID** and
+press **Generate a new client secret**. Put both into
+`/srv/waku/config/gateway.env`, as root, and restart the gateway:
+
+```
+WAKU_GITHUB_CLIENT_ID=<Client ID>
+WAKU_GITHUB_CLIENT_SECRET=<the client secret>
+```
+
+The gateway's log then says `connectors: on (notion, linear, github)`.
+Without both values it says why GitHub is not offered, `/setup` has no GitHub
+card, and an agent asked to connect GitHub answers that it cannot be
+connected here yet.
+
+A person presses "Connect GitHub" on `/setup` and approves on github.com. The
+agent then reads the repositories the app is installed on, so the person also
+installs the app from its public page, `https://github.com/apps/<the app's
+name>`, on the account or the repositories the agent may read.
+
+**Reading is enforced three times.** The app's permissions are read-only, so
+GitHub refuses a write with the person's token. The gateway calls
+`https://api.githubcopilot.com/mcp/readonly`, where GitHub's server offers no
+tool that writes. And the gateway refuses a `tools/call` whose tool matches
+GitHub's write patterns before GitHub is called, as it does for Notion.
+
+GitHub's token lasts eight hours and its refresh token six months. The
+gateway renews the token in its last minute and keeps the new refresh token,
+because GitHub ends the old one when it is used.
+
 ### Turning it on
 
 Connectors are on when `config/gateway.env` has a usable
@@ -714,7 +768,7 @@ or `connectors: off` with the reason, and the three routes then answer 503.
   A write tool whose name matches none of the vendor's write patterns would
   run: the patterns list verbs, and a verb can be missing.
 - **Calls are not charged credits.** There is no limit by plan: every person
-  may connect both.
+  may connect all three.
 - **No button disconnects yet.** `POST /connect/disconnect` is the route; the
   Connections page (spec 030) is where its button goes.
 - **Disconnecting deletes the gateway's copy of the tokens and does not
@@ -723,8 +777,11 @@ or `connectors: off` with the reason, and the three routes then answer 503.
 - **A restore onto a new VM needs `WAKU_SLACK_TOKEN_KEY` carried over by
   hand**, as for Slack. Without it each person signs in to their connectors
   again, and the gateway registers with each vendor again.
-- **None of this has run against Notion or Linear.** The evals use a fake
-  vendor on loopback. Whether each vendor's registration accepts
+- **Removing the two GitHub values takes GitHub off the list** and leaves
+  each person's sealed tokens in `control.db`. Their `github` tools answer an
+  error until the values are back.
+- **None of this has run against Notion, Linear or GitHub.** The evals use a
+  fake vendor on loopback. Whether each vendor's registration accepts
   `https://agent.waku.one/connect/callback` as a redirect address is not
   verified.
 

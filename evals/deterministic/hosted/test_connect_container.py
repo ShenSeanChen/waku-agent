@@ -73,7 +73,7 @@ def test_a_tenants_own_servers_are_never_removed_or_replaced(tmp_path):
 
 
 def test_a_name_that_is_not_on_the_list_is_never_written(tmp_path):
-    assert sync_connectors(tmp_path, PROXY, ["github", "../x", "notion"]) is True
+    assert sync_connectors(tmp_path, PROXY, ["slack", "../x", "notion"]) is True
     assert _servers(tmp_path) == [NOTION]
 
 
@@ -110,7 +110,7 @@ def test_provision_and_start_take_a_list_of_connector_names():
                            "project_id": 7}).connectors == ()
 
 
-@pytest.mark.parametrize("bad", [["github"], ["notion", "notion"], "notion", [3],
+@pytest.mark.parametrize("bad", [["slack"], ["notion", "notion"], "notion", [3],
                                  ["notion/../x"], {"notion": True}, [["notion"]]])
 def test_the_spawner_refuses_anything_that_is_not_a_list_of_listed_names(bad):
     with pytest.raises(requests.Invalid, match="connector names"):
