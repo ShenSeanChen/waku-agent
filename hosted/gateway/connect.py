@@ -427,7 +427,7 @@ class Connect:
             client_id, client_secret = self._clients[vendor.name]
             scheme, host, _ = _origin(vendor.authorize_url)
             return Client(client_id=client_id, client_secret=client_secret,
-                          issuer=f"{scheme}://{host}",
+                          issuer=vendor.issuer or f"{scheme}://{host}",
                           authorization_endpoint=vendor.authorize_url,
                           token_endpoint=vendor.token_url)
         lock = self._registering.setdefault(vendor.name, asyncio.Lock())
