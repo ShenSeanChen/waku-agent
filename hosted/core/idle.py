@@ -85,6 +85,12 @@ DISK_WARNING_FRACTION = 0.80
 # given up on, so two hours covers every honest report; a container that still
 # says it is working after that is broken, and it is stopped like any other.
 WORK_LIMIT_SECONDS = 2 * 3600
+# How long a container on an old image must have gone without a non-background
+# request before the gateway replaces it (Launcher.stop_stale). One sweep. A
+# request and a scheduler wake both set the idle clock and then take up to
+# READY_TIMEOUT_SECONDS plus one hand-over to reach the container, so after
+# this long whatever they delivered is in the container's own report.
+STALE_QUIET_SECONDS = 60
 
 CAPACITY_MESSAGE = "At capacity, try again shortly."
 START_TIMEOUT_MESSAGE = "Your assistant is taking too long to start. Try again."
@@ -227,6 +233,14 @@ class Fleet:
         state = self._states.get(tenant_id)
         return state is not None and self._idle(state)
 
+    def quiet_for(self, tenant_id: str, seconds: float) -> bool:
+        """Whether a running container has nothing in flight and has had no
+        non-background request for `seconds`. is_idle() is this question with
+        the idle window. Launcher.stop_stale asks it with STALE_QUIET_SECONDS,
+        to find the gap between two turns."""
+        state = self._states.get(tenant_id)
+        return state is not None and self._quiet(state, seconds)
+
     def seconds_idle(self, tenant_id: str) -> float:
         """How long since the last non-background request, for the log line
         the idle loop writes. 0.0 for a tenant the fleet has no state for."""
@@ -244,7 +258,10 @@ class Fleet:
         return self._now() - state.last_activity >= limit
 
     def _idle(self, state: ContainerState) -> bool:
-        cutoff = self._now() - self._idle_seconds
+        return self._quiet(state, self._idle_seconds)
+
+    def _quiet(self, state: ContainerState, seconds: float) -> bool:
+        cutoff = self._now() - seconds
         return (state.status == RUNNING and state.in_flight == 0
                 and state.last_activity <= cutoff)
 

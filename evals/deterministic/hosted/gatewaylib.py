@@ -98,6 +98,11 @@ class FakeSpawner:
         # Tenant ids the spawner has containers for but `list` would never
         # report: see tenant_ids below.
         self.labelled_only: list[str] = []
+        # Tenant ids whose container `list` reports as created from an older
+        # build of the tenant image. A test adds an id to say "an upgrade
+        # rebuilt the image under this container"; a start takes it out,
+        # because every start creates a container from the current image.
+        self.old_image: set[str] = set()
 
     def _port(self) -> int:
         if not self.ports:
@@ -126,6 +131,7 @@ class FakeSpawner:
         await asyncio.sleep(self.start_delay)
         if self.fail_start is not None:
             raise self.fail_start
+        self.old_image.discard(tenant_id)
         container = RunningContainer(
             tenant_id=tenant_id,
             address=self.address or address_for_project(project_id),
@@ -155,7 +161,8 @@ class FakeSpawner:
 
     async def list(self) -> list[RunningContainer]:
         self.requests.append({"op": "list"})
-        return list(self.running.values())
+        return [dataclasses.replace(c, stale=c.tenant_id in self.old_image)
+                for c in self.running.values()]
 
     async def tenant_ids(self) -> list[str]:
         """Every labelled tenant container, UNFILTERED -- the real spawner's

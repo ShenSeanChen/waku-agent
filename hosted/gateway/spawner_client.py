@@ -148,4 +148,7 @@ class SpawnerClient:
             raise SpawnerError(f"no address in the spawner's answer: {answer!r}")
         if not isinstance(port, int) or port <= 0:
             raise SpawnerError(f"no port in the spawner's answer: {answer!r}")
-        return RunningContainer(tenant_id=tenant_id, address=address, port=port)
+        # `stale` is in a `list` answer only, and only True counts. A spawner
+        # from before the key existed sends none, and nothing is restarted.
+        return RunningContainer(tenant_id=tenant_id, address=address, port=port,
+                                stale=answer.get("stale") is True)
