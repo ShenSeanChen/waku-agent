@@ -35,7 +35,7 @@ and the dashboard's **Tools** tab lists them under **Coming soon**:
 | Graph workflows | [`waku/graph/`](../waku/graph) | **live** behind `WAKU_GRAPH_WORKFLOWS=1` — [triage-first turns](tour.md#graph-workflows) |
 | Terminal tool | `run_command` | skeleton — needs a real sandbox + safety surface first |
 | Browser tool | `browse_web` | skeleton — `search_web` already covers read-only lookups |
-| Cron Job | `schedule_task` | **live** — a core tool: the agent sets a one-time timer, and `waku serve` wakes it then. A recurring job is still `make brief` and a system cron line |
+| Cron Job | `schedule_task` | **live** — a core tool: the agent sets a timer that fires once or repeats every day or every weekday, and `waku serve` wakes it then. "Send me a brief every morning at 9" is one repeating timer. `make brief` with a system cron line still works |
 
 A teaching repo's point is a readable core, so these come alive one at a time,
 tested.

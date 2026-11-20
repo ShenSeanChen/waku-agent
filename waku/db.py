@@ -121,7 +121,12 @@ CREATE TABLE IF NOT EXISTS timers (
     note TEXT NOT NULL,            -- what the agent told itself to do then
     reply_to TEXT NOT NULL DEFAULT '',       -- JSON: channel and target, or ''
     idempotency_key TEXT NOT NULL UNIQUE,
-    status TEXT NOT NULL DEFAULT 'pending'   -- pending | fired | cancelled
+    status TEXT NOT NULL DEFAULT 'pending',  -- pending | fired | cancelled
+    -- Spec 033. A repeating timer stays pending, and the loop moves due_at to
+    -- the next occurrence each time it fires.
+    repeat TEXT NOT NULL DEFAULT '',         -- '' | daily | weekdays
+    local_time TEXT NOT NULL DEFAULT '',     -- the time on the clock, "09:00"
+    zone TEXT NOT NULL DEFAULT ''            -- "Europe/Madrid", or "+01:00"
 );
 CREATE INDEX IF NOT EXISTS timers_due ON timers(status, due_at);
 
@@ -178,6 +183,12 @@ def _migrate(conn: sqlite3.Connection) -> None:
     if "scope" not in facts_cols:
         conn.execute("ALTER TABLE facts ADD COLUMN scope TEXT DEFAULT 'global'")
         conn.commit()
+    # Spec 033. A timer set before these columns existed fires once, as before.
+    timer_cols = {r[1] for r in conn.execute("PRAGMA table_info(timers)").fetchall()}
+    for column in ("repeat", "local_time", "zone"):
+        if column not in timer_cols:
+            conn.execute(f"ALTER TABLE timers ADD COLUMN {column} TEXT NOT NULL DEFAULT ''")
+            conn.commit()
 
 
 def connect(home: Path, check_same_thread: bool = True) -> sqlite3.Connection:

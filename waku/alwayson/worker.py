@@ -159,6 +159,59 @@ message. Your note to yourself was:]
 timer. If there is nothing worth sending, reply with the single word SILENT \
 and nothing is sent.]"""
 
+# What a run reads after either timer prompt when the timer repeats (spec
+# 033). Without it a woken run sets "the next one" itself, as a run had to
+# before a timer could repeat, and the person gets two the day after.
+REPEATS = ("[This timer repeats {every}. It sets its next time by itself: do not set "
+           "another timer for it. The person stops it by asking you to cancel it.]")
+
+# What a run reads when a timer whose note starts with "Daily brief" woke it
+# (spec 033). The steps are here and not in the note, so a brief set last
+# month follows the steps of today's release. The note still carries what the
+# person asked the brief to cover.
+BRIEF_NOTE = "daily brief"
+BRIEF_PROMPT = """\
+[A timer you set on {set_at} is due now. Nobody sent this message: the \
+person asked you earlier for a regular brief, and this is the time for it. \
+Your note to yourself was:]
+
+{note}
+
+[Write the brief now. This run only reads: save nothing, post nothing \
+elsewhere and change nothing in any service.
+
+1. Check once which services are connected right now, with the tool that \
+reports it. For each service that is connected (for example Notion, Linear \
+or GitHub), use that service's read tools to find \
+what waits for the person: a question or request nobody answered, work \
+assigned to them, and what changed since yesterday. Read today's calendar \
+when you have a calendar tool. Skip a service that is not connected or that \
+fails, and never mention that you skipped it.
+2. Recall from memory what the person committed to and what is due soon. \
+When you have team memories or a team board, read what is new there and \
+which board messages are still open.
+3. Reply with one short message, the way a person texts a colleague: six \
+short lines at most, no headings and no list of sources. Put first what \
+needs an answer from the person, then deadlines today and this week, then \
+what changed since yesterday. Say every time in the person's time zone, with \
+am or pm. Do not apologise and do not describe what you could not read. If \
+nothing needs attention, say that in one line.
+
+Your reply is the brief. It is sent to the conversation that asked for it.]"""
+
+
+def is_brief(note: str) -> bool:
+    """Whether a timer's note asks for the brief: it starts with "Daily brief"."""
+    return (note or "").strip().lower().startswith(BRIEF_NOTE)
+
+
+def _timer_text(event: Event) -> str:
+    note = event.payload.get("text", "")
+    prompt = BRIEF_PROMPT if is_brief(note) else TIMER_PROMPT
+    text = prompt.format(set_at=event.payload.get("set_at", "an earlier day"), note=note)
+    every = event.payload.get("repeat")
+    return f"{text}\n\n{REPEATS.format(every=every)}" if every else text
+
 
 # What a run reads when an event started it and no person asked for anything,
 # for example a new issue with the label. The last sentence says what happens
@@ -256,7 +309,7 @@ def _text(event: Event) -> str:
             text=text, reply=UNPROMPTED_POSTS if free else UNPROMPTED_ASKS)
     if event.source != "timer":
         return text
-    return TIMER_PROMPT.format(set_at=event.payload.get("set_at", "an earlier day"), note=text)
+    return _timer_text(event)
 
 
 # What a run reads last when its reply goes where several people read it: a
