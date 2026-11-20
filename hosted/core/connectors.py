@@ -46,6 +46,9 @@ class Vendor:
 
       authorize_url  the vendor's sign-in page
       token_url      where a code, and later a refresh token, is exchanged
+      issuer         the name the vendor's sign-in server gives itself, which
+                     it may send back as `iss` on the callback. Empty means
+                     the origin of authorize_url
       note           one sentence for the setup page about what the agent
                      can reach there
 
@@ -59,6 +62,7 @@ class Vendor:
     writes: tuple[str, ...]
     authorize_url: str = ""
     token_url: str = ""
+    issuer: str = ""
     note: str = ""
 
     def is_write(self, tool: str) -> bool:
@@ -106,6 +110,11 @@ VENDORS: dict[str, Vendor] = {vendor.name: vendor for vendor in (
         # 2026-11-19.
         authorize_url="https://github.com/login/oauth/authorize",
         token_url="https://github.com/login/oauth/access_token",
+        # GitHub names itself with a path, and sends this back as `iss`. Read
+        # 2026-11-20 from
+        # https://github.com/.well-known/oauth-authorization-server/login/oauth.
+        # The first real sign-in was refused while this was the bare origin.
+        issuer="https://github.com/login/oauth",
         note="It reads the repositories the Waku app is installed on at GitHub."),
 )}
 

@@ -194,6 +194,9 @@ def test_github_is_called_at_its_read_only_address_and_signs_in_at_github_com():
     assert github.url == "https://api.githubcopilot.com/mcp/readonly"
     assert github.authorize_url == "https://github.com/login/oauth/authorize"
     assert github.token_url == "https://github.com/login/oauth/access_token"
+    # GitHub's sign-in server names itself with a path, and says so on the
+    # callback. Read from its own metadata on 2026-11-20.
+    assert github.issuer == "https://github.com/login/oauth"
     # A GitHub App's sign-in takes no scope: the app's permissions decide.
     assert github.scope == ""
 
@@ -367,6 +370,38 @@ def test_the_code_is_exchanged_with_the_verifier_of_its_own_start(harness, githu
     challenge = _run(harness, body)
     [exchange] = github.calls("/token")
     assert pkce_challenge(exchange["body"]["code_verifier"]) == challenge
+
+
+def test_a_callback_that_names_github_as_github_names_itself_is_taken(harness, github):
+    """GitHub sends `iss=https://github.com/login/oauth` with the code. The
+    first real sign-in, on 2026-11-19, was refused: the gateway expected the
+    bare origin, and answered "GitHub did not finish the sign-in"."""
+    async def body():
+        tenant_id, cookie, _ = await sign_in(harness)
+        start = await _start(harness, cookie)
+        landed = await _callback(harness, cookie, code=github.approve(start["query"]),
+                                 state=start["query"]["state"],
+                                 iss="https://github.com/login/oauth")
+        return tenant_id, landed
+
+    tenant_id, landed = _run(harness, body)
+    assert landed == "/setup?connect=connected&server=github"
+    assert harness.connect.states(tenant_id)["github"] == "connected"
+
+
+@pytest.mark.parametrize("issuer", ["https://github.com", "https://example.com/login/oauth"])
+def test_a_callback_that_names_another_sign_in_server_is_refused(harness, github, issuer):
+    async def body():
+        tenant_id, cookie, _ = await sign_in(harness)
+        start = await _start(harness, cookie)
+        landed = await _callback(harness, cookie, code=github.approve(start["query"]),
+                                 state=start["query"]["state"], iss=issuer)
+        return tenant_id, landed
+
+    tenant_id, landed = _run(harness, body)
+    assert landed == "/setup?connect=failed&server=github"
+    assert harness.connect.states(tenant_id)["github"] == "todo"
+    assert github.calls("/token") == []
 
 
 def test_a_callback_without_our_state_stores_nothing(harness, github):
