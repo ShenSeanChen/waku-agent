@@ -15,6 +15,24 @@ class Tenant:
     status: str
     project_id: int
     created_at: float
+    # "person", or "team" for the home of a team space's agent (spec 032). A
+    # team tenant has no person behind it: no sign-in, no session, no page.
+    kind: str = "person"
+
+
+@dataclass(frozen=True)
+class TeamHome:
+    """The home of one team space's agent (spec 032, decision 1): what
+    waku.one sent when it made the home, and the tenant that runs it.
+    `key_sealed` is the agent's Waku Memory key as SecretBox sealed it: the
+    store never sees the key itself."""
+    space_id: str
+    tenant_id: str
+    space_name: str
+    agent_id: str
+    agent_name: str
+    return_url: str
+    key_sealed: bytes = field(repr=False)
 
 
 @dataclass(frozen=True)
@@ -115,4 +133,9 @@ class ControlStore(Protocol):
     def set_connection_reconnect(self, tenant_id: str, server: str,
                                  needed: bool) -> None: ...
     def delete_connection(self, tenant_id: str, server: str) -> bool: ...
+    def set_team_home(self, *, space_id: str, space_name: str, agent_id: str,
+                      agent_name: str, return_url: str,
+                      key_sealed: bytes) -> tuple[TeamHome, bool]: ...
+    def team_home(self, space_id: str) -> TeamHome | None: ...
+    def team_home_for_tenant(self, tenant_id: str) -> TeamHome | None: ...
     def delete_tenant(self, tenant_id: str) -> None: ...
