@@ -80,7 +80,8 @@ make eval
 file: `~/.waku/state.db`, the same from every folder.
 
 **Use the model you already pay for.** Anthropic (default), OpenAI, Gemini, DeepSeek, MiniMax,
-Kimi, GLM, OpenRouter (one key, hundreds of hosted models), OpenCode Zen, or OpenCode Go —
+Kimi, GLM, OpenRouter (one key, hundreds of hosted models), OpenCode Zen, OpenCode Go,
+or [OpenDesign Go](https://go.open-design.ai/) —
 set `WAKU_PROVIDER=`, paste the key, done. One dialect in the loop;
 a [~60-line adapter](waku/loop/models.py) handles the rest.
 

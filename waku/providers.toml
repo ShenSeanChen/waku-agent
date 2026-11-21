@@ -219,6 +219,20 @@ small_model = "deepseek-v4-flash"
 key_url = "https://opencode.ai/zen"
 price = [0.435, 0.87]
 
+# OpenDesign Go uses a workspace key and the existing Chat Completions adapter.
+# Reference token rates for the default model, checked 2026-11-21:
+# https://go.open-design.ai/models/deepseek-v4-1-flash/
+# The spend estimate does not represent the subscription invoice or allowance.
+[opendesign-go]
+kind = "openai"
+key_env = "OPENDESIGN_API_KEY"
+base_url = "https://amr-link.open-design.ai/v1"
+model = "deepseek-v4.1-flash"
+small_model = "deepseek-v4.1-flash"
+catalog_url = "https://amr-link.open-design.ai/v1/models"
+key_url = "https://go.open-design.ai/"
+price = [0.3, 1.2]
+
 # The hosted free tier. Hidden on a local machine: with no
 # WAKU_PLATFORM_BASE_URL set it appears in no page, list or error message,
 # and never in .env.example. In a tenant container the four WAKU_PLATFORM_*

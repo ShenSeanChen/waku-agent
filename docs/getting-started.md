@@ -36,8 +36,12 @@ cp .env.example .env
 ```
 
 Set `WAKU_PROVIDER=` and paste that provider's key. Anthropic is the default;
-OpenAI, Gemini, DeepSeek, MiniMax, Kimi, GLM, OpenRouter, OpenCode Zen and
-OpenCode Go work the same way. You can also paste a key in the dashboard
+OpenAI, Gemini, DeepSeek, MiniMax, Kimi, GLM, OpenRouter, OpenCode Zen,
+OpenCode Go and OpenDesign Go work the same way. For OpenDesign Go, create a
+workspace key using its [API setup guide](https://open-design.ai/help/cloud-api/)
+and set `WAKU_PROVIDER=opendesign-go` and `OPENDESIGN_API_KEY`. Waku lists the
+models available to that key. Its token-cost estimate is not the subscription
+invoice or the remaining plan allowance. You can also paste a key in the dashboard
 later. Either way the key stays in a `.env` on your machine and is never sent
 to the browser.
 
