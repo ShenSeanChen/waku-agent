@@ -35,6 +35,24 @@ from hosted.ports.control import SlackInstall
 
 TEMPLATE = Path(__file__).resolve().parent.parent / "templates" / "setup.html"
 
+# The way in from waku.one (waku.one's Integrations page links here). waku.one's
+# server asks the bearer route for a one-time URL with the person's Supabase
+# token, the same way it asks /v1/embed for the chat, and the browser opens it:
+#
+#     POST https://<apex>/v1/setup-link        (bearer, server to server)
+#         -> {"url": "https://<apex>/auth/setup?code=<code>",
+#             "expires_at": <unix seconds>}
+#     GET  https://<apex>/auth/setup?code=<code>   (a new tab, same-site)
+#         -> Set-Cookie: __Host-waku_session=...   (the apex's own session)
+#         -> 302 /setup
+#
+# Without it a person already signed in to waku.one met "Sign in" here and a
+# second email link. The code is sixty seconds and single use, from its own
+# HandoffCodes, so a sign-in code or an embed code cannot be spent here.
+LINK_API_PATH = "/v1/setup-link"
+AUTH_PATH = "/auth/setup"
+LINK_POST_ONLY = "Ask for a setup link with a POST."
+
 # How an install ended, as the callback reports it in /setup?slack=<outcome>.
 OUTCOMES = {
     slack.CONNECTED: "Slack is connected.",
