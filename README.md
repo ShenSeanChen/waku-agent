@@ -25,10 +25,8 @@ Built by [seanchen.io](https://seanchen.io).
 > The system-design whiteboard from the series.
 > Every box maps to a file — see [the architecture](docs/architecture.md).
 
-![waku-agent always-on — events in, one run, actions out](docs/always-on-whiteboard.png)
-
-> What happens *around* a run. The box called "A run" here is the whole chart above:
-> an event inbox and timers wake it, permissions can pause it for your yes, and an outbox
+> **Always-on** is what happens *around* a run. Picture the whole chart above as one box called
+> "a run": an event inbox and timers wake it, permissions can pause it for your yes, and an outbox
 > sends what it decided. The files are in [`waku/alwayson/`](waku/alwayson/).
 
 **▶ Watch the series**
