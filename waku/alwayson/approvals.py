@@ -39,13 +39,31 @@ Address = tuple[str, dict]
 
 def is_private(address: Address) -> bool:
     """Whether only the people a message is meant for read this place: an
-    address WAKU_OWNER names, or a Telegram chat with one person, whose id is
-    positive. A GitHub issue, a Slack channel and a group chat are read by
-    others."""
+    address WAKU_OWNER names, a Telegram chat with one person, whose id is
+    positive, or the Slack direct message of a hosted agent's own person. A
+    GitHub issue, a Slack channel and a group chat are read by others."""
     channel, target = address
     chat_id = target.get("chat_id")
     return (address in outbox.owner_addresses()
-            or (channel == "telegram" and isinstance(chat_id, int) and chat_id > 0))
+            or (channel == "telegram" and isinstance(chat_id, int) and chat_id > 0)
+            or own_slack_chat(address))
+
+
+def own_slack_chat(address: Address) -> bool:
+    """A Slack direct message between a hosted agent and the person it
+    belongs to (spec 032, version A).
+
+    A direct-message id starts with `D`, and that alone says nothing: anybody
+    in a workspace can open a chat with the bot. What says it is `private` in
+    the event's `reply_to`, which the platform's gateway sets after it matched
+    the sender to the person who added the app. The mark arrives with an event
+    the gateway hands over, and a timer set in that chat carries it on. No
+    tool can write it: an address a model names is parsed from text
+    (outbox.parse_address), and the parsed form has no such field."""
+    channel, target = address
+    return (channel == "slack" and target.get("private") is True
+            and str(target.get("channel") or "").startswith("D")
+            and os.getenv("WAKU_HOSTED", "") == "1")
 
 
 def reply_is_free(address: Address) -> bool:

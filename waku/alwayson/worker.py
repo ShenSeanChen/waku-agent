@@ -318,7 +318,9 @@ def _text(event: Event) -> str:
 # its person's outreach drafts and account email to the channel. The agent
 # reads personal and team memories through one key until a space has a key of
 # its own (Waku Memory spec 095), so this is a rule the model is given and not
-# a wall: it lowers the chance and does not remove it.
+# a wall: it lowers the chance and does not remove it. It is not added in a
+# private place, which on hosted Waku includes the Slack direct message of the
+# agent's own person (approvals.own_slack_chat).
 SHARED_PLACE = ("[Several people read this place, and you cannot be sure which of them "
                 "wrote the message. Answer from team memories, the team board and what "
                 "was said here. Do not quote, list or summarise the personal memories of "

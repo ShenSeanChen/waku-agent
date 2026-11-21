@@ -53,6 +53,10 @@ CONNECT_OUTCOMES = {
 }
 CONNECTORS_HEAD = "Connect your tools"
 CONNECTOR_WORDS = {"connected": "Connected", "reconnect": "To do", "todo": "To do"}
+DIRECT_READY = ("You can also write to Waku in a private chat in Slack. It answers only "
+                "you there.")
+DIRECT_NEEDS_UPDATE = ("To write to Waku in a private chat in Slack, press Update "
+                       "permissions once.")
 SLACK_OFF = "Slack is not available on this server yet."
 STATE_WORDS = {"done": "Done", "todo": "To do", "off": "Not available"}
 
@@ -152,9 +156,14 @@ def render(*, signed_in: bool, slack_on: bool, install: SlackInstall | None,
             "Choose your workspace and approve Waku. No token is copied."
             if signed_in else "Sign in first.",
             _button(slack.INSTALL_PATH, "Add to Slack") if signed_in else "")
+    # A direct message is answered for the person who added the app, and a
+    # workspace added before 2026-11-20 has no record of who that was. Slack's
+    # approval page records it, so that person is told to go through it once.
+    direct = (DIRECT_READY if connected and install.installer_user_id
+              else DIRECT_NEEDS_UPDATE)
     steps += _step(
         3, "mention", "done" if connected else "todo", "Mention @Waku",
-        "Invite @Waku to a channel and mention it. It answers in the thread."
+        f"Invite @Waku to a channel and mention it. It answers in the thread. {direct}"
         if connected else "After Slack is connected, mention @Waku in a channel.",
         _button(dashboard_url, "Open your agent", secondary=True) if connected else "")
     sentence = OUTCOMES.get(outcome, "") if signed_in else ""

@@ -106,7 +106,7 @@ def test_the_start_sends_a_signed_in_person_to_slack_with_a_state(harness):
     assert start["client_id"] == SLACK_CLIENT_ID
     assert start["scope"] == ("app_mentions:read,chat:write,channels:history,"
                               "groups:history,users:read,reactions:write,channels:read,"
-                              "groups:read")
+                              "groups:read,im:history")
     assert start["redirect_uri"] == REDIRECT_URI
     assert len(start["state"]) >= 43
     assert SLACK_CLIENT_SECRET not in start["location"]

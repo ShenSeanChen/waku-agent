@@ -35,6 +35,11 @@ THREAD_OR_DAYS = ("Not read: give `thread_ts` to read one thread, or `days` to r
 
 NOT_FROM_SLACK = ("Not read: this reads the Slack channel a run was started from, and "
                   "this run was not started from a Slack message.")
+# A direct message with the agent's own person (approvals.own_slack_chat).
+# The platform reads channels the agent was mentioned in, and this is none.
+PRIVATE_CHAT = ("Not read: this is a private chat, and what was said in it is already in "
+                "this conversation. A channel is read from a message written in that "
+                "channel.")
 UNREACHABLE = "Not read: Slack's messages could not be fetched just now. Try again."
 EMPTY = "{where} has no messages to show."
 # What the platform's short error codes mean, in words for the person.
@@ -109,6 +114,8 @@ def make_tool(home: Path, base_url: str, platform_token: str, post: Post = post_
         channel = address[1].get("channel") if address and address[0] == "slack" else None
         if not isinstance(channel, str) or not channel:
             return NOT_FROM_SLACK
+        if address[1].get("private") is True:
+            return PRIVATE_CHAT
         thread_ts = str(thread_ts or "").strip()
         person = " ".join(str(person or "").split()).lstrip("@")[:80]
         days = _whole(days, 0, MAX_DAYS, 0)

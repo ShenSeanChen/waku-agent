@@ -112,7 +112,7 @@ Which one you use depends on where your agent runs.
 | How you connect | copy two tokens into `.env` | sign in, press "Add to Slack", approve |
 | How a mention arrives | Socket Mode: your machine calls Slack, so it needs no public address | Slack posts to `https://agent.waku.one/v1/triggers/slack` |
 | Where the bot token is | `SLACK_BOT_TOKEN` in your `.env` | encrypted on the server. Your agent's container never has it |
-| Who is heard | a person in your workspace, in a channel in `SLACK_ALLOWED_CHANNELS` | a person in your workspace, in any channel the bot was invited to |
+| Who is heard | a person in your workspace, in a channel in `SLACK_ALLOWED_CHANNELS` | a person in your workspace, in any channel the bot was invited to. In a direct message, only the person who added the app |
 | While your agent is not running | nothing hears a mention: `waku serve` has to be running | the mention is stored and starts your agent |
 
 **Your own app.** Create a Slack app with Socket Mode on, the bot scopes
