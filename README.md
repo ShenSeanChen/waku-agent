@@ -7,8 +7,8 @@
 
 **Your own AI assistant. On your laptop. In code you can read in an afternoon.**
 
-Meet **Waku** — a local-first personal assistant that shows the four pillars behind every
-serious agent: **Harness · Loop · Memory · Eval/LLM-Ops**. No frameworks hiding the good parts.
+Meet **Waku** — a local-first personal assistant that shows the five pillars behind every
+serious agent: **Harness · Loop · Memory · Eval/LLM-Ops · Always-on**. No frameworks hiding the good parts.
 Built by [seanchen.io](https://seanchen.io).
 
 - **Local-first.** Your memory is one SQLite file. Open it. Read it. It's yours.
@@ -17,13 +17,24 @@ Built by [seanchen.io](https://seanchen.io).
 - **The loop is ~95 lines** of plain Python. Step through it.
 - **Watch it think.** A local dashboard lights up every message as it flows through the harness.
 - **Eval built in.** Deterministic tests *and* LLM-as-judge, side by side, with a release gate.
+- **Always-on.** It sleeps until an event arrives: a message, a timer, your yes. Every event is a
+  row on disk first, so a crash loses nothing.
 
 ![waku-agent architecture — the whiteboard](docs/architecture-whiteboard.png)
 
 > The system-design whiteboard from the series.
 > Every box maps to a file — see [the architecture](docs/architecture.md).
 
-**▶ [Watch the 20-min code walkthrough](https://www.youtube.com/watch?v=rvRyBhILrls&list=PLE9hy4A7ZTmpGq7GHf5tgGFWh2277AeDR&index=42)** — the loop, the memory pillars, the evals, the Telegram gateway and the "Waku Waku" wake word, live.
+![waku-agent always-on — events in, one run, actions out](docs/always-on-whiteboard.png)
+
+> What happens *around* a run. The box called "A run" here is the whole chart above:
+> an event inbox and timers wake it, permissions can pause it for your yes, and an outbox
+> sends what it decided. The files are in [`waku/alwayson/`](waku/alwayson/).
+
+**▶ Watch the series**
+
+- [AI Agent Harness & Loop Engineering in 19 min](https://www.youtube.com/watch?v=GrNbuWWJYiI): the concepts behind the first chart.
+- [The 20-min code walkthrough](https://www.youtube.com/watch?v=rvRyBhILrls&list=PLE9hy4A7ZTmpGq7GHf5tgGFWh2277AeDR&index=42): the loop, the memory pillars, the evals, the Telegram gateway and the "Waku Waku" wake word, live.
 
 **[Waku Memory](https://www.waku.one)** — the same memory in Claude Code, Codex, Grok Bot and this agent: [waku.one](https://www.waku.one) · [docs](https://www.waku.one/docs)
 
@@ -55,6 +66,7 @@ uv venv && uv pip install -e .          # create the env + install the `waku` co
 cp .env.example .env                    # pick a provider, paste ONE key
 uv run waku                             # talk to your Waku in the terminal
 uv run waku dashboard                   # …or the browser cockpit → localhost:7777
+uv run waku serve                       # …or always-on: it wakes for Telegram, Slack, GitHub and timers
 ```
 
 To run the evals, install the test extras first. `make eval` then runs the offline checks
@@ -90,6 +102,11 @@ waku skill export --to claude,codex     # carry Waku's skills to Claude Code and
 
 That installs the Waku plugin, the one Claude Code and Codex use. To connect Claude Code, Codex, Hermes or Grok Bot to the
 same memory, see [integrations](docs/integrations.md#share-one-memory-with-your-other-agents-waku-memory).
+**For a team.** A Waku Memory team space is one memory your whole team's agents write to and
+read from: a decision one person's coding agent saves on Monday is there when a teammate, or
+Waku in your Slack channel, is asked about it on Friday. Personal memories stay personal; a
+person shares one into the team when they choose to.
+
 For live data when it researches, `waku connect treg` (or `/connect treg`) signs in to your own
 [treg](https://treg.to) account the same way; see [integrations](docs/integrations.md#live-data-for-research-treg).
 
@@ -101,11 +118,27 @@ For live data when it researches, `waku connect treg` (or `/connect treg`) signs
 | **Loop** | ~95 lines of plain Python: reason, act, repeat, with two ways to stop | [the tour](docs/tour.md#the-loop) |
 | **Memory** | semantic, episodic and procedural (skills); a gate decides *whether* to remember, consolidation decides *what* to keep | [the tour](docs/tour.md#the-retrieval-gate) |
 | **Eval / LLM-Ops** | deterministic tests and LLM-as-judge side by side, a release gate, a trace for every turn | [evals](docs/evals.md) |
+| **Always-on** | an event inbox, timers that repeat, runs that pause for your yes, and an outbox that sends once: `waku serve` | [integrations](docs/integrations.md#always-on-waku-serve) |
 
 **How is this different from ChatGPT or Claude Desktop?** Those are products you *use*. This is a
 codebase you *own*: the loop, the memory schema, the gate and the eval harness are all yours to
 read and change. Versus the big open-source assistants (OpenClaw, Hermes)? Same architecture,
-1/100th the code.
+1/100th the code. And where those are one person's agent, Waku is built to be a teammate: the
+same always-on blocks, with a memory a whole team shares.
+
+## Hosted, if you'd rather not run it
+
+[agent.waku.one](https://agent.waku.one) runs the same harness for you: sign in, press
+**Add to Slack**, and mention `@Waku` in a channel. It answers in the thread, sets reminders and
+a daily brief, and reads Notion, Linear, GitHub and Gmail once you connect them. It reads and
+drafts; anything that changes the outside world still needs your yes.
+
+- **In a channel** it answers from what the team shares. Your personal notes stay out.
+- **In a private chat** it is the same Waku, and there it can use your own memories and mail.
+  Today that works for the person who added Waku to the workspace.
+
+It is a preview, invite-only for now. The code is in [`hosted/`](hosted/README.md) under the
+Elastic License, so you can run the whole platform yourself.
 
 ## Docs
 
