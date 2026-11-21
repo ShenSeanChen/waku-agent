@@ -132,6 +132,27 @@ def test_a_person_who_connected_slack_sees_every_step_done_and_their_workspace(h
     assert SLACK_BOT_TOKEN not in page
 
 
+def test_the_page_says_whether_a_private_chat_is_answered_yet(harness, slack):
+    """A direct message is answered for the person who added the app (spec
+    032, version A). A workspace added before that person was recorded is
+    told to approve once more, which records them."""
+    from hosted.gateway.setup_page import DIRECT_NEEDS_UPDATE, DIRECT_READY
+
+    async def body():
+        _tenant, cookie, _ = await sign_in(harness)
+        await _connect(harness, cookie)                  # Slack named nobody
+        _, _, before = await _page(harness, cookie)
+        slack.oauth_answer = {**slack.oauth_answer, "authed_user": {"id": "U0ANA"}}
+        await _connect(harness, cookie)                  # "Update permissions"
+        _, _, after = await _page(harness, cookie)
+        return before, after
+
+    before, after = _run(harness, body)
+    assert DIRECT_NEEDS_UPDATE in before and DIRECT_READY not in before
+    assert DIRECT_READY in after and DIRECT_NEEDS_UPDATE not in after
+    assert "Update permissions" in DIRECT_NEEDS_UPDATE
+
+
 def test_a_workspace_name_cannot_put_markup_in_the_page(harness, slack):
     slack.oauth_answer = {**slack.oauth_answer,
                           "team": {"id": "T0ANA", "name": '<script>alert(1)</script>"'}}

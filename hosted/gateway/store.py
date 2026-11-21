@@ -131,7 +131,11 @@ CREATE TABLE IF NOT EXISTS slack_install (
   token_sealed  BLOB NOT NULL,
   installed_at  REAL NOT NULL,
   -- 1 when the gateway's key does not open token_sealed (slack.check_tokens).
-  needs_reconnect INTEGER NOT NULL DEFAULT 0
+  needs_reconnect INTEGER NOT NULL DEFAULT 0,
+  -- The Slack user who approved the install, or '' when it is not known: a
+  -- row written before 2026-11-20, or the home of a team space's agent. A
+  -- direct message is answered only for this person (spec 032, version A).
+  installer_user_id TEXT NOT NULL DEFAULT ''
 );
 -- Spec 029 A1: the gateway's registration with one vendor's sign-in server,
 -- made once with the one redirect address and used for every tenant.
@@ -178,6 +182,7 @@ CREATE TABLE IF NOT EXISTS team_home (
 # opens the file: (table, column, the column's definition).
 ADDED_COLUMNS = (
     ("tenant", "kind", "TEXT NOT NULL DEFAULT 'person'"),
+    ("slack_install", "installer_user_id", "TEXT NOT NULL DEFAULT ''"),
 )
 
 _COLUMNS = "id, sub, email, timezone, status, project_id, created_at, kind"
@@ -186,7 +191,8 @@ _HOME_COLUMNS = ("space_id, tenant_id, space_name, agent_id, agent_name, return_
 # What a team tenant's `sub` starts with. A person's sub is the uuid their
 # sign-in carries, so no sign-in can name a team's row.
 TEAM_SUB_PREFIX = "team:"
-_SLACK_COLUMNS = "team_id, tenant_id, team_name, bot_user_id, token_sealed, needs_reconnect"
+_SLACK_COLUMNS = ("team_id, tenant_id, team_name, bot_user_id, token_sealed, needs_reconnect, "
+                  "installer_user_id")
 _EVENT_COLUMNS = ("id, tenant_id, source, external_id, session_id, payload, status, "
                   "received_at")
 
@@ -562,8 +568,12 @@ class ControlDb:
         return [row[0] for row in rows]
 
     def set_slack_install(self, tenant_id: str, *, team_id: str, team_name: str,
-                          bot_user_id: str, token_sealed: bytes) -> bool:
+                          bot_user_id: str, token_sealed: bytes,
+                          installer_user_id: str = "") -> bool:
         """Record that this tenant added the Slack app to this workspace.
+        `installer_user_id` is the Slack user who approved, as Slack named
+        them, or "" when Slack did not say. An install that does not say
+        keeps the person an earlier install of the same workspace recorded.
 
         False, and nothing changes, when the workspace already belongs to
         another tenant: the first tenant keeps it, so a second member of the
@@ -577,12 +587,17 @@ class ControlDb:
                 (team_id,)).fetchone()
             if owner is not None and owner[0] != tenant_id:
                 return False
+            if not installer_user_id and owner is not None:
+                installer_user_id = self._conn.execute(
+                    "SELECT installer_user_id FROM slack_install WHERE team_id = ?",
+                    (team_id,)).fetchone()[0]
             self._conn.execute("DELETE FROM slack_install WHERE tenant_id = ?",
                                (tenant_id,))
             self._conn.execute(
                 "INSERT INTO slack_install (team_id, tenant_id, team_name, bot_user_id, "
-                "token_sealed, installed_at) VALUES (?, ?, ?, ?, ?, ?)",
-                (team_id, tenant_id, team_name, bot_user_id, token_sealed, self._now()))
+                "token_sealed, installed_at, installer_user_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (team_id, tenant_id, team_name, bot_user_id, token_sealed, self._now(),
+                 installer_user_id))
             self._conn.commit()
             return True
 
@@ -596,7 +611,8 @@ class ControlDb:
 
     @staticmethod
     def _install(row: sqlite3.Row) -> SlackInstall:
-        return SlackInstall(row[0], row[1], row[2], row[3], bytes(row[4]), bool(row[5]))
+        return SlackInstall(row[0], row[1], row[2], row[3], bytes(row[4]), bool(row[5]),
+                            row[6])
 
     def slack_install(self, tenant_id: str) -> SlackInstall | None:
         """The workspace this tenant connected, or None."""
