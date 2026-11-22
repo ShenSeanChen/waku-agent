@@ -223,9 +223,9 @@ def _belongs_elsewhere(model: str, provider_name: str) -> bool:
     that produces a 400 rather than a surprise.
 
     A row with claims_families = false (the hosted free tier) is left out of
-    the OWNER map below, because it fronts a live catalog behind a single
+    the owners below, because it fronts a live catalog behind a single
     placeholder id and its own family tells you nothing about what is valid
-    there. It is still JUDGED by the map, and that is deliberate
+    there. It is still checked against those owners, and that is deliberate
     (spec 001, "The free tier is a provider"): a real anthropic owns
     "claude", so a leftover
     claude-* WAKU_MODEL under the hosted row is replaced by the row's own
@@ -234,10 +234,12 @@ def _belongs_elsewhere(model: str, provider_name: str) -> bool:
     family = model.split("-")[0].lower()
     if "/" in model or not family:
         return False
-    owner = {f: name for name, p in PROVIDERS.items()
-             if p.claims_families and "/" not in (p.model or "x")
-             for f in _families(p)}.get(family)
-    return bool(owner) and owner != provider_name
+    # DeepSeek and OpenCode both serve deepseek-* models. Keep every owner:
+    # choosing the last row silently reset valid DeepSeek overrides to Pro.
+    owners = {name for name, p in PROVIDERS.items()
+              if p.claims_families and "/" not in (p.model or "x")
+              and family in _families(p)}
+    return bool(owners) and provider_name not in owners
 
 
 def models_for(provider_name: str, model: str = "", small_model: str = "") -> tuple[str, str]:
