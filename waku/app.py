@@ -38,7 +38,7 @@ MEMORY_READS = ("memory.search", "memory.get", "memory.recall")
 # Spec 021 amendment E3: the line Waku Agent adds when Waku Memory's capture
 # is paused for this person, once per change to paused.
 CAPTURE_PAUSED_LINE = ("Waku Agent will send the facts it keeps from this conversation to Waku "
-                       "Memory itself until remembering from conversations is back on.")
+                       "Memory itself until auto-save from conversations is back on.")
 
 # Spec 021: the turns a plugin's hooks run for. The morning brief and the
 # arenas call respond() too, and their turns are not a person talking.

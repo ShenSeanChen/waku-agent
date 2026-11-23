@@ -298,10 +298,10 @@ does both steps when you answer yes. A `waku_memory` entry you added to
 
 From then on, the plugin's `Stop` hook sends each message and reply to Waku
 Memory, and Waku Memory's server extracts the memories (spec 021). You can
-turn that off for Waku Agent at waku.one/integrations. Waku keeps the facts
-it finds on this machine and sends a captured turn's facts nowhere. Waku
-Memory pauses remembering from conversations on an account whose trial or
-plan has ended, and says so in its answer to each hook. While it is paused,
+turn that off for Waku Agent with the "Auto-save from conversations" switch
+at waku.one/integrations. Waku keeps the facts it finds on this machine and
+sends none of them while Waku Memory saves the turn. Waku Memory pauses
+auto-save from conversations on an account whose trial or plan has ended, and says so in its answer to each hook. While it is paused,
 Waku sends the facts it finds itself, and tells you once (spec 021
 amendment). While you have turned it off, Waku sends no facts from your
 conversations. Three things are still sent while it is off: a note you ask
