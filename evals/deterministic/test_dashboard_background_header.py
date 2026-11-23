@@ -132,6 +132,14 @@ BACKGROUND_AWARE = {
     },
     "judgment.js": {
         "loadJudgmentArena": r'fetch\("/api/judgment-arena",\s*background\s*\?\s*\{headers:\s*BG\}\s*:\s*undefined\)',
+    },    # spec 012: the Observability page re-reads its data on the 5s refresh
+    "observe.js": {
+        "loadObservability": r'background\s*\?\s*\{headers:\s*BG\}\s*:\s*undefined',
+    },
+    # spec 030: on hosted Waku the page asks the gateway about Slack after a
+    # refresh, and a refresh is a timer's poll most of the time
+    "hosted.js": {
+        "loadHostedSlack": r'fetch\("/hosted/slack",\s*background\s*\?\s*\{headers:\s*BG\}\s*:\s*undefined\)',
     },
 }
 
@@ -261,15 +269,25 @@ NETWORK_CALLERS = {
     # spec 008: the embedded chat never polls; it reads its header's state when
     # the page opens and after a turn or a model switch the person made
     ("embed.js", "refresh"): "user",
+    # the header's "Dashboard" button: one click, one sign-in hand-off code
+    ("embed.js", "openDashboard"): "user",
     ("graph.js", "runGraph"): "user",
     ("judgment.js", "loadJudgmentArena"): "background",
     ("judgment.js", "runJudgmentArena"): "user",
     ("main.js", "refresh"): "background",
+    ("observe.js", "loadObservability"): "background",
+    ("hosted.js", "loadHostedSlack"): "background",   # spec 030: the Slack card's facts, from the gateway
+    ("observe.js", "obsJudge"): "user",   # spec 015: the "Judge this turn" click
     ("main.js", "stopMic"): "user",
     ("memory.js", "saveFact"): "user",
     ("memory.js", "delMem"): "user",
     ("memory.js", "saveSoul"): "user",
     ("memory.js", "saveSkill"): "user",
+    ("memorychoice.js", "chooseMemory"): "user",   # a click on the first-run Waku Memory card (spec 020)
+    ("waiting.js", "cancelWaiting"): "user",   # the Cancel button on a row of the Waiting card
+    ("connectors.js", "addConnector"): "user",      # Connect on a starter card, and Add by address (spec 025)
+    ("connectors.js", "removeConnector"): "user",   # Remove in a server's Manage dialog
+    ("connectors.js", "setConnectorWrites"): "user",   # the writes switch in that dialog
     ("models.js", "saveSettings"): "user",
     ("models.js", "loadModelList"): "user",
     ("models.js", "switchModel"): "user",
@@ -362,6 +380,8 @@ DECLARED_TIMERS = {
     # the dock's elapsed counter while waiting for the first token: repaint only
     ("render.js", "sendChat", "setInterval"):
         {"() => { if (pending.pending && !pending.stream) syncChatLogs(); }"},
+    # #evals/release scrolling Evals to "This release" once render is done: no request
+    ("observe.js", "<top level>", "setTimeout"): {"obsJumpRelease"},
     # menu/copy-button chrome
     ("ui.js", "openMenu", "setTimeout"): {'() => document.addEventListener("click", _menuOutside)'},
     ("util.js", "copyCode", "setTimeout"):

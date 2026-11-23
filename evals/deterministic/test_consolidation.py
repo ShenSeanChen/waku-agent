@@ -462,3 +462,143 @@ def test_a_retried_fact_keeps_the_project_it_was_meant_for(memory):
     run_with(memory, [response([text_block('{"facts": [], "episode": ""}')])], remember)
     assert {scope for _, scope in remember.sent} == {"project:Company brain"}
     assert len(remember.sent) == 2
+
+
+# ---------- the assistant's own operating state is never kept (2026-10-05)
+
+OPS_FACTS = [
+    "User's treg balance is $0.759 USD (759,000 micro), enabling completion of full research passes.",
+    "User's treg balance of $0.00188 is insufficient to complete YouTube research.",
+    "The TikHub search returned a 402 when the balance ran out.",
+    "treg rate-limited the Aviato calls.",
+    "The research turn used 328.5k input tokens.",
+    "Sean is out of treg credits.",
+]
+USER_FACTS = [
+    "User researches competitor funding with treg.",
+    "Sean values work-life balance.",
+    "Sean pays for his tools with a credit card.",
+    "Sean's startup spends about $500 a month on AWS.",
+]
+
+
+@pytest.mark.parametrize("content", OPS_FACTS)
+def test_a_balance_a_402_or_a_token_count_is_not_a_fact(content):
+    from waku.memory.consolidation import is_ops_state
+
+    assert is_ops_state({"subject": "user", "content": content}), content
+
+
+@pytest.mark.parametrize("content", USER_FACTS)
+def test_a_fact_about_the_user_is_not_operating_state(content):
+    from waku.memory.consolidation import is_ops_state
+
+    assert not is_ops_state({"subject": "sean", "content": content}), content
+
+
+def test_consolidation_keeps_the_user_facts_and_drops_the_operating_state(memory):
+    proposed = [{"subject": "user", "content": c} for c in [*OPS_FACTS, *USER_FACTS]]
+    distilled = json.dumps({"facts": proposed, "episode": "Researched Letta's funding with treg."})
+    add_exchanges(memory.conn, 3)
+    memory.client = CountingClient([response([text_block(distilled)])])
+    kept = kept_if_due(memory.conn, memory.client, "small-model", 3, memory.facts, memory.episodes)
+    assert [k["content"] for k in kept] == USER_FACTS
+    # and the summariser is told the same rule
+    assert "account balances, credits" in memory.client.kwargs[0]["messages"][0]["content"]
+
+
+# --- spec 018: a fact about what memory holds or lacks is the assistant's own
+# state, not a fact about the person ---
+
+from waku.memory.consolidation import is_memory_state  # noqa: E402
+
+# The sentence kept and sent to Waku Memory on 2026-10-07 after Sean asked
+# "What is our company's legal entity name and business address?" and the agent
+# answered that it had no address.
+JUNK = ("The user does not have the company's business address stored in memory and "
+        "requested it be provided for future use on legal pages and footers.")
+
+
+@pytest.mark.parametrize("content", [
+    JUNK,
+    "No record of Sean's passport number exists in memory.",
+    "The assistant could not find the user's address in memory.",
+    "Waku Memory has no business address for the company.",
+])
+def test_a_fact_about_what_memory_lacks_is_memory_state(content):
+    assert is_memory_state({"subject": "company", "content": content})
+
+
+@pytest.mark.parametrize("content", [
+    "Sean has no passport.",
+    "Alex prefers morning meetings.",
+    "Sean does not keep his passwords in a notes app.",
+    "The user connected Claude Code to Waku Memory.",
+])
+def test_a_fact_about_the_person_is_not_memory_state(content):
+    assert not is_memory_state({"subject": "sean", "content": content})
+
+
+def _question_only_exchange(memory):
+    memory.conn.execute("INSERT INTO chat_log (role, content) VALUES ('user', ?)",
+                        ("What is our company's legal entity name and business address?",))
+    memory.conn.execute("INSERT INTO chat_log (role, content) VALUES ('assistant', ?)",
+                        ("The legal entity is AutoManus Technologies, Inc. I don't have a business address.",))
+    memory.conn.commit()
+
+
+def test_a_question_only_turn_keeps_no_fact_and_sends_nothing(memory):
+    _question_only_exchange(memory)
+    sent = []
+    client = ScriptedClient([response([text_block(json.dumps({
+        "facts": [{"subject": "company", "content": JUNK}], "episode": "Asked about the address."}))])])
+    kept = kept_if_due(memory.conn, client, "small", 1, memory.facts, memory.episodes,
+                       remember=lambda body, scope: sent.append(body) or "m1")
+    assert kept == []
+    assert sent == []
+    assert memory.facts.list() == []
+
+
+def test_a_real_fact_in_the_same_turn_is_still_kept(memory):
+    _question_only_exchange(memory)
+    client = ScriptedClient([response([text_block(json.dumps({
+        "facts": [{"subject": "company", "content": JUNK},
+                  {"subject": "sean", "content": "Sean registered the company in Delaware."}],
+        "episode": "Asked about the address."}))])])
+    kept = kept_if_due(memory.conn, client, "small", 1, memory.facts, memory.episodes)
+    assert [k["content"] for k in kept] == ["Sean registered the company in Delaware."]
+
+
+def test_the_summariser_is_told_to_extract_only_what_the_person_said():
+    assert "Extract only what the person said" in SUMMARIZER_PROMPT
+    assert "what the assistant's memory holds or lacks" in SUMMARIZER_PROMPT
+
+
+@pytest.mark.parametrize("mode, sends", [("plugin", False), ("agent", True)])
+def test_under_plugin_mode_consolidation_keeps_its_facts_here_and_retries_only_failed_sends(tmp_path, mode, sends):
+    """Spec 021 D1: with the Waku plugin installed, the server extracts from
+    the Stop hook. Consolidation keeps this batch's facts on this machine and
+    sends none of them. The amendment (E2) sends again a fact an earlier send
+    failed on, whatever the batch: it was meant for Waku Memory and never got
+    there."""
+    from waku.config import Settings
+    from waku.memory import Memory
+
+    memory = Memory(connect(tmp_path), Settings(home=tmp_path, memory_mode=mode, consolidate_every=3),
+                    CountingClient([response([text_block(DISTILLED)])]))
+    memory.conn.execute("INSERT INTO facts (subject, content, source, synced, scope) "
+                        "VALUES ('raj', 'Raj plays tennis.', 'consolidation', 0, 'global')")
+    memory.conn.commit()
+    remember = FakeRemember()
+    memory.remember = remember
+    add_exchanges(memory.conn, 3)
+    memory.maybe_consolidate()
+    stored = [r[0] for r in memory.conn.execute("SELECT content FROM facts ORDER BY id")]
+    assert stored == ["Raj plays tennis.", "Alex prefers morning meetings.", "The Acme demo is on Friday."]
+    assert bool(remember.sent) is True
+    if not sends:
+        # only the fact that failed earlier; none of this batch's two
+        assert remember.sent == [("Raj plays tennis.", "global")]
+        assert memory.remember is remember   # save_note keeps its send
+    else:
+        assert len(remember.sent) == 3

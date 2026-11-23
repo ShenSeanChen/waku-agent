@@ -48,7 +48,7 @@ from hosted.core.tenant import (
 )
 from hosted.ports.runtime import RunningContainer
 from hosted.spawner import template, xfsquota
-from hosted.spawner.engine import Engine
+from hosted.spawner.engine import Engine, EngineError
 
 _LOG = log.get(__name__)
 
@@ -200,9 +200,26 @@ class DockerRuntime:
 
     # --- provisioning ----------------------------------------------------
 
-    async def provision(self, tenant_id: str, project_id: int) -> None:
+    async def provision(self, tenant_id: str, project_id: int,
+                        connectors: tuple[str, ...] = ()) -> None:
+        """The `provision` operation: _provision() under the tenant's lock.
+
+        The gateway asks for it when a tenant is created, and again when a
+        person signs in to a connector or disconnects one while their
+        container runs (spec 029 B2). Under the lock, so it never runs beside
+        the provision a start is making: two of them would both write the
+        staging file mcp.json is renamed from.
+        """
+        async with self._lock_for(tenant_id):
+            await self._provision(tenant_id, project_id, connectors)
+
+    async def _provision(self, tenant_id: str, project_id: int,
+                         connectors: tuple[str, ...] = ()) -> None:
         """Create what is missing. Runs before EVERY start, so a failed first
         provision is repaired on the next one.
+
+        `connectors` names the connectors this tenant signed in to (spec 029
+        B2). Provisioning makes the tenant's mcp.json list exactly those.
 
         THE CREATE PATH AND THE REPEAT PATH ARE DIFFERENT, and this is the most
         important seven lines in the class.
@@ -246,7 +263,7 @@ class DockerRuntime:
             config, tenant_id=tenant_id,
             command=["python", "-m", "hosted.spawner.provision_main"],
             # Spec 004 E: where the treg entry points, only when the relay is on.
-            extra_env=tuple(template.provision_env(config)),
+            extra_env=tuple(template.provision_env(config, connectors)),
             # NOT KIND_TASK. See template.KIND_PROVISION: labelling the
             # spawner's own bookkeeping as an operator task makes a tenant's
             # start refuse their own retried start with {"code": "busy"}.
@@ -307,32 +324,37 @@ class DockerRuntime:
     # --- the tenant's own container --------------------------------------
 
     async def start(self, tenant_id: str, project_id: int, timezone: str,
-                    token: str, memory_key: str = "") -> RunningContainer:
+                    token: str, memory_key: str = "",
+                    connectors: tuple[str, ...] = (),
+                    memory_space: str = "") -> RunningContainer:
         if not is_tenant_id(tenant_id):
             # start() validates its OWN id before it does anything, including
             # before the label query below. The socket path has already run
             # core/requests.parse, so this is the in-process path's guard.
             raise ValueError(f"not a tenant id: {tenant_id!r}")
         # One tenant, one start at a time. Without this, the gateway's
-        # documented retry ("a start that does not answer within 15 seconds ...
+        # documented retry ("a start that does not answer within 60 seconds ...
         # Try again.") can run concurrently with the start it is retrying, and
         # the two race over the same container name and the same directories.
         async with self._lock_for(tenant_id):
             return await self._start_locked(tenant_id, project_id, timezone, token,
-                                            memory_key)
+                                            memory_key, connectors, memory_space)
 
     def _lock_for(self, tenant_id: str) -> asyncio.Lock:
         return self._locks.setdefault(tenant_id, asyncio.Lock())
 
     async def _start_locked(self, tenant_id: str, project_id: int, timezone: str,
-                            token: str, memory_key: str = "") -> RunningContainer:
+                            token: str, memory_key: str = "",
+                            connectors: tuple[str, ...] = (),
+                            memory_space: str = "") -> RunningContainer:
         await self._refuse_if_busy(tenant_id)
         await self.stop(tenant_id)          # exactly one container per tenant
-        await self.provision(tenant_id, project_id)
+        await self._provision(tenant_id, project_id, connectors)
 
         body = template.tenant_container(
             self._config, tenant_id=tenant_id, project_id=project_id,
-            timezone=timezone, token=token, memory_key=memory_key)
+            timezone=timezone, token=token, memory_key=memory_key,
+            memory_space=memory_space)
         name = template.container_name(tenant_id, template.KIND_TENANT)
         # A previous container with this name may be mid-removal by the
         # AutoRemove reaper. Removing by name first clears it when it is still
@@ -391,8 +413,21 @@ class DockerRuntime:
             ids.append(tenant_id)
         return sorted(set(ids))
 
+    async def _tenant_image_id(self) -> str:
+        """The id the tenant image tag names now, or "" when the daemon
+        cannot say. With "" no container is called stale: a restart that
+        nobody can justify is worse than a container that waits for its idle
+        stop."""
+        try:
+            return await self._engine.image_id(self._config.tenant_image)
+        except EngineError as exc:
+            _LOG.warning("could not read the id of %s (%s); no container is "
+                         "reported stale", self._config.tenant_image, exc)
+            return ""
+
     async def list(self) -> list[RunningContainer]:
         running = []
+        current = await self._tenant_image_id()
         for entry in await self._engine.containers(
                 label=f"{template.LABEL_KIND}={template.KIND_TENANT}"):
             tenant_id = (entry.get("Labels") or {}).get(template.LABEL_TENANT, "")
@@ -425,8 +460,15 @@ class DockerRuntime:
                 _LOG.warning("tenant=%s has address %r, which no project id "
                              "derives; not listing it", tenant_id, address)
                 continue
+            # ImageID is the image the container was CREATED from. upgrade.sh
+            # rebuilds the tag under a running container, and then the two
+            # ids differ until the container is replaced.
+            created_from = entry.get("ImageID")
+            stale = bool(current and isinstance(created_from, str)
+                         and created_from and created_from != current)
             running.append(RunningContainer(tenant_id=tenant_id, address=address,
-                                            port=template.DASHBOARD_PORT))
+                                            port=template.DASHBOARD_PORT,
+                                            stale=stale))
         return running
 
     async def _refuse_if_busy(self, tenant_id: str) -> None:

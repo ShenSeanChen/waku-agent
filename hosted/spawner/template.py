@@ -22,6 +22,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
+from hosted.core.connectors import is_connector_name
 from hosted.core.tenant import (
     INSPECT_NETWORK,
     TENANT_NETWORK,
@@ -30,11 +31,14 @@ from hosted.core.tenant import (
     is_memory_key,
     is_project_id,
     is_proxy_token,
+    is_space_id,
     is_tenant_id,
     tenant_dirs,
 )
 
 DASHBOARD_PORT = 7777
+# The most model calls with tools one tenant turn may make (WAKU_MAX_ITERATIONS).
+TENANT_MAX_ITERATIONS = 15
 
 # Spec, the container template table. Every number is the spec's, spelled with
 # its unit beside it so the next reader does not have to divide.
@@ -72,7 +76,7 @@ KIND_INSPECT = "inspect"
 # `start` does to itself, every time, on its way to starting the container --
 # so labelling it KIND_TASK makes a tenant's own start refuse a concurrent or
 # retried start of the same tenant with {"code": "busy"}. The spec's start path
-# retries: "a start that does not answer within 15 seconds returns 'Your
+# retries: "a start that does not answer within 60 seconds returns 'Your
 # assistant is taking too long to start. Try again.'", and a container that
 # refuses the connection is "looked up again ... and only if it is gone does
 # the gateway start it once more". Both retries would land on Busy, and the
@@ -152,6 +156,11 @@ TREG_UNAVAILABLE_TOOLS = ("treg_balance", "treg_resources_list")
 # What the provision container is told, and the only variable
 # provision_main.py reads: where the treg entry in mcp.json points.
 TREG_BASE_URL_ENV = "WAKU_TREG_BASE_URL"
+# Spec 029 B2, read by provision_main.py the same way: the metering proxy's
+# address, which a connector's entry in mcp.json points at, and the names of
+# the connectors this tenant signed in to, separated by commas.
+CONNECT_BASE_URL_ENV = "WAKU_CONNECT_BASE_URL"
+CONNECTORS_ENV = "WAKU_CONNECTORS"
 
 # ONE literal for this path. provision_main.py imports it rather than
 # hardcoding the same string, because a plan that says "setting any of them in
@@ -268,11 +277,20 @@ def platform_env(config: SpawnerConfig, token: str) -> list[str]:
     ]
 
 
-def provision_env(config: SpawnerConfig) -> list[str]:
-    """What the provision container is told: the treg relay's base, or nothing."""
-    if not config.treg_relay:
-        return []
-    return [f"{TREG_BASE_URL_ENV}={config.platform_base_url}"]
+def provision_env(config: SpawnerConfig,
+                  connectors: tuple[str, ...] = ()) -> list[str]:
+    """What the provision container is told: the treg relay's base when the
+    relay runs, and, on a deployment with a metering proxy, where a
+    connector's entry points and which connectors this tenant signed in to
+    (spec 029 B2). The connector pair is sent with an empty list too, so a
+    tenant who disconnected their last connector loses its entry."""
+    env = [f"{TREG_BASE_URL_ENV}={config.platform_base_url}"] if config.treg_relay else []
+    if config.platform_base_url:
+        if not all(is_connector_name(name) for name in connectors):
+            raise ValueError("not a list of connector names")
+        env += [f"{CONNECT_BASE_URL_ENV}={config.platform_base_url}",
+                f"{CONNECTORS_ENV}={','.join(connectors)}"]
+    return env
 
 
 def unavailable_tools_env(config: SpawnerConfig) -> list[str]:
@@ -282,8 +300,12 @@ def unavailable_tools_env(config: SpawnerConfig) -> list[str]:
     return [f"WAKU_UNAVAILABLE_TOOLS={','.join(TREG_UNAVAILABLE_TOOLS)}"]
 
 
+MEMORY_SPACE_ENV = "WAKU_MEMORY_SPACE"
+
+
 def tenant_container(config: SpawnerConfig, *, tenant_id: str, project_id: int,
-                     timezone: str, token: str, memory_key: str = "") -> dict:
+                     timezone: str, token: str, memory_key: str = "",
+                     memory_space: str = "") -> dict:
     """The create body for one tenant's dashboard.
 
     The four checks at the top are not belt and braces over core/requests.py:
@@ -308,6 +330,8 @@ def tenant_container(config: SpawnerConfig, *, tenant_id: str, project_id: int,
         raise ValueError("not a proxy token")
     if memory_key and not is_memory_key(memory_key):
         raise ValueError("not a Waku Memory key")
+    if memory_space and not is_space_id(memory_space):
+        raise ValueError("not a team space's id")
     dirs = tenant_dirs(config.tenant_root, tenant_id)
     address = address_for_project(project_id)
     host = _isolation(config)
@@ -329,6 +353,16 @@ def tenant_container(config: SpawnerConfig, *, tenant_id: str, project_id: int,
             f"WAKU_DASHBOARD_PORT={DASHBOARD_PORT}",
             f"TZ={timezone}",
             "HOME=/tmp",
+            # The loop's step limit, pinned here rather than left to stock
+            # waku's default, so the platform decides what a tenant's turn
+            # may spend. A research turn with a failed lookup or two needs
+            # more than ten; at the limit the loop still answers, tools off.
+            f"WAKU_MAX_ITERATIONS={TENANT_MAX_ITERATIONS}",
+            # Spec 026: stock waku's dashboard starts the always-on worker,
+            # timer loop and dispatcher, and answers the gateway's hand-over
+            # routes, only when this is set. An inspect container does not
+            # get it.
+            "WAKU_HOSTED=1",
             # The free tier's four, present only when there IS one. Stock
             # waku decides whether to offer the row by whether these are set
             # (waku/integrations.py, the hidden_unless_env row), so omitting
@@ -340,7 +374,14 @@ def tenant_container(config: SpawnerConfig, *, tenant_id: str, project_id: int,
             # The person's own Waku Memory key (spec 004), read by mcp.json's
             # waku_memory server through auth_env. Theirs, revocable on
             # waku.one, and present only once the gateway has minted it.
+            # A team home (spec 032) gets its space's agent's key here, and
+            # never a person's.
             *([f"WAKU_MEMORY_API_KEY={memory_key}"] if memory_key else []),
+            # The team space a team home saves into (spec 032 A4). Stock
+            # waku's remember_via sends it as `space`, so a save made with
+            # the agent's key becomes a team memory every member reads. A
+            # person's container does not get it.
+            *([f"{MEMORY_SPACE_ENV}={memory_space}"] if memory_space else []),
             # treg's tools the relay refuses, so the model is told not to
             # call them (spec 009 E). Only where the relay runs.
             *unavailable_tools_env(config),

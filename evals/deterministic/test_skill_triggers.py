@@ -103,6 +103,12 @@ MESSAGES = {
         "research the market for AI note takers",
         "compare the pricing of Notion and Coda",
         "what funding have the competitors of muse.ai raised",
+        # 2026-10-05: "save an audience brief" shared one word with the
+        # description, so the turn saved five loose memories and no report
+        "save an audience brief",
+        "save a visibility snapshot",
+        "save a report",
+        "group what people ask for and save an audience brief to the Company brain",
     ],
 }
 

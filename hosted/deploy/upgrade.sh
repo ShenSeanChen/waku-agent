@@ -1,13 +1,22 @@
 #!/usr/bin/env bash
 # Pull, rebuild, restart the services. Tenant containers pick up the new image
-# on their next start, or at once with --now.
+# on their next start. A running one is restarted between two turns, about a
+# minute after its last request, or at once with --now.
 #
-# WHY TENANTS DO NOT NEED RESTARTING BY DEFAULT: a container's environment
+# WHY THIS SCRIPT RESTARTS NO TENANT BY DEFAULT: a container's environment
 # cannot change and each start carries a new proxy token, so every start creates
-# a new container from the current image tag. An idle tenant is therefore
-# upgraded the moment they come back, for free. --now is for the case where the
-# upgrade fixes something a running tenant is suffering from, and it costs every
-# open dashboard an interrupted turn.
+# a new container from the current image tag. A tenant whose container has
+# stopped is therefore upgraded the moment they come back, for free. A RUNNING
+# container keeps the old image, and the gateway replaces it: once a minute its
+# idle loop asks the spawner which containers were created from an older build
+# of the tenant image, and it stops each one that has nothing in flight, has
+# had no request for 60 seconds and reports no run, event or outgoing message
+# (Launcher.stop_stale in hosted/gateway/launch.py). The tenant's next message,
+# or their next timer, starts a new container. A container that never reaches
+# such a gap keeps the old image until the idle stop (15 minutes,
+# WAKU_IDLE_MINUTES), an eviction at the cap, or --now. --now is for the case
+# where the upgrade fixes something a running tenant is suffering from, and it
+# costs every open dashboard an interrupted turn.
 #
 # NOTHING HERE TOUCHES config/ OR tenants/. An upgrade that rewrote config would
 # be an install; an upgrade that touched tenants/ would be a restore.
@@ -45,6 +54,12 @@ waku_require_root
 waku_load_install_env WAKU_TENANT_IMAGE WAKU_SERVICES_IMAGE WAKU_CADDY_IMAGE \
                       WAKU_DNS_PROVIDER WAKU_GATEWAY_ADDRESS
 
+# ONE UPGRADE AT A TIME (lib.sh, waku_flock_deploy). autodeploy.sh takes the
+# same lock every five minutes when the timer is on, so a manual run that lands
+# in the middle of an automatic one refuses here, before it fetches anything.
+waku_flock_deploy \
+  || waku_die "another upgrade holds $WAKU_ROOT/run/deploy/lock: an automatic upgrade (journalctl -u waku-autodeploy) or a second upgrade.sh. They share one lock so two upgrades never rebuild the checkout at once. Wait for it to finish and rerun."
+
 # CURL IS CHECKED HERE, before anything is fetched or rebuilt, not left to
 # fail 60 seconds into the readiness loop below with a message that blames the
 # gateway for a missing binary.
@@ -75,9 +90,24 @@ git -C "$WAKU_SRC" checkout --detach "${ref:-origin/main}"
 after=$(git -C "$WAKU_SRC" rev-parse HEAD)
 waku_log "checkout $before -> $after"
 
+# THE RELEASE RECORD FOR EXACTLY THIS COMMIT, or none. autodeploy.sh writes
+# run/deploy/releases/<sha>.json before it calls this script: the commit and
+# the CI checks that passed on it, which the tenant image carries to the Evals
+# page. Looked up by the SHA the checkout now holds, so an image can never
+# carry another commit's record. A manual upgrade to a commit autodeploy never
+# recorded builds without one, and the page says it has no release record.
+release_file="$WAKU_ROOT/run/deploy/releases/$after.json"
 waku_log "rebuilding the tenant and services images"
-"$WAKU_SRC/hosted/image/build.sh" \
-  --tenant-tag "$WAKU_TENANT_IMAGE" --services-tag "$WAKU_SERVICES_IMAGE"
+if [ -f "$release_file" ]; then
+  waku_log "the tenant image will carry the release record $release_file"
+  "$WAKU_SRC/hosted/image/build.sh" \
+    --tenant-tag "$WAKU_TENANT_IMAGE" --services-tag "$WAKU_SERVICES_IMAGE" \
+    --release-file "$release_file"
+else
+  waku_log "no release record for $after (autodeploy.sh writes one), so the Evals page will show none"
+  "$WAKU_SRC/hosted/image/build.sh" \
+    --tenant-tag "$WAKU_TENANT_IMAGE" --services-tag "$WAKU_SERVICES_IMAGE"
+fi
 
 # THE MODULE IS THE FIRST WORD, and install.sh says why in capitals at the line
 # that splits it: "--dns-provider is TWO THINGS in one string... The whole

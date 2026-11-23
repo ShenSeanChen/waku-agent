@@ -3,7 +3,7 @@
 // step, no modules). Load order + rules: static/README.md.
 
 // --- sub-tabs: keep long pages short by splitting them into hash-routed tabs
-// (#memory/semantic, #database/facts). Each tab is a plain link, so it's
+// (#memory/semantic, #tools/hooks). Each tab is a plain link, so it's
 // bookmarkable and the architecture cards can deep-link straight to one.
 function subtabBar(view, tabs, active){
   return uiTabs(tabs.map(([key,label,n]) =>
@@ -21,11 +21,32 @@ function dbTable(t){
   return `<div class="scrolly">${uiTable(cols, rows)}</div>
     <div class="meta" style="margin-top:calc(var(--spacing) * 1.5)">showing ${t.sample.length} of ${t.count} row${t.count===1?"":"s"} (newest first)</div>`;
 }
+// The raw SQLite rows behind a page, closed until asked for. Each page that
+// lists a table's rows carries its own raw view, so no page exists only to
+// show the same rows a second time (the old Database page). `rawOpen` keeps
+// a view open across the 5-second refresh, which rebuilds the page.
+const rawOpen = {};
+function rawToggle(name, el){ rawOpen[name] = el.open; }
+function rawRows(d, name, note = ""){
+  const t = ((d.db || {}).tables || []).find(x => x.name === name);
+  if (!t) return "";
+  return `<details class="raw" ${rawOpen[name] ? "open" : ""} ontoggle="rawToggle('${esc(name)}', this)">
+    <summary>Raw rows · <code>${esc(name)}</code> table · ${t.count}</summary>
+    <div class="meta" style="margin:var(--space-2) 0">${note || "These are the same rows as above, as SQLite stores them in <code>state.db</code>."}
+      Ask your own question in the ${uiLink("SQL console", "#sql")}.</div>${dbTable(t)}</details>`;
+}
 const DB_DESC = {
   calendar_events: "events the create_event tool wrote (the flagship task)",
-  facts: "semantic memory — durable facts (Memory ▸ Semantic)",
-  episodes: "episodic memory — dated summaries (Memory ▸ Episodic)",
+  facts: "semantic memory — durable facts",
+  episodes: "episodic memory — dated summaries",
   chat_log: "every message, tagged by session_id — consolidation reads from here",
+};
+// The page that shows each table's rows, with their raw view at its foot.
+const DB_HOME = {
+  calendar_events: ["Tools ▸ Results", "#tools/results"],
+  facts: ["Memory ▸ Semantic", "#memory/semantic"],
+  episodes: ["Memory ▸ Episodic", "#memory/episodic"],
+  chat_log: ["Gateway", "#gateway"],
 };
 const QUERY_EXAMPLES = [
   "SELECT role, content FROM chat_log ORDER BY id DESC LIMIT 10",
@@ -59,6 +80,26 @@ async function runQuery(){
 
 // --- Memory sub-tabs. Memory is the friendly, per-pillar view of what persists;
 // the Data tab shows the SAME rows as raw SQLite tables (see the explainer).
+// Which memory is which: this agent's own, on this machine, beside the
+// outside one every agent of the person's reads.
+function memWhich(d){
+  const w = d.waku_memory || {};
+  const n = (count, word) => `${count} ${word}${count === 1 ? "" : "s"}`;
+  const local = uiCard(`<span>Waku Agent's own memory, in ${reveal("","the .waku folder")}.
+      ${n(d.facts.length, "fact")}, ${n(d.episodes.length, "episode")}, ${n(d.skills.length, "skill")}.
+      It works offline, and only this agent reads it.</span>`, {title: "On this machine", cls: "box"});
+  const how = w.mode === "plugin" || w.by_plugin
+    ? "The Waku plugin sends each turn, and Waku Memory picks what to keep."
+    : w.mode === "off" ? "Nothing is sent." : "Waku Agent sends each fact it keeps.";
+  const shared = uiCard(`<span>An outside memory that every agent of yours reads: Claude Code, Codex, the phone app.
+      ${w.connected
+        ? `${uiBadge("connected", "ok")} ${w.account ? esc(w.account) + ". " : ""}${how}`
+        : `${uiBadge("not connected", "neutral")} Everything stays on this machine.`}</span>`,
+    {title: "Waku Memory, shared",
+     action: w.connected ? `<a class="link" href="https://www.waku.one/memories" target="_blank" rel="noopener noreferrer">open waku.one</a>`
+                         : uiLink("how to connect", "#connections/waku-memory"), cls: "box"});
+  return `<div class="tiles" style="grid-template-columns:repeat(auto-fill,minmax(280px,1fr));margin-bottom:var(--space-3)">${local}${shared}</div>`;
+}
 function memOverview(d){
   const s = d.stats;
   const pillars = [
@@ -67,20 +108,19 @@ function memOverview(d){
     ["Procedural","skills",d.skills.length+" skills","SKILL.md files loaded only when relevant — how to act"],
   ].map(([t,sub,n,desc]) => uiCard(`<span>${desc}</span>`,
       {title: t, action: uiLink(n, `#memory/${sub}`), cls: "box"})).join("");
-  return uiNotice("note", `<b>Memory vs Database — two views of one file.</b>
-      <div class="r">This tab is the curated, per-pillar view of what Waku remembers. The
-      ${uiLink("Database tab", "#database")} shows the exact same
-      thing as raw SQLite tables (plus the FTS5 keyword index). Same
-      <code>.waku/state.db</code> — different altitude.
+  return memWhich(d) + uiNotice("note", `<b>One file underneath.</b>
+      <div class="r">What Waku remembers is rows in <code>.waku/state.db</code>: facts and episodes, searchable
+      by keyword (FTS5). Each tab here is the readable view, and the raw rows are at the foot of
+      ${uiLink("Semantic", "#memory/semantic")} and ${uiLink("Episodic", "#memory/episodic")}.
       <br><br>Some assistants (Hermes) keep memory as a single <code>MEMORY.md</code> file. Waku keeps
-      the queryable source in <code>state.db</code> (facts + episodes, FTS5-searchable) <b>and</b> writes a
+      the queryable source in <code>state.db</code> <b>and</b> writes a
       human-readable ${reveal("MEMORY.md","MEMORY.md")} mirror after every turn — so you get both: a real file
       you can open, backed by a sturdy database.</div>`) + `
     <h2>The three pillars</h2>
     <div class="tiles" style="grid-template-columns:repeat(auto-fill,minmax(220px,1fr))">${pillars}</div>
     <h2>Retrieval gate — does this turn even need memory?</h2>${gateSplit(s)}
     <div class="meta" style="margin-top:var(--space-2)">A cheap model decides <b>if</b> a turn needs memory at all, before any lookup —
-      this is memory <i>retrieval</i>, the hero decision. (The Ops tab charts the same skip/retrieve
+      this is memory <i>retrieval</i>, the hero decision. (The Observability page charts the same skip/retrieve
       numbers as an operational metric; the decision itself is memory's.)</div>
     <div class="meta" style="margin-top:var(--space-3)">Files: ${reveal("state.db","state.db")} · ${reveal("MEMORY.md","MEMORY.md")} · ${reveal("SOUL.md","SOUL.md")} · ${reveal("skills","skills/")}</div>`;
 }
@@ -95,7 +135,7 @@ function memSemantic(d){
     `<span class="meta">${esc(f.source)}</span>`,
     `<span style="white-space:nowrap">${uiButton("edit", {level: "tertiary", size: "sm", onclick: `editFact(${f.id})`})} · ${uiButton("delete", {level: "tertiary", size: "sm", danger: true, onclick: `delMem('delete_fact',${f.id})`})}</span>`,
   ]})), {empty: "no facts yet"});
-  return h;
+  return h + rawRows(d, "facts");
 }
 function memEpisodic(d){
   const src = d.episodes_source || "sqlite";
@@ -103,13 +143,14 @@ function memEpisodic(d){
   if (d.episodes_error) h += uiCard(`<span class="empty">Could not read episodes from Notion: ${esc(d.episodes_error)}</span>`);
   h += uiNotice("note", `<b>Why is this small?</b> <span class="r">Episodic memory holds one <i>distilled</i> summary per
     consolidation, not every message. The raw, blow-by-blow conversation lives in the
-    ${uiLink("<code>chat_log</code> table", "#database/chat_log")}
-    (the big one) on the Database tab — episodes are its highlights.</span>`);
+    ${uiLink("<code>chat_log</code> table", "#gateway")}
+    (the big one), under Gateway — episodes are its highlights.</span>`);
   h += uiTable(["date","episode",""], d.episodes.map(e => [
     `<span class="meta">${esc(e.happened_at)}</span>`, esc(e.summary),
     uiButton("delete", {level: "tertiary", size: "sm", danger: true, onclick: `delMem('delete_episode','${e.id}')`}),
   ]), {empty: "no episodes yet"});
-  return h;
+  return h + rawRows(d, "episodes", d.episodes_source === "notion"
+    ? "Episodes live in Notion now. These rows are the old local copy in <code>state.db</code>." : "");
 }
 function memSkills(d){
   let h = `<div class="meta" style="margin-bottom:var(--space-3)">Procedural memory — markdown instructions loaded
@@ -157,7 +198,7 @@ function memConsolidation(d){
   h += table(["subject","fact","when"], distilled.map(f =>
     `<tr><td><code>${esc(f.subject)}</code></td><td>${esc(f.content)}</td><td class="meta">${esc((f.created_at||"").slice(0,10))}</td></tr>`));
   h += `<div class="meta" style="margin-top:var(--space-2)">This is a memory operation, shown here. Each run is also
-    ${uiLink("traced", "#ops")} (Ops) and can be scored by the judge evals.</div>`;
+    ${uiLink("traced", "#observability/turns")} (Observability) and can be scored by the judge evals.</div>`;
   return h;
 }
 
@@ -172,29 +213,33 @@ function toolsResults(d){
   h += `<h2>Outbox — drafted messages <span style="font-weight:400;text-transform:none;letter-spacing:0">· ${reveal("outbox","open the outbox folder")}</span></h2>`;
   h += d.outbox.length ? d.outbox.map(o => uiCard(`<span class="u">${esc(o.name)}</span><div class="r">${esc(o.text)}</div>`)).join("")
                        : uiCard(`<span class="empty">no drafted messages</span>`);
-  return h;
+  return h + rawRows(d, "calendar_events");
 }
-// Tools ▸ MCP: external connectors. Shows live status + a copy-paste config so
-// anyone can plug in their own server (scalable, not a one-off).
-function toolsMCP(t){
-  const m = t.mcp;
-  let h = uiNotice(m.live ? "ok" : "note", `<b>Model Context Protocol${m.live?" — connected":m.configured?" — configured":" — not set up"}.</b>
-    <div class="r">MCP lets Waku borrow tools from any external server (files, GitHub, a database, …),
-    namespaced <code>&lt;server&gt;_&lt;tool&gt;</code>. ${m.configured
-      ? `Configured servers: ${m.servers.map(s=>`<code>${esc(s)}</code>`).join(" ")}${m.live?"":" — start a chat to connect them."}`
-      : "None configured yet."}</div>`);
-  h += `<h2>Connect one (30 seconds)</h2>` + uiCard(`
-    <div class="meta">1 — install the extra: <code>pip install -e '.[mcp]'</code></div>
-    <div class="meta" style="margin-top:calc(var(--spacing) * 1.5)">2 — create ${reveal("","the .waku folder")}<code>/mcp.json</code>:</div>
-    <pre style="font-family:var(--face-mono);font-size:var(--text-xs);color:var(--text-muted);white-space:pre-wrap;margin-top:var(--space-2)">{"servers": [
-  {"name": "fs", "command": "npx",
-   "args": ["-y", "@modelcontextprotocol/server-filesystem", "${esc(D&&D.home||"")}"]}
-]}</pre>
-    <div class="meta" style="margin-top:var(--space-2)">3 — restart the dashboard. The server's tools appear above under
-      ${uiLink("Available ▸ MCP servers", "#tools/available")}, callable in chat.</div>`);
-  h += `<div class="meta" style="margin-top:var(--space-3)">The same pattern scales: any MCP server (yours or a vendor's)
-    plugs in the same way — no code changes to Waku. Skills work the same way — drop a <code>SKILL.md</code>
-    in ${reveal("skills","skills/")}.</div>`;
+// What each of the four hook moments is, in the words a person would use.
+const HOOK_WHEN = {SessionStart: "Session start", UserPromptSubmit: "Each message",
+  PreToolUse: "Before a tool runs", Stop: "After each reply"};
+
+function toolsHooks(t){
+  const k = t.hooks || {rows: [], skipped: []};
+  let h = uiNotice("note", `<b>Hooks — calls Waku makes by itself.</b>
+    <div class="r">A tool is called when the model decides to. A hook is called at a fixed moment of every turn,
+    whatever the model decides. Plugins declare them. This tab lists the hooks that exist;
+    ${uiLink("Observability ▸ Turns", "#observability/turns")} shows each time one ran.</div>`);
+  h += uiTable(["When", "Plugin", "Calls", "Last run"], (k.rows || []).map(r => {
+    const when = `${esc(HOOK_WHEN[r.event] || r.event)}<div class="meta"><code>${esc(r.event)}</code></div>`;
+    if (!r.plugin) return [when, `<span class="meta">no plugin uses this yet</span>`, "", ""];
+    const last = r.last
+      ? (r.last.ok ? uiBadge("ok", "ok") : uiBadge("failed", "bad"))
+        + ` <span class="meta">${Math.round(r.last.duration_ms || 0)} ms · ${esc(String(r.last.ts || "").replace("T", " ").slice(0, 16))}</span>`
+        + (r.last.error ? `<div class="meta">${esc(r.last.error)}</div>` : "")
+      : `<span class="meta">not yet</span>`;
+    return [when, esc(r.plugin),
+      `<code>${esc(r.tool)}</code><div class="meta">on ${esc(r.server || "?")}${r.kind && r.kind !== "mcp_tool" ? ` · type ${esc(r.kind)} is not run` : ""}</div>`,
+      last];
+  }));
+  if ((k.skipped || []).length)
+    h += `<div class="meta" style="margin-top:var(--space-2)">Loaded without their hooks, because they were written for
+      Claude Code: ${k.skipped.map(n => `<code>${esc(n)}</code>`).join(" ")}.</div>`;
   return h;
 }
 
@@ -275,82 +320,63 @@ async function saveProvider(provider){
 }
 function stProvider(){ return (D.settings || {}).provider || "anthropic"; }
 
-const CONNECTION_GROUPS = ["Channels", "Productivity", "Memory", "Tools"];
-// "Memory", not "Storage". The registry already calls this group "Memory &
-// Storage"; the display map was dropping the half that says what these
-// actually are. Notion is the episodic store, Supabase the semantic one, and
-// every hosted memory service that joins them is semantic too — none of it is
-// generic storage, and Memory is one of the four pillars the rest of the
-// dashboard is organised around.
-const CONNECTION_GROUP_MAP = {
-  "Channels": "Channels",
-  "Calendar & Productivity": "Productivity",
-  "Memory & Storage": "Memory",
-  "Search & Observability": "Tools",
-};
-
-function connectionDisplayGroup(item){
-  if (item.key === "apple_tools") return "Tools";
-  return CONNECTION_GROUP_MAP[item.group] || "Tools";
-}
-
+// A registry row's state as the connection dialog shows it, in the words the
+// cards use (waku/ops/connections_page.py, STATES). The dialog reads the row
+// itself, because Test connection answers with a row and not with a card.
 function connectionStatusDisplay(status){
   const state = (status && status.state) || "not_configured";
-  if (state === "connected") return {label:"connected", className:"connected"};
-  if (state === "error") return {label:"error", className:"error"};
-  // "configured" means every required field is filled and the extra is
-  // installed — it just hasn't been probed. That is not a warning, so it must
-  // not wear the amber "needs setup" pill: this state covers most of a working
-  // setup on first visit, and colouring it like a problem told every new user
-  // their Telegram, Notion and Tavily needed fixing when they were fine.
-  if (state === "configured") return {label:"configured · not tested", className:"configured"};
-  if (state === "installed_but_unconfigured") return {label:"needs setup", className:"needs-setup"};
-  return {label:"not configured", className:"not-configured"};
+  if (state === "connected") return {label: "connected", className: "connected"};
+  if (state === "error") return {label: "error", className: "error"};
+  // Every required field is filled and nothing has tried it yet. That is
+  // not a warning, so it does not take the colour of one.
+  if (state === "configured") return {label: "configured · not tested", className: "configured"};
+  if (state === "installed_but_unconfigured") return {label: "needs setup", className: "needs-setup"};
+  return {label: "not connected", className: "not-configured"};
 }
 
-function connectionCard(item){
-  const display = connectionStatusDisplay(item.status);
-  const action = item.status && item.status.state !== "not_configured" ? "Edit" : "Configure";
-  // Say WHY on the card. "needs setup" covers two unrelated fixes — a missing
-  // value ("missing NOTION_TOKEN") and a missing package ("missing notion
-  // extra", which wants a pip install, not a key) — and the reason used to be
-  // hidden until you opened the modal. The message repeats the label for
-  // connected/configured, so only show it where it adds something.
-  const why = (item.status && item.status.message
-    && (item.status.state === "installed_but_unconfigured" || item.status.state === "error"))
-    ? `<div class="connwhy">${esc(item.status.message)}</div>` : "";
-  return uiCard(`
-    <img class="provlogo connlogo" src="/static/logos/connections/${esc(item.key)}.svg" alt="">
-    <div class="connstatus ${display.className}"><span class="conndot"></span>${esc(display.label)}</div>
-    ${why}
-    <div class="conndesc">${esc(item.what)}</div>
-    <div class="provactions connactions">
-      ${uiButton(action, {level: "secondary", onclick: `openConnectionModal('${esc(item.key)}')`})}
-    </div>`, {title: esc(item.name), cls: "provcard conncard"});
+// The Connections page (spec 030). `connections_page` in /api/data holds
+// every card, in its group, with its state and its one button
+// (waku/ops/connections_page.py decides all of it). This file draws them.
+
+// A card with no drawing of its own shows the first letter of its name.
+function connectionLogo(card){
+  return card.logo
+    ? `<img class="provlogo connlogo" src="/static/${esc(card.logo)}" alt="">`
+    : `<span class="provlogo connmark" aria-hidden="true">${esc(card.name.slice(0, 1).toUpperCase())}</span>`;
 }
 
-// MCP servers that sign in on their own page (spec 007 E: treg). They are not
-// .env fields, so they are not in the registry and have no modal: the card
-// says where the server stands, and Connect sends `/connect <key>` through the
-// chat dock, the same door as typing it. The reply lands in the dock.
-const MCP_STATE_DISPLAY = {
-  connected: {label:"connected", className:"connected"},
-  not_signed_in: {label:"not signed in", className:"needs-setup"},
-  not_added: {label:"not added", className:"not-configured"},
-};
+// A card's button. `kind` says what it does. An address is opened in a new
+// tab, and only when it is http(s): the button carries it as data, so no
+// address is ever part of a script.
+function connectionButton(a, level){
+  if (!a) return "";
+  const t = esc(a.target);
+  if (a.kind === "href")
+    return /^https?:\/\//.test(a.target)
+      ? uiButton(esc(a.label), {level, onclick: "openHref(this)", attrs: `data-href="${t}"`}) : "";
+  const onclick = {dialog: `openConnectionModal('${t}')`, chat: `connectInChat('${t}')`,
+                   add: `addConnector('${t}')`, manage: `openConnectorManage('${t}')`}[a.kind];
+  return onclick ? uiButton(esc(a.label), {level, onclick}) : "";
+}
+function openHref(button){
+  const href = button.dataset.href || "";
+  if (/^https?:\/\//.test(href)) window.open(href, "_blank", "noopener,noreferrer");
+}
+// A card has one button. The hosted Slack card has a second, quieter one
+// (`action2`): the same workspace again, or a different one.
+function connectionAction(card){
+  return connectionButton(card.action, "secondary") + connectionButton(card.action2, "tertiary");
+}
 
-function mcpConnectionCard(item){
-  const display = MCP_STATE_DISPLAY[item.state] || MCP_STATE_DISPLAY.not_added;
-  const why = item.detail ? `<div class="connwhy">${esc(item.detail)}</div>` : "";
-  const action = item.state === "connected" ? "" : `<div class="provactions connactions">
-      ${uiButton("Connect", {level: "secondary", onclick: `connectInChat('${esc(item.key)}')`})}
-    </div>`;
-  return uiCard(`
-    <img class="provlogo connlogo" src="/static/logos/connections/${esc(item.key)}.svg" alt="">
-    <div class="connstatus ${display.className}"><span class="conndot"></span>${esc(display.label)}</div>
-    ${why}
-    <div class="conndesc">${esc(item.what)}</div>
-    ${action}`, {title: esc(item.name), cls: "provcard conncard"});
+function connectionCard(card){
+  const action = connectionAction(card);
+  return `<div class="conncell" id="conn-${esc(card.id)}">${uiCard(`
+    ${connectionLogo(card)}
+    <div class="connstatus ${esc(card.state)}"><span class="conndot"></span>${esc(card.label)}</div>
+    ${card.why ? `<div class="connwhy">${esc(card.why)}</div>` : ""}
+    <div class="conndesc">${esc(card.what)}</div>
+    ${action ? `<div class="provactions connactions">${action}</div>` : ""}`,
+    {title: esc(card.name), cls: "provcard conncard"})}</div>`;
 }
 
 function connectInChat(key){
@@ -361,14 +387,57 @@ function connectInChat(key){
   sendChat(input);
 }
 
-function connectionsGrid(items, mcpItems = []){
-  const grouped = Object.fromEntries(CONNECTION_GROUPS.map(group => [group, []]));
-  items.forEach(item => grouped[connectionDisplayGroup(item)].push(connectionCard(item)));
-  mcpItems.forEach(item => grouped[connectionDisplayGroup(item)].push(mcpConnectionCard(item)));
-  return CONNECTION_GROUPS.map(group => `<section class="connsection">
-    <h2>${group}</h2>
-    <div class="provgrid conngrid">${grouped[group].join("")}</div>
-  </section>`).join("");
+function connectionsGrid(page, slack){
+  // A dashboard that was not restarted after an update still sends the page
+  // without this section; draw it empty rather than not at all.
+  const dev = page.developers || {title: "For developers", cards: [], add_by_address: !!page.add_by_address};
+  const grid = cards => `<div class="provgrid conngrid">${cards.map(connectionCard).join("")}</div>`;
+  // Hosted Waku: the gateway knows about Slack, so its card comes from there
+  // (hosted.js) and leads the first group.
+  const lead = group => group.id === "talk" && slack ? [slack] : [];
+  return page.groups.map(group => `<section class="connsection" id="conn-group-${esc(group.id)}">
+    <h2>${esc(group.title)}</h2>
+    ${group.id === "apps" ? connectorSignIn(page.sign_in) : ""}
+    ${grid(lead(group).concat(group.cards))}
+    ${group.more ? `<h3 class="connsub">${esc(group.more.title)}</h3>${grid(group.more.cards)}` : ""}
+  </section>`).join("") + `<details class="connmore conndev" id="conn-group-developers"${connectionsDevOpen ? " open" : ""}
+      ontoggle="connectionsDevOpen = this.open">
+    <summary>${esc(dev.title)}</summary>
+    <div class="conndev-body">
+      ${grid(dev.cards)}
+      ${dev.add_by_address ? connectorAddSection() : ""}
+    </div>
+  </details>` + (page.hidden ? `<details class="connmore connhidden">
+    <summary>${esc(page.hidden.title)}</summary>
+    <div class="connmore-body meta">${esc(page.hidden.why)}</div>
+  </details>` : "");
+}
+
+// The first row of the Tools page: the connections that are connected right
+// now, each with its logo, then the way to Connections. `tools.connected` in
+// /api/data lists them; on hosted Waku a connected Slack workspace joins.
+function toolsConnected(d, t){
+  const slack = hostedSlackCard(d);
+  const items = (slack && slack.state === "connected" ? [slack] : []).concat(t.connected || []);
+  const list = items.length
+    ? items.map(c => `<a class="toolconn-item" href="#connections/${encodeURIComponent(c.id)}"
+        title="${esc(c.name)} in Connections">${connectionLogo(c)}<span>${esc(c.name)}</span></a>`).join("")
+    : `<span class="meta">Nothing is connected yet.</span>`;
+  return `<div class="toolconn"><span class="toolconn-label">Connected</span>${list}
+    ${uiButton("Manage connections", {level: "secondary", size: "sm", cls: "toolconn-go", onclick: "location.hash = '#connections'"})}</div>`;
+}
+
+// A link such as #connections/app-notion opens the page at that card and
+// marks it, so one click from Tools reaches the card that controls a tool.
+function focusConnection(id, scroll){
+  const card = document.getElementById("conn-" + id);
+  const el = card || document.getElementById("conn-group-" + id);
+  if (!el) return;
+  // A card under "For developers" is in a closed section: open it first.
+  const closed = el.closest("details:not([open])") || (el.matches("details:not([open])") ? el : null);
+  if (closed){ closed.open = true; if (closed.classList.contains("conndev")) connectionsDevOpen = true; }
+  if (card) card.classList.add("conn-target");
+  if (scroll) el.scrollIntoView({block: card ? "center" : "start"});
 }
 
 // The connection dialog. openDialog (ui.js) owns the <dialog>: Escape and a
@@ -428,9 +497,9 @@ const VIEWS = {
     return modelsGrid(d);
   },
   connections(d){
-    const items = d.connections || [], mcpItems = d.mcp_connections || [];
-    return items.length || mcpItems.length ? connectionsGrid(items, mcpItems)
-      : uiCard(`<span class="empty">No integrations registered.</span>`);
+    const page = d.connections_page;
+    return page && page.groups.length ? connectionsGrid(page, hostedSlackCard(d))
+      : uiCard(`<span class="empty">Nothing to connect yet.</span>`);
   },
   // Gateway: ONE unified conversation across every channel (dashboard, telegram,
   // voice, cli) — the same loop + memory answer all of them. Each message is
@@ -449,12 +518,13 @@ const VIEWS = {
       `${esc(s.title||s.id)} <span class="meta" style="font-weight:400;white-space:nowrap">· ${sessionMeta(s)}</span>`,
       esc(s.last||""),
       {onclick: `openConversation('${esc(s.id)}')`, cls: s.id === SESSION ? "on" : ""})).join("");
-    return h;
+    return h + rawRows(d, "chat_log",
+      "Every message of every conversation above, one row each, as SQLite stores them in <code>state.db</code>.");
   },
   overview(d){
     const s = d.stats;
     const u = d.usage || {total_cost:0};
-    return `${uiStatBand([
+    return `${hostedSlackLine(d)}${memoryChoiceCard(d)}${waitingCard(d)}${uiStatBand([
         {label:"spent", value:money(u.total_cost), sub:"all-time", tone:"ok"},
         {label:"avg turn", value:secs(s.latency_avg)},
         {label:"turns", value:s.turns}, {label:"tool calls", value:s.tool_calls},
@@ -566,25 +636,32 @@ const VIEWS = {
     const t = d.tools || {catalog:[], mcp:{configured:false,servers:[],live:false}, apple_on:false};
     sub = sub || "available";
     const tabs = [["available","Available",t.catalog.length],["results","Results"],
-      ["mcp","MCP",t.mcp.servers.length||null]];
-    let h = subtabBar("tools", tabs, sub);
+      ["hooks","Hooks",(t.hooks && t.hooks.count)||null]];
+    let h = toolsConnected(d, t) + subtabBar("tools", tabs, sub);
     if (sub === "results") return h + toolsResults(d);
-    if (sub === "mcp") return h + toolsMCP(t);
-    // Available: what the agent CAN do (grouped by origin), not just what it did.
-    h += `<div class="meta" style="margin-bottom:var(--space-3)">The capabilities the agent can call this turn.
-      A tool is a name + description the model reads, a JSON schema, and a Python function — that's it.
-      ${t.apple_on?"":"Apple tools are off (set <code>WAKU_APPLE_TOOLS=1</code>). "}Connect more via
-      ${uiLink("MCP", "#tools/mcp")}.</div>`;
-    const SRC = [["flagship","Flagship task — scheduling"],["web","Web search"],
-      ["self-management","Self-management — it edits its own memory"],
-      ["apple","Apple ecosystem"],["mcp","MCP servers"],["other","Other"]];
-    SRC.forEach(([key,label]) => {
-      const items = t.catalog.filter(c => c.source === key);
-      if (!items.length) return;
-      h += `<h2>${label}</h2>`;
-      h += items.map(c => uiCard(`
-        <div class="tn"><code>${esc(c.name)}</code> ${uiBadge(esc(key), key==="mcp" ? "ok" : "neutral")}</div>
-        <div class="td">${esc(c.description)}</div>`, {cls: "toolcard", size: "sm"})).join("");
+    if (sub === "hooks") return h + toolsHooks(t);
+    // Available: what the agent can do right now, grouped by where each
+    // ability comes from (spec 030). The page changes nothing: a connection
+    // is managed on its card in Connections, one click from its group here.
+    h += `<div class="meta" style="margin-bottom:var(--space-3)">What Waku can do right now. Each tool says where
+      it comes from: Waku itself, or a connection. This page changes nothing: a connection is added and
+      removed in ${uiLink("Connections", "#connections")}.</div>`;
+    const toolCard = (c, label) => uiCard(`
+        <div class="tn"><code>${esc(c.name)}</code> ${uiBadge(esc(label), c.from ? "ok" : "neutral")}</div>
+        <div class="td">${esc(c.description)}</div>`, {cls: "toolcard", size: "sm"});
+    const builtIn = t.catalog.filter(c => !c.from);
+    if (builtIn.length)
+      h += `<h2>Built in</h2>` + builtIn.map(c => toolCard(c, "built in")).join("");
+    // One group for each connection, in the order its first tool appears.
+    const groups = [];
+    t.catalog.filter(c => c.from).forEach(c => {
+      let g = groups.find(x => x.name === c.from.name);
+      if (!g) groups.push(g = {name: c.from.name, id: c.from.id, items: []});
+      g.items.push(c);
+    });
+    groups.forEach(g => {
+      h += `<h2>${esc(g.name)}</h2>` + g.items.map(c => toolCard(c, g.name)).join("");
+      if (g.id) h += `<div class="meta toolmanage">${uiLink("Manage in Connections", "#connections/" + encodeURIComponent(g.id))}</div>`;
     });
     // Roadmap: whiteboard boxes not wired in yet — set expectations, don't over-promise.
     if ((t.planned||[]).length){
@@ -593,137 +670,34 @@ const VIEWS = {
         <div class="tn"><code>${esc(p.name)}</code> ${uiBadge(`soon · ${esc(p.box)}`)}</div>
         <div class="td">${esc(p.description)}</div>`, {cls: "toolcard toolcard-soon", size: "sm"})).join("");
     }
+    // The last line of the page: the starter connections nobody connected,
+    // so a person who looks for a missing ability finds the way.
+    const missing = t.not_connected || [];
+    if (missing.length)
+      h += `<div class="meta toolmissing">Not connected: ${missing.map(m => esc(m.name)).join(", ")}.
+        ${uiLink("Connect", "#connections/" + encodeURIComponent(missing[0].id))}</div>`;
     return h;
   },
-  database(d, sub){
-    // The persistence layer itself — one SQLite file, real tables, FTS5 index.
-    // "Data" in the nav (plainer than "state.db"), but we keep saying state.db
-    // because that's literally the filename you can open.
+  sql(d){
+    // The one thing the old Database page had that no other page does: a
+    // read-only console over state.db. The tables themselves are shown where
+    // they belong, each with its raw rows.
     const db = d.db || {tables:[], all_tables:[], fts:[], size:0, path:""};
-    const tables = db.tables || [];
-    sub = sub || "overview";
-    const tabs = [["overview","Overview"],
-      ...tables.map(t => [t.name, t.name, t.count]),
-      ["query","SQL console"]];
-    let h = subtabBar("database", tabs, sub);
-    if (sub === "query") return h + dbQueryView();
-    if (sub !== "overview"){
-      const t = tables.find(x => x.name === sub);
-      if (!t) return h + uiCard(`<span class="empty">no such table</span>`);
-      const notionNote = (t.name === "episodes" && d.episodes_source === "notion")
-        ? `<div class="meta" style="margin-bottom:var(--space-2)">Episodes currently live in Notion — see
-            ${uiLink("Memory ▸ Episodic", "#memory/episodic")}.
-            The rows below are the old local copy in state.db.</div>` : "";
-      return h + notionNote + `<div class="meta" style="margin-bottom:var(--space-2)">${DB_DESC[t.name]||""}</div>` + dbTable(t);
-    }
     const kb = (db.size/1024).toFixed(1);
-    h += uiNotice("note", `<b>Database vs Memory.</b> <span class="r">This is the raw persistence layer — the literal SQLite
-      tables. The ${uiLink("Memory tab", "#memory")} is the friendly
-      view of the same rows (facts, episodes, skills, persona). One file, two altitudes. Where Hermes
-      uses a <code>MEMORY.md</code> file, Waku uses these queryable tables — and mirrors them to a
-      readable <code>MEMORY.md</code> too.</span>`);
-    h += uiCard(`
+    let h = uiCard(`
       <div class="u" style="font-family:var(--face-mono);font-size:var(--text-xs);word-break:break-all">${esc(db.path)}</div>
       <div class="meta">${kb} KB on disk · SQLite + FTS5 · open it yourself: <code>sqlite3 .waku/state.db</code></div>
       <div class="meta" style="margin-top:var(--space-2)">${reveal("state.db","reveal state.db in Finder")} &nbsp;·&nbsp; ${reveal("","open the .waku folder")}</div>`);
-    h += `<h2>Tables — click a tab above, or a row here</h2>`;
-    h += table(["table","rows","what it holds"], tables.map(t =>
-      `<tr><td>${uiLink(`<code>${esc(t.name)}</code>`, `#database/${esc(t.name)}`)}</td>
-        <td class="meta">${t.count}</td><td class="meta">${DB_DESC[t.name]||""}</td></tr>`));
+    h += dbQueryView();
+    h += `<h2>Tables</h2>` + uiTable(["table", "rows", "what it holds", "shown on"], (db.tables || []).map(t => {
+      const home = DB_HOME[t.name];
+      return [`<code>${esc(t.name)}</code>`, `<span class="meta">${t.count}</span>`,
+        `<span class="meta">${DB_DESC[t.name] || ""}</span>`, home ? uiLink(home[0], home[1]) : ""];
+    }));
     h += `<h2>FTS5 — the keyword index</h2>` + uiCard(`The <code>*_fts</code> virtual tables (and their
       <code>*_fts_data</code>/<code>*_fts_idx</code> shadows) make memory searchable by keyword — no embeddings,
       no vector DB. This is the "keyword top-k" the retrieval gate queries.
       <div class="meta" style="margin-top:var(--space-2)">all ${db.all_tables.length} tables: ${db.all_tables.map(t=>`<code>${esc(t)}</code>`).join(" ")}</div>`);
-    return h;
-  },
-  ops(d){
-    const s = d.stats;
-    const u = d.usage || {calls:0,total_in:0,total_out:0,total_cost:0,by_day:[],by_provider:[]};
-    let h = uiStatBand([
-        {label:"spent", value:money(u.total_cost), sub:"all-time", tone:"ok"},
-        {label:"tokens in", value:u.total_in.toLocaleString(), sub:"all-time"},
-        {label:"tokens out", value:u.total_out.toLocaleString(), sub:"all-time"},
-        {label:"LLM calls", value:u.calls.toLocaleString()},
-        {label:"avg turn", value:secs(s.latency_avg)}, {label:"tool errors", value:`${s.tool_errors}`},
-      ]);
-    // Eval verdicts are "pass" / "fail" / anything else (skipped, not run).
-    const verdict = v => v === "pass" ? "ok" : v === "fail" ? "bad" : "neutral";
-
-    h += `<h2>Spend <span class="meta" style="font-weight:400">· permanent ledger — survives a demo reset</span></h2>`;
-    h += uiCard(`<span class="r prose">Every LLM call's tokens are logged to
-      <code>.waku/usage.jsonl</code> (append-only, never wiped). Dollar cost is estimated from tokens
-      × current pricing — the tokens are the ground truth.</span>`,
-      {footer: reveal("usage.jsonl","open usage.jsonl")});
-    if ((u.by_provider||[]).length){
-      h += table(["provider","LLM calls","tokens in","tokens out","cost (est)"], u.by_provider.map(p =>
-        `<tr><td><code>${esc(p.provider)}</code></td><td class="meta">${p.calls}</td>
-          <td class="meta">${p.in.toLocaleString()}</td><td class="meta">${p.out.toLocaleString()}</td>
-          <td class="meta">${money(p.cost)}</td></tr>`));
-    }
-    if ((u.by_day||[]).length){
-      h += `<h2>Spend per day</h2>`;
-      h += table(["day","LLM calls","tokens in","tokens out","cost (est)"], u.by_day.map(r =>
-        `<tr><td class="meta">${esc(r.date)}</td><td class="meta">${r.calls}</td>
-          <td class="meta">${r.in.toLocaleString()}</td><td class="meta">${r.out.toLocaleString()}</td>
-          <td class="meta">${money(r.cost)}</td></tr>`));
-    }
-
-    h += `<h2>Retrieval gate — which turns used memory</h2>${gateSplit(s)}`;
-    const decided = d.turns.filter(t => t.gate);
-    if (decided.length){
-      h += `<div class="meta" style="margin:var(--space-2) 0">The actual decisions (what was skipped vs retrieved), most recent first:</div>`;
-      h += table(["turn","decision","why"], decided.slice(0,10).map(t =>
-        `<tr><td>${esc((t.user_message||"").slice(0,44))}</td>
-          <td>${uiBadge(esc(t.gate.decision), t.gate.decision==="skip" ? "neutral" : "ok")}</td>
-          <td class="meta">${esc(t.gate.reason||"")}</td></tr>`));
-    }
-
-    h += `<h2>Release gate <span class="meta" style="font-weight:400">· the ship/no-ship check</span></h2>`;
-    h += uiCard(`<span class="r prose">Before you ship a change (new prompt, swapped model, tuned
-      retrieval), <code>make gate</code> runs both eval suites: deterministic must pass 100%, the judge must
-      clear its threshold. It's manual — you run it — so there's one record per run. The history below grows
-      each time you run it.</span>`);
-    h += d.eval_report ? uiCard(`
-        ${uiBadge(`deterministic · ${esc(d.eval_report.deterministic)}`, verdict(d.eval_report.deterministic))}
-        <span style="margin-left:var(--space-2)">${uiBadge(`llm-judge · ${esc(d.eval_report.judge)}`, verdict(d.eval_report.judge))}</span>
-        <div class="meta">last run ${esc(d.eval_report.ran_at)} — re-run with <code>make gate</code></div>`)
-      : uiCard(`<span class="empty">never run yet — run <code>make gate</code> to populate this</span>`);
-
-    if ((d.eval_history||[]).length){
-      const cnt = s => s ? `${s.passed||0} pass · ${s.failed||0} fail` : "—";
-      h += `<h2>Eval history</h2>`;
-      h += table(["when","deterministic","llm-judge","counts"], d.eval_history.map(r =>
-        `<tr><td class="meta">${esc((r.ran_at||"").replace("T"," ").slice(0,19))}</td>
-         <td>${uiBadge(esc(r.deterministic), verdict(r.deterministic))}</td>
-         <td>${uiBadge(esc(r.judge), verdict(r.judge))}</td>
-         <td class="meta">det ${cnt(r.suites&&r.suites.deterministic)} · judge ${cnt(r.suites&&r.suites.judge)}</td></tr>`));
-    }
-
-    h += `<h2>Slowest turns</h2>`;
-    const slow = [...d.turns].filter(t=>t.latency_ms!=null).sort((a,b)=>b.latency_ms-a.latency_ms).slice(0,6);
-    h += table(["turn","latency","cost","tools"], slow.map(t =>
-      `<tr><td>${esc((t.user_message||"").slice(0,48))}</td><td class="meta">${secs(t.latency_ms)}</td><td class="meta">${money(t.cost||0)}</td><td class="meta">${(t.tools||[]).map(x=>x.tool).join(", ")||"—"}</td></tr>`));
-
-    h += `<h2>Tracing <span class="meta" style="font-weight:400">· every turn as JSONL, always on</span></h2>`;
-    if ((d.trace_errors||[]).length){
-      h += d.trace_errors.map(e => uiCard(`${uiBadge("trace encoding error", "bad")}
-        <div class="meta" style="margin-top:var(--space-2)"><code>${esc(e.file)}</code> — ${esc(e.error)}</div>`)).join("");
-    }
-    h += uiCard(`<span class="r prose">${s.trace_files} trace file(s) in <code>traces/</code>${
-      d.trace_file?` (newest: <code>${esc(d.trace_file)}</code>)`:""}.
-      A trace is just "what happened, in order" — here are the most recent lines:</span>`,
-      {footer: reveal("traces","open the traces folder")});
-    h += (d.trace_tail||[]).length ? table(["event","detail","when"], d.trace_tail.map(e =>
-        `<tr><td><code>${esc(e.type)}</code></td><td class="meta">${esc(String(e.detail).slice(0,60))}</td>
-          <td class="meta">${esc((e.ts||"").replace("T"," ").slice(0,19))}</td></tr>`))
-      : uiCard(`<span class="empty">no trace lines yet — talk to Waku</span>`);
-    h += `<div class="meta" style="margin-top:var(--space-2)">Span waterfalls: <code>make trace</code> + <code>OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317</code>.</div>`;
-
-    if (d.wake_scans.length){
-      h += `<h2>Voice — wake near-misses</h2>`;
-      h += table(["heard","when"], d.wake_scans.map(w =>
-        `<tr><td>${esc(w.heard)}</td><td class="meta">${esc((w.ts||"").replace("T"," ").slice(0,19))}</td></tr>`));
-    }
     return h;
   },
 };

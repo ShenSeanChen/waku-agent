@@ -67,6 +67,10 @@ EXPECTED = {
     "/api/query": "pass",
     "/api/compare/history": "pass",
     "/embed/chat": "pass",
+    "/api/observability": "pass",
+    "/api/turn-evals/judge": "pass",
+    "/api/waiting": "pass",
+    "/api/waiting/cancel": "pass",
     # filter: the payload decides
     "/api/providers": "filter",
     "/api/settings": "filter",
@@ -87,6 +91,13 @@ EXPECTED = {
     "/api/judgment-arena/stream": "block",
     "/api/voice": "block",
     "/api/reveal": "block",
+    # spec 026: only the gateway's scheduler and idle loop ask a container
+    # this, and they connect to the container themselves
+    "/api/alwayson/next": "block",
+    "/api/connectors": "block",
+    "/api/connectors/add": "block",
+    "/api/connectors/remove": "block",
+    "/api/connectors/approve": "block",
 }
 
 
@@ -128,3 +139,21 @@ def test_every_pinned_route_resolves_to_its_own_entry_not_a_shorter_one():
     wrong = {route: policy.match(route) for route in _pinned_routes()
              if policy.match(route) != route}
     assert not wrong, f"these routes match a different entry than their own: {wrong}"
+
+
+def test_a_browser_can_read_the_event_feed_and_cannot_hand_an_event_over():
+    """Spec 026: POST /api/events is how the gateway hands a tenant's waiting
+    events to its container. It shares a path with the page's own feed, which
+    is a GET and passes. A signed-in browser that could POST there would write
+    into its container's inbox with a source of its own choosing."""
+    assert policy.decide("GET", "/api/events?cursor=42").verdict == "pass"
+    for method in ("POST", "post", "PUT", "PATCH", "DELETE"):
+        outcome = policy.decide(method, "/api/events", {"events": []})
+        assert (outcome.verdict, outcome.status) == ("block", 403), method
+        assert outcome.message == "Only the gateway may call this."
+
+
+def test_a_browser_cannot_ask_a_container_what_work_it_has_left():
+    outcome = policy.decide("GET", "/api/alwayson/next")
+    assert (outcome.verdict, outcome.status) == ("block", 403)
+    assert outcome.message == "Only the gateway may call this."

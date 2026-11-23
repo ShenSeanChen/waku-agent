@@ -12,6 +12,7 @@ import json
 import os
 import socket
 import sys
+import urllib.error
 import urllib.request
 from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass
@@ -154,7 +155,27 @@ def _darwin_tools(env: Mapping[str, str]) -> bool:
     return sys.platform == "darwin" and bool(env.get("WAKU_APPLE_TOOLS"))
 
 
+# The page that says how to make the Slack app from the manifest. A link to
+# the repository, because a card's setup link opens in the browser.
+SLACK_SETUP = ("https://github.com/ShenSeanChen/waku-agent/blob/main/"
+               "docs/integrations.md#slack-from-a-manifest")
+
 INTEGRATIONS: tuple[Integration, ...] = (
+    # Spec 030: Slack has a card like Telegram's. `waku serve` hears Slack
+    # (waku/alwayson/sources/slack.py), not the dashboard, so the row is LIVE:
+    # a save writes .env and the dashboard starts nothing. Its test is the
+    # check `waku connections` makes (slack_status).
+    Integration("slack", "Channels", "Slack",
+                "Lets Waku answer Slack mentions while waku serve runs.",
+                (EnvField("SLACK_BOT_TOKEN", "Bot token", required=True, secret=True,
+                          help="Starts with xoxb-. The Bot User OAuth Token of your own Slack app."),
+                 EnvField("SLACK_APP_TOKEN", "App-level token", required=True, secret=True,
+                          help="Starts with xapp-. It opens the Socket Mode connection."),
+                 EnvField("SLACK_ALLOWED_CHANNELS", "Allowed channels",
+                          help="Channel ids the agent hears, comma-separated. Empty means it "
+                               "hears nobody.")),
+                "slack", "slack_sdk", SLACK_SETUP, ReloadMode.LIVE,
+                lambda env: bool(env.get("SLACK_BOT_TOKEN")), None),
     Integration("telegram", "Channels", "Telegram", "Lets Waku receive and send Telegram messages.",
                 (EnvField("TELEGRAM_BOT_TOKEN", "Bot token", required=True, secret=True),
                  EnvField("TELEGRAM_ALLOWED_USER", "Allowed user")), "telegram", "telegram",
@@ -193,7 +214,8 @@ INTEGRATIONS: tuple[Integration, ...] = (
                 "Lets Waku use Apple Mail and other local Apple tools.",
                 (EnvField("WAKU_APPLE_TOOLS", "Enable Apple tools", FieldKind.BOOL),), None, None,
                 "", ReloadMode.AGENT, _darwin_tools, None),
-    Integration("notion", "Memory & Storage", "Notion", "Stores episodic memory in a Notion database.",
+    Integration("notion", "Memory & Storage", "Notion database (memory store)",
+                "Stores episodic memory in a Notion database.",
                 (EnvField("WAKU_EPISODIC_STORE", "Episodic store", FieldKind.CHOICE,
                           default="sqlite", options=("sqlite", "notion")),
                  EnvField("NOTION_TOKEN", "Integration token", required=True, secret=True),
@@ -247,9 +269,19 @@ INTEGRATIONS: tuple[Integration, ...] = (
                           help="Embeddings also require OPENAI_API_KEY (optionally OPENAI_EMBED_MODEL).")),
                 "supabase", "supabase", "", ReloadMode.AGENT,
                 lambda env: env.get("WAKU_SEMANTIC_STORE") == "supabase", None),
-    Integration("tavily", "Search & Observability", "Tavily", "Lets Waku search the web.",
+    Integration("tavily", "Search & Observability", "Web search", "Search the web, through Tavily.",
                 (EnvField("TAVILY_API_KEY", "API key", secret=True),), None, None,
                 "https://tavily.com", ReloadMode.LIVE, lambda env: bool(env.get("TAVILY_API_KEY")), None),
+    # Spec 014: a person's own treg key. Its card is treg's MCP card
+    # (waku/tools/treg.py), which opens this row's dialog; views.js draws no
+    # second card for it. Saving rebuilds the agent, which reconnects treg
+    # with the key (treg.resolve), so the switch is live on the next message.
+    Integration("treg", "Search & Observability", "treg",
+                "Your own treg key. treg then bills your treg account, not your Waku credits.",
+                (EnvField("TREG_API_KEY", "API key", secret=True,
+                          help="An org-scoped key from your treg dashboard. It is sent only to treg."),),
+                None, None, "https://treg.to", ReloadMode.AGENT,
+                lambda env: bool(env.get("TREG_API_KEY")), None),
     # Spec 005: Jev decides which memories earn a slot. Both fields, or it
     # stays off: WAKU_SLOT_GATE=jev is the switch, the key is the credential.
     Integration("typesafe", "Memory & Storage", "TypeSafe Jev",
@@ -465,6 +497,69 @@ def render_env_example_block() -> str:
     return "\n".join(lines)
 
 
+def _slack_api(method: str, token: str) -> tuple[dict, dict]:
+    """One call to Slack's Web API: (the JSON body, the response headers with
+    lower-case names). The token goes to slack.com and nowhere else."""
+    request = urllib.request.Request(f"https://slack.com/api/{method}", data=b"",
+                                     headers={"Authorization": f"Bearer {token}"})
+    with urllib.request.urlopen(request, timeout=10) as response:  # noqa: S310 - fixed provider endpoint
+        headers = {name.lower(): value for name, value in response.headers.items()}
+        return json.loads(response.read().decode("utf-8") or "{}"), headers
+
+
+def slack_status(env: Mapping[str, str] | None = None, fetch=None,
+                 extra_installed: bool | None = None) -> tuple[bool | None, str]:
+    """Slack's line for `waku connections` (spec 025, decision 5): (whether
+    `waku serve` would hear a mention, the line). None means Slack is not set
+    up at all, which is not a failure.
+
+    With both tokens set it asks Slack two things. `auth.test` says whose bot
+    token this is and which scopes it holds, and a scope the Slack source or
+    sender needs and the token lacks is named. `apps.connections.open` says
+    whether the app-level token may open a Socket Mode connection. No token is
+    ever part of the line.
+    """
+    from waku.alwayson.sources import slack
+
+    env = os.environ if env is None else env
+    bot, app = env.get("SLACK_BOT_TOKEN", "").strip(), env.get("SLACK_APP_TOKEN", "").strip()
+    if not bot and not app:
+        return None, f"not configured · create the app from {slack.MANIFEST}"
+    for name, value in (("SLACK_BOT_TOKEN", bot), ("SLACK_APP_TOKEN", app)):
+        if not value:
+            return False, f"{name} is not set · docs/integrations.md, \"Slack from a manifest\""
+    if not bot.startswith("xoxb-") or not app.startswith("xapp-"):
+        return False, ("SLACK_BOT_TOKEN starts xoxb- (the Bot User OAuth Token) and "
+                       "SLACK_APP_TOKEN starts xapp- (an app-level token): check which is which")
+    if not (_extra_installed("slack_sdk") if extra_installed is None else extra_installed):
+        return False, "needs the slack extra: pip install 'waku-agent[slack]'"
+    try:
+        who, headers = (fetch or _slack_api)("auth.test", bot)
+        if not who.get("ok"):
+            return False, f"Slack refused SLACK_BOT_TOKEN ({who.get('error', 'no reason given')})"
+        held = {scope.strip() for scope in headers.get("x-oauth-scopes", "").split(",")}
+        missing = [scope for scope in slack.BOT_SCOPES if scope not in held]
+        if missing:
+            return False, (f"the bot token is missing the scope{'s' if len(missing) > 1 else ''} "
+                           f"{' and '.join(missing)}: add under OAuth & Permissions, then "
+                           "reinstall the app")
+        opened, _ = (fetch or _slack_api)("apps.connections.open", app)
+    except (OSError, ValueError):
+        return False, "could not reach Slack to check the tokens"
+    if not opened.get("ok"):
+        if opened.get("error") == "missing_scope":
+            return False, (f"SLACK_APP_TOKEN is missing the scope "
+                           f"{opened.get('needed') or slack.APP_SCOPE}: generate an app-level "
+                           "token with it under Basic Information")
+        return False, f"Slack refused SLACK_APP_TOKEN ({opened.get('error', 'no reason given')})"
+    channels = [c for c in env.get("SLACK_ALLOWED_CHANNELS", "").split(",") if c.strip()]
+    if not channels:
+        return False, ("the tokens work, and SLACK_ALLOWED_CHANNELS is empty, so nobody "
+                       "is heard: put a channel id in it")
+    return True, (f"connected · workspace {who.get('team', '?')} as {who.get('user', '?')} · "
+                  f"hears {len(channels)} channel{'' if len(channels) == 1 else 's'}")
+
+
 def cli_main() -> int:
     """Print the current Connections surface and return a meaningful exit code."""
     from rich.console import Console
@@ -503,6 +598,14 @@ def cli_main() -> int:
     if notice := home_notice():
         console.print(f"  {notice}", markup=False)
 
+    # Where a model key was looked for, in the order the places win (spec 013).
+    # Paths and yes-or-no only: no value is printed.
+    from waku.key_locations import cli_lines, model_key_locations
+
+    console.print("\n[bold]Model key[/bold]")
+    for line in cli_lines(model_key_locations()):
+        console.print(f"  {line}", markup=False)
+
     # Waku Memory is not an .env field like the rows above: it is a server in
     # mcp.json with a sign-in token beside it, so its line comes from there.
     console.print("\n[bold]Shared memory[/bold]")
@@ -510,7 +613,12 @@ def cli_main() -> int:
     # treg the same way: an MCP server with a sign-in, not an .env field.
     console.print("\n[bold]Live data[/bold]")
     console.print(f"  {'treg':<20} {treg_status(load_settings().home)}", markup=False)
-    return int(failed)
+    # Slack for `waku serve` (spec 025): two tokens that Slack is asked about
+    # here, so a missing scope is named before the first mention goes unheard.
+    slack_ok, slack_line = slack_status()
+    console.print("\n[bold]Always-on[/bold]")
+    console.print(f"  {'Slack':<20} {slack_line}", markup=False)
+    return int(failed or slack_ok is False)
 
 
 def _find_integration(key: str) -> Integration | None:
@@ -518,9 +626,9 @@ def _find_integration(key: str) -> Integration | None:
 
 
 def _env_path() -> Path:
-    from dotenv import find_dotenv
+    from waku.config import env_write_path
 
-    return Path(find_dotenv(usecwd=True) or ".env")
+    return env_write_path()
 
 
 def _safe_error(exc: Exception, values: Mapping[str, str], integration: Integration) -> str:
@@ -567,6 +675,31 @@ def _tavily_probe(values: Mapping[str, str]) -> None:
             raise ValueError(f"Tavily returned HTTP {response.status}")
 
 
+def _slack_probe(values: Mapping[str, str]) -> None:
+    """Ask Slack whether the two tokens work and hold the scopes `waku serve`
+    needs: the same check `waku connections` prints."""
+    ok, line = slack_status(values)
+    if not ok:
+        raise ValueError(line)
+
+
+def _treg_probe(values: Mapping[str, str]) -> None:
+    """Ask treg whether the key is good: GET /tools lists the team's own tools,
+    is free, writes nothing and answers 401 on a bad key. Straight to treg.to,
+    never through a relay, and never `balance`."""
+    request = urllib.request.Request("https://treg.to/tools",
+                                     headers={"X-Treg-Token": values.get("TREG_API_KEY", ""),
+                                              "Accept": "application/json"})
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:  # noqa: S310 - fixed provider endpoint
+            if response.status >= 300:
+                raise ValueError(f"treg returned HTTP {response.status}")
+    except urllib.error.HTTPError as exc:
+        if exc.code in (401, 403):
+            raise ValueError("treg did not accept this key") from None
+        raise ValueError(f"treg returned HTTP {exc.code}") from None
+
+
 def _otel_probe(values: Mapping[str, str]) -> None:
     """Check that the configured OTLP/gRPC collector accepts TCP connections."""
     endpoint = values.get("OTEL_EXPORTER_OTLP_ENDPOINT", "").strip()
@@ -608,6 +741,10 @@ def _probed(integration: Integration) -> Integration:
         return Integration(**{**integration.__dict__, "probe": _notion_probe})
     if integration.key == "tavily":
         return Integration(**{**integration.__dict__, "probe": _tavily_probe})
+    if integration.key == "slack":
+        return Integration(**{**integration.__dict__, "probe": _slack_probe})
+    if integration.key == "treg":
+        return Integration(**{**integration.__dict__, "probe": _treg_probe})
     if integration.key == "otel":
         return Integration(**{**integration.__dict__, "probe": _otel_probe})
     return integration

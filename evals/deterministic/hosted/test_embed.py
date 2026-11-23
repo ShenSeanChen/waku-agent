@@ -515,8 +515,24 @@ def test_a_gateway_env_from_before_spec_008_still_starts():
     """upgrade.sh never rewrites config/: an existing gateway.env has no
     WAKU_EMBED_ORIGINS line, and the gateway must start on the default."""
     env = _example_env()
-    assert set(env) == set(REQUIRED_ENV_NAMES) - {"WAKU_EMBED_ORIGINS"}
-    assert MAY_BE_ABSENT == {"WAKU_EMBED_ORIGINS"}
+    # Spec 001 E4 added the second optional name, WAKU_IDLE_MINUTES, for the
+    # same reason; test_idle_loop.py pins its own default.
+    # Spec 026 C added the four Slack names on the same terms;
+    # test_slack_install.py pins what their absence does.
+    slack = {"WAKU_SLACK_CLIENT_ID", "WAKU_SLACK_CLIENT_SECRET",
+             "WAKU_SLACK_SIGNING_SECRET", "WAKU_SLACK_TOKEN_KEY"}
+    # Spec 029 F added the GitHub App's two; test_connect_github.py pins
+    # what their absence does.
+    github = {"WAKU_GITHUB_CLIENT_ID", "WAKU_GITHUB_CLIENT_SECRET"}
+    # Spec 032 added the platform secret; test_team_home_routes.py pins what
+    # its absence does.
+    # Spec 031 A added the Google client's two; test_mail_gmail.py pins what
+    # their absence does.
+    google = {"WAKU_GOOGLE_CLIENT_ID", "WAKU_GOOGLE_CLIENT_SECRET"}
+    absent = {"WAKU_EMBED_ORIGINS", "WAKU_IDLE_MINUTES",
+              "WAKU_AGENT_PLATFORM_SECRET"} | slack | github | google
+    assert set(env) == set(REQUIRED_ENV_NAMES) - absent
+    assert MAY_BE_ABSENT == absent
     assert config_from_env(env).embed_origins == DEFAULT_EMBED_ORIGINS
     assert config_from_env(env | {"WAKU_EMBED_ORIGINS": ""}).embed_origins == DEFAULT_EMBED_ORIGINS
     with pytest.raises(ValueError, match="WAKU_SUPABASE_URL"):
@@ -562,3 +578,209 @@ console.log(JSON.stringify(posts));
     got = json.loads(out.stdout)
     assert [(t, o) for t, o, _ in got] == posted
     assert all(source == "waku-agent" for _, _, source in got)
+
+
+# --- spec 040 T (waku-memory): the console's theme rides the redirect ---------------
+
+
+@pytest.mark.parametrize(("query", "location"), [
+    ("&theme=dark", "/embed/chat?theme=dark"),
+    ("&theme=light", "/embed/chat?theme=light"),
+    ("", "/embed/chat"),
+    ("&theme=system", "/embed/chat"),
+    ("&theme=DARK", "/embed/chat"),
+    ("&theme=dark%0d%0aSet-Cookie:x=1", "/embed/chat"),
+    ("&theme=https://evil.example", "/embed/chat"),
+], ids=["dark", "light", "none", "system", "upper-case", "header-injection", "url"])
+def test_the_redirect_carries_only_exactly_light_or_dark(harness, query, location):
+    async def run():
+        await harness.start()
+        host, code, _ = await _minted(harness)
+        answer = await harness.send("GET", f"{embed.AUTH_PATH}?code={code}{query}",
+                                    host=host, headers=IN_A_FRAME)
+        await harness.stop()
+        return answer
+
+    status, headers, _ = asyncio.run(run())
+    assert status == 302 and headers["location"] == location
+
+
+# --- a tab at the tenant host, carrying the frame's cookie (2026-10-04) ------------
+#
+# The embed cookie is Partitioned, keyed by the top-level SITE. A frame on
+# dev.waku.one and a tab at <tenant>.agent.waku.one both have top-level site
+# waku.one, so the browser sends the frame's cookie to the tab. Sean opened the
+# chat's "Agent dashboard" link and got "The embedded chat cannot open that."
+# A tab is no embed session: it gets the sign-in page, like anyone signed out.
+
+A_TAB = {"Sec-Fetch-Site": "cross-site", "Sec-Fetch-Dest": "document",
+         "Accept": "text/html,application/xhtml+xml"}
+AN_OLD_BROWSERS_TAB = {"Accept": "text/html,application/xhtml+xml"}
+
+
+@pytest.mark.parametrize("target", ["/", "/api/data", "/settings"])
+@pytest.mark.parametrize("headers", [A_TAB, AN_OLD_BROWSERS_TAB], ids=["tab", "no-fetch-metadata"])
+def test_a_tab_with_only_the_embed_cookie_is_sent_to_sign_in(harness, target, headers):
+    async def run():
+        await harness.start()
+        host, cookie = await _embedded(harness)
+        answer = await harness.send("GET", target, host=host, cookie=cookie, headers=headers)
+        await harness.stop()
+        return answer
+
+    status, headers, body = asyncio.run(run())
+    assert status == 302 and headers["location"] == f"https://{APEX}/login"
+    assert embed.EMBED_REFUSED.encode() not in body
+    assert harness.forwarder.calls == [], "the embed cookie opened nothing"
+
+
+@pytest.mark.parametrize("headers", [
+    {"Sec-Fetch-Dest": "iframe", "Accept": "text/html"},
+    {"Sec-Fetch-Dest": "empty"},
+    {},
+    [("Sec-Fetch-Dest", "document"), ("Sec-Fetch-Dest", "document"), ("Accept", "text/html")],
+], ids=["the-frame-navigating", "a-fetch", "no-headers", "duplicated-dest"])
+def test_inside_the_frame_a_non_chat_route_is_still_403(harness, headers):
+    """403, not 401: a 401 would tell waku.one the session ended."""
+    async def run():
+        await harness.start()
+        host, cookie = await _embedded(harness)
+        answer = await harness.send("GET", "/api/data", host=host, cookie=cookie,
+                                    headers=headers)
+        await harness.stop()
+        return answer
+
+    status, _, body = asyncio.run(run())
+    assert status == 403 and embed.EMBED_REFUSED.encode() in body
+    assert harness.forwarder.calls == []
+
+
+def test_a_tab_with_the_dashboards_own_cookie_is_unaffected(harness):
+    async def run():
+        await harness.start()
+        host, tenant_cookie = await signed_in_on_the_tenant_host(harness)
+        _, embed_cookie = await _embedded(harness)
+        answer = await harness.send("GET", "/", host=host,
+                                    cookie=f"{tenant_cookie}; {embed_cookie}", headers=A_TAB)
+        await harness.stop()
+        return answer
+
+    status, _, body = asyncio.run(run())
+    assert status == 200 and body == b"forwarded"
+
+
+def test_the_chat_still_opens_in_the_frame(harness):
+    async def run():
+        await harness.start()
+        host, cookie = await _embedded(harness)
+        answer = await harness.send("GET", "/embed/chat", host=host, cookie=cookie,
+                                    headers={"Sec-Fetch-Dest": "iframe", "Accept": "text/html"})
+        await harness.stop()
+        return answer
+
+    status, headers, body = asyncio.run(run())
+    assert status == 200 and body == b"forwarded" and _framable_by(headers)
+
+
+# --- the frame's "Dashboard" button: a sign-in hand-off code ------------------------
+
+
+async def _dashboard_code(harness: Harness, host: str, cookie: str, **kwargs):
+    return await harness.json_post(embed.DASHBOARD_PATH, {}, host=host, cookie=cookie, **kwargs)
+
+
+A_TAB_FROM_THE_FRAME = {"Sec-Fetch-Site": "same-origin", "Sec-Fetch-Dest": "document"}
+
+
+def test_the_frame_can_open_the_dashboard_signed_in(harness):
+    async def run():
+        await harness.start()
+        host, cookie = await _embedded(harness)
+        status, headers, body = await _dashboard_code(harness, host, cookie)
+        url = json.loads(body)["url"]
+        entered = await harness.send("GET", url, host=host, headers=A_TAB_FROM_THE_FRAME)
+        tenant_cookie = f"__Host-waku_tenant={cookie_value(entered[1], '__Host-waku_tenant')}"
+        data = await harness.send("GET", "/api/data", host=host, cookie=tenant_cookie)
+        again = await harness.send("GET", url, host=host, headers=A_TAB_FROM_THE_FRAME)
+        await harness.stop()
+        return status, headers, url, entered, data, again
+
+    status, headers, url, entered, data, again = asyncio.run(run())
+    assert status == 200 and _denies_framing(headers)
+    assert re.fullmatch(r"/auth/enter\?code=[A-Za-z0-9_-]{43}", url)
+    assert entered[0] == 302 and entered[1]["location"] == "/"
+    assert data[0] == 200, "the hand-off made the dashboard's own session"
+    assert again[0] == 302 and again[1]["location"] == f"https://{APEX}/login", "once only"
+
+
+def test_the_dashboard_code_is_short_lived_and_bound_to_its_tenant(harness):
+    async def run():
+        await harness.start()
+        host, cookie = await _embedded(harness, sub="sub-mei")
+        other, _ = await _embedded(harness, sub="sub-kai", email="kai@example.com")
+        url = json.loads((await _dashboard_code(harness, host, cookie))[2])["url"]
+        elsewhere = await harness.send("GET", url, host=other, headers=A_TAB_FROM_THE_FRAME)
+        late_url = json.loads((await _dashboard_code(harness, host, cookie))[2])["url"]
+        harness.clock.t += 61
+        late = await harness.send("GET", late_url, host=host, headers=A_TAB_FROM_THE_FRAME)
+        embed_url = json.loads((await _dashboard_code(harness, host, cookie))[2])["url"]
+        as_embed = await _enter(harness, host, embed_url.split("code=", 1)[1])
+        await harness.stop()
+        return elsewhere, late, as_embed
+
+    elsewhere, late, as_embed = asyncio.run(run())
+    assert elsewhere[0] == 302 and elsewhere[1]["location"] == f"https://{APEX}/login"
+    assert late[0] == 302 and late[1]["location"] == f"https://{APEX}/login"
+    assert as_embed[0] == 401, "a dashboard code is not an embed code"
+
+
+def test_the_dashboard_code_needs_a_session_and_the_csrf_pair(harness):
+    async def run():
+        await harness.start()
+        host, cookie = await _embedded(harness)
+        no_session = await _dashboard_code(harness, host, "")
+        foreign = await _dashboard_code(harness, host, cookie, origin="https://dev.waku.one")
+        as_get = await harness.send("GET", embed.DASHBOARD_PATH, host=host, cookie=cookie)
+        await harness.stop()
+        return no_session[0], foreign[0], as_get[0]
+
+    no_session, foreign, as_get = asyncio.run(run())
+    assert no_session == 401
+    assert foreign == 415, "only the tenant host's own page may ask"
+    assert as_get == 403, "a GET is not the route, and the embed cookie opens nothing else"
+
+
+def test_the_dashboard_hand_off_is_refused_cross_site(harness):
+    async def run():
+        await harness.start()
+        host, cookie = await _embedded(harness)
+        url = json.loads((await _dashboard_code(harness, host, cookie))[2])["url"]
+        entered = await harness.send("GET", url, host=host,
+                                     headers={"Sec-Fetch-Site": "cross-site",
+                                              "Sec-Fetch-Dest": "document"})
+        await harness.stop()
+        return entered
+
+    status, headers, _ = asyncio.run(run())
+    assert status == 302 and headers["location"] == f"https://{APEX}/login"
+
+
+# --- the gateway's own error page wears the sign-in page's styles --------------------
+
+
+def test_the_error_page_is_styled_and_its_styles_are_served_on_both_hosts(harness):
+    async def run():
+        await harness.start()
+        host, _cookie = await _embedded(harness)
+        page = await harness.send("GET", "/nowhere", host=APEX, headers={"Accept": "text/html"})
+        on_tenant = await harness.send("GET", "/auth/static/login.css", host=host)
+        on_apex = await harness.send("GET", "/auth/static/login.css", host=APEX)
+        await harness.stop()
+        return page, on_tenant, on_apex
+
+    page, on_tenant, on_apex = asyncio.run(run())
+    assert page[0] == 404
+    for name in ("design/tokens.css", "login.css"):
+        assert f'<link rel="stylesheet" href="/auth/static/{name}">'.encode() in page[2]
+    assert on_tenant[0] == 200 and on_tenant[2] == on_apex[2]
+    assert harness.forwarder.calls == []

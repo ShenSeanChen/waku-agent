@@ -39,7 +39,17 @@ from aiohttp import web
 
 from hosted import log
 from hosted.core import policy, quota
-from hosted.gateway import answers, embed, guards, sessions
+from hosted.gateway import (
+    answers,
+    connect,
+    embed,
+    guards,
+    sessions,
+    setup_page,
+    slack,
+    slack_state,
+    team_homes,
+)
 from hosted.gateway.config import GatewayConfig
 from hosted.gateway.identity import NotSignedIn
 from hosted.gateway.launch import (
@@ -83,6 +93,7 @@ STATIC = Path(__file__).resolve().parent / "static"
 STATIC_FILES: dict[str, tuple[str, str]] = {
     "login.css": ("login.css", "text/css"),
     "login.js": ("login.js", "text/javascript"),
+    "setup.css": ("setup.css", "text/css"),
     "waku-mark.svg": ("waku-mark.svg", "image/svg+xml"),
     "design/tokens.css": ("design/tokens.css", "text/css"),
     "design/type.css": ("design/type.css", "text/css"),
@@ -242,8 +253,22 @@ class Gateway:
                  turns: quota.TurnWindow | None = None,
                  plans: dict[str, quota.Plan] | None = None,
                  memory_keys: MemoryKeys | None = None,
+                 slack: slack.SlackRoutes | None = None,
+                 connect: connect.Connect | None = None,
+                 team_homes: team_homes.TeamHomeRoutes | None = None,
                  now: Callable[[], float] = time.time) -> None:
         self._config = config
+        # Spec 032: None when config/gateway.env has no platform secret, or
+        # no key to seal a team's Waku Memory key with. Every route under
+        # /v1/team-homes then answers 503 with the reason.
+        self._team_homes = team_homes
+        # Spec 029: None when config/gateway.env has no key to seal a
+        # connector's tokens with. Every connector route then answers 503
+        # with config.connect_problem.
+        self._connect = connect
+        # Spec 026 C: None when config/gateway.env lacks one of the four Slack
+        # values. Every Slack route then answers 503 with config.slack_problem.
+        self._slack = slack
         self._memory_keys = memory_keys
         # tenant id -> when its Waku Memory key was last minted or checked (A7).
         self._key_checked: dict[str, float] = {}
@@ -257,6 +282,9 @@ class Gateway:
         # Spec 008 C: the embedded chat's one-time codes, a separate set so a
         # sign-in code cannot be redeemed as an embed code or the other way.
         self._embed_codes = sessions.HandoffCodes(now, ttl=embed.EMBED_CODE_SECONDS)
+        # The setup page's way in from waku.one (setup_page.LINK_API_PATH): a
+        # third set, for the same reason as the embed codes.
+        self._setup_codes = sessions.HandoffCodes(now)
         # ONE TurnWindow per process, shared with E3's forwarder, which is
         # built BEFORE the Gateway because the Gateway requires a forwarder.
         # Two windows would mean the forwarder counts turns and `disable`
@@ -293,6 +321,10 @@ class Gateway:
         return self._embed_codes
 
     @property
+    def setup_codes(self) -> sessions.HandoffCodes:
+        return self._setup_codes
+
+    @property
     def turns(self) -> quota.TurnWindow:
         return self._turns
 
@@ -318,6 +350,7 @@ class Gateway:
         self._sessions.forget_tenant(tenant_id)
         self._handoffs.forget_tenant(tenant_id)
         self._embed_codes.forget_tenant(tenant_id)
+        self._setup_codes.forget_tenant(tenant_id)
 
     def build(self) -> web.Application:
         """One catch-all route, one explicit body cap, and the five security
@@ -378,9 +411,26 @@ class Gateway:
                 return await self._chat_api(request)
             if path == embed.EMBED_API_PATH:
                 return await self._embed_api(request)
+            if path == setup_page.LINK_API_PATH:
+                return await self._setup_link_api(request)
+            if path == slack.EVENTS_PATH:
+                # Before the CSRF pair, like the bearer routes: its credential
+                # is Slack's signature (slack.SlackRoutes.events).
+                if self._slack is None:
+                    return slack.not_configured(self._config.slack_problem)
+                return await self._slack.events(request)
             if (path == CONVERSATIONS_API_PATH
                     or path.startswith(CONVERSATIONS_API_PATH + "/")):
                 return await self._conversations_api(request, path)
+            if path == team_homes.PATH or path.startswith(team_homes.PATH + "/"):
+                # Before the CSRF pair, like the bearer routes: waku.one's
+                # API calls these with the platform secret and no Origin.
+                if self._team_homes is None:
+                    return team_homes.not_configured(
+                        self._config.platform_problem
+                        if not self._config.platform_secret
+                        else self._config.connect_problem)
+                return await self._team_homes.handle(request, path)
         if guards.csrf_refusal(request, host):
             return answers.refusal(request, guards.UNSUPPORTED_MEDIA, answers.NOT_JSON)
         if host == self._config.apex_host:
@@ -402,9 +452,181 @@ class Gateway:
             return await self._sign_in(request)
         if request.method == "POST" and path == "/auth/logout":
             return self._sign_out(request)
+        if request.method == "GET" and path == slack.SETUP_PATH:
+            return self._setup_page(request)
+        if request.method == "GET" and path == setup_page.AUTH_PATH:
+            return self._setup_enter(request)
+        if request.method == "GET" and path == slack.INSTALL_PATH:
+            return self._slack_install(request)
+        if request.method == "GET" and path == slack.CALLBACK_PATH:
+            return await self._slack_callback(request)
+        if request.method == "GET" and path == connect.START_PATH:
+            return await self._connect_start(request)
+        if request.method == "GET" and path == connect.CALLBACK_PATH:
+            return await self._connect_callback(request)
+        if request.method == "POST" and path == connect.DISCONNECT_PATH:
+            return await self._connect_disconnect(request)
         if request.method == "GET" and path == "/":
             return answers.redirect("/login")
         return answers.refusal(request, 404, answers.NOT_FOUND)
+
+    def _setup_page(self, request: web.Request) -> web.Response:
+        """GET /setup: the three steps for the person this browser's session
+        names, or for a visitor who has not signed in (spec 026 C4)."""
+        tenant = self._apex_tenant(request)
+        return setup_page.render(
+            signed_in=tenant is not None, slack_on=self._slack is not None,
+            install=self._store.slack_install(tenant.id) if tenant else None,
+            outcome=request.query.get("slack", ""),
+            login_url="/login",
+            dashboard_url=(f"https://{tenant.id}.{self._config.apex_host}/"
+                           if tenant else ""),
+            connectors=[(vendor.name, vendor.title, state)
+                        for vendor, state in self._connector_states(tenant)],
+            connect_outcome=request.query.get("connect", ""),
+            connect_server=request.query.get("server", ""))
+
+    async def _setup_link_api(self, request: web.Request) -> web.Response:
+        """`POST /v1/setup-link`: a one-time way onto /setup, signed in, for
+        waku.one's Integrations page (setup_page.LINK_API_PATH).
+
+            -> {"url": "https://<apex>/auth/setup?code=<code>",
+                "expires_at": <unix seconds>}
+
+        Bearer-checked exactly like /v1/embed, through the same two helpers, so
+        the tenant is found or created and its Waku Memory key minted here too.
+        The Supabase token never goes into the URL.
+        """
+        if request.method != "POST":
+            return answers.json_error(405, setup_page.LINK_POST_ONLY)
+        if request.content_type != guards.JSON_CONTENT_TYPE:
+            return answers.json_error(guards.UNSUPPORTED_MEDIA, answers.NOT_JSON)
+        signed_in = await self._bearer(request)
+        if isinstance(signed_in, web.Response):
+            return signed_in
+        tenant = await self._bearer_tenant(*signed_in)
+        if isinstance(tenant, web.Response):
+            return tenant
+        code = self._setup_codes.issue(tenant.id)
+        url = f"https://{self._config.apex_host}{setup_page.AUTH_PATH}?code={code}"
+        return answers.json_ok({"url": url,
+                                "expires_at": int(self._now() + sessions.HANDOFF_TTL_SECONDS)})
+
+    def _setup_enter(self, request: web.Request) -> web.Response:
+        """GET /auth/setup?code=: the code becomes this browser's apex
+        session, then /setup.
+
+        THE SAME THREE CHECKS AS /auth/enter, with the same answer for all
+        three: a navigation that is same-site and a document
+        (guards.handoff_refusal), a code that is spent here and names a
+        tenant, and a tenant that is still active. waku.one and the apex share
+        the registrable domain, so the real link from waku.one is same-site,
+        and a link from any other site bounces to /login.
+
+        Like /auth/enter, `?code=` must never reach an access log.
+        """
+        if guards.handoff_refusal(request):
+            return answers.redirect(f"https://{self._config.apex_host}/login")
+        tenant_id = self._setup_codes.take(request.query.get("code", ""))
+        tenant = self._store.tenant_by_id(tenant_id) if tenant_id else None
+        if tenant is None or tenant.status != "active":
+            return answers.redirect(f"https://{self._config.apex_host}/login")
+        value = sessions.new_secret()
+        self._remember(sessions.apex_key(value), tenant.id)
+        response = answers.redirect(slack.SETUP_PATH)
+        sessions.set_session_cookie(response, sessions.APEX_COOKIE, value,
+                                    max_age=int(SESSION_TTL_SECONDS))
+        return response
+
+    # --- "Connect Notion" (spec 029 A2) ---------------------------------
+
+    def _connector_states(self, tenant: Tenant | None) -> list:
+        """(vendor, state) for the setup page; nothing when connectors are off."""
+        if self._connect is None:
+            return []
+        states = self._connect.states(tenant.id if tenant else None)
+        return [(vendor, states[name]) for name, vendor in self._connect.vendors.items()]
+
+    async def _connect_start(self, request: web.Request) -> web.Response:
+        """GET /connect/start?server=<name>: the "Connect" link. A GET, for
+        /slack/install's reason: it is a link a person follows, it changes
+        nothing but the state it issues, and the vendor's own page asks the
+        person before anything is granted."""
+        if self._connect is None:
+            return connect.not_configured(self._config.connect_problem)
+        tenant = self._apex_tenant(request)
+        if tenant is None:
+            return answers.redirect(f"https://{self._config.apex_host}/login")
+        return await self._connect.start(tenant.id, request.query.get("server", ""))
+
+    async def _connect_callback(self, request: web.Request) -> web.Response:
+        """GET /connect/callback: the vendor sends the browser back here. The
+        session cookie is SameSite=Lax, so it rides this top-level navigation,
+        and the callback checks it against the state."""
+        if self._connect is None:
+            return connect.not_configured(self._config.connect_problem)
+        tenant = self._apex_tenant(request)
+        return await self._connect.callback(request, tenant.id if tenant else None)
+
+    async def _connect_disconnect(self, request: web.Request) -> web.Response:
+        """POST /connect/disconnect {"server": "<name>"}: forget this person's
+        sign-in to one vendor. A POST behind the gateway's Origin and JSON
+        checks, because it changes something: a link on another site must not
+        be able to disconnect a person's Notion."""
+        if self._connect is None:
+            return connect.not_configured(self._config.connect_problem)
+        tenant = self._apex_tenant(request)
+        if tenant is None:
+            return answers.json_error(401, answers.NO_SESSION)
+        try:
+            payload = await request.json()
+        except ValueError:
+            payload = None
+        server = payload.get("server") if isinstance(payload, dict) else None
+        if self._connect.vendor(server) is None:
+            return answers.json_error(400, connect.DISCONNECT_BODY)
+        return answers.json_ok({"ok": True,
+                                "disconnected": await self._connect.disconnect(tenant.id, server)})
+
+    # --- "Add to Slack" (spec 026 C1) -----------------------------------
+
+    def _apex_tenant(self, request: web.Request) -> Tenant | None:
+        """The active tenant this browser's apex session names, or None."""
+        value = request.cookies.get(sessions.APEX_COOKIE, "")
+        tenant_id = self._resolve(sessions.apex_key(value)) if value else None
+        tenant = self._store.tenant_by_id(tenant_id) if tenant_id else None
+        return tenant if tenant is not None and tenant.status == "active" else None
+
+    def _slack_install(self, request: web.Request) -> web.Response:
+        """GET /slack/install: the "Add to Slack" link. A GET, because it is a
+        link a person follows; it changes nothing but the state it issues, and
+        Slack's own page asks the person before anything is installed.
+
+        Like /auth/enter, `?home=<ticket>` must never reach an access log."""
+        if self._slack is None:
+            return slack.not_configured(self._config.slack_problem)
+        if "home" in request.query:
+            # Spec 032 A3: an owner of a team space, sent here by waku.one
+            # with a ticket and no session. The ticket is read once, and a
+            # session in this browser is neither needed nor used.
+            home = (self._team_homes.redeem_ticket(request.query.get("home", ""))
+                    if self._team_homes is not None else None)
+            if home is None:
+                return answers.html_error(410, slack.HOME_LINK_ENDED, retry=False)
+            return self._slack.start_home(home)
+        tenant = self._apex_tenant(request)
+        if tenant is None:
+            return answers.redirect(f"https://{self._config.apex_host}/login")
+        return self._slack.start(tenant.id)
+
+    async def _slack_callback(self, request: web.Request) -> web.Response:
+        """GET /slack/oauth/callback: Slack sends the browser back here. The
+        session cookie is SameSite=Lax, so it rides this top-level navigation
+        from slack.com, and the callback checks it against the state."""
+        if self._slack is None:
+            return slack.not_configured(self._config.slack_problem)
+        tenant = self._apex_tenant(request)
+        return await self._slack.callback(request, tenant.id if tenant else None)
 
     def _login_page(self) -> web.Response:
         """The sign-in page, with its own strict policy and Clear-Site-Data.
@@ -730,6 +952,12 @@ class Gateway:
             return self._enter(request, label)
         if request.method == "GET" and path == embed.AUTH_PATH:
             return self._enter_embed(request, label)
+        if request.method == "GET" and path.startswith("/auth/static/"):
+            # The sign-in page's public stylesheets and faces, on this host
+            # too: the gateway's own error page (answers.html_error) links
+            # them, and CORP same-origin keeps a tenant host from loading
+            # the apex's copies.
+            return self._static(request, path[len("/auth/static/"):])
         value = request.cookies.get(sessions.TENANT_COOKIE, "")
         tenant_id = (self._resolve(sessions.tenant_key(label, value))
                      if value else None)
@@ -760,15 +988,38 @@ class Gateway:
             if tenant is not None:
                 self.end_sessions(tenant.id)
             return self._no_session(request, path)
+        if request.method == "POST" and path == embed.DASHBOARD_PATH:
+            return self._dashboard_handoff(tenant)
         if embed_only:
             body = await request.read() if request.method == "POST" else b""
             refused = embed.route_refusal(request.method, path, body)
+            if refused and guards.is_top_level_page(request):
+                # A tab, not the frame: the partitioned embed cookie reached
+                # it because both have top-level site waku.one (see
+                # guards.is_top_level_page). It is no session here. The tab
+                # gets what a signed-out visitor gets, the sign-in page.
+                _LOG.info("embed cookie ignored on a top-level page for "
+                          "tenant=%s: %s", tenant.id, path)
+                return answers.redirect(f"https://{self._config.apex_host}/login")
             if refused:
+                # From inside the frame (its fetches, or a navigation of the
+                # frame itself): 403 and not 401, because a 401 tells
+                # waku.one the session ended and it would re-mint and reload
+                # the chat, which would ask again.
                 _LOG.info("embed session for tenant=%s refused %s %s: %s",
                           tenant.id, request.method, path, refused)
                 return answers.refusal(request, 403, embed.EMBED_REFUSED)
         if request.method == "GET" and path == embed.PAGE_PATH:
             return await self._embed_page(request, tenant)
+        if path == slack_state.PATH:
+            # Spec 030: the Slack card's facts. Answered here, so a stopped
+            # container is not started to say what only the gateway knows.
+            if request.method != "GET":
+                return answers.json_error(405, slack_state.GET_ONLY)
+            return answers.json_ok(slack_state.facts(
+                slack_on=self._slack is not None,
+                install=self._store.slack_install(tenant.id),
+                apex_host=self._config.apex_host))
         return await self._forward(request, tenant)
 
     def _embed_session(self, request: web.Request, label: str) -> str | None:
@@ -799,7 +1050,8 @@ class Gateway:
         _enter's three checks, with the fetch-metadata rule for a frame (see
         guards.embed_refusal), and two differences that are the point of it:
         the cookie is the embed one (12 hours, SameSite=None, Partitioned) and
-        the redirect goes to the chat page, not the dashboard. Every answer,
+        the redirect goes to the chat page, not the dashboard, carrying the
+        console's `theme` when it is exactly light or dark. Every answer,
         including a refusal, is framable by the allowlist: a refusal is the
         expired page, which tells waku.one to ask for a new code.
 
@@ -819,9 +1071,22 @@ class Gateway:
         self._remember(embed.embed_key(label, value), label,
                        ttl=embed.EMBED_SESSION_SECONDS)
         response = answers.allow_framing(
-            web.Response(status=302, headers={"Location": embed.PAGE_PATH}), origins)
+            web.Response(status=302, headers={
+                "Location": embed.page_location(request.query.get("theme", ""))}),
+            origins)
         embed.set_embed_cookie(response, value)
         return answers.harden(response)
+
+    def _dashboard_handoff(self, tenant: Tenant) -> web.Response:
+        """POST /auth/dashboard: a sign-in hand-off code for the frame's
+        "Dashboard" button (embed.DASHBOARD_PATH says why this is safe).
+
+        The code is the apex's kind, from the same HandoffCodes, so it is
+        redeemed by _enter and nothing else: 60 seconds, once, this tenant
+        only, and only as a document navigation that is not cross-site.
+        """
+        code = self._handoffs.issue(tenant.id)
+        return answers.json_ok({"url": f"/auth/enter?code={code}"})
 
     def _enter(self, request: web.Request, label: str) -> web.Response:
         """The hand-off: a code from the apex becomes this host's session.

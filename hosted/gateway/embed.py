@@ -7,10 +7,11 @@ three steps, and each has its own constant here:
     POST https://<apex>/v1/embed            (bearer, server to server)
         -> {"url": "https://<tenant>.<apex>/auth/embed?code=<code>",
             "expires_at": <unix seconds>}
-    GET  https://<tenant>.<apex>/auth/embed?code=<code>   (inside the iframe)
+    GET  https://<tenant>.<apex>/auth/embed?code=<code>[&theme=light|dark]
+                                                          (inside the iframe)
         -> Set-Cookie: __Host-waku_embed=...; Secure; HttpOnly;
                        SameSite=None; Partitioned
-        -> 302 /embed/chat
+        -> 302 /embed/chat[?theme=light|dark]
     GET  /embed/chat, its /static/ files, and the chat's own calls.
 
 WHY A THIRD COOKIE, AND NOT THE TENANT HOST'S. __Host-waku_tenant is
@@ -48,6 +49,32 @@ EMBED_COOKIE = "__Host-waku_embed"
 EMBED_SESSION_SECONDS = 12 * 3600
 EMBED_CODE_SECONDS = 60.0
 EMBED_SCOPE = "embed:"
+
+# The console's theme, carried from /auth/embed?theme= to /embed/chat?theme=
+# so the frame's first paint matches the page around it (waku-memory spec 040
+# T). Exactly these two values; anything else, or none, redirects to the page
+# with no query, and the chat falls back to its own stored choice.
+EMBED_THEMES = ("light", "dark")
+
+
+def page_location(theme: str) -> str:
+    """Where the redeemed code goes: the chat page, with the theme when it is
+    one of EMBED_THEMES. Nothing else from the request reaches the Location."""
+    return f"{PAGE_PATH}?theme={theme}" if theme in EMBED_THEMES else PAGE_PATH
+
+
+# The frame's "Dashboard" button (waku/ops/static/js/embed.js). A POST with
+# the session the frame already has answers {"url": "/auth/enter?code=..."}:
+# a SIGN-IN hand-off code, from the same HandoffCodes the apex's sign-in uses
+# (60 seconds, single use, bound to this tenant), which the frame opens in a
+# new tab. The embed cookie itself still opens nothing but the chat: the full
+# session is only ever made by GET /auth/enter, a top-level document
+# navigation with all of _enter's checks, in a tab that is first-party. The
+# code reaches only the page that asked for it -- the route needs the CSRF
+# pair (JSON and an Origin equal to this host), and the answer carries no
+# CORS header -- so it is something the tenant's own page can do, and the
+# tenant's own page is already the dashboard's origin.
+DASHBOARD_PATH = "/auth/dashboard"
 
 EMBED_POST_ONLY = "Ask for an embedded chat with a POST."
 EMBED_REFUSED = "The embedded chat cannot open that."

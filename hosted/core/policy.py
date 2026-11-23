@@ -70,9 +70,33 @@ WRONG_METHOD = "That route only takes a POST."
 ARENA_BLOCKED = "The arenas are not available on hosted waku."
 VOICE_BLOCKED = "Voice is not available on hosted waku."
 REVEAL_BLOCKED = "Opening a file in an editor only works on your own machine."
+# Spec 026: two routes a container answers for the gateway alone. The
+# scheduler and the idle loop connect to the container themselves, so nothing
+# that arrives through the forwarder is ever one of their calls.
+GATEWAY_ONLY = "Only the gateway may call this."
+# waku-agent spec 021: a tenant's MCP servers and memory are set when they
+# sign in, so a chat message that is a /plugin command is refused here. The
+# container refuses it too, but only while its provider is the platform's,
+# and a tenant can change the provider.
+PLUGIN_REFUSED = ("Plugins are not available on hosted Waku. A hosted container's "
+                  "servers and memory are set up when you sign in.")
+# waku-agent spec 025: the same holds for a server a tenant would add from the
+# "Connectors" card. Whether a tenant gets the card is the hosted spec's
+# decision, so its routes are blocked until it is made.
+CONNECTORS_BLOCKED = ("Connectors are not available on hosted Waku. A hosted "
+                      "container's servers are set up when you sign in.")
+PLUGIN_COMMAND = "/plugin"
+CHAT_ROUTES = ("/api/chat", "/api/chat/stream")
 PLATFORM_FIELDS_REFUSED = ("The hosted free tier's key and endpoint are set by the "
                            "platform. Pick another provider to use your own key.")
-CONNECTION_REFUSED = "Only Tavily and Notion can be connected on hosted waku."
+CONNECTION_REFUSED = ("Only Tavily, Notion and your own treg key can be connected "
+                      "on hosted waku.")
+CONNECTION_FIELD_REFUSED = "Only the treg API key can be set here."
+
+# Routes a browser may only GET. /api/events is two things on one path: the
+# page's own feed (GET) and the gateway's hand-over of a tenant's waiting
+# events (POST, spec 026). Any other method on it is refused here.
+READ_ONLY_ROUTES = frozenset({"/api/events"})
 
 # Design section 9: a turn is one request to one of these three. The gateway
 # sees turns; the proxy only sees individual model calls.
@@ -90,9 +114,18 @@ STREAMING_ROUTES = frozenset({
 # a host-bound integration (cannot work in a container), a hosted memory
 # backend or telemetry (platform decisions). An allowlist, so a connection
 # added upstream is refused until somebody decides.
-ALLOWED_CONNECTIONS = frozenset({"notion", "tavily"})
+ALLOWED_CONNECTIONS = frozenset({"notion", "tavily", "treg"})
 
-DROPPED_SETTINGS_FIELDS = ("experimental",)
+# Spec 014: a connection here may set only these fields, in `values` or
+# `clear`. treg's is the person's own key and nothing else: no field may name
+# a URL or an auth_env, so the dashboard can never point a tenant's treg
+# server at the relay, or anywhere, with a token that is not theirs. The
+# override's address is a constant in waku/tools/treg.py.
+CONNECTION_FIELDS: dict[str, frozenset[str]] = {"treg": frozenset({"TREG_API_KEY"})}
+
+# memory_mode: a tenant's Waku Memory path is set by provisioning, never by the
+# tenant (spec 020), so a save that carries it loses that field.
+DROPPED_SETTINGS_FIELDS = ("experimental", "memory_mode")
 PLATFORM_REFUSED_FIELDS = ("key", "base_url", "custom_key")
 
 DECISIONS: dict[str, str] = {
@@ -113,6 +146,17 @@ DECISIONS: dict[str, str] = {
     # spec 008: the chat column alone, for waku.one's iframe. Framing and the
     # embed session's narrower reach are the gateway's (hosted/gateway/embed.py)
     "/embed/chat": PASS,
+    # spec 012: the Observability page reads only this tenant's own traces,
+    # ledger and receipts, so it is per-tenant like /api/data
+    "/api/observability": PASS,
+    # spec 015: judges one of this tenant's own stored turns. Like /api/chat it
+    # spends through the tenant's own provider, so on the free tier the
+    # metering proxy charges it in credits; one call per click, 300 tokens out
+    "/api/turn-evals/judge": PASS,
+    # spec 024: the timers, waiting calls and queued messages of this tenant's
+    # own home, and cancelling one of them. Per-tenant like /api/data
+    "/api/waiting": PASS,
+    "/api/waiting/cancel": PASS,
     # filtered: the payload decides
     "/api/providers": FILTER,
     "/api/settings": FILTER,
@@ -133,6 +177,14 @@ DECISIONS: dict[str, str] = {
     "/api/judgment-arena/stream": BLOCK,
     "/api/voice": BLOCK,
     "/api/reveal": BLOCK,
+    # spec 026: what work a container has left, asked by the gateway only
+    "/api/alwayson/next": BLOCK,
+    # spec 025: listing, adding and removing a server of the tenant's own, and
+    # the switch that lets one write without asking
+    "/api/connectors": BLOCK,
+    "/api/connectors/add": BLOCK,
+    "/api/connectors/remove": BLOCK,
+    "/api/connectors/approve": BLOCK,
 }
 
 BLOCK_MESSAGES: dict[str, str] = {
@@ -150,6 +202,11 @@ BLOCK_MESSAGES: dict[str, str] = {
     "/api/judgment-arena/stream": ARENA_BLOCKED,
     "/api/voice": VOICE_BLOCKED,
     "/api/reveal": REVEAL_BLOCKED,
+    "/api/alwayson/next": GATEWAY_ONLY,
+    "/api/connectors": CONNECTORS_BLOCKED,
+    "/api/connectors/add": CONNECTORS_BLOCKED,
+    "/api/connectors/remove": CONNECTORS_BLOCKED,
+    "/api/connectors/approve": CONNECTORS_BLOCKED,
 }
 
 # Substrings no path may contain. The query is split off first, so a percent
@@ -261,9 +318,17 @@ def _filter_providers(payload: dict) -> FilterResult:
 
 
 def _filter_connections(payload: dict) -> FilterResult:
-    if payload.get("key") in ALLOWED_CONNECTIONS:
-        return FilterResult(True, dict(payload))
-    return FilterResult(False, None, CONNECTION_REFUSED)
+    key = payload.get("key")
+    if key not in ALLOWED_CONNECTIONS:
+        return FilterResult(False, None, CONNECTION_REFUSED)
+    allowed = CONNECTION_FIELDS.get(key)
+    if allowed is not None:
+        values, clear = payload.get("values") or {}, payload.get("clear") or []
+        if not isinstance(values, dict) or not isinstance(clear, list | tuple):
+            return FilterResult(False, None, CONNECTION_FIELD_REFUSED)
+        if not set(values) <= allowed or not set(map(str, clear)) <= allowed:
+            return FilterResult(False, None, CONNECTION_FIELD_REFUSED)
+    return FilterResult(True, dict(payload))
 
 
 FILTERS: dict[str, Callable[[dict], FilterResult]] = {
@@ -272,6 +337,13 @@ FILTERS: dict[str, Callable[[dict], FilterResult]] = {
     "/api/connections": _filter_connections,
     "/api/connections/test": _filter_connections,
 }
+
+
+def _is_plugin_command(payload: dict | None) -> bool:
+    """Whether a chat body is a /plugin command. Text only: hosted/ never
+    imports waku/, so this reads the message the way a person types it."""
+    message = (payload or {}).get("message") if isinstance(payload, dict) else None
+    return isinstance(message, str) and message.lstrip().startswith(PLUGIN_COMMAND)
 
 
 def decide(method: str, raw_path: str, payload: dict | None = None) -> Outcome:
@@ -295,6 +367,10 @@ def decide(method: str, raw_path: str, payload: dict | None = None) -> Outcome:
     # pins the invariant -- delete "/" from DECISIONS and it fails there,
     # rather than here as a KeyError on somebody's live request.
     decision = DECISIONS[route]
+    if route in CHAT_ROUTES and _is_plugin_command(payload):
+        return Outcome("refuse", 403, PLUGIN_REFUSED, route=route, streaming=streaming)
+    if route in READ_ONLY_ROUTES and method.upper() != "GET":
+        return Outcome("block", 403, GATEWAY_ONLY, route=route, streaming=streaming)
     if decision == BLOCK:
         return Outcome("block", 403, BLOCK_MESSAGES[route], route=route, streaming=streaming)
     if decision == FILTER:

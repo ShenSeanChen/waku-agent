@@ -8,7 +8,9 @@ let activeView = null, activeSub = null;
 // moved: after the Connections registry took keys, providers and integrations
 // out of that page, what remained was two switches that change how a turn runs,
 // which is a behaviour, not a setting.
-const TITLES = {chat:"Chat & watch", ops:"LLM Ops",
+const TITLES = {chat:"Chat & watch",
+                observability:"Observability — what each turn did, cost and remembered",
+                evals:"Evals — whether a turn or a release was good",
                 graph:"Graph workflows — structure around the loop",
                 // Keyed by view AND sub for the Arena, now that the sidebar
                 // names the two races separately. A single title covering both
@@ -18,10 +20,24 @@ const TITLES = {chat:"Chat & watch", ops:"LLM Ops",
                 "compare/models":"Model race — ten brains, one harness",
                 "compare/memory":"Memory race — one brain, five places to put facts",
                 settings:"Behaviour — how a turn runs",
-                database:"Database — everything Waku stores (state.db)"};
+                sql:"SQL console — read-only questions over state.db"};
 function render(){
   if (!D) return;
-  const [v, subRaw] = (location.hash||"#overview").slice(1).split("/");
+  let [hashView, subRaw] = (location.hash||"#overview").slice(1).split("/");
+  // #ops is the Observability page's old name (spec 012); it still opens it.
+  // Evals were a tab there and are a page of their own now, so the old
+  // #observability/evals link lands on #evals.
+  if (hashView === "observability" && subRaw === "evals"){
+    history.replaceState(null, "", "#evals");
+    hashView = "evals"; subRaw = undefined;
+  }
+  // Tools had a tab for the servers a person connects. They are cards on
+  // Connections now (spec 030), so the old link opens that page.
+  if (hashView === "tools" && subRaw === "mcp"){
+    history.replaceState(null, "", "#connections/apps");
+    hashView = "connections"; subRaw = "apps";
+  }
+  const v = hashView === "ops" ? "observability" : hashView;
   const sub = subRaw || null;
   // FIRST RUN. With no usable provider, every other page is a page about a
   // loop that cannot run a turn -- and the chat box on Overview looks ready
@@ -57,7 +73,7 @@ function render(){
   if (view === "overview" || view === "graph"){
     // don't rebuild mid-animation or the glowing SVG gets wiped
     if (activeView !== view || !animating){ document.getElementById("view").innerHTML = VIEWS[view](D); }
-  } else if ((view === "memory" || view === "settings" || view === "database" || view === "compare" || view === "models" || view === "connections" || view === "judgment") && editing && !subChanged){
+  } else if ((view === "memory" || view === "settings" || view === "sql" || view === "compare" || view === "models" || view === "connections" || view === "judgment") && editing && !subChanged){
     // don't wipe an in-progress edit on the 5s refresh — but DO switch sub-tabs
     // ("judgment" is here for hover: rebuilding the table mid-hover destroys the
     // element under the pointer, and a native tooltip never gets to appear)
@@ -71,6 +87,9 @@ function render(){
     const y = keepScroll ? main.scrollTop : 0;
     document.getElementById("view").innerHTML = VIEWS[view](D, sub);
     if (keepScroll) main.scrollTop = y;
+    // #connections/<card> opens the page at that card. Every redraw marks it
+    // again; only the navigation scrolls to it.
+    if (view === "connections" && sub) focusConnection(sub, subChanged);
   }
   activeView = view; activeSub = sub;
   document.getElementById("n-gw").textContent = (D.chat_log||[]).length || "";
@@ -79,8 +98,7 @@ function render(){
     (D.graph && (D.graph.stats.quick + D.graph.stats.full)) || "";
   document.getElementById("n-mem").textContent = (D.facts.length + D.episodes.length) || "";
   document.getElementById("n-tools").textContent = (D.calendar.length + D.outbox.length) || "";
-  document.getElementById("n-db").textContent = (D.db && D.db.all_tables.length) || "";
-  document.getElementById("n-ops").textContent = D.stats.tool_errors || (D.eval_report ? "" : "!");
+  document.getElementById("n-obs").textContent = D.stats.tool_errors || "";
 }
 let lastFetch = Date.now();
 let lastCompareLoad = 0;   // throttle the Compare scoreboard self-heal to ~5s
@@ -130,7 +148,7 @@ async function restoreDock(background = false){
   // opening the dock and hold a hosted container awake.
   dockRestored = true;
   const sid = D && D.current_session;
-  if (!sid || CHAT.length) return;
+  if (!sid || CHAT.length || sessionChange) return;   // a new chat is opening: leave it empty
   await loadThreadInto(sid, {setSession: true, background});
 }
 // A reply whose body is {"code": "paused", "error": "…"} — the hosted
@@ -172,6 +190,7 @@ async function refresh(background = false){
     applyTele();      // reflect the stats on/off choice (default on)
     syncLiveView(background);   // live-update an opened conversation (e.g. new phone messages)
     if (!dockRestored) restoreDock(background);
+    hostedAfterRefresh(background);   // hosted Waku: what the gateway knows about Slack
     // Self-heal the Compare scoreboard: it otherwise only loads on tab-open and
     // after a race, so a slow/interrupted race (or a server blip) can leave it
     // showing a partial set. Re-pull the server totals while viewing the tab —

@@ -1,4 +1,4 @@
-<!doctype html><html><head><meta charset="utf-8">
+<!doctype html><html@@THEME@@><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Waku chat</title>
 <link rel="icon" type="image/svg+xml" href="/static/waku-mark.svg">
@@ -9,7 +9,9 @@
 <link rel="stylesheet" href="/static/style.css"></head>
 <!-- The dashboard's chat column alone, for waku.one to frame (spec 008).
      Served by dashboard.py at /embed/chat, which fills in data-embed-origins:
-     the only origins this page will ever postMessage to (js/embed.js). The
+     the only origins this page will ever postMessage to (js/embed.js), and
+     the html tag's theme: data-theme="light|dark" when the address
+     carried ?theme=, so the first paint is the console's (spec 040 T). The
      markup is index.html's #dock with the parts that need the rest of the
      dashboard left out: no collapse button, no mic (voice is local only), and
      no inline script, so the page runs only the files below. -->
@@ -18,8 +20,11 @@
   <div class="sesshead" style="padding:8px 2px 0">
     <button class="btn btn-secondary btn-sm sessbtn" onclick="newChat()">+ New chat</button>
     <button class="btn btn-secondary btn-sm sessbtn" onclick="toggleSessMenu(event)">History &#9662;</button>
-    <button class="btn btn-secondary btn-sm sessbtn teletoggle" id="teletoggle" onclick="toggleTele()" title="Show/hide per-turn stats: gate decision, seconds, iterations, tools">stats</button>
     <button class="modelchip" id="modelchip" onclick="toggleModelMenu(event)" title="Switch the model for this chat">&hellip;</button>
+    <!-- The two controls that were buttons here, "stats" and "Dashboard", are
+         this menu's items, so the toolbar is one row at any dock width: the
+         model chip is the only part that shrinks (spec-free change, 2026-10-11). -->
+    <button class="btn btn-secondary btn-sm moremenu" id="moremenu" onclick="toggleMoreMenu(event)" aria-haspopup="menu" aria-label="More: show how it answered, open the full dashboard" title="More">&hellip;</button>
   </div>
   <div class="chatlog" id="docklog"></div>
   <div class="chatbar">
@@ -34,6 +39,7 @@
 <script src="/static/js/util.js"></script>
 <script src="/static/js/theme.js"></script>
 <script src="/static/js/ui.js"></script>
+<script src="/static/js/blocks.js"></script>
 <script src="/static/js/render.js"></script>
 <script src="/static/js/dock.js"></script>
 <script src="/static/js/embed.js"></script></body></html>

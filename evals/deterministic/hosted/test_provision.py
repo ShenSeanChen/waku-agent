@@ -304,3 +304,35 @@ def test_treg_never_follows_a_symlinked_mcp_json(dirs, template, tmp_path):
     (dirs.home / "mcp.json").symlink_to(target)
     assert ensure_treg(dirs.home, PROXY) is False
     assert json.loads(target.read_text()) == {"servers": []}
+
+
+# --- spec 014: a tenant's own treg key --------------------------------------------
+# Provisioning never reads the key and never rewrites the treg entry; waku's
+# treg.resolve() decides at connect time. Evals may import both sides.
+
+def test_a_saved_key_leaves_the_relay_entry_on_disk_and_clearing_it_switches_back(
+        dirs, template, monkeypatch):
+    from waku.tools.treg import KEY_ENV, URL, resolve
+
+    provision(dirs, template, treg_base_url=PROXY)
+    (dirs.env / ".env").write_text(f"{KEY_ENV}=theirs\n", encoding="utf-8")
+    monkeypatch.setenv(KEY_ENV, "theirs")
+    provision(dirs, template, treg_base_url=PROXY)
+    assert _servers(dirs) == [WAKU_MEMORY_SERVER, TREG], "provisioning only adds"
+    resolved = resolve(_servers(dirs))
+    assert resolved[1] == {"name": "treg", "url": URL, "auth_env": KEY_ENV}
+    monkeypatch.delenv(KEY_ENV)
+    assert resolve(_servers(dirs)) == [WAKU_MEMORY_SERVER, TREG], "back through the relay"
+
+
+def test_a_tenant_s_own_treg_entry_survives_a_key_and_a_reprovision(dirs, template, monkeypatch):
+    from waku.tools.treg import KEY_ENV, resolve
+
+    dirs.home.mkdir(parents=True)
+    theirs = {"name": "treg", "url": "https://treg.to/mcp/", "oauth": True}
+    (dirs.home / "mcp.json").write_text(json.dumps({"servers": [theirs, WAKU_MEMORY_SERVER]}))
+    monkeypatch.setenv(KEY_ENV, "theirs")
+    provision(dirs, template, treg_base_url=PROXY)
+    assert _servers(dirs) == [theirs, WAKU_MEMORY_SERVER]
+    monkeypatch.delenv(KEY_ENV)
+    assert resolve(_servers(dirs)) == [theirs, WAKU_MEMORY_SERVER]

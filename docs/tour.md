@@ -20,14 +20,15 @@ Each tab is one pillar, linked to the real files:
 
 | Tab | What you see |
 |---|---|
-| **Overview** | cost, latency, the gate skip/retrieve split, the clickable architecture map |
+| **Overview** | cost, latency, the gate skip/retrieve split, the clickable architecture map. Its LLM Ops panel ("watch, judge, ship") runs Trace → Observability → Evals → Release: each Observability word opens its tab, Evals shows "your turns n/m" (turns that passed every turn check) and the release gate's verdict, and Release's arrow ends on the LOOP box |
 | **Gateway** | one conversation across every channel, each message tagged by source (dashboard / telegram / voice / cli) |
 | **Loop** | every turn with its gate decision, tool calls, tokens, and cost |
 | **Graph** | graph workflows: the live triage topology (drawn from the engine itself) + which door each turn took |
 | **Memory** | sub-tabs per pillar — semantic facts, episodes, editable skills + SOUL, consolidation |
 | **Tools** | the agent's available tools (grouped by origin), its results, and MCP connectors |
 | **Data** | a live SQLite browser: per-table tabs, schema, and a read-only SQL console over `state.db` |
-| **Ops** | eval verdict + history, the gate decisions, slowest turns, and inline JSONL traces |
+| **Observability** | four cards over four tabs, in the same order and with the same names, each card opening its tab, for today, 7 days or all: **Turns** (count and average loops; each row carries a turn-check chip, "5 of 5 checks" or the first failure such as "spend claim: fail"; each turn opens to a story line such as "question → gate retrieve → 5 loops → 3 treg calls $0.0089 · 42.1s · $0.93", one notice per failed step, and a grid on one time axis with one closed row per loop, "slowest" and "most $" on the two hotspot steps, and each step's input and output behind "details"), **Tools** (calls by source and errors; grouped by treg with endpoints, Waku Memory and local), **Memory** (retrievals, writes and the gate's retrieve or skip; memories used and kept per turn), **Spend** (one total as charged plus estimated, split by model, treg and memory so the parts add up, with tokens in and out). `#ops` still opens it |
+| **Evals** | whether a turn or a release was good. **Your turns** comes first: five checks per turn (spend claim, one report, grounded numbers, errors handled, under budget) counted as passed, failed and n/a for today, 7 days or all, each with a button that opens its newest failing turn, and how many turns the AI judge scored ("Judge this turn" in a waterfall, with its cost shown first). **This release** follows: what deterministic tests and judge suites exist, the last release gate and its history. `#observability/evals` still opens it |
 
 The sidebar and chat dock are drag-resizable and hideable, and the chat has
 *New chat* + history like any chat app.
@@ -40,7 +41,7 @@ Type these in the chat dock (or `make run`) and watch the dashboard light up:
 |---|---|---|
 | *"Schedule a tennis game with Raj this Saturday at 8am"* | the Loop calls a tool (`create_event`) | the **LOOP** box pulses; **Loop** tab shows `iter 2` |
 | *"What's on my calendar today?"* | reading the calendar (`list_events`) | it answers from `state.db`, no made-up events |
-| *"When am I swimming with Sergey?"* then *"what's 12 × 8?"* | the **retrieval gate** — retrieve vs skip | Overview gate bar; **Ops** shows the per-turn decision |
+| *"When am I swimming with Sergey?"* then *"what's 12 × 8?"* | the **retrieval gate** — retrieve vs skip | Overview gate bar; **Observability ▸ Memory** shows the per-turn decision |
 | *"Remember that Raj prefers evening games"* | memory self-management (`save_note`) | **Memory ▸ Semantic** gains a fact; `MEMORY.md` updates |
 | *"Search for the World Cup games still left to play and add each one to my calendar"* | **multi-tool loop engineering** | **Loop** tab shows `iter 8`: `search_web` × N → `create_event` × N |
 | chat from `make run` **and** the browser | one brain, many gateways | the **Gateway** tab tags each message `cli` / `dashboard` |
@@ -68,7 +69,9 @@ while not done:
 ```
 
 Two guardrails end every turn: the model stops asking for tools (natural end),
-or it hits `max_iterations` (hard stop — it never spins forever). That's "loop
+or it hits `max_iterations` (hard stop — it never spins forever). At that stop
+the loop makes one last call with tools off, so the reply answers from what the
+turn already gathered instead of throwing it away. That's "loop
 engineering": the exit conditions, the tool round-trip, and feeding results
 back as working memory.
 
@@ -163,7 +166,7 @@ The agent has tools to keep itself useful — no black box:
 
 You can also edit any of this by hand on the dashboard's Memory tab (edit or
 delete facts, rewrite `SOUL.md`) or in Settings (switch provider or model,
-paste keys — kept in your local `.env`, never sent to the browser).
+paste keys — kept in a `.env` on your machine, never sent to the browser).
 
 Waku keeps the *queryable* memory in `state.db` and regenerates a readable
 `~/.waku/MEMORY.md` after every turn; [architecture.md](architecture.md#memorymd-vs-statedb)

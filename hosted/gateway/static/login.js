@@ -90,11 +90,135 @@
     });
     var body = await res.json().catch(function () { return {}; });
     if (res.ok && body.enter) {
+      if (await handedOver(body.enter)) {
+        say("You're signed in in your other tab. You can close this one.");
+        // Usually refused: a tab the mail client opened was not opened by a
+        // script, and only those may close themselves. The sentence above
+        // is the real answer; this is a courtesy where the browser allows it.
+        try { window.close(); } catch (e) { /* refused is fine */ }
+        return;
+      }
       // location.assign and not a redirect the fetch would follow invisibly.
       location.assign(body.enter);
       return;
     }
     say(body.error || "That did not work. Ask for a new link.", true);
+  }
+
+  // --- the tab that asked for the link --------------------------------------
+  //
+  // WHY TABS TALK TO EACH OTHER. The link in the email opens a NEW tab, and
+  // that tab signs in. The tab the person typed their address into was left
+  // reading "Check your email for the link." forever, which reads as broken.
+  // So the tab that sent the link listens, and the tab the email opened
+  // offers it the hand-off before using it itself.
+  //
+  // THE ENTER URL IS SINGLE-USE (sessions.Handoffs.redeem pops the code), so
+  // exactly one tab may navigate to it. Three messages make that so:
+  //
+  //   email tab     {type: "enter", enter, from}   "who wants this?"
+  //   asking tab    {type: "taken", to, from}      "I do" -- and it waits
+  //   email tab     {type: "go", to}               to the FIRST taker only
+  //
+  // A second asking tab (the person pressed send in two tabs) also answers
+  // "taken", is not chosen, and stays where it is. Nobody answers within
+  // HANDOFF_WAIT_MS -- no other tab, another browser, no BroadcastChannel --
+  // and the email tab signs itself in exactly as it did before.
+  //
+  // SAME ORIGIN ONLY, by construction: a BroadcastChannel reaches the tabs of
+  // this origin in this browser profile and nothing else. Even so, a message
+  // is data and not an instruction, so the URL is checked by enterIsOurs
+  // before any tab will navigate to it.
+  var CHANNEL = "waku-sign-in";
+  var HANDOFF_WAIT_MS = 400;
+  // hosted/core/tenant.py's alphabet and length, and sessions.new_secret's
+  // 43 URL-safe characters. Kept exact so a URL this gateway did not build
+  // cannot pass.
+  var TENANT_ID = /^[a-z2-7]{12}$/;
+  var ENTER_QUERY = /^\?code=[A-Za-z0-9_-]{43}$/;
+
+  function channel() {
+    if (typeof BroadcastChannel !== "function") { return null; }
+    try { return new BroadcastChannel(CHANNEL); }
+    catch (e) { return null; }
+  }
+
+  function tabId() {
+    return Math.random().toString(36).slice(2) + Date.now().toString(36);
+  }
+
+  // `https://<tenant id>.<this host>/auth/enter?code=<code>` and nothing
+  // else: the one shape app.py's _sign_in writes. No port, no user info, no
+  // fragment, no second query parameter.
+  function enterIsOurs(raw) {
+    var target;
+    try { target = new URL(String(raw)); }
+    catch (e) { return false; }
+    var suffix = "." + location.hostname;
+    var host = target.hostname;
+    return target.protocol === "https:" &&
+      target.username === "" && target.password === "" &&
+      target.port === "" && target.hash === "" &&
+      host.length > suffix.length &&
+      host.slice(-suffix.length) === suffix &&
+      TENANT_ID.test(host.slice(0, -suffix.length)) &&
+      target.pathname === "/auth/enter" &&
+      ENTER_QUERY.test(target.search);
+  }
+
+  // The email tab's half. Resolves true when another tab took the hand-off,
+  // false when this tab should use it itself.
+  function handedOver(enter) {
+    var bus = channel();
+    if (!bus) { return Promise.resolve(false); }
+    var me = tabId();
+    return new Promise(function (resolve) {
+      var done = false;
+      function finish(taken) {
+        if (done) { return; }
+        done = true;
+        clearTimeout(timer);
+        bus.close();
+        resolve(taken);
+      }
+      bus.onmessage = function (event) {
+        var message = event.data || {};
+        if (message.type !== "taken" || message.to !== me || !message.from) { return; }
+        // First taker wins. finish() makes every later answer a no-op, so
+        // a second asking tab is never told to go.
+        bus.postMessage({type: "go", to: message.from});
+        finish(true);
+      };
+      var timer = setTimeout(function () { finish(false); }, HANDOFF_WAIT_MS);
+      bus.postMessage({type: "enter", enter: enter, from: me});
+    });
+  }
+
+  // The asking tab's half: started once a link has been sent.
+  var listening = null;
+  function listen() {
+    if (listening) { return; }
+    listening = channel();
+    if (!listening) { return; }
+    var me = tabId();
+    var offered = null;
+    listening.onmessage = function (event) {
+      var message = event.data || {};
+      if (message.type === "enter" && !offered && message.from &&
+          enterIsOurs(message.enter)) {
+        offered = message.enter;
+        listening.postMessage({type: "taken", to: message.from, from: me});
+        // Not chosen (another tab answered first, or the email tab gave up
+        // waiting): forget the offer, so the next link can still land here.
+        setTimeout(function () { offered = null; }, 2 * HANDOFF_WAIT_MS);
+      } else if (message.type === "go" && message.to === me && offered) {
+        // The URL this tab checked when it was offered -- never one carried
+        // by the "go" message itself.
+        listening.close();
+        say("Signing you in...");
+        location.assign(offered);
+      }
+    };
   }
 
   form.addEventListener("submit", async function (event) {
@@ -113,6 +237,7 @@
     }
     button.disabled = false;
     say(failed || "Check your email for the link.", Boolean(failed));
+    if (!failed) { listen(); }
   });
 
   var hash = new URLSearchParams(location.hash.replace(/^#/, ""));

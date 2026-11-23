@@ -98,15 +98,30 @@ VIEWS.setup = function(d){
        it is not in this build, or it has no key. You already have a working
        provider. Pick the one to use.`
     : "Waku needs a model to think with. Pick a provider and paste an API key.";
+  // WHERE WAKU LOOKED. On 2026-10-04 Sean opened the dashboard from a git
+  // worktree with no .env, while his keys sat in the main checkout's .env, and
+  // this page told him to paste a key without naming a single place it had
+  // read. key_locations (waku/key_locations.py) lists them in the order they
+  // win, with paths and yes-or-no only; it never carries a key's value.
+  const kl = d.key_locations || null;
+  const looked = (!orphaned && kl) ? `<div class="setup-looked">
+    <p class="setup-note">${esc(kl.intro)}</p>
+    <ul class="setup-places">${(kl.places || []).map(p =>
+      `<li>${p.path ? `<code>${esc(p.where)}</code>` : esc(p.where)}: ${esc(p.state)}</li>`
+    ).join("")}</ul>
+    ${(kl.unread || []).map(u => `<p class="setup-note">${esc(u)}</p>`).join("")}
+    ${kl.restart ? `<p class="setup-note">${esc(kl.restart)}</p>` : ""}</div>` : "";
+  const saveNote = kl ? esc(kl.save_note)
+    : "A key you paste here is written to a <code>.env</code> file on this machine.";
   // No card title: the page header's h1 is already "Set up Waku", and a card
   // that repeats its own page's heading is the shape of a screen assembled
   // from parts rather than designed.
   return uiCard(`
     <p class="setup-lede">${lede}</p>
+    ${looked}
     <div class="setup-choices">${offered.map(setupChoice).join("")}</div>
-    <p class="setup-note">The key is written to <code>.env</code> on this
-      machine and is read only when Waku calls that provider. Nothing here
-      sends it anywhere else.</p>
+    <p class="setup-note">${saveNote} Waku reads the key only when it calls
+      that provider, and nothing here sends it anywhere else.</p>
     ${more}
     <p class="setup-note">Optional, once Waku has a model: type
       <code>/connect waku-memory</code> in the chat for one memory shared with

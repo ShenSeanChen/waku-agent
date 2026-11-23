@@ -42,6 +42,15 @@ POST_ROUTES = {
     "/api/compare/clear",
     "/api/compare/regrade",
     "/api/compare/delete_run",
+    # spec 015: judge one stored turn, on demand
+    "/api/turn-evals/judge",
+    # spec 024: cancel one timer, waiting call or queued message
+    "/api/waiting/cancel",
+    # spec 025: add or remove an MCP server of the person's own
+    "/api/connectors/add",
+    "/api/connectors/remove",
+    # spec 025: let one connector write without asking, or take that back
+    "/api/connectors/approve",
 }
 
 # Paths served on GET, either exactly or as a prefix.
@@ -55,6 +64,12 @@ GET_PATHS = {
     "/static/",
     # spec 008: the chat column alone, for waku.one to frame
     "/embed/chat",
+    # spec 012: the Observability page's turns, tools, memory, spend, evals
+    "/api/observability",
+    # spec 024: the three lists of the "Waiting" card
+    "/api/waiting",
+    # spec 025: the servers and the waiting sign-in behind the Connections page's cards
+    "/api/connectors",
 }
 
 # Streaming endpoints. These are what the dashboard actually uses for chat and
@@ -70,6 +85,8 @@ PINNED_GET = GET_PATHS | {
     "/api/judgment-arena",
     "/api/memory-arena",
     "/api/memory-arena/stores",
+    # spec 026: the hosted gateway asks a container what work it has left
+    "/api/alwayson/next",
 }
 
 # Every path do_POST matches: the streaming `if self.path == ...` checks handled
@@ -81,6 +98,8 @@ PINNED_POST = POST_ROUTES | STREAM_ROUTES | {
     "/api/judgment-arena/stream",
     "/api/memory-arena/clean",
     "/api/memory-arena/stream",
+    # spec 026: the hosted gateway hands a tenant's waiting events over
+    "/api/events",
 }
 
 _EXACT_PATH = re.compile(r'self\.path\s*==\s*"([^"]+)"')

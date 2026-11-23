@@ -7,6 +7,9 @@ ever read or charge that person (waku-memory spec 040 D1):
            person at zero is refused before their call reaches Anthropic.
   charge   POST <api>/agent-usage after a call settles, in the background,
            retried; idempotent on turn_id, so a retry never bills twice.
+           The task it returns answers the credits Waku Memory took
+           (`charged`), or None when that is not known; the turn receipt
+           adds them up (turns.py).
 
 Neither ever blocks or fails a model call. An unreachable Waku Memory leaves
 the $1 cap as the only limit, which is where the free tier started.
@@ -54,13 +57,14 @@ class WakuMemoryWallet:
         self._balances[key] = (self._now(), (plan, left))
         return plan, left
 
-    def charge(self, key: str, *, turn_id: str, model: str, usd: float) -> None:
+    def charge(self, key: str, *, turn_id: str, model: str, usd: float) -> asyncio.Task:
         task = asyncio.get_running_loop().create_task(
             self._charge(key, {"turn_id": turn_id, "model": model, "usd": round(usd, 6)}))
         self._pending.add(task)
         task.add_done_callback(self._pending.discard)
+        return task
 
-    async def _charge(self, key: str, report: dict) -> None:
+    async def _charge(self, key: str, report: dict) -> int | None:
         for attempt, delay in enumerate((0.0, *RETRY_DELAYS)):
             if delay:
                 await asyncio.sleep(delay)
@@ -71,12 +75,26 @@ class WakuMemoryWallet:
                         timeout=aiohttp.ClientTimeout(total=TIMEOUT_SECONDS)) as response:
                     if response.status == 200:
                         self._balances.pop(key, None)   # the next read sees the charge
-                        return
+                        try:
+                            body = await response.json(content_type=None)
+                        except ValueError:
+                            body = None
+                        return _charged(body)
                     if response.status < 500:
                         _LOG.warning("agent usage %s refused: %s", report["turn_id"],
                                      response.status)
-                        return
+                        return None
             except (aiohttp.ClientError, TimeoutError) as exc:
                 _LOG.info("agent usage %s attempt %s failed: %s",
                           report["turn_id"], attempt + 1, exc)
         _LOG.warning("agent usage %s not charged after retries", report["turn_id"])
+        return None
+
+
+def _charged(body: object) -> int | None:
+    """The credits one charge took. A duplicate answers 0 for a charge an
+    earlier attempt made, so its number is not known here."""
+    if not isinstance(body, dict) or body.get("duplicate"):
+        return None
+    charged = body.get("charged")
+    return charged if isinstance(charged, int) and not isinstance(charged, bool) else None

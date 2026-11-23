@@ -13,7 +13,7 @@ import anthropic
 import pytest
 
 from waku.config import Settings
-from waku.loop.models import PROVIDERS, OpenAICompatClient, get_client
+from waku.loop.models import PLATFORM, PROVIDERS, OpenAICompatClient, TurnTagged, get_client
 
 
 @pytest.fixture(autouse=True)
@@ -41,6 +41,10 @@ def test_get_client_builds_the_right_wire(name):
     settings = Settings(provider=name, model="", small_model="", api_key="", base_url=None)
     client = get_client(settings)
     expected = anthropic.Anthropic if provider.kind == "anthropic" else OpenAICompatClient
+    if name == PLATFORM:
+        # spec 011 B1: the free tier's client tags each call with its turn
+        assert isinstance(client, TurnTagged)
+        client = client.client
     assert isinstance(client, expected)
     # defaults must be filled in so the loop never sends model=""
     assert settings.model == provider.model
@@ -201,6 +205,28 @@ def test_every_priced_model_has_a_knowledge_cutoff():
 # gate fails open on error BY DESIGN, so this did not surface as a failure — it
 # surfaced as "retrieve", on every turn, for every non-anthropic model in the
 # arena. These pin the rule that stops it.
+
+@pytest.mark.parametrize("provider", ["deepseek", "opencode_zen", "opencode_go"])
+@pytest.mark.parametrize("reverse_registry", [False, True])
+def test_shared_model_family_keeps_saved_selection(monkeypatch, provider, reverse_registry):
+    """Saving Flash must survive both dashboard readback and client creation."""
+    from waku.loop import models
+    from waku.ops.settings_api import settings_info
+
+    if reverse_registry:
+        monkeypatch.setattr(models, "PROVIDERS", dict(reversed(list(PROVIDERS.items()))))
+    monkeypatch.setenv("WAKU_PROVIDER", provider)
+    monkeypatch.setenv("WAKU_MODEL", "deepseek-v4-flash")
+    monkeypatch.setenv("WAKU_SMALL_MODEL", "deepseek-v4-flash")
+
+    info = settings_info()
+    assert info["model"] == "deepseek-v4-flash"
+    assert info["small_model"] == "deepseek-v4-flash"
+    settings = Settings(provider=provider)
+    get_client(settings)
+    assert settings.model == "deepseek-v4-flash"
+    assert settings.small_model == "deepseek-v4-flash"
+
 
 def test_env_model_names_do_not_leak_into_another_provider(monkeypatch):
     from waku.config import Settings

@@ -23,6 +23,7 @@ without any special case for it.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 from collections.abc import Callable
@@ -35,7 +36,13 @@ from yarl import URL
 from hosted import log
 from hosted.core import idle, policy, quota
 from hosted.gateway import answers, embed, guards
-from hosted.gateway.launch import InMaintenance, Launcher, NotActive, StartFailed
+from hosted.gateway.launch import (
+    InMaintenance,
+    Launcher,
+    NotActive,
+    StartFailed,
+    StartTimedOut,
+)
 from hosted.gateway.proxy_client import Spend, read_spend
 from hosted.ports.control import Tenant
 from hosted.ports.runtime import RunningContainer
@@ -170,6 +177,32 @@ def platform_call_recent(spend: Spend | None, now: float) -> bool:
     return now - float(last) <= quota.TURN_WINDOW_SECONDS
 
 
+async def listening(running: RunningContainer) -> bool:
+    """Whether the container accepts a connection within
+    idle.READY_TIMEOUT_SECONDS (read through the module, so a test can shorten
+    it).
+
+    WHY A STARTED CONTAINER IS NOT A LISTENING ONE. The spawner answers once
+    Docker has started the container; the dashboard inside is still importing
+    Python and has not bound its port. A request in that window was refused,
+    re-listed, retried at once, refused again, and shown "taking too long to
+    start" -- on the first open of every tenant after `upgrade.sh --now` or an
+    idle stop, while a click on Try again twenty seconds later worked.
+    """
+    deadline = time.monotonic() + idle.READY_TIMEOUT_SECONDS
+    while True:
+        try:
+            _reader, writer = await asyncio.wait_for(
+                asyncio.open_connection(running.address, running.port), 1.0)
+        except (OSError, TimeoutError):
+            if time.monotonic() >= deadline:
+                return False
+            await asyncio.sleep(0.25)
+            continue
+        writer.close()
+        return True
+
+
 class ContainerForwarder:
     def __init__(self, *, launcher: Launcher, turns: quota.TurnWindow,
                  plans: dict[str, quota.Plan], proxy_socket: Path,
@@ -212,6 +245,17 @@ class ContainerForwarder:
         if streaming:
             return answers.sse_error(status, message)
         return answers.refusal(request, status, message)
+
+    def _still_starting(self, request: web.Request, *,
+                        streaming: bool) -> web.Response:
+        """A start that has not finished in the time a request waits. A page
+        navigation (the dashboard, or the chat inside waku.one's frame) gets
+        the starting page, which reloads itself and joins the same start;
+        a fetch or a stream gets the sentence, as before."""
+        if not streaming and answers.wants_html(request):
+            return answers.starting_page(request.raw_path)
+        return self._refuse(request, REFUSED_STATUS, idle.START_TIMEOUT_MESSAGE,
+                            streaming=streaming)
 
     def _paused(self) -> web.Response:
         """The one body in this group that carries a `code`, and it is group
@@ -357,15 +401,17 @@ class ContainerForwarder:
         if admission.action == "wait":
             running = await self._launcher.wait_for_start(tenant.id)
             if running is None:
-                return self._refuse(request, REFUSED_STATUS,
-                                    idle.START_TIMEOUT_MESSAGE, streaming=streaming)
-            return running
+                return self._still_starting(request, streaming=streaming)
+            return await self._ready(request, running, streaming=streaming)
         if admission.action in ("start", "evict_then_start"):
             if admission.evict:
                 _LOG.info("at the cap: stopping tenant=%s to start tenant=%s",
                           admission.evict, tenant.id)
                 await self._launcher.stop(admission.evict)
-            return await self._start(request, tenant, streaming=streaming)
+            started = await self._start(request, tenant, streaming=streaming)
+            if isinstance(started, web.Response):
+                return started
+            return await self._ready(request, started, streaming=streaming)
         if admission.action != "forward":
             # F6: A CLOSED SET, AND THE DEFAULT IS TO REFUSE. Every action
             # Fleet.admit can answer is named above or is "forward"; a sixth
@@ -394,9 +440,20 @@ class ContainerForwarder:
                                 streaming=streaming)
         except NotActive as exc:
             return self._refuse(request, 403, str(exc), streaming=streaming)
+        except StartTimedOut:
+            return self._still_starting(request, streaming=streaming)
         except StartFailed as exc:
             return self._refuse(request, REFUSED_STATUS, str(exc),
                                 streaming=streaming)
+
+    async def _ready(self, request: web.Request, running: RunningContainer, *,
+                     streaming: bool) -> RunningContainer | web.Response:
+        """The container a start produced, once it accepts a connection."""
+        if await listening(running):
+            return running
+        _LOG.warning("tenant=%s started but did not listen within %ss",
+                     running.tenant_id, idle.READY_TIMEOUT_SECONDS)
+        return self._still_starting(request, streaming=streaming)
 
     # --- delivery, the retry ladder and the timeout ----------------------
 
@@ -440,11 +497,15 @@ class ContainerForwarder:
                 if isinstance(started, web.Response):
                     return started
                 second = started
+            # Listed as running, or just started: either way it may not have
+            # bound its port yet (see `listening`), so wait for it to.
+            ready = await self._ready(request, second, streaming=streaming)
+            if isinstance(ready, web.Response):
+                return ready
             try:
-                return await self._send(request, second, body, held=held)
+                return await self._send(request, ready, body, held=held)
             except aiohttp.ClientConnectorError:
-                return self._refuse(request, REFUSED_STATUS,
-                                    idle.START_TIMEOUT_MESSAGE, streaming=streaming)
+                return self._still_starting(request, streaming=streaming)
         except aiohttp.ClientError as exc:
             # EVERY OTHER WAY A CONTAINER CAN FAIL MID-REQUEST, shaped rather
             # than left to aiohttp. Without this the browser gets aiohttp's

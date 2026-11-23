@@ -36,6 +36,12 @@ HTTP+SSE transport is deprecated and is deliberately not supported here.
 
 Each server's tools register as `<server>_<tool>` on the ToolRegistry. A server
 that fails to connect is skipped with a warning — Waku still starts.
+
+A remote server keeps each session in its own memory, so a server that
+restarts (a redeploy) forgets every session it had and answers the next call
+with HTTP 404 "Session not found". The MCP spec says the client must then
+start a new session, and the bridge does: it opens a new session and sends
+the call once more (`_acall`).
 """
 
 from __future__ import annotations
@@ -43,6 +49,7 @@ from __future__ import annotations
 import asyncio
 import concurrent.futures
 import json
+import logging
 import os
 import re
 import threading
@@ -56,6 +63,21 @@ from waku.tools.registry import Tool
 # Origin from it (`waku` for any name containing "waku"); a client that sends
 # no name of its own is filed under the SDK's default and shows up as `web`.
 CLIENT_NAME = "waku-agent"
+
+log = logging.getLogger(__name__)
+
+
+def _session_expired(exc: BaseException) -> bool:
+    """Whether a failed call means the server no longer knows our session.
+
+    A Streamable HTTP server answers a request for a session it does not hold
+    with HTTP 404. The SDK hands that back as an error whose message is the
+    server's own, "Session not found", or, when the 404 carries no JSON-RPC
+    body, its stand-in "Session terminated". Nothing else is a reason to start
+    over: a tool's own error must reach the model as it is.
+    """
+    text = str(exc).lower()
+    return "session not found" in text or "session terminated" in text
 
 
 def _model_safe_name(server: str, tool: str) -> str:
@@ -76,6 +98,61 @@ def _model_safe_name(server: str, tool: str) -> str:
     # Keep the tail: the tool's own name is what disambiguates, and the
     # server prefix is the part a reader can afford to lose.
     return safe[-64:].lstrip("_")
+
+
+def tool_meta(tool) -> dict:
+    """What Waku keeps of one tool a server listed."""
+    notes = getattr(tool, "annotations", None)
+    return {
+        "name": tool.name,
+        "description": tool.description,
+        "inputSchema": getattr(tool, "input_schema", None) or getattr(tool, "inputSchema", None),
+        # The server's own word that the tool changes nothing. `readOnlyHint`
+        # on the wire; the SDK's 2.x line may spell it `read_only_hint`.
+        "readOnly": bool(getattr(notes, "read_only_hint", None)
+                         or getattr(notes, "readOnlyHint", None)),
+    }
+
+
+def as_tool(server: str, meta: dict, call) -> Tool:
+    """The Tool the model is offered for one listed tool. `call` is
+    (server, tool name, arguments) -> text."""
+    return Tool(
+        name=_model_safe_name(server, meta["name"]),
+        description=f"[MCP:{server}] {meta.get('description','') or ''}",
+        input_schema=meta.get("inputSchema") or {"type": "object", "properties": {}},
+        # `tname` is the server's OWN name, unsanitised — the rename above is
+        # only how the model refers to the tool, never what goes back over
+        # the wire.
+        fn=(lambda srv=server, tname=meta["name"], **kw: call(srv, tname, kw)),
+        read_only=bool(meta.get("readOnly")),
+        mcp=(server, meta["name"]),
+    )
+
+
+def merge(config_servers: list[dict], plugin_servers: list[dict]) -> tuple[list[dict], list[tuple[str, str]]]:
+    """mcp.json's servers, then each plugin server mcp.json does not already
+    have (spec 021). A plugin server at a URL mcp.json names is the same
+    server, and is left out without a word. A plugin server with an id
+    mcp.json names is a different server under a taken name: mcp.json wins,
+    and the skipped one is returned so `waku plugin list` can say so. Two
+    plugins naming one id are resolved the same way: the first one wins."""
+    merged = [s for s in config_servers if isinstance(s, dict) and s.get("name")]
+    names = {s["name"] for s in merged}
+    urls = {str(s.get("url", "")).rstrip("/") for s in merged if s.get("url")}
+    skipped: list[tuple[str, str]] = []
+    for spec in plugin_servers:
+        url = str(spec.get("url", "")).rstrip("/")
+        if url and url in urls:
+            continue
+        if spec.get("name") in names:
+            skipped.append((str(spec.get("plugin", "")), str(spec["name"])))
+            continue
+        merged.append(spec)
+        names.add(spec["name"])
+        if url:
+            urls.add(url)
+    return merged, skipped
 
 
 def _auth_hint(spec: dict, auth_dir: Path) -> str:
@@ -101,8 +178,24 @@ def _auth_hint(spec: dict, auth_dir: Path) -> str:
 
 class MCPBridge:
     def __init__(self, config_path: Path, timeout: float = 30.0,
-                 call_timeout: float | None = None):
+                 call_timeout: float | None = None, skip=None, extra_servers=(),
+                 open_url=None):
         self.config_path = config_path
+        # Spec 025: what receives a sign-in link in place of this machine's
+        # browser. None opens the browser, as `waku mcp login` does.
+        self._open_url = open_url
+        # Spec 021: the servers installed plugins bring, in mcp.json's shape.
+        # They join mcp.json's own (merge below), and `servers` keeps the
+        # merged list, so Waku Memory is found whichever file named it.
+        self._extra = [dict(s) for s in extra_servers]
+        self.servers: list[dict] = []
+        # Plugin servers left out because mcp.json names the same id:
+        # (plugin, server id), for `waku plugin list`.
+        self.skipped: list[tuple[str, str]] = []
+        # A predicate on an mcp.json entry: True leaves that server unconnected.
+        # Waku Memory's "off" choice uses it (spec 020); other servers are not
+        # touched.
+        self._skip = skip
         self.timeout = timeout
         # How long one tool call may take, apart from how long connecting may
         # take. 30 seconds was both until 2026-10-02, when two treg product
@@ -115,6 +208,13 @@ class MCPBridge:
         self._thread = threading.Thread(target=self._loop.run_forever, daemon=True)
         self._stack: AsyncExitStack | None = None
         self._sessions: dict = {}
+        # Each server's mcp.json entry, kept so an expired session can be
+        # opened again the way the first one was.
+        self._specs: dict[str, dict] = {}
+        # One lock per server, so calls that all find the session expired
+        # open one new session between them, not one each. Every call runs on
+        # the bridge's one event loop, which makes an asyncio.Lock enough.
+        self._reopening: dict[str, asyncio.Lock] = {}
 
     def _deadline(self, servers: list[dict]) -> float:
         """How long to wait for every server to connect.
@@ -138,7 +238,17 @@ class MCPBridge:
     def start(self) -> list[Tool]:
         """Connect every configured server and return their tools (as Tools)."""
         self._thread.start()
-        servers = json.loads(self.config_path.read_text(encoding="utf-8")).get("servers", [])
+        servers = (json.loads(self.config_path.read_text(encoding="utf-8")).get("servers", [])
+                   if self.config_path.exists() else [])
+        servers, self.skipped = merge(servers, self._extra)
+        if self._skip is not None:
+            servers = [s for s in servers if not self._skip(s)]
+        self.servers = servers
+        # A treg key of the person's own wins over mcp.json's treg entry
+        # (spec 014); every other server is connected as written.
+        from waku.tools.treg import resolve
+
+        servers = resolve(servers)
         # Before the coroutine, not as fut.result()'s argument: _deadline is
         # the first import of the `mcp` package in this thread, and
         # _connect_one imports it on the loop thread. Two threads importing it
@@ -149,16 +259,7 @@ class MCPBridge:
         listed = fut.result(deadline)  # {server: [tool metas]}
         tools: list[Tool] = []
         for srv, metas in listed.items():
-            for meta in metas:
-                tools.append(Tool(
-                    name=_model_safe_name(srv, meta["name"]),
-                    description=f"[MCP:{srv}] {meta.get('description','') or ''}",
-                    input_schema=meta.get("inputSchema") or {"type": "object", "properties": {}},
-                    # `tname` is the server's OWN name, unsanitised — the
-                    # rename above is only how the model refers to the tool,
-                    # never what goes back over the wire.
-                    fn=(lambda srv=srv, tname=meta["name"], **kw: self.call(srv, tname, kw)),
-                ))
+            tools.extend(as_tool(srv, meta, self.call) for meta in metas)
         return tools
 
     async def _open_streams(self, spec: dict):
@@ -194,6 +295,11 @@ class MCPBridge:
             # no stated precedence, so refusing beats picking one silently.
             raise ValueError("server names both 'auth_env' and 'oauth' — pick one")
 
+        if isinstance(spec.get("headers"), dict):
+            # Spec 021: a plugin server that brings its own static header,
+            # the way Claude Code's .mcp.json allows. It signs in no other way.
+            headers.update({str(k): str(v) for k, v in spec["headers"].items()})
+
         if auth_env:
             token = os.environ.get(auth_env)
             if not token:
@@ -209,7 +315,8 @@ class MCPBridge:
             # An httpx auth flow, not a header: the SDK drives the 401, the
             # discovery and the refresh itself, so this is handed to the
             # client once and never thought about again.
-            auth = build_provider(url, spec["name"], self.config_path.parent)
+            auth = build_provider(url, spec["name"], self.config_path.parent,
+                                  open_url=self._open_url)
 
         # create_mcp_http_client applies the SDK's own timeouts and
         # follow_redirects; a header or an auth flow are the two supported ways
@@ -233,13 +340,16 @@ class MCPBridge:
             return False
         from waku.tools.mcp_oauth import FileTokenStorage
 
-        return FileTokenStorage(self.config_path.parent, spec["name"])._path.exists()
+        # The file is written when this client registers, before any token.
+        return FileTokenStorage(self.config_path.parent, spec["name"],
+                                spec.get("url")).has_tokens()
 
     async def _connect_one(self, spec: dict) -> list[dict]:
         """Open one server's session and return its tool metadata."""
         from mcp import ClientSession, types
 
         name = spec["name"]
+        self._specs[name] = spec
         read, write = await self._open_streams(spec)
         info = types.Implementation(name=CLIENT_NAME, version=__version__)
         session = await self._stack.enter_async_context(
@@ -250,14 +360,7 @@ class MCPBridge:
         # `input_schema` in the SDK's 2.x line; it was `inputSchema` in 1.x.
         # getattr covers both so a user on either pin gets a working connector
         # rather than an AttributeError reported as "failed to connect".
-        return [
-            {
-                "name": t.name,
-                "description": t.description,
-                "inputSchema": getattr(t, "input_schema", None) or getattr(t, "inputSchema", None),
-            }
-            for t in tools
-        ]
+        return [tool_meta(t) for t in tools]
 
     async def _connect_all(self, servers) -> dict:
         self._stack = AsyncExitStack()
@@ -312,15 +415,84 @@ class MCPBridge:
         except Exception as exc:
             return f"MCP call {server}_{tool} failed: {exc}"
 
+    def call_json(self, server: str, tool: str, args: dict,
+                  timeout: float) -> tuple[dict | None, bool, str]:
+        """One call for a hook (spec 021): (the result as JSON, whether it
+        failed, its text). A hook needs the tool's own answer and its
+        `isError`, which `call` flattens into text for the model, and it
+        waits `timeout` seconds rather than a paid tool's two minutes."""
+        if server not in self._sessions:
+            return None, True, f"MCP server '{server}' is not connected."
+        fut = asyncio.run_coroutine_threadsafe(self._acall_raw(server, tool, args), self._loop)
+        try:
+            result = fut.result(timeout)
+        except concurrent.futures.TimeoutError:
+            fut.cancel()
+            return None, True, f"timed out after {timeout:g}s"
+        except Exception as exc:
+            return None, True, str(exc) or type(exc).__name__
+        text = "\n".join(getattr(b, "text", None) or "" for b in result.content)
+        failed = bool(getattr(result, "is_error", None) or getattr(result, "isError", False))
+        data = getattr(result, "structured_content", None) or getattr(result, "structuredContent", None)
+        if not isinstance(data, dict):
+            try:
+                data = json.loads(text) if text.strip() else {}
+            except ValueError:
+                data = None
+        return (data if isinstance(data, dict) else None), failed, text
+
+    async def _acall_raw(self, server: str, tool: str, args: dict):
+        """The tool's own result, with the same one retry `_acall` makes
+        when the server forgot the session."""
+        session = self._sessions[server]
+        try:
+            return await session.call_tool(tool, args)
+        except Exception as exc:
+            if not _session_expired(exc):
+                raise
+            session = await self._reopen(server, session)
+            return await session.call_tool(tool, args)
+
     async def _acall(self, server: str, tool: str, args: dict) -> str:
         session = self._sessions.get(server)
         if session is None:
             return f"MCP server '{server}' is not connected."
-        result = await session.call_tool(tool, args)
+        try:
+            result = await session.call_tool(tool, args)
+        except Exception as exc:
+            # 2026-10-04: api.waku.one was redeployed during a research turn,
+            # forgot the agent's session, and answered every later call
+            # "Session not found". The agent kept sending the dead session's
+            # id until its container restarted, so no search ran and no fact
+            # or report reached Waku Memory. The server refused the call
+            # before running it, so sending it again cannot run it twice.
+            if not _session_expired(exc):
+                raise
+            log.info("MCP server '%s' no longer knows this session (%s); "
+                     "opening a new one", server, exc)
+            session = await self._reopen(server, session)
+            result = await session.call_tool(tool, args)
         parts = []
         for block in result.content:
             parts.append(getattr(block, "text", None) or "[non-text content]")
         return "\n".join(parts) or "(no output)"
+
+    async def _reopen(self, server: str, expired):
+        """A new session for `server`, opened once however many calls ask.
+
+        The first call to find `expired` dead opens the new session; a call
+        that was waiting on the lock finds it already replaced and uses it.
+        The expired session's streams stay on the exit stack and close with
+        the bridge: closing them here would exit their task group from a
+        different task than the one that entered it, which anyio refuses.
+        """
+        lock = self._reopening.setdefault(server, asyncio.Lock())
+        async with lock:
+            current = self._sessions.get(server)
+            if current is not None and current is not expired:
+                return current
+            await self._connect_one(self._specs[server])
+            return self._sessions[server]
 
     def close(self) -> None:
         if self._stack is not None:

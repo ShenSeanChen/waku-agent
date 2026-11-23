@@ -144,12 +144,19 @@ def test_the_address_is_the_one_the_project_id_derives():
     assert body["HostConfig"]["NetworkMode"] == tenant.TENANT_NETWORK
 
 
-def test_the_environment_is_the_specs_nine_variables():
+def test_the_environment_is_the_specs_nine_variables_the_step_limit_and_the_hosted_mark():
     names = [entry.split("=", 1)[0] for entry in _tenant_body()["Env"]]
     assert names == ["WAKU_HOME", "WAKU_DASHBOARD_HOST", "WAKU_DASHBOARD_PORT",
-                     "TZ", "HOME", "WAKU_PLATFORM_BASE_URL", "WAKU_PLATFORM_TOKEN",
+                     "TZ", "HOME", "WAKU_MAX_ITERATIONS", "WAKU_HOSTED",
+                     "WAKU_PLATFORM_BASE_URL", "WAKU_PLATFORM_TOKEN",
                      "WAKU_PLATFORM_MODEL", "WAKU_PLATFORM_SMALL_MODEL"]
     assert "TZ=Asia/Shanghai" in _tenant_body()["Env"]
+    # a hosted turn gets fifteen steps (2026-10-05: ten was not enough for a
+    # research turn whose first lookups failed)
+    assert "WAKU_MAX_ITERATIONS=15" in _tenant_body()["Env"]
+    # spec 026: the dashboard in a tenant container runs the always-on worker
+    # and answers the gateway's two routes only when this is exactly "1"
+    assert "WAKU_HOSTED=1" in _tenant_body()["Env"]
     assert _tenant_body()["WorkingDir"] == "/work"
     assert _tenant_body()["User"] == "10001:10001"
 
@@ -170,6 +177,16 @@ def test_an_inspect_container_gets_no_platform_token():
              for entry in template.inspect_container(CONFIG, tenant_id=TENANT,
                                                      host_port=17777)["Env"]]
     assert not [name for name in names if name.startswith("WAKU_PLATFORM_")]
+
+
+def test_an_inspect_container_runs_no_always_on_worker():
+    """Spec 026. An operator opens an inspect container to look at a tenant's
+    data while the tenant is under maintenance. A worker inside it would run
+    the tenant's waiting events and send their replies."""
+    names = [entry.split("=", 1)[0]
+             for entry in template.inspect_container(CONFIG, tenant_id=TENANT,
+                                                     host_port=17777)["Env"]]
+    assert names == ["WAKU_HOME", "WAKU_DASHBOARD_HOST", "WAKU_DASHBOARD_PORT", "HOME"]
 
 
 def test_an_inspect_container_publishes_on_loopback_only():
@@ -663,8 +680,12 @@ def test_the_treg_relay_is_off_unless_spawner_env_says_on():
     assert template.config_from_env(_spawner_env(**FREE_TIER)).treg_relay is False
     on = template.config_from_env(_spawner_env(**FREE_TIER, WAKU_TREG_RELAY="on"))
     assert on.treg_relay is True
-    assert template.provision_env(on) == ["WAKU_TREG_BASE_URL=http://10.88.0.1:8788"]
-    assert template.provision_env(CONFIG) == []
+    # The first entry is treg's. The other two are spec 029's, sent on every
+    # deployment with a metering proxy (test_connect_container.py).
+    assert template.provision_env(on)[0] == "WAKU_TREG_BASE_URL=http://10.88.0.1:8788"
+    assert not any(line.startswith("WAKU_TREG") for line in
+                   template.provision_env(template.config_from_env(_spawner_env(**FREE_TIER))))
+    assert not any(line.startswith("WAKU_TREG") for line in template.provision_env(CONFIG))
 
 
 def test_treg_without_the_free_tier_or_with_a_misspelt_value_is_refused():

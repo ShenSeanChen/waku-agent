@@ -38,10 +38,11 @@ import shelllib
 # block dropped envfiles.sh, which already existed and is already covered by
 # every parametrised test below -- so pasting it verbatim would have deleted a
 # script's parse check, its executable-bit check and its membership assertion
-# in one edit, with the suite green. F4 appended migrate.sh and tenant.sh.
+# in one edit, with the suite green. F4 appended migrate.sh and tenant.sh;
+# spec 010 appended autodeploy.sh.
 EXPECTED_SCRIPTS = {"backup.sh", "checks.sh", "envfiles.sh", "install.sh",
                     "lib.sh", "migrate.sh", "networks.sh", "restore.sh",
-                    "tenant.sh", "tree.sh", "upgrade.sh"}
+                    "tenant.sh", "tree.sh", "upgrade.sh", "autodeploy.sh"}
 
 COMPOSE = shelllib.DEPLOY / "compose.yaml"
 SERVICES = ("caddy", "gateway", "proxy", "spawner")
@@ -633,6 +634,7 @@ _ENV_GLOBALS = {
     "platform_key": "sk-ant-envfiles-fixture",
     "restic_repository": "s3:s3.example.test/waku-backups-fixture",
     "restic_password_file": "/srv/waku/config/restic-password",
+    "slack_token_key": "ab" * 32,
 }
 
 
@@ -719,6 +721,38 @@ def test_the_gateway_env_install_writes_carries_every_name_the_gateway_requires(
 
     written = _env_body(tmp_path, "waku_gateway_env")
     assert list(written) == list(REQUIRED_ENV_NAMES)
+
+
+def test_install_generates_the_key_that_seals_slack_tokens(tmp_path):
+    """Spec 026 C1. The key is made on the VM by lib.sh's waku_new_key and
+    never comes from the repository: two calls give two keys, each is the 64
+    hexadecimal characters the gateway's SecretBox takes, and the gateway.env
+    written with one turns nothing else on, because the three values from the
+    Slack app's settings page are written empty for the operator to fill in."""
+    from hosted.gateway.config import SLACK_ENV_NAMES, slack_from
+    from hosted.gateway.secretbox import SecretBox
+
+    script = tmp_path / "key.sh"
+    assignments = "\n".join(f"{name}={value!r}" for name, value in _ENV_GLOBALS.items()
+                            if name != "slack_token_key")
+    script.write_text(
+        f'set -euo pipefail\n{assignments}\n. "{LIB}"\n. "{ENVFILES}"\n'
+        'slack_token_key=$(waku_new_key)\nwaku_gateway_env\n'
+        'printf "second=%s\\n" "$(waku_new_key)"\n', encoding="utf-8")
+    done = shelllib.run(script, [], tmp_path=tmp_path)
+    assert done.returncode == 0, done.stderr
+    written = dict(line.split("=", 1) for line in done.stdout.splitlines() if "=" in line)
+
+    key, second = written["WAKU_SLACK_TOKEN_KEY"], written.pop("second")
+    assert re.fullmatch(r"[0-9a-f]{64}", key) and re.fullmatch(r"[0-9a-f]{64}", second)
+    assert key != second
+    SecretBox.from_hex(key)
+    assert [written[name] for name in SLACK_ENV_NAMES[:3]] == ["", "", ""]
+    settings, problem = slack_from(written)
+    assert settings is None
+    assert all(name in problem for name in SLACK_ENV_NAMES[:3])
+    assert "WAKU_SLACK_TOKEN_KEY" not in problem
+    assert slack_from(written | dict.fromkeys(SLACK_ENV_NAMES[:3], "x"))[0] is not None
 
 
 def test_the_spawner_env_install_writes_carries_every_name_the_spawner_requires(tmp_path):
@@ -869,7 +903,23 @@ def test_no_env_file_install_writes_holds_a_value_compose_would_misread(tmp_path
     # WAKU_TREG_TOKEN is the second (spec 004 E): install.sh has no flag for
     # it, and an empty token is the treg relay switched off. The operator fills
     # it in by hand (hosted/README.md, "treg in every container").
-    may_be_empty = {"WAKU_DNS_MODULE_VERSION", "WAKU_TREG_TOKEN"}
+    #
+    # The three values from the Slack app's settings page are the rest (spec
+    # 026 C): install.sh has no flag for them either, and empty is the Slack
+    # routes switched off (hosted/README.md, "Slack").
+    #
+    # The GitHub App's two are next (spec 029 F), on the same terms: empty
+    # is GitHub not offered as a connector (hosted/README.md, "GitHub").
+    #
+    # WAKU_AGENT_PLATFORM_SECRET is the last (spec 032): it is shared with
+    # waku.one, so install.sh cannot make it, and empty is the team-home
+    # routes switched off (hosted/README.md, "Team homes").
+    may_be_empty = {"WAKU_DNS_MODULE_VERSION", "WAKU_TREG_TOKEN", "WAKU_SLACK_CLIENT_ID",
+                    "WAKU_SLACK_CLIENT_SECRET", "WAKU_SLACK_SIGNING_SECRET",
+                    "WAKU_GITHUB_CLIENT_ID", "WAKU_GITHUB_CLIENT_SECRET",
+                    # The Google client's two (spec 031 A), on the same terms.
+                    "WAKU_GOOGLE_CLIENT_ID", "WAKU_GOOGLE_CLIENT_SECRET",
+                    "WAKU_AGENT_PLATFORM_SECRET"}
     for function in ("waku_install_env", "waku_gateway_env",
                      "waku_spawner_env", "waku_proxy_env"):
         for name, raw in _env_body(tmp_path, function).items():

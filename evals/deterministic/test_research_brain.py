@@ -113,7 +113,8 @@ def test_a_research_turn_searches_waku_memory_before_any_treg_call(tmp_path, mon
 
     tools = [ev["tool"] for kind, ev in events if kind == "tool"]
     assert tools == [brain.TOOL, brain.TOOL, "treg_catalog_search"], "searched first"
-    first_llm = next(i for i, (kind, _) in enumerate(events) if kind == "llm")
+    # the loop's first call; the retrieval gate's own call (spec 011 A2) names a kind
+    first_llm = next(i for i, (kind, ev) in enumerate(events) if kind == "llm" and "kind" not in ev)
     last_search = max(i for i, (kind, ev) in enumerate(events)
                       if kind == "tool" and ev["tool"] == brain.TOOL)
     assert last_search < first_llm, "both searches ran before the model's first call"
@@ -290,7 +291,7 @@ def test_a_report_turn_keeps_at_most_two_facts_none_about_its_companies(tmp_path
     sent = []
     memory.remember = lambda body, scope: sent.append((body, scope)) or f"mem-{len(sent)}"
     events = []
-    memory.maybe_consolidate(notify=lambda kind, ev: events.append(ev), report=REPORT_BODY)
+    memory.maybe_consolidate(notify=lambda kind, ev: kind == "consolidation" and events.append(ev), report=REPORT_BODY)
 
     kept = events[0]["kept"]
     assert len(kept) <= 2
@@ -314,7 +315,7 @@ def test_a_batch_whose_earlier_row_saved_a_report_is_a_report_batch(tmp_path):
                                 "summary": ["Zep and Letta sell hosted agent memory."]}}),))
     memory.conn.commit()
     events = []
-    memory.maybe_consolidate(notify=lambda kind, ev: events.append(ev))
+    memory.maybe_consolidate(notify=lambda kind, ev: kind == "consolidation" and events.append(ev))
     subjects = [k["subject"] for k in events[0]["kept"]]
     assert len(subjects) <= 2 and not {"Zep", "Letta"} & set(subjects)
 
@@ -322,7 +323,7 @@ def test_a_batch_whose_earlier_row_saved_a_report_is_a_report_batch(tmp_path):
 def test_a_turn_without_a_report_consolidates_as_before(tmp_path):
     memory, client = _memory(tmp_path, [response([text_block(FLOOD)])])
     events = []
-    memory.maybe_consolidate(notify=lambda kind, ev: events.append(ev))
+    memory.maybe_consolidate(notify=lambda kind, ev: kind == "consolidation" and events.append(ev))
     assert len(events[0]["kept"]) == 6
     assert "saved a research report" not in client.prompts[0]
 

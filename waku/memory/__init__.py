@@ -21,6 +21,7 @@ from waku.memory import consolidation, retrieval_gate, slot_gate
 from waku.memory.episodic.store import SqliteEpisodeStore
 from waku.memory.procedural.loader import SkillLoader
 from waku.memory.semantic.store import SqliteFactStore
+from waku.ops.tracing import metered
 
 
 def bundled_skill_dirs() -> list[Path]:
@@ -66,10 +67,20 @@ class Memory:
         self.client = client
         self.facts = self._make_fact_store(conn, settings)
         self.episodes = episode_store if episode_store is not None else self._make_episode_store(conn, settings)
-        self.skills = SkillLoader([*bundled_skill_dirs(), settings.home / "skills"])
+        # Spec 021: an enabled plugin's skills load like the person's own.
+        from waku.plugins import store
+
+        plugin_skills = [p.skills_dir for p in store.enabled(settings.home) if p.skills_dir]
+        self.skills = SkillLoader([*bundled_skill_dirs(), settings.home / "skills", *plugin_skills])
         # Spec 006: sends each fact consolidation keeps to Waku Memory. app.py
         # sets it once the MCP servers have connected; None means no send.
         self.remember = None
+        # Spec 021 review: True when an enabled plugin's Stop hook sends each
+        # turn to the Waku Memory this agent is connected to. Consolidation
+        # then sends no captured turn's facts, whatever mode is saved, so no
+        # turn reaches Waku Memory twice. A paused turn's facts it still sends
+        # (spec 021 amendment E2). app.py sets it.
+        self.plugin_captures = False
 
     @staticmethod
     def _make_fact_store(conn, settings):
@@ -105,8 +116,10 @@ class Memory:
 
     # ---- retrieval (gated — see retrieval_gate.py for why)
     def gated_retrieve(self, message: str, notify=None) -> str:
+        # Spec 011 A2: with a notify, the gate's model call is counted too.
+        client = metered(self.client, "gate", notify) if notify else self.client
         retrieve, query, reason = retrieval_gate.should_retrieve(
-            self.client, self.settings.small_model, message
+            client, self.settings.small_model, message
         )
         if notify:
             notify("gate", {"decision": "retrieve" if retrieve else "skip", "reason": reason})
@@ -129,7 +142,9 @@ class Memory:
 
     # ---- write paths
     def log_chat(self, user_message: str, reply: str, session_id: str = "default",
-                 source: str = "cli", meta: dict | None = None) -> None:
+                 source: str = "cli", meta: dict | None = None) -> int:
+        """Store one exchange and return the assistant row's id, which
+        `update_meta` takes once the turn's receipt is built."""
         import json as _json
         self.conn.execute(
             "INSERT INTO chat_log (role, content, session_id, source) VALUES ('user', ?, ?, ?)",
@@ -137,10 +152,20 @@ class Memory:
         )
         # meta (gate/latency/iterations/tools) rides on the assistant row so a
         # reopened thread can render the full turn card, not just the text.
-        self.conn.execute(
+        row = self.conn.execute(
             "INSERT INTO chat_log (role, content, session_id, source, meta) VALUES ('assistant', ?, ?, ?, ?)",
             (reply, session_id, source, _json.dumps(meta) if meta else None),
         )
+        self.conn.commit()
+        return row.lastrowid
+
+    def update_meta(self, row_id: int, meta: dict) -> None:
+        """Replace one assistant row's meta. The turn's receipt (spec 011)
+        counts what consolidation kept, and consolidation reads the chat log
+        the exchange was just written to, so the receipt is added after."""
+        import json as _json
+        self.conn.execute("UPDATE chat_log SET meta = ? WHERE id = ?",
+                          (_json.dumps(meta), row_id))
         self.conn.commit()
 
     # ---- sessions (for the dashboard's chat history + "New chat")
@@ -235,21 +260,40 @@ class Memory:
             if path.stem.isdigit() and path.name not in current:
                 path.unlink()
 
-    def maybe_consolidate(self, notify=None, report: str = "") -> None:
+    def _server_extracts(self) -> bool:
+        """Whether Waku Memory takes this agent's turns from the Stop hook:
+        the saved mode says so, or an enabled plugin's Stop hook reaches
+        Waku Memory whatever the mode (spec 021 review fix 10). Both answer
+        the amendment's question the same way: a paused turn's facts are
+        sent by consolidation."""
+        return self.settings.memory_mode == "plugin" or self.plugin_captures
+
+    def maybe_consolidate(self, notify=None, report: str = "", recalled: str = "") -> None:
         """`report` is the research report this turn saved, if it saved one
-        (spec 009 B): its findings stay in it, not in loose facts."""
+        (spec 009 B): its findings stay in it, not in loose facts. `recalled`
+        is the memory this turn read: a fact that only repeats it is not kept
+        again."""
         kept = consolidation.kept_if_due(
             self.conn,
-            self.client,
+            metered(self.client, "consolidation", notify) if notify else self.client,
             self.settings.small_model,
             self.settings.consolidate_every,
             self.facts,
             self.episodes,
-            remember=self.remember,
+            # Spec 021: under "plugin" the server extracts from the Stop hook,
+            # so consolidation keeps facts here and sends none. The amendment
+            # (E2): a batch with a turn whose capture was paused sends its
+            # facts itself, and facts an earlier send failed on are sent
+            # again. save_note and the report upload still use self.remember:
+            # the person asked for them.
+            remember=None if self._server_extracts() else self.remember,
             report=report,
+            recalled=recalled,
+            send_if_paused=self.remember if self._server_extracts() else None,
         )
-        # Spec 006: `kept` lists each fact (subject, content, project, and its
-        # Waku Memory id when the send succeeded), so a chat panel can show
-        # what the turn kept and link each one. `new_facts` stays the count.
+        # Spec 006: `kept` lists each fact (subject, content, project, its
+        # Waku Memory id when the send succeeded, and `sent`), so a chat panel
+        # can show what the turn kept, link each one, and say which ones Waku
+        # Memory did not take. `new_facts` stays the count.
         if kept and notify:
             notify("consolidation", {"new_facts": len(kept), "kept": kept})

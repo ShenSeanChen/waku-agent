@@ -296,9 +296,9 @@ def test_an_unreachable_socket_propagates_rather_than_a_spawner_answer(sock_dir)
 def test_the_three_timeouts_are_the_specs_numbers():
     """Pinned literals, not a comparison of a value to the constant that
     sets it: START_ASK_TIMEOUT's own docstring derives it from the gateway's
-    15-second start budget, and QUICK_ASK_TIMEOUT and TASK_ASK_TIMEOUT are
+    60-second start budget, and QUICK_ASK_TIMEOUT and TASK_ASK_TIMEOUT are
     the brief's own values."""
-    assert START_ASK_TIMEOUT == 30.0
+    assert START_ASK_TIMEOUT == 75.0
     assert QUICK_ASK_TIMEOUT == 15.0
     assert TASK_ASK_TIMEOUT == 900.0
 

@@ -60,13 +60,24 @@ const toolRow = x => {
 // (meta: gate/latency/iterations/tools) render as the FULL turn card, so a
 // reopened thread looks just like when it was live. Rows without meta (from
 // before this was saved, or another gateway) fall back to a plain card.
+//
+// A stored assistant row is the model's history record: the reply, then an
+// internal "[tools used: ...]" note so the model remembers it already acted
+// (waku/memory/tool_note.py). Rows from before that note was compact carry a
+// tool's FULL output, tens of kilobytes of search JSON drawn as a block
+// thousands of lines tall. stripToolNote is the one place the note comes off,
+// and histItem is the one door every stored row comes through (dock.js's
+// loadThreadInto: switch, history, the "__all__" timeline, the embedded chat).
+const stripToolNote = t => (t || "").replace(/\s*\[tools used: [\s\S]*$/, "").trim();
 function histItem(m){
   if (m.role === "user") return {role:"user", text:m.content};
-  if (m.meta) return {role:"waku", reply:m.content, gate:m.meta.gate, slot:m.meta.slot,
+  const reply = stripToolNote(m.content);
+  if (m.meta) return {role:"waku", reply, gate:m.meta.gate, slot:m.meta.slot,
                       graph:m.meta.graph, report:m.meta.report, used:m.meta.used,
                       tools:m.meta.tools, iterations:m.meta.iterations,
-                      latency_ms:m.meta.latency_ms, model:m.meta.model};
-  return {role:"waku", reply:m.content, historical:true};
+                      latency_ms:m.meta.latency_ms, model:m.meta.model,
+                      receipt:m.meta.receipt, notices:m.meta.notices};
+  return {role:"waku", reply, historical:true};
 }
 
 const turnCard = t => uiCard(`
@@ -139,8 +150,11 @@ function stagesRow(t, live){
     + graph + gate + tools + uiBadge("reply", replyVariant) + `</div>`;
 }
 // The per-turn telemetry footer: seconds · iterations · model · what the
-// turn's tools cost (spec 009 C, when any said) · consolidation.
+// turn's tools cost (spec 009 C, when any said) · consolidation. A turn with
+// a receipt (spec 011) keeps only seconds and iterations here: the receipt
+// line below it says the model, the costs and what memory kept.
 const teleFooter = t => {
+  if (t.receipt) return `<div class="meta tele">${secs(t.latency_ms)} · ${t.iterations??"?"} iter</div>`;
   const spent = toolsCost(t.tools);
   return `<div class="meta tele">${secs(t.latency_ms)} · ${t.iterations??"?"} iter${
     t.model?` · ${esc(t.model)}`:""}${spent > 0 ? ` · tools ${money(spent)}` : ""}${
@@ -180,11 +194,16 @@ function openReport(link){
   return false;
 }
 // Spec 009 A: what the company brain already knew, read before a research
-// turn: each memory with the date it was saved, linked to waku.one.
+// turn: each memory with the date it was saved, linked to waku.one. A report
+// reads as its title and first Summary line, a fact as its prose: brain.py
+// builds both, never a raw window into a report's Sources block.
+const usedLabel = u => u.report
+  ? `Report${u.title ? ` "${u.title}"` : ""}${u.text ? `: ${u.text}` : ""}`
+  : (u.text || "Memory");
 const usedList = used => !(used || []).length ? "" : `<div class="kept">
   <div class="report-kicker">Used from memory</div>
   <ul class="mdlist">${used.map(u => {
-    const label = (u.report ? `Report${u.title ? ` "${u.title}"` : ""}: ` : "") + (u.text || "");
+    const label = usedLabel(u);
     const short = label.length > 160 ? label.slice(0, 159) + "\u2026" : label;
     return `<li>${u.created_at ? `<span class="meta">${esc(u.created_at)}</span> ` : ""}${u.id
       ? `<a href="${esc(memoryUrl(u.id))}" target="_blank" rel="noopener noreferrer">${esc(short)}</a>`
@@ -192,13 +211,117 @@ const usedList = used => !(used || []).length ? "" : `<div class="kept">
   }).join("")}</ul>
 </div>`;
 // A `consolidation` event's `kept` (spec 006): each fact this turn put in
-// memory, linked when Waku Memory gave it an id.
-const keptList = c => !(c && (c.kept||[]).length) ? "" : `<div class="kept">
-  <div class="report-kicker">Kept in memory</div>
-  <ul class="mdlist">${c.kept.map(k => `<li>${k.memory_id
+// memory, linked when Waku Memory gave it an id. A fact whose `sent` is false
+// is on this agent only: Waku Memory did not take it, and the card says so
+// rather than claiming it was kept there. The agent sends it again later.
+function keptNote(missed, total){
+  if (!missed) return "";
+  const which = missed === total ? "these facts" : `${missed} of these ${total} facts`;
+  return `<p class="kept-note">Waku Memory did not answer, so this agent keeps ${which} on its own `
+    + `and sends them again the next time it saves memory.</p>`;
+}
+function keptList(c){
+  const kept = (c && c.kept) || [];
+  if (!kept.length) return "";
+  const missed = kept.filter(k => k.sent === false).length;
+  return `<div class="kept${missed ? " kept-failed" : ""}">
+  <div class="report-kicker">${missed === kept.length ? "Kept on this agent only" : "Kept in memory"}</div>
+  <ul class="mdlist">${kept.map(k => `<li>${k.memory_id
     ? `<a href="${esc(memoryUrl(k.memory_id))}" target="_blank" rel="noopener noreferrer">${esc(k.content)}</a>`
     : esc(k.content)}</li>`).join("")}</ul>
+  ${keptNote(missed, kept.length)}
 </div>`;
+}
+// The receipt's word for kept facts, with how many Waku Memory did not take.
+function keptSaid(kept){
+  const missed = kept.filter(k => k.sent === false).length;
+  return missed ? `, ${missed} on this agent only` : "";
+}
+
+// --- Spec 011: the turn receipt, one quiet line under every reply.
+//
+// waku/ops/receipt.py builds it once; this only draws it. Collapsed, the
+// line reads "claude-sonnet-5 · 12.4k in / 1.9k out · $0.066 | treg 2 ·
+// $0.030 | memory 4 used · 2 kept | $0.096 · 2,400 credits". It is a button
+// that opens a table of the same numbers, with each memory linked to its
+// page on waku.one. The stats toggle does not hide it: it is the turn's bill.
+const receiptUsd = n => "$" + (n === 0 || n >= 0.001 ? n.toFixed(3) : n.toFixed(4));
+const receiptK = n => n >= 1000 ? (n / 1000).toFixed(1) + "k" : String(n);
+const receiptN = n => Number(n).toLocaleString("en-US");
+// A search's match page on waku.one, or the list of matches when the search
+// result did not name its trace (waku-memory has not shipped M1 yet).
+function matchesUrl(traceId){
+  const framed = typeof embedParentOrigin === "function" ? embedParentOrigin() : null;
+  return (framed || WAKU_ONE) + "/matches" + (traceId ? "/" + encodeURIComponent(traceId) : "");
+}
+const receiptLink = (label, href) =>
+  `<a href="${esc(href)}" target="_blank" rel="noopener noreferrer">${esc(label)}</a>`;
+// The four parts of the collapsed line, as plain text. A part with nothing
+// to say is left out rather than printed as zero.
+function receiptParts(r){
+  const m = r.model || {}, mem = r.memory || {}, tools = r.tools || [];
+  const parts = [`${m.id || "model"} · ${receiptK(m.in || 0)} in / ${receiptK(m.out || 0)} out · ${
+    receiptUsd(m.usd || 0)}${m.estimate ? " est" : ""}`];
+  const priced = tools.filter(x => typeof x.usd === "number");
+  if (priced.length){
+    const label = priced.every(x => x.tool.startsWith("treg")) ? "treg" : "paid tools";
+    parts.push(`${label} ${priced.length} · ${receiptUsd(priced.reduce((a, x) => a + x.usd, 0))}`);
+  } else if (tools.length) parts.push(`tools ${tools.length}`);
+  const said = [];
+  if (mem.used) said.push(`${mem.used} used`);
+  else if ((mem.searches || []).length) said.push(`searched ${mem.searches.length}`);
+  if ((mem.kept || []).length) said.push(`${mem.kept.length} kept${keptSaid(mem.kept)}`);
+  if (mem.report) said.push("report saved");
+  if (said.length) parts.push("memory " + said.join(" · "));
+  parts.push(receiptUsd(r.total_usd || 0)
+    + (typeof r.credits === "number" ? ` · ${receiptN(r.credits)} credits` : ""));
+  return parts;
+}
+// The expanded view: one row per lens and the total.
+function receiptRows(r){
+  const m = r.model || {}, mem = r.memory || {}, label = t => `<span class="receipt-label">${t}</span>`;
+  const calls = m.calls || [], loop = calls.filter(c => c.kind === "loop").reduce((a, c) => a + c.n, 0);
+  const small = calls.filter(c => c.kind !== "loop").reduce((a, c) => a + c.n, 0);
+  const rows = [[label("Model"), esc(`${m.id || "model"} · ${loop} loop${small ? ` + ${small} small` : ""} call${
+    loop + small === 1 ? "" : "s"} · ${receiptN(m.in || 0)} in / ${receiptN(m.out || 0)} out · ${
+    receiptUsd(m.usd || 0)}${m.estimate ? " est" : ""}`)]];
+  if ((r.tools || []).length)
+    rows.push([label("Tools"), r.tools.map(x => esc(
+      [x.tool, x.provider, typeof x.usd === "number" ? receiptUsd(x.usd) : ""].filter(Boolean).join(" ")
+      + (x.status === "error" ? " (failed)" : ""))).join(" · ")]);
+  const searches = mem.searches || [], kept = mem.kept || [], said = [];
+  if (searches.length){
+    const found = searches.reduce((a, x) => a + (x.found || 0), 0);
+    const traced = searches.find(x => x.trace_id);
+    said.push(`searched ${searches.length} (${found} found, ${
+      receiptLink("Matches", matchesUrl(traced ? traced.trace_id : ""))})`);
+  }
+  if (mem.used) said.push(`used ${mem.used}`);
+  if (kept.length){
+    const ids = kept.filter(k => k.memory_id);
+    said.push((ids.length ? `kept ${kept.length} (${ids.map((k, i) =>
+      receiptLink(String(i + 1), memoryUrl(k.memory_id))).join(", ")})` : `kept ${kept.length}`)
+      + esc(keptSaid(kept)));
+  }
+  if (mem.report) said.push(receiptLink("report saved", memoryUrl(mem.report)));
+  if (said.length) rows.push([label("Memory"), said.join(" · ")]);
+  rows.push([label("Total"), esc(receiptUsd(r.total_usd || 0)
+    + (typeof r.credits === "number" ? ` · ${receiptN(r.credits)} credits` : ""))]);
+  return rows;
+}
+const receiptBlock = r => !r ? "" : `<div class="receipt">
+  ${uiButton(receiptParts(r).map(esc).join(`<span class="receipt-gap" aria-hidden="true">|</span>`),
+    {level: "tertiary", size: "sm", cls: "receipt-line", onclick: "toggleReceipt(this)",
+     title: "What this turn did and cost", attrs: 'aria-expanded="false"'})}
+  <div class="receipt-detail" hidden>${uiTable(["", "This turn"], receiptRows(r))}</div>
+</div>`;
+// Open or close one card's receipt. Not remembered: the next redraw of the
+// chat closes it again.
+function toggleReceipt(btn){
+  const open = btn.getAttribute("aria-expanded") !== "true";
+  btn.setAttribute("aria-expanded", open ? "true" : "false");
+  if (btn.nextElementSibling) btn.nextElementSibling.hidden = !open;
+}
 
 const chatTurnCard = t => uiCard(`
   ${msgCopy(t.reply)}
@@ -211,7 +334,9 @@ const chatTurnCard = t => uiCard(`
   ${reportCard(t.report)}
   ${usedList(t.used)}
   ${keptList(t.consolidation)}
-  ${teleFooter(t)}`, {cls: "reply"});
+  ${teleFooter(t)}
+  ${receiptBlock(t.receipt)}
+  ${(t.notices || []).map(n => `<div class="meta plugin-notice">${esc(n)}</div>`).join("")}`, {cls: "reply"});
 
 // While a turn runs we stream it live: stages light up as the harness reaches
 // them, and the reply text appears token by token (with a blinking caret).
@@ -242,12 +367,10 @@ const streamingCard = m => uiCard(`
          : ""}</div>`}`, {cls: "reply"});
 
 // Messages loaded from history (a switched/opened conversation) have no live
-// latency/iteration data, and their stored form carries an internal
-// "[tools used: ...]" annotation — strip both so the thread reads cleanly.
-const stripTools = t => (t || "").replace(/\s*\[tools used:[\s\S]*\]\s*$/, "").trim();
+// latency/iteration data.
 const historicalCard = m => uiCard(`
-  ${msgCopy(stripTools(m.reply))}
-  <div class="r">${renderMarkdown(stripTools(m.reply))}</div>`, {cls: "reply"});
+  ${msgCopy(m.reply)}
+  <div class="r">${renderMarkdown(m.reply)}</div>`, {cls: "reply"});
 
 function renderChatLog(){
   if (!CHAT.length)
@@ -332,6 +455,10 @@ function autogrow(el){
 const turnWatchers = [];
 const tellWatchers = ev => turnWatchers.forEach(w => { try { w(ev); } catch(e){} });
 
+// While newChat() (dock.js) waits for the server to open the new conversation,
+// this holds that request. The server sends a message to whichever
+// conversation is active, so sendChat waits for it to settle before posting.
+let sessionChange = null;
 async function sendChat(fromInput){
   const input = fromInput || document.getElementById("msg") || document.getElementById("dmsg");
   const text = (input && input.value || "").trim();
@@ -345,6 +472,7 @@ async function sendChat(fromInput){
   // tick the elapsed counter while we wait for the first token
   const ticker = setInterval(() => { if (pending.pending && !pending.stream) syncChatLogs(); }, 1000);
   try {
+    if (sessionChange) await sessionChange;   // a new chat is still opening
     const res = await fetch("/api/chat/stream", {method:"POST",
       headers:{"Content-Type":"application/json"}, body:JSON.stringify({message:text})});
     noteStatus(res.status);
@@ -396,6 +524,8 @@ function wireComposer(){
   // Enter sends; Shift+Enter is a real newline now that this is a textarea.
   // preventDefault stops the sending keystroke also inserting that newline.
   if (i) i.onkeydown = e => {
+    // Some browsers clear isComposing before the IME's final keydown (229).
+    if (e.isComposing || e.keyCode === 229) return;
     if (e.key === "Enter" && !e.shiftKey){ e.preventDefault(); sendChat(i); }
   };
   if (i) i.oninput = () => autogrow(i);
