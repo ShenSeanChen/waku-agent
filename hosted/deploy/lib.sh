@@ -115,6 +115,24 @@ waku_admin() {
 # Empty at every other moment.
 WAKU_WRITE_TMP=""
 
+# A NEW 256-BIT KEY, as 64 hexadecimal characters. install.sh calls it once for
+# WAKU_SLACK_TOKEN_KEY, the key the gateway seals each workspace's Slack bot
+# token with (spec 026 C1). It is made here, on the VM, so no key is ever in
+# the repository, and waku_write_config never overwrites, so the key a VM was
+# installed with is the key it keeps: a second key would leave every stored
+# token unreadable.
+#
+# /dev/urandom through od and tr, which are coreutils: no openssl, and nothing
+# on the command line of any process. The length is checked because a short
+# read would otherwise become a short key that the gateway refuses at startup,
+# far from here.
+waku_new_key() {
+  local key
+  key=$(od -An -N32 -tx1 /dev/urandom | tr -d ' \n')
+  [ "${#key}" = 64 ] || waku_die "could not read 32 bytes from /dev/urandom for a new key"
+  printf '%s\n' "$key"
+}
+
 # Write one config file from stdin, once. $1 is the full path.
 #
 # NEVER OVERWRITES (spec: "a rerun skips finished steps and never overwrites

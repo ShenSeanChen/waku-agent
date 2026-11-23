@@ -83,7 +83,7 @@ EXPOSE 7777
 # One WAKU_* variable is set here, and only this one: WAKU_RELEASE_FILE names
 # a file this image itself may hold, so the image is the one place that knows
 # the path. Every other one -- WAKU_HOME, WAKU_DASHBOARD_HOST,
-# WAKU_DASHBOARD_PORT, TZ, the four WAKU_PLATFORM_* and HOME -- comes from the
+# WAKU_DASHBOARD_PORT, TZ, WAKU_HOSTED, the four WAKU_PLATFORM_* and HOME -- comes from the
 # spawner's fixed template (spec, "The spawner"). Setting any of them in two
 # places is how the two drift.
 ENV WAKU_RELEASE_FILE=/etc/waku/release.json

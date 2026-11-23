@@ -28,6 +28,11 @@ TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{43}$")
 # pattern is anchored and admits no space, newline or `=`.
 MEMORY_KEY_RE = re.compile(r"^mem_sk_[A-Za-z0-9_-]{43}$")
 
+# A team space's id (spec 032): a uuid as Waku Memory writes one. It lands in
+# a team home's environment as WAKU_MEMORY_SPACE, so the pattern is anchored
+# and admits lowercase hexadecimal and hyphens and nothing else.
+SPACE_ID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+
 STATUSES = frozenset({"active", "disabled", "deleted"})
 
 # The tenant bridge. install.sh creates it with this subnet before any service
@@ -143,6 +148,10 @@ def tenant_dirs(root: Path, tenant_id: str) -> TenantDirs:
 
 def is_memory_key(value: object) -> bool:
     return isinstance(value, str) and MEMORY_KEY_RE.match(value) is not None
+
+
+def is_space_id(value: object) -> bool:
+    return isinstance(value, str) and bool(SPACE_ID_RE.fullmatch(value))
 
 
 def is_project_id(value: object) -> bool:
