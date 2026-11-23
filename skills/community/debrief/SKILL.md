@@ -1,6 +1,6 @@
 ---
-name: meeting-debrief
-description: Capture what happened after a meeting or call — decisions, who owes what, follow-ups to book. Use for "debrief", "how did it go", "log my meeting", "what did I commit to", "wrap up my call with", "that meeting just ended".
+name: debrief
+description: Debrief once a conversation has ended — decisions made, who owes what, follow-ups. Use for "debrief", "how did it go", "what did I commit to", "log what we decided", "it just ended".
 ---
 
 ## How to debrief
