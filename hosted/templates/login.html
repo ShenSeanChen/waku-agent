@@ -3,21 +3,32 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Sign in to waku</title>
+<title>Sign in to Waku</title>
+<link rel="icon" href="/auth/static/waku-mark.svg" type="image/svg+xml">
+<!-- The design system, then the page. Order matters: login.css reads the
+     tokens these three declare, and a stylesheet cannot read a variable
+     declared after it in a file that has not loaded yet. -->
+<link rel="stylesheet" href="/auth/static/design/tokens.css">
+<link rel="stylesheet" href="/auth/static/design/type.css">
+<link rel="stylesheet" href="/auth/static/design/fonts.css">
+<link rel="stylesheet" href="/auth/static/design/controls.css">
 <link rel="stylesheet" href="/auth/static/login.css">
 </head>
 <body data-supabase-url="@@SUPABASE_URL@@" data-supabase-key="@@SUPABASE_KEY@@">
 <main>
-  <h1>waku</h1>
-  <p id="lede">Sign in with a link sent to your email.</p>
+  <img id="mark" src="/auth/static/waku-mark.svg" alt="" width="44" height="44">
+  <h1>Waku</h1>
+  <p id="lede">Your agent, on your own host. Sign in with a link sent to your email.</p>
   <form id="form">
     <label for="email">Email</label>
-    <input id="email" name="email" type="email" autocomplete="email" required>
-    <button id="send" type="submit">Send me a link</button>
+    <input id="email" name="email" type="email" data-slot="input"
+           autocomplete="email" autocapitalize="off" spellcheck="false"
+           placeholder="you@example.com" required>
+    <button id="send" type="submit" data-slot="button">Send me a link</button>
   </form>
   <p id="status" role="status"></p>
+  <p id="foot">Invite only while Waku is in preview.</p>
 </main>
-<script src="/auth/static/supabase.js"></script>
 <script src="/auth/static/login.js"></script>
 </body>
 </html>

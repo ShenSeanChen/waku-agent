@@ -42,6 +42,18 @@ HANDOFF_FETCH_SITES = frozenset({"", "same-site", "same-origin"})
 # Anything else -- image, iframe, empty (fetch/XHR), script -- is a
 # subresource load, and a subresource must not mint a session.
 HANDOFF_FETCH_DESTS = frozenset({"", "document"})
+# Spec 008: GET /auth/embed is loaded INSIDE an iframe on waku.one, so its
+# navigation is an iframe one and may come from another site entirely (a
+# developer's http://localhost:3000). What it must never be is a top-level
+# document: an attacker who mints a code on their own account and walks
+# somebody's browser to it top-level would sign that browser into the
+# attacker's chat on the tenant host's own site. Inside a frame the cookie is
+# partitioned to the framing site, and frame-ancestors keeps any other site
+# from showing the result. `same-origin` and `none` are refused: the real
+# request comes from waku.one, never from the tenant host's own pages (which a
+# container serves) and never from a typed URL.
+EMBED_FETCH_SITES = frozenset({"", "same-site", "cross-site"})
+EMBED_FETCH_DESTS = frozenset({"", "iframe"})
 FETCH_SITE_HEADER = "Sec-Fetch-Site"
 FETCH_DEST_HEADER = "Sec-Fetch-Dest"
 
@@ -189,4 +201,43 @@ def handoff_refusal(request: web.Request) -> str:
         return "cross-site hand-off"
     if destination not in HANDOFF_FETCH_DESTS:
         return "not a navigation"
+    return ""
+
+
+def is_top_level_page(request: web.Request) -> bool:
+    """A GET or HEAD that is a tab's own document, not a frame or a fetch.
+
+    WHY THIS EXISTS (Sean, 2026-10-04). The embed cookie is Partitioned, and a
+    partitioned cookie is keyed by the TOP-LEVEL SITE. The frame's top-level
+    site is waku.one; a tab opened at `<tenant>.agent.waku.one` has top-level
+    site waku.one too. So the browser sends the frame's embed cookie to that
+    tab, and the gateway has to tell the two apart by the request, not by the
+    cookie. A tab's document is `Sec-Fetch-Dest: document`; with no fetch
+    metadata at all (an older Safari) it is a request that asks for HTML.
+    A repeated header is not a navigation, for handoff_refusal's reason.
+    """
+    if request.method not in CHECKED_EXEMPT_METHODS:
+        return False
+    destinations = request.headers.getall(FETCH_DEST_HEADER, ())
+    if len(destinations) > 1:
+        return False
+    if destinations:
+        return destinations[0].strip().lower() == "document"
+    return "text/html" in request.headers.get("Accept", "")
+
+
+def embed_refusal(request: web.Request) -> str:
+    """Empty when GET /auth/embed may be honoured: handoff_refusal's rule for
+    a navigation that is an iframe rather than a document. One copy of each
+    header, for the reason given there."""
+    sites = request.headers.getall(FETCH_SITE_HEADER, ())
+    destinations = request.headers.getall(FETCH_DEST_HEADER, ())
+    if len(sites) > 1 or len(destinations) > 1:
+        return "more than one fetch-metadata header"
+    site = (sites[0] if sites else "").strip().lower()
+    destination = (destinations[0] if destinations else "").strip().lower()
+    if site not in EMBED_FETCH_SITES:
+        return "not from a framing page"
+    if destination not in EMBED_FETCH_DESTS:
+        return "not an iframe"
     return ""

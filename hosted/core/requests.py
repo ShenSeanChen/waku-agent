@@ -15,16 +15,33 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from hosted.core.tenant import is_known_timezone, is_project_id, is_proxy_token, is_tenant_id
+from hosted.core.connectors import is_connector_name
+from hosted.core.tenant import (
+    is_known_timezone,
+    is_memory_key,
+    is_project_id,
+    is_proxy_token,
+    is_space_id,
+    is_tenant_id,
+)
 
-OPERATIONS = frozenset({"provision", "start", "stop", "list", "task"})
+OPERATIONS = frozenset({"provision", "start", "stop", "list", "tenants", "task"})
 TASKS = frozenset({"backup", "restore", "archive", "inspect", "inspect-stop"})
 
 _KEYS: dict[str, frozenset[str]] = {
-    "provision": frozenset({"op", "tenant_id", "project_id"}),
-    "start": frozenset({"op", "tenant_id", "project_id", "timezone", "token"}),
+    # connectors is optional (spec 029 B2): the names of the connectors this
+    # tenant signed in to, which provisioning writes into the tenant's
+    # mcp.json. Left out, the tenant has none.
+    "provision": frozenset({"op", "tenant_id", "project_id", "connectors"}),
+    # memory_key is optional (spec 004): a tenant whose Waku Memory key has not
+    # been minted yet still starts, without one.
+    # memory_space is optional too (spec 032 A4): the team space a team home
+    # saves into. A person's start does not carry it.
+    "start": frozenset({"op", "tenant_id", "project_id", "timezone", "token", "memory_key",
+                        "connectors", "memory_space"}),
     "stop": frozenset({"op", "tenant_id"}),
     "list": frozenset({"op"}),
+    "tenants": frozenset({"op"}),
     # project_id is OPTIONAL here and required only for `restore`, which is a
     # per-TASK requirement and _REQUIRED is per-OPERATION, so service.handle
     # enforces it rather than parse(). restore recreates the tenant's two
@@ -41,6 +58,7 @@ _REQUIRED: dict[str, tuple[str, ...]] = {
     "start": ("tenant_id", "project_id", "timezone", "token"),
     "stop": ("tenant_id",),
     "list": (),
+    "tenants": (),
     "task": ("tenant_id", "task"),
 }
 
@@ -57,6 +75,9 @@ class SpawnerRequest:
     timezone: str = "UTC"
     token: str = ""
     task: str = ""
+    memory_key: str = ""
+    connectors: tuple[str, ...] = ()
+    memory_space: str = ""
 
 
 def parse(payload: object) -> SpawnerRequest:
@@ -92,9 +113,28 @@ def parse(payload: object) -> SpawnerRequest:
     if "token" in payload and not is_proxy_token(token):
         raise Invalid("token is not a proxy token")
 
+    memory_key = payload.get("memory_key", "")
+    if "memory_key" in payload and not is_memory_key(memory_key):
+        raise Invalid("memory_key is not a Waku Memory key")
+
+    memory_space = payload.get("memory_space", "")
+    if "memory_space" in payload and not is_space_id(memory_space):
+        # It becomes a line of a container's environment, so only a uuid is
+        # taken.
+        raise Invalid("memory_space is not a team space's id")
+
+    connectors = payload.get("connectors", [])
+    if (not isinstance(connectors, list) or len(set(map(str, connectors))) != len(connectors)
+            or not all(is_connector_name(name) for name in connectors)):
+        # A name becomes part of an address in the tenant's mcp.json, so only
+        # a name on the list is taken (hosted/core/connectors.py).
+        raise Invalid("connectors is a list of distinct connector names")
+
     task = payload.get("task", "")
     if "task" in payload and task not in TASKS:
         raise Invalid(f"task must be one of {sorted(TASKS)}, not {task!r}")
 
     return SpawnerRequest(op=op, tenant_id=tenant_id, project_id=project_id,
-                          timezone=timezone, token=token, task=task)
+                          timezone=timezone, token=token, task=task,
+                          memory_key=memory_key, connectors=tuple(connectors),
+                          memory_space=memory_space)

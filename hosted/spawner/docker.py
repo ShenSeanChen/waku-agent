@@ -1,8 +1,10 @@
-"""DockerRuntime: the five operations ports.TenantRuntime names, and no sixth.
+"""DockerRuntime: the operations ports.TenantRuntime names, and no more.
 
 The spawner is root with CAP_SYS_ADMIN and the data disk's block device. EVERY
 NEW OPERATION HERE IS A NEW PRIVILEGED VERB, so this class implements exactly
-the five in the Protocol and exactly the five tasks core/requests.TASKS names.
+the ones in the Protocol and exactly the five tasks core/requests.TASKS names.
+`tenant_ids` made the Protocol six; the conformance test in
+test_spawner_service.py counts them, so the number lives there and not here.
 Widening either set is a spec change.
 
 What each verb can and cannot do, so a reviewer can check the list rather than
@@ -46,7 +48,7 @@ from hosted.core.tenant import (
 )
 from hosted.ports.runtime import RunningContainer
 from hosted.spawner import template, xfsquota
-from hosted.spawner.engine import Engine
+from hosted.spawner.engine import Engine, EngineError
 
 _LOG = log.get(__name__)
 
@@ -198,9 +200,26 @@ class DockerRuntime:
 
     # --- provisioning ----------------------------------------------------
 
-    async def provision(self, tenant_id: str, project_id: int) -> None:
+    async def provision(self, tenant_id: str, project_id: int,
+                        connectors: tuple[str, ...] = ()) -> None:
+        """The `provision` operation: _provision() under the tenant's lock.
+
+        The gateway asks for it when a tenant is created, and again when a
+        person signs in to a connector or disconnects one while their
+        container runs (spec 029 B2). Under the lock, so it never runs beside
+        the provision a start is making: two of them would both write the
+        staging file mcp.json is renamed from.
+        """
+        async with self._lock_for(tenant_id):
+            await self._provision(tenant_id, project_id, connectors)
+
+    async def _provision(self, tenant_id: str, project_id: int,
+                         connectors: tuple[str, ...] = ()) -> None:
         """Create what is missing. Runs before EVERY start, so a failed first
         provision is repaired on the next one.
+
+        `connectors` names the connectors this tenant signed in to (spec 029
+        B2). Provisioning makes the tenant's mcp.json list exactly those.
 
         THE CREATE PATH AND THE REPEAT PATH ARE DIFFERENT, and this is the most
         important seven lines in the class.
@@ -243,6 +262,8 @@ class DockerRuntime:
         body = template.task_container(
             config, tenant_id=tenant_id,
             command=["python", "-m", "hosted.spawner.provision_main"],
+            # Spec 004 E: where the treg entry points, only when the relay is on.
+            extra_env=tuple(template.provision_env(config, connectors)),
             # NOT KIND_TASK. See template.KIND_PROVISION: labelling the
             # spawner's own bookkeeping as an operator task makes a tenant's
             # start refuse their own retried start with {"code": "busy"}.
@@ -303,31 +324,37 @@ class DockerRuntime:
     # --- the tenant's own container --------------------------------------
 
     async def start(self, tenant_id: str, project_id: int, timezone: str,
-                    token: str) -> RunningContainer:
+                    token: str, memory_key: str = "",
+                    connectors: tuple[str, ...] = (),
+                    memory_space: str = "") -> RunningContainer:
         if not is_tenant_id(tenant_id):
             # start() validates its OWN id before it does anything, including
             # before the label query below. The socket path has already run
             # core/requests.parse, so this is the in-process path's guard.
             raise ValueError(f"not a tenant id: {tenant_id!r}")
         # One tenant, one start at a time. Without this, the gateway's
-        # documented retry ("a start that does not answer within 15 seconds ...
+        # documented retry ("a start that does not answer within 60 seconds ...
         # Try again.") can run concurrently with the start it is retrying, and
         # the two race over the same container name and the same directories.
         async with self._lock_for(tenant_id):
-            return await self._start_locked(tenant_id, project_id, timezone, token)
+            return await self._start_locked(tenant_id, project_id, timezone, token,
+                                            memory_key, connectors, memory_space)
 
     def _lock_for(self, tenant_id: str) -> asyncio.Lock:
         return self._locks.setdefault(tenant_id, asyncio.Lock())
 
     async def _start_locked(self, tenant_id: str, project_id: int, timezone: str,
-                            token: str) -> RunningContainer:
+                            token: str, memory_key: str = "",
+                            connectors: tuple[str, ...] = (),
+                            memory_space: str = "") -> RunningContainer:
         await self._refuse_if_busy(tenant_id)
         await self.stop(tenant_id)          # exactly one container per tenant
-        await self.provision(tenant_id, project_id)
+        await self._provision(tenant_id, project_id, connectors)
 
         body = template.tenant_container(
             self._config, tenant_id=tenant_id, project_id=project_id,
-            timezone=timezone, token=token)
+            timezone=timezone, token=token, memory_key=memory_key,
+            memory_space=memory_space)
         name = template.container_name(tenant_id, template.KIND_TENANT)
         # A previous container with this name may be mid-removal by the
         # AutoRemove reaper. Removing by name first clears it when it is still
@@ -354,8 +381,53 @@ class DockerRuntime:
         await self._engine.remove(name)
         _LOG.info("stopped tenant=%s", tenant_id)
 
+    async def tenant_ids(self) -> list[str]:
+        """Every tenant container this spawner labelled, by id.
+
+        A DIFFERENT QUESTION FROM `list`, AND DELIBERATELY WIDER. `list`
+        answers "may the gateway forward to this container?", so it drops one
+        with no address on the tenant bridge and one at an address its project
+        id does not derive -- both right, because forwarding to either is
+        sending a signed-in person somewhere the platform never meant. This
+        answers "is this container ours?", which is what STOPPING needs, and
+        the containers in the difference are exactly the ones a restore is
+        about to delete the directories out from under. The failure that costs
+        is in designs/backup-restore-integrity.md: a bind mount left on a dead
+        inode, and the next `docker exec` reporting "possible container
+        breakout detected" in the middle of a disaster recovery.
+
+        THE LABEL AND THE ID SHAPE ARE THE WHOLE FILTER. No address check, no
+        control.db join -- the spawner opens no database, and a tenant the
+        restored control.db will not know is precisely a container that must
+        still be stopped. `is_tenant_id` stays because the id is a closed set
+        everywhere else it is used and `stop` joins it to a container name.
+        """
+        ids = []
+        for entry in await self._engine.containers(
+                label=f"{template.LABEL_KIND}={template.KIND_TENANT}"):
+            tenant_id = (entry.get("Labels") or {}).get(template.LABEL_TENANT, "")
+            if not is_tenant_id(tenant_id):
+                _LOG.warning("ignoring container %s with label tenant=%r",
+                             entry.get("Id", "")[:12], tenant_id)
+                continue
+            ids.append(tenant_id)
+        return sorted(set(ids))
+
+    async def _tenant_image_id(self) -> str:
+        """The id the tenant image tag names now, or "" when the daemon
+        cannot say. With "" no container is called stale: a restart that
+        nobody can justify is worse than a container that waits for its idle
+        stop."""
+        try:
+            return await self._engine.image_id(self._config.tenant_image)
+        except EngineError as exc:
+            _LOG.warning("could not read the id of %s (%s); no container is "
+                         "reported stale", self._config.tenant_image, exc)
+            return ""
+
     async def list(self) -> list[RunningContainer]:
         running = []
+        current = await self._tenant_image_id()
         for entry in await self._engine.containers(
                 label=f"{template.LABEL_KIND}={template.KIND_TENANT}"):
             tenant_id = (entry.get("Labels") or {}).get(template.LABEL_TENANT, "")
@@ -388,15 +460,23 @@ class DockerRuntime:
                 _LOG.warning("tenant=%s has address %r, which no project id "
                              "derives; not listing it", tenant_id, address)
                 continue
+            # ImageID is the image the container was CREATED from. upgrade.sh
+            # rebuilds the tag under a running container, and then the two
+            # ids differ until the container is replaced.
+            created_from = entry.get("ImageID")
+            stale = bool(current and isinstance(created_from, str)
+                         and created_from and created_from != current)
             running.append(RunningContainer(tenant_id=tenant_id, address=address,
-                                            port=template.DASHBOARD_PORT))
+                                            port=template.DASHBOARD_PORT,
+                                            stale=stale))
         return running
 
     async def _refuse_if_busy(self, tenant_id: str) -> None:
         """The maintenance mark, enforced by the spawner so it survives a
         gateway restart.
 
-        It blocks on template.BLOCKING_KINDS -- KIND_TASK and KIND_INSPECT,
+        THREE CALLERS: `start`, `_restore`, and `_archive`. It blocks on
+        template.BLOCKING_KINDS -- KIND_TASK and KIND_INSPECT,
         which are the OPERATOR's containers. It does NOT block on
         KIND_PROVISION, the spawner's own bookkeeping, which every start
         creates on its way to starting the container: blocking on that would
@@ -412,9 +492,11 @@ class DockerRuntime:
             kind = (entry.get("Labels") or {}).get(template.LABEL_KIND)
             if kind in template.BLOCKING_KINDS:
                 raise Busy(
-                    f"tenant {tenant_id} has a {kind} container running. "
-                    "Starting their dashboard now would put two processes "
-                    "on one state.db.")
+                    f"tenant {tenant_id} has a {kind} container running, and "
+                    "it binds their home and env directories. Starting their "
+                    "dashboard would put two processes on one state.db; "
+                    "archiving or restoring would move those directories out "
+                    "from under a live mount.")
 
     # --- the five file tasks ---------------------------------------------
     #
@@ -578,14 +660,41 @@ class DockerRuntime:
         runs, on exactly what the spec describes. The check below is what makes
         a future regression loud instead of silent.
 
-        NOTHING HERE STOPS A RUNNING TENANT CONTAINER, and F3 must. A task is
-        not a start, and _refuse_if_busy is one-way -- a task blocks a start, a
-        start does not block a task -- so a single-tenant restore empties /data
-        and /work under a live dashboard holding state.db open. The spec puts
-        "stop every tenant container first" on `restore.sh --all`, which is
-        F3's; a per-tenant restore needs the same, and the sequencing belongs
-        with the caller, which already has `stop` as a verb.
+        NOTHING HERE STOPS A RUNNING TENANT CONTAINER, and F3's caller does:
+        `_act` calls `launcher.stop(tenant.id)` before this task, and
+        `restore.sh --all` stops the whole fleet through `stop-all` first. The
+        sequencing belongs with the caller, which already has `stop` as a verb.
+        What the caller CANNOT reach is a task or inspect container -- `stop`
+        names a KIND_TENANT container and nothing else -- so those are refused
+        here instead; see the first lines of the body.
         """
+        # EVERY CONTAINER HOLDING THIS TENANT'S MOUNTS MUST BE GONE, NOT JUST
+        # THEIR DASHBOARD. `_refuse_if_busy` was called only from `start`, and
+        # the note below said so -- but the containers it blocks on,
+        # KIND_TASK and KIND_INSPECT, bind `home` and `env` exactly as the
+        # tenant container does (template.task_container,
+        # template.inspect_container), and those are the two directories the
+        # lines below remove and re-create.
+        #
+        # An inspect container is the one that bites: it is operator-started,
+        # AutoRemove is deliberately off, and it lives until `inspect-stop`.
+        # An operator who inspects a tenant and then runs `restore.sh --all`
+        # gets the failure designs/backup-restore-integrity.md records -- a
+        # bind mount left on a removed directory, and the next `docker exec`
+        # reporting "possible container breakout detected" in the middle of a
+        # disaster recovery. The gateway's `stop-all` cannot reach them: it
+        # stops by tenant id and `stop` only knows how to name a KIND_TENANT
+        # container.
+        #
+        # A REFUSAL AND NOT A WIDER STOP, deliberately. An inspect container
+        # holds a dashboard someone is looking at, and killing it from under a
+        # restore is a decision an operator should make with `inspect-stop`,
+        # not one this method should make for them. Busy is the maintenance
+        # answer the gateway already knows how to render.
+        #
+        # This runs BEFORE the manifest read and long before `_archive`, so a
+        # refusal here costs nothing: the tenant's tree is untouched.
+        await self._refuse_if_busy(tenant_id)
         staging = self._staging(tenant_id)
         if staging.is_symlink():
             # is_dir() FOLLOWS a link; _backup refuses one outright. Two guards
@@ -744,7 +853,26 @@ class DockerRuntime:
         image, no network, the tenant's two mounts and the ONE extra the task
         needs -- the archive root, which is the platform's own directory and
         not any tenant's.
+
+        IT REFUSES A BUSY TENANT, and that is not the same guard `_restore`
+        already has: `_restore` calls `_refuse_if_busy` and then calls THIS,
+        but `tenant.sh delete` reaches this method through the admin verb
+        `delete`, which runs `archive` on its own and never went past that
+        check. An inspect container is the one that bites -- it is
+        operator-started, AutoRemove is deliberately off, and it lives until
+        `inspect-stop`, so `launcher.stop` and `stop-all` both leave it
+        running with `state.db` open. The archive it would then pack is the
+        ONLY copy a deleted tenant has (backup.sh's own comment: archives are
+        in no restic snapshot), so a torn database here is not recoverable
+        from anywhere. Refusing costs the operator one `tenant.sh
+        inspect-stop`; the admin verb has already set the tenant's status to
+        disabled by this point, which `tenant.sh enable` reverses.
+
+        The double call on the restore path is deliberate and free: the query
+        is one label lookup and nothing between the two creates a blocking
+        container.
         """
+        await self._refuse_if_busy(tenant_id)
         archive = self._tenant_directory_under(self._config.archive_root, tenant_id)
         stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
         name = f"{tenant_id}-{stamp}" + (f"-{suffix}" if suffix else "")

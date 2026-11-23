@@ -18,7 +18,7 @@ caps it at 100 lines, so the detail lives in the files it points to.
 | decide how much process a change needs | [conventions §2](docs/context/conventions.md#2-how-much-process-a-change-needs) |
 | add capability (tool, gateway, provider, store) | [conventions §3](docs/context/conventions.md#3-where-new-capability-goes-the-footprint-ladder), the footprint ladder |
 | add a skill | [CONTRIBUTING.md](CONTRIBUTING.md): no Python needed |
-| connect Waku Memory, or carry skills to another agent | [docs/integrations.md](docs/integrations.md#share-one-memory-with-your-other-agents-waku-memory) |
+| connect Waku Memory (the Waku plugin), or carry skills to another agent | [docs/integrations.md](docs/integrations.md#share-one-memory-with-your-other-agents-waku-memory) |
 | add a tool | the `new-tool` skill in `.claude/skills/new-tool/` |
 | run waku for other people on a server | [hosted/README.md](hosted/README.md) |
 | touch the loop, memory, graph engine or a tool contract | [docs/architecture.md](docs/architecture.md), then conventions §2: it may need a proposal |
@@ -38,16 +38,20 @@ caps it at 100 lines, so the detail lives in the files it points to.
    machine: no hidden network calls, nothing reads or sends `.env` or keys, and
    nothing runs at install time. `hosted/` is the platform's own deployment and
    reads the platform's own configuration by design; it ships to nobody.
-3. **No new default dependency.** The core is stdlib plus the Anthropic and
-   OpenAI clients. Anything else goes behind an extra (`[voice]`, `[telegram]`).
+3. **No new default dependency, with one exception.** The core is stdlib plus
+   the Anthropic and OpenAI clients. `mcp` is the exception, because Waku Memory
+   connects over it. Anything else goes behind an extra (`[voice]`, `[telegram]`).
 4. **Every behaviour change gets a deterministic eval** in `evals/deterministic/`
    (0/1, offline). A bug fix adds the case that would have caught it.
 5. **Nothing under `waku/` or `evals/` imports from `examples/` or `lab/`,** and
    `lab/` never ships to PyPI.
 6. **No emojis** in the dashboard, CLI output or docs prose.
-7. **The Waku brand is not MIT.** The design system, the Waku mark and the names
-   are listed in `LICENSE-BRAND`. List any new brand file there, and never copy
-   one into `examples/`.
+7. **Two things here are not MIT.** `hosted/` is Elastic License 2.0
+   (`hosted/LICENSE`): runnable by anyone, including commercially, but not
+   offerable to third parties as a service. And the brand — the design system,
+   the Waku mark and the names — is `LICENSE-BRAND`. List any new brand file
+   there, never copy one into `examples/`, and **do not move code between
+   `hosted/` and `waku/` without saying which license it lands under.**
 8. **Don't edit the copied design files** in `waku/ops/static/design/`. They are
    synced from the private master; ask for a new token in an issue.
 9. **Fix the doc your change makes false,** in the same PR.
@@ -78,8 +82,8 @@ Everything else in the rulebook is checked in review. The judge evals in
 `hosted-docker` needs a Docker daemon and an XFS filesystem, so it is a job of
 its own, and its row above says "advisory" because it is: a red run there does
 not block a merge until `hosted-docker` is added to `main`'s required checks.
-It says nothing yet about the bridge rules -- `firewall.sh` and `networks.sh`
-arrive with the rest of spec 001's group C.
+It now checks the two bridges `networks.sh` creates, but nothing yet about the
+rules that make them safe: `firewall.sh` is still spec 001's group C.
 
 ## Commands
 

@@ -1,13 +1,123 @@
-:root { color-scheme: light dark; }
-body { font: 16px/1.5 system-ui, sans-serif; margin: 0;
-       display: grid; place-items: center; min-height: 100vh; }
-main { width: min(28rem, 90vw); }
-h1 { font-size: 1.5rem; margin: 0 0 0.25rem; }
-#lede { margin: 0 0 1.5rem; opacity: 0.75; }
-form { display: grid; gap: 0.5rem; }
-label { font-size: 0.875rem; }
-input, button { font: inherit; padding: 0.6rem 0.75rem; border-radius: 0.5rem;
-                border: 1px solid currentColor; background: transparent; }
-button { cursor: pointer; }
-button[disabled] { opacity: 0.5; cursor: default; }
-#status { min-height: 1.5rem; margin: 1rem 0 0; }
+/* The sign-in page, in the Waku design system.
+ *
+ * Every colour, size, face and corner here is a token from design/. The rule
+ * the dashboard's own stylesheet follows applies to this page for the same
+ * reason: a literal written here is a second source of truth for a value the
+ * design system already owns, and it drifts silently the first time the
+ * system changes. evals/deterministic/hosted/test_login_page.py enforces it.
+ *
+ * The control contract (design/controls.css) already owns the shape, the
+ * transition, the focus ring, the pressed ground and the disabled colours of
+ * anything carrying data-slot. What is left here is what that file calls the
+ * level: which ground and which border this page's one field and one button
+ * are. Those follow .btn-primary and the dashboard's text field.
+ */
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: var(--space-6);
+  background: var(--surface-bg);
+  color: var(--text-ink);
+  font-family: var(--face-sans);
+  font-size: var(--text-base);
+  line-height: var(--leading-normal);
+  /* The bone ground and the dark one are both the system's. tokens.css
+     already switches every value on prefers-color-scheme, so this page
+     follows the browser without owning a single colour of its own. */
+}
+
+main {
+  width: min(26rem, 100%);
+  background: var(--surface-paper);
+  border: var(--rule-width) solid var(--rule);
+  border-radius: var(--radius);
+  padding: var(--space-8);
+}
+
+#mark { display: block; margin-bottom: var(--space-4); }
+
+h1 {
+  font-family: var(--face-display);
+  font-size: var(--text-xl);
+  font-weight: var(--font-weight-normal);
+  line-height: var(--leading-tight);
+  margin: 0;
+}
+
+#lede {
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  margin: var(--space-2) 0 var(--space-6);
+}
+
+form { display: grid; gap: var(--space-2); }
+
+label {
+  font-family: var(--face-mono);
+  font-size: var(--text-xs);
+  font-weight: var(--font-weight-medium);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-label);
+  color: var(--text-muted);
+}
+
+/* The field: the dashboard's text input, which is a transparent ground and
+   the --input edge, moving to accent when it has focus. The focus RING comes
+   from controls.css; this is the border underneath it. */
+input {
+  background: transparent;
+  border: var(--rule-width) solid var(--input);
+  color: var(--text-ink);
+  font-family: inherit;
+  font-size: var(--text-sm);
+  padding: var(--space-2) var(--space-3);
+  min-width: 0;
+}
+input::placeholder { color: var(--text-faint); }
+
+/* The button: .btn plus .btn-primary, which is paper on a hard rule that
+   turns amber under the pointer. */
+button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  font-family: var(--face-mono);
+  font-size: var(--text-xs);
+  font-weight: var(--font-weight-medium);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-label);
+  line-height: 1;
+  padding: var(--control-pad-y) var(--control-pad-x);
+  margin-top: var(--space-2);
+  background: var(--surface-paper);
+  border: var(--rule-width) solid var(--rule-hard);
+  color: var(--text-ink);
+}
+button:hover:not(:disabled) { border-color: var(--accent); }
+button:disabled { cursor: default; }
+
+/* Reserved, not collapsed: the line appears the moment the form is submitted,
+   and a box that grows at that moment moves the button out from under the
+   pointer mid-click. */
+#status {
+  min-height: var(--space-6);
+  margin: var(--space-4) 0 0;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+#status.bad { color: var(--bad); }
+
+#foot {
+  margin: var(--space-6) 0 0;
+  padding-top: var(--space-4);
+  border-top: var(--rule-width) solid var(--rule);
+  font-family: var(--face-mono);
+  font-size: var(--text-xs);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+  color: var(--text-faint);
+}

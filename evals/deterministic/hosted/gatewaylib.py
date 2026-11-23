@@ -23,10 +23,15 @@ owns the classes they build.
 from __future__ import annotations
 
 import asyncio
+import base64
+import dataclasses
+import gzip
+import hashlib
 import json
 import socket
 import threading
 import time
+import urllib.parse
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -36,13 +41,18 @@ from aiohttp import web
 from cryptography.hazmat.primitives.asymmetric import ec
 
 from hosted.core import idle, quota
+from hosted.core.connectors import VENDORS, Vendor
 from hosted.core.tenant import address_for_project
 from hosted.gateway.app import Gateway
-from hosted.gateway.config import GatewayConfig
+from hosted.gateway.config import GatewayConfig, SlackSettings
+from hosted.gateway.connect import Connect, VendorApi
 from hosted.gateway.forward import ContainerForwarder
 from hosted.gateway.identity import JwksVerifier
 from hosted.gateway.launch import Launcher
+from hosted.gateway.secretbox import SecretBox
+from hosted.gateway.slack import SlackApi, SlackRoutes
 from hosted.gateway.store import ControlDb
+from hosted.gateway.team_homes import HomeKeys, TeamHomeRoutes
 from hosted.ports.runtime import RunningContainer
 
 
@@ -87,26 +97,46 @@ class FakeSpawner:
         # start answer a port nothing listens on. A list of ports, consumed in
         # order, with the last one repeating.
         self.ports: list[int] = []
+        # Tenant ids the spawner has containers for but `list` would never
+        # report: see tenant_ids below.
+        self.labelled_only: list[str] = []
+        # Tenant ids whose container `list` reports as created from an older
+        # build of the tenant image. A test adds an id to say "an upgrade
+        # rebuilt the image under this container"; a start takes it out,
+        # because every start creates a container from the current image.
+        self.old_image: set[str] = set()
 
     def _port(self) -> int:
         if not self.ports:
             return self.port
         return self.ports.pop(0) if len(self.ports) > 1 else self.ports[0]
 
-    async def provision(self, tenant_id: str, project_id: int) -> None:
-        self.requests.append({"op": "provision", "tenant_id": tenant_id,
-                              "project_id": project_id})
+    async def provision(self, tenant_id: str, project_id: int,
+                        connectors: tuple[str, ...] | None = None) -> None:
+        request = {"op": "provision", "tenant_id": tenant_id, "project_id": project_id}
+        if connectors is not None:
+            request["connectors"] = list(connectors)
+        self.requests.append(request)
         if self.fail_provision is not None:
             raise self.fail_provision
 
     async def start(self, tenant_id: str, project_id: int, timezone: str,
-                    token: str) -> RunningContainer:
-        self.requests.append({"op": "start", "tenant_id": tenant_id,
-                              "project_id": project_id, "timezone": timezone,
-                              "token": token})
+                    token: str, memory_key: str = "",
+                    connectors: tuple[str, ...] | None = None,
+                    memory_space: str | None = None) -> RunningContainer:
+        request = {"op": "start", "tenant_id": tenant_id,
+                   "project_id": project_id, "timezone": timezone, "token": token}
+        if memory_key:
+            request["memory_key"] = memory_key
+        if memory_space is not None:
+            request["memory_space"] = memory_space
+        if connectors is not None:
+            request["connectors"] = list(connectors)
+        self.requests.append(request)
         await asyncio.sleep(self.start_delay)
         if self.fail_start is not None:
             raise self.fail_start
+        self.old_image.discard(tenant_id)
         container = RunningContainer(
             tenant_id=tenant_id,
             address=self.address or address_for_project(project_id),
@@ -136,7 +166,20 @@ class FakeSpawner:
 
     async def list(self) -> list[RunningContainer]:
         self.requests.append({"op": "list"})
-        return list(self.running.values())
+        return [dataclasses.replace(c, stale=c.tenant_id in self.old_image)
+                for c in self.running.values()]
+
+    async def tenant_ids(self) -> list[str]:
+        """Every labelled tenant container, UNFILTERED -- the real spawner's
+        `tenants` op applies the kind label and the id shape and nothing else.
+
+        `labelled_only` is how a test says "the spawner has a container the
+        gateway would refuse to forward to": a tenant at an address its
+        project id does not derive, or one control.db has lost. Those never
+        appear in `list`, which is the whole reason this operation exists.
+        """
+        self.requests.append({"op": "tenants"})
+        return sorted(set(self.running) | set(self.labelled_only))
 
     async def task(self, tenant_id: str, task: str, project_id: int = 0) -> dict:
         self.requests.append({"op": "task", "tenant_id": tenant_id,
@@ -297,17 +340,36 @@ class Harness:
         self.store = ControlDb(tmp_path / "control.db", now=self.clock)
         self.spawner = spawner
         self.fleet = idle.Fleet(self.clock, max_running=max_running)
+        # Spec 032: what opens a team home's key, with the fake sealing key.
+        self.home_keys = HomeKeys(self.store, SecretBox(bytes.fromhex(SLACK_TOKEN_KEY)))
         self.launcher = Launcher(store=self.store, spawner=spawner,
-                                 fleet=self.fleet, now=self.clock)
+                                 fleet=self.fleet, now=self.clock,
+                                 home_keys=self.home_keys)
         self.turns = quota.TurnWindow(self.clock)
         self.plans = quota.DEFAULT_PLANS
         self.verifier = JwksVerifier(
             jwks_url=JWKS_URL, issuer=ISSUER, audience=AUDIENCE,
             fetch=lambda _url: self.jwks, now=self.clock)
         self.forwarder: object = RecordingForwarder()
+        self.memory_keys = None
         self.session = None
         self.container = None
         self._real_forwarding = False
+        # Spec 026 C: set by use_slack. `woken` counts the scheduler ticks the
+        # Slack routes asked for.
+        self.slack: SlackRoutes | None = None
+        self.slack_settings: SlackSettings | None = None
+        self._fake_slack: FakeSlack | None = None
+        self.woken = 0
+        # Spec 029: set by use_connect.
+        self.connect: Connect | None = None
+        self._fake_vendors: dict[str, FakeVendor] = {}
+        # Spec 032: set by use_team_homes.
+        self.team_homes: TeamHomeRoutes | None = None
+        # Spec 029 F: the GitHub App's client, as config/gateway.env gives it.
+        self.connect_clients: dict[str, tuple[str, str]] = {}
+        # What a wake also calls, when a test wires a real Scheduler's kick.
+        self.on_wake = lambda: None
         self.config = GatewayConfig(
             apex_host=APEX, bind_host="127.0.0.1", port=0,
             control_db=tmp_path / "control.db",
@@ -327,7 +389,70 @@ class Harness:
         return Gateway(config=self.config, store=self.store,
                        launcher=self.launcher, verifier=self.verifier,
                        forward=self.forwarder, turns=self.turns,
-                       plans=self.plans, now=self.clock)
+                       plans=self.plans, memory_keys=self.memory_keys,
+                       slack=self.slack, connect=self.connect,
+                       team_homes=self.team_homes, now=self.clock)
+
+    def use_team_homes(self, secret: str | None = None) -> None:
+        """Turn the /v1/team-homes routes on, with the fake platform secret
+        and the fake sealing key (spec 032)."""
+        self.config = dataclasses.replace(
+            self.config, platform_secret=secret or PLATFORM_SECRET, platform_problem="")
+        self.team_homes = TeamHomeRoutes(
+            secret=self.config.platform_secret, apex_host=APEX, store=self.store,
+            keys=self.home_keys, now=self.clock)
+        self.gateway = self._build_gateway()
+
+    def use_connect(self, **fakes: FakeVendor) -> None:
+        """Turn the connector routes on, with each named vendor's address
+        moved to a fake on loopback: use_connect(notion=fake). Before
+        start(), for use_real_forwarding's reason."""
+        assert self._runner is None, "call use_connect before start()"
+        self._fake_vendors = dict(fakes)
+
+    def vendors(self) -> dict[str, Vendor]:
+        """The real list, with each faked vendor's address on loopback."""
+        moved = {}
+        for name, fake in self._fake_vendors.items():
+            # Gmail is an API under the fake's own origin, not an MCP address.
+            changes = {"url": fake.url + ("/mcp" if VENDORS[name].mcp else "")}
+            if VENDORS[name].authorize_url:
+                # GitHub: its two sign-in addresses are this code's own, so
+                # they move to the fake too.
+                changes |= {"authorize_url": fake.url + "/authorize",
+                            "token_url": fake.url + "/token"}
+            moved[name] = dataclasses.replace(VENDORS[name], **changes)
+        return moved
+
+    def _wire_connect(self) -> None:
+        if self.session is None:
+            self.session = aiohttp.ClientSession(auto_decompress=False)
+        self.connect = Connect(
+            key=bytes.fromhex(SLACK_TOKEN_KEY), apex_host=APEX, store=self.store,
+            api=VendorApi(self.session), vendors=self.vendors(),
+            clients=self.connect_clients, now=self.clock)
+        self.gateway = self._build_gateway()
+
+    def use_slack(self, fake: FakeSlack, settings: SlackSettings | None = None) -> None:
+        """Turn the Slack routes on, in front of a fake Slack. Before start(),
+        for use_real_forwarding's reason: the client session needs the loop."""
+        assert self._runner is None, "call use_slack before start()"
+        self._fake_slack = fake
+        self.slack_settings = settings or slack_settings()
+
+    def _wire_slack(self) -> None:
+        if self.session is None:
+            self.session = aiohttp.ClientSession(auto_decompress=False)
+
+        def wake() -> None:
+            self.woken += 1
+            self.on_wake()
+
+        self.slack = SlackRoutes(
+            settings=self.slack_settings, apex_host=APEX, store=self.store,
+            api=SlackApi(self.session, base_url=self._fake_slack.url),
+            now=self.clock, wake=wake)
+        self.gateway = self._build_gateway()
 
     def use_real_forwarding(self, container: FakeContainer) -> None:
         """Point the harness at a fake container and swap the recording
@@ -375,6 +500,10 @@ class Harness:
     async def start(self) -> None:
         if self._real_forwarding:
             self._wire_real_forwarding()
+        if self._fake_slack is not None:
+            self._wire_slack()
+        if self._fake_vendors:
+            self._wire_connect()
         self._runner = web.AppRunner(self.gateway.build())
         await self._runner.setup()
         site = web.TCPSite(self._runner, "127.0.0.1", 0)
@@ -474,7 +603,10 @@ class FakeContainer:
         self._server: ThreadingHTTPServer | None = None
         self.port = 0
 
-    def start(self) -> None:
+    def start(self, port: int = 0) -> None:
+        """Listen on `port`, or on a free one. A test that has stopped the
+        container passes its old port to bring it back where the spawner
+        says it is: a dashboard that binds after its container started."""
         recorder = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -519,7 +651,74 @@ class FakeContainer:
 
             do_POST = do_GET
 
-        self._server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self._server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+        self.port = self._server.server_address[1]
+        threading.Thread(target=self._server.serve_forever, daemon=True).start()
+
+    def stop(self) -> None:
+        if self._server is not None:
+            self._server.shutdown()
+            self._server.server_close()
+            self._server = None
+
+
+class AlwaysOnContainer:
+    """The two routes a tenant container answers for the gateway (spec 026):
+    POST /api/events and GET /api/alwayson/next. HTTP/1.0, like the stock
+    dashboard.
+
+    It records every event it was handed, and a test sets what it answers:
+    `events_status` for a hand-over, `work` for the report (None answers 404,
+    which is what an image older than spec 026 answers)."""
+
+    def __init__(self) -> None:
+        self.handed: list[list[dict]] = []
+        self.asked = 0
+        self.events_status = 200
+        self.work: dict | None = {"next_timer_at": None, "events": 0, "outbox": 0,
+                                  "running": 0}
+        # Called inside the report, before it answers: how a test makes a
+        # request arrive while the gateway is waiting for this answer.
+        self.on_ask = lambda: None
+        self._server: ThreadingHTTPServer | None = None
+        self.port = 0
+
+    def start(self, port: int = 0) -> None:
+        recorder = self
+
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, *args):
+                """Silence BaseHTTPRequestHandler's stderr log line."""
+
+            def _answer(self, status: int, payload: dict) -> None:
+                body = json.dumps(payload).encode("utf-8")
+                self.send_response(status)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def do_GET(self):
+                if self.path != "/api/alwayson/next":
+                    self._answer(404, {})
+                    return
+                recorder.asked += 1
+                recorder.on_ask()
+                if recorder.work is None:
+                    self._answer(404, {})
+                else:
+                    self._answer(200, recorder.work)
+
+            def do_POST(self):
+                length = int(self.headers.get("Content-Length", 0))
+                body = json.loads(self.rfile.read(length) or b"{}")
+                if self.path != "/api/events":
+                    self._answer(404, {})
+                    return
+                recorder.handed.append(body.get("events"))
+                self._answer(recorder.events_status, {"accepted": len(body.get("events", []))})
+
+        self._server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
         self.port = self._server.server_address[1]
         threading.Thread(target=self._server.serve_forever, daemon=True).start()
 
@@ -564,4 +763,385 @@ class AcceptsThenCloses:
     def stop(self) -> None:
         if self._server is not None:
             self._server.close()
+            self._server = None
+
+
+# --- spec 026 group C: a fake Slack --------------------------------------
+
+# Not a real token's shape past the prefix, so no secret scanner reads it as one.
+SLACK_BOT_TOKEN = "xoxb-fake-token-for-ana"
+SLACK_CLIENT_ID = "1111.2222"
+SLACK_CLIENT_SECRET = "fake-client-secret"
+SLACK_SIGNING_SECRET = "fake-signing-secret"
+SLACK_TOKEN_KEY = "0f" * 32
+# Spec 032. Not a real secret or key: the shapes, filled with one letter.
+PLATFORM_SECRET = "fake-platform-secret-" + "p" * 24
+AGENT_MEMORY_KEY = "mem_sk_" + "A" * 43
+
+
+def slack_settings(**changes) -> SlackSettings:
+    values = {"client_id": SLACK_CLIENT_ID, "client_secret": SLACK_CLIENT_SECRET,
+              "signing_secret": SLACK_SIGNING_SECRET,
+              "token_key": bytes.fromhex(SLACK_TOKEN_KEY)}
+    return SlackSettings(**{**values, **changes})
+
+
+class FakeSlack:
+    """Slack's Web API on loopback: oauth.v2.access and chat.postMessage.
+
+    It records every request with its Authorization header, and a test sets
+    what each method answers. Slack answers 200 and says no in the body, and
+    so does this."""
+
+    def __init__(self) -> None:
+        self.requests: list[dict] = []
+        self.oauth_answer: dict = {
+            "ok": True, "access_token": SLACK_BOT_TOKEN, "token_type": "bot",
+            "scope": "app_mentions:read,chat:write", "bot_user_id": "U0BOT",
+            "team": {"id": "T0ANA", "name": "Ana & Co"}}
+        self.post_answer: dict = {"ok": True, "ts": "171.9"}
+        # What reading a thread and looking up a person answer. The default
+        # is a workspace that added the app before those scopes were asked for.
+        self.replies_answer: dict = {"ok": False, "error": "missing_scope"}
+        # What reading a channel's history answers (spec 029 D).
+        self.history_answer: dict = {"ok": False, "error": "missing_scope"}
+        # A channel's whole history, in any order. When a test sets it,
+        # conversations.history serves it as Slack does: newest first, from
+        # `oldest` on, `limit` to a page, with `next_cursor` while more wait.
+        self.history_messages: list[dict] | None = None
+        self.users: dict[str, str] = {}
+        self.channels: dict[str, str] = {}
+        self._server: ThreadingHTTPServer | None = None
+        self.port = 0
+
+    @property
+    def url(self) -> str:
+        return f"http://127.0.0.1:{self.port}"
+
+    def calls(self, path: str) -> list[dict]:
+        return [request for request in self.requests if request["path"] == path]
+
+    def history_page(self, sent: dict) -> dict:
+        """One page of `history_messages`, the way conversations.history
+        pages: newest first, nothing older than `oldest`."""
+        oldest = float(sent.get("oldest") or 0)
+        found = sorted((m for m in self.history_messages if float(m["ts"]) >= oldest),
+                       key=lambda m: float(m["ts"]), reverse=True)
+        start, size = int(sent.get("cursor") or 0), int(sent.get("limit") or 100)
+        page, more = found[start:start + size], start + size < len(found)
+        return {"ok": True, "messages": page, "has_more": more,
+                "response_metadata": {"next_cursor": str(start + size) if more else ""}}
+
+    def start(self) -> None:
+        recorder = self
+
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, *args):
+                """Silence BaseHTTPRequestHandler's stderr log line."""
+
+            def do_POST(self):
+                length = int(self.headers.get("Content-Length", 0))
+                raw = self.rfile.read(length).decode("utf-8")
+                if "json" in self.headers.get("Content-Type", ""):
+                    sent = json.loads(raw or "{}")
+                else:
+                    sent = {k: v[0] for k, v in urllib.parse.parse_qs(raw).items()}
+                recorder.requests.append({
+                    "path": self.path, "body": sent,
+                    "authorization": self.headers.get("Authorization", "")})
+                answers = {"/oauth.v2.access": recorder.oauth_answer,
+                           "/chat.postMessage": recorder.post_answer,
+                           "/conversations.replies": recorder.replies_answer,
+                           "/conversations.history": recorder.history_answer,
+                           "/reactions.add": {"ok": True}}
+                answer = answers.get(self.path, {"ok": False, "error": "unknown_method"})
+                if (self.path == "/conversations.history"
+                        and recorder.history_messages is not None):
+                    answer = recorder.history_page(sent)
+                if self.path == "/conversations.info":
+                    named = recorder.channels.get(sent.get("channel", ""))
+                    answer = ({"ok": True, "channel": {"name": named}}
+                              if named else {"ok": False, "error": "missing_scope"})
+                if self.path == "/users.info":
+                    known = recorder.users.get(sent.get("user", ""))
+                    answer = ({"ok": True, "user": {"profile": {"display_name": known}}}
+                              if known else {"ok": False, "error": "missing_scope"})
+                body = json.dumps(answer).encode("utf-8")
+                # Slack compresses its answers for a client that takes gzip.
+                # The fake did not until 2026-11-18, and the first real
+                # install failed on exactly that.
+                zipped = "gzip" in self.headers.get("Accept-Encoding", "")
+                if zipped:
+                    body = gzip.compress(body)
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                if zipped:
+                    self.send_header("Content-Encoding", "gzip")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+        self._server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.port = self._server.server_address[1]
+        threading.Thread(target=self._server.serve_forever, daemon=True).start()
+
+    def stop(self) -> None:
+        if self._server is not None:
+            self._server.shutdown()
+            self._server.server_close()
+            self._server = None
+
+
+# --- spec 029: a fake vendor ----------------------------------------------
+
+# Not a real token's shape, so no secret scanner reads one as a credential.
+VENDOR_CLIENT_SECRET = "fake-vendor-client-secret"
+
+
+def pkce_challenge(verifier: str) -> str:
+    digest = hashlib.sha256(verifier.encode("ascii")).digest()
+    return base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
+
+
+class FakeVendor:
+    """A vendor's sign-in server on loopback: the two discovery documents,
+    dynamic client registration and the token endpoint, with PKCE checked.
+
+    The sign-in page itself is a person's browser, so a test plays it: it
+    reads the address /connect/start redirects to and calls `approve` with
+    that address's query, which returns the code the vendor would send back.
+
+    It records every request, and it compresses an answer for a client that
+    takes gzip, as a real vendor does."""
+
+    def __init__(self, title: str = "vendor") -> None:
+        self.title = title
+        self.requests: list[dict] = []
+        # client id -> the registration this server issued.
+        self.clients: dict[str, dict] = {}
+        # code -> the sign-in a person approved.
+        self.codes: dict[str, dict] = {}
+        # refresh token -> how many times it was issued, so each is distinct.
+        self.refresh_tokens: set[str] = set()
+        self.access_tokens: set[str] = set()
+        self.issued = 0
+        self.expires_in: int | None = 3600
+        # What discovery says, changed by a test that moves an address away.
+        self.metadata_changes: dict = {}
+        self.resource_changes: dict = {}
+        # A token answer a test sets in place of the real one.
+        self.token_answer: dict | None = None
+        self.register_answer: dict | None = None
+        self.send_refresh_token = True
+        # --- the MCP endpoint, POST /mcp (spec 029 group B) ---
+        self.tools: list[dict] = [
+            {"name": "notion-search", "description": "Search the workspace.",
+             "inputSchema": {"type": "object", "properties": {"query": {"type": "string"}}},
+             "annotations": {"readOnlyHint": True}},
+            {"name": "notion-create-pages", "description": "Create pages.",
+             "inputSchema": {"type": "object", "properties": {}}},
+        ]
+        # Session ids this server handed out and still knows.
+        self.sessions: set[str] = set()
+        self.opened = 0
+        # Answer as a Server-Sent Events stream, with a message of the
+        # server's own in front of the answer, as a real server may.
+        self.sse = False
+        # What a tool call's text is, by tool name; the default says its name.
+        self.tool_text: dict[str, str] = {}
+        self._server: ThreadingHTTPServer | None = None
+        self.port = 0
+
+    @property
+    def url(self) -> str:
+        return f"http://127.0.0.1:{self.port}"
+
+    def calls(self, path: str) -> list[dict]:
+        return [request for request in self.requests if request["path"] == path]
+
+    def mcp_calls(self, method: str) -> list[dict]:
+        return [request for request in self.calls("/mcp")
+                if request["body"].get("method") == method]
+
+    def _mcp(self, sent: dict, headers) -> tuple[int, dict | None, dict]:
+        """(status, the JSON-RPC answer or None, extra headers)."""
+        token = headers.get("Authorization", "").removeprefix("Bearer ")
+        if token not in self.access_tokens:
+            return 401, {"error": "invalid_token"}, {}
+        method, message_id = sent.get("method"), sent.get("id")
+        if method == "initialize":
+            self.opened += 1
+            session = f"{self.title}-session-{self.opened}"
+            self.sessions.add(session)
+            return 200, {"jsonrpc": "2.0", "id": message_id, "result": {
+                "protocolVersion": sent["params"]["protocolVersion"],
+                "capabilities": {"tools": {}},
+                "serverInfo": {"name": self.title, "version": "1"}}}, {
+                    "Mcp-Session-Id": session}
+        if headers.get("Mcp-Session-Id", "") not in self.sessions:
+            return 404, {"jsonrpc": "2.0", "id": message_id,
+                         "error": {"code": -32001, "message": "Session not found"}}, {}
+        if message_id is None:
+            return 202, None, {}
+        if method == "tools/list":
+            result: dict = {"tools": self.tools}
+        elif method == "tools/call":
+            name = sent["params"]["name"]
+            result = {"content": [{"type": "text", "text": self.tool_text.get(
+                name, f"{self.title} ran {name}")}]}
+        else:
+            return 200, {"jsonrpc": "2.0", "id": message_id,
+                         "error": {"code": -32601, "message": "Method not found"}}, {}
+        return 200, {"jsonrpc": "2.0", "id": message_id, "result": result}, {}
+
+    def approve(self, query: dict) -> str:
+        """The person presses Allow. `query` is what /connect/start sent the
+        browser to the sign-in page with."""
+        code = f"code-{len(self.codes) + 1}"
+        self.codes[code] = dict(query)
+        return code
+
+    def _tokens(self) -> dict:
+        self.issued += 1
+        access = f"{self.title}-access-{self.issued}"
+        self.access_tokens.add(access)
+        answer = {"access_token": access, "token_type": "Bearer"}
+        if self.expires_in is not None:
+            answer["expires_in"] = self.expires_in
+        if self.send_refresh_token:
+            refresh = f"{self.title}-refresh-{self.issued}"
+            self.refresh_tokens.add(refresh)
+            answer["refresh_token"] = refresh
+        return answer
+
+    def _token(self, sent: dict) -> tuple[int, dict]:
+        if self.token_answer is not None:
+            return 400 if "error" in self.token_answer else 200, self.token_answer
+        client = self.clients.get(sent.get("client_id", ""))
+        if client is None or sent.get("client_secret") != client["client_secret"]:
+            return 401, {"error": "invalid_client"}
+        if sent.get("grant_type") == "authorization_code":
+            approved = self.codes.pop(sent.get("code", ""), None)
+            if (approved is None or approved.get("client_id") != sent["client_id"]
+                    or approved.get("redirect_uri") != sent.get("redirect_uri")
+                    or approved.get("code_challenge")
+                    != pkce_challenge(sent.get("code_verifier", ""))):
+                return 400, {"error": "invalid_grant"}
+            return 200, self._tokens()
+        if sent.get("grant_type") == "refresh_token":
+            # Rotating: a refresh token works once.
+            if sent.get("refresh_token") not in self.refresh_tokens:
+                return 400, {"error": "invalid_grant"}
+            self.refresh_tokens.discard(sent["refresh_token"])
+            return 200, self._tokens()
+        return 400, {"error": "unsupported_grant_type"}
+
+    def _get(self, path: str) -> tuple[int, dict]:
+        if path == "/.well-known/oauth-protected-resource":
+            return 200, {"resource": self.url, "authorization_servers": [self.url],
+                         **self.resource_changes}
+        if path == "/.well-known/oauth-authorization-server":
+            return 200, {
+                "issuer": self.url, "authorization_endpoint": f"{self.url}/authorize",
+                "token_endpoint": f"{self.url}/token",
+                "registration_endpoint": f"{self.url}/register",
+                "code_challenge_methods_supported": ["S256"], **self.metadata_changes}
+        return 404, {"error": "not_found"}
+
+    def _post(self, path: str, sent: dict, headers) -> tuple[int, dict]:
+        if path == "/register":
+            if self.register_answer is not None:
+                return 400, self.register_answer
+            client_id = f"client-{len(self.clients) + 1}"
+            self.clients[client_id] = {**sent, "client_id": client_id,
+                                       "client_secret": VENDOR_CLIENT_SECRET}
+            return 201, self.clients[client_id]
+        if path == "/token":
+            return self._token(sent)
+        return self.handle_other(path, sent, headers)
+
+    def handle_get(self, target: str, headers) -> tuple[int, dict] | None:
+        """A GET that is not discovery, for a fake that also plays the
+        vendor's API (FakeGoogle). None means it is not one."""
+        return None
+
+    def handle_other(self, path: str, sent: dict, headers) -> tuple[int, dict]:
+        return 404, {"error": "not_found"}
+
+    def start(self) -> None:
+        recorder = self
+
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, *args):
+                """Silence BaseHTTPRequestHandler's stderr log line."""
+
+            def _send(self, status: int, answer: dict) -> None:
+                body = json.dumps(answer).encode("utf-8")
+                zipped = "gzip" in self.headers.get("Accept-Encoding", "")
+                if zipped:
+                    body = gzip.compress(body)
+                self.send_response(status)
+                self.send_header("Content-Type", "application/json")
+                if zipped:
+                    self.send_header("Content-Encoding", "gzip")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def do_GET(self):
+                recorder.requests.append({
+                    "method": "GET", "path": self.path, "body": {},
+                    "authorization": self.headers.get("Authorization", "")})
+                found = recorder.handle_get(self.path, self.headers)
+                self._send(*(found or recorder._get(self.path)))
+
+            def do_POST(self):
+                length = int(self.headers.get("Content-Length", 0))
+                raw = self.rfile.read(length).decode("utf-8")
+                if "json" in self.headers.get("Content-Type", ""):
+                    sent = json.loads(raw or "{}")
+                else:
+                    sent = {k: v[0] for k, v in urllib.parse.parse_qs(raw).items()}
+                recorder.requests.append({
+                    "method": "POST", "path": self.path, "body": sent,
+                    "authorization": self.headers.get("Authorization", ""),
+                    "headers": {k.lower(): v for k, v in self.headers.items()}})
+                if self.path == "/mcp":
+                    self._send_mcp(*recorder._mcp(sent, self.headers))
+                    return
+                self._send(*recorder._post(self.path, sent, self.headers))
+
+            def _send_mcp(self, status: int, answer: dict | None, extra: dict) -> None:
+                if answer is None:
+                    body, kind = b"", ""
+                elif recorder.sse and status == 200:
+                    note = {"jsonrpc": "2.0", "method": "notifications/message",
+                            "params": {"level": "info", "data": "working"}}
+                    body = "".join(f"event: message\r\ndata: {json.dumps(item)}\r\n\r\n"
+                                   for item in (note, answer)).encode("utf-8")
+                    kind = "text/event-stream"
+                else:
+                    body, kind = json.dumps(answer).encode("utf-8"), "application/json"
+                zipped = bool(body) and "gzip" in self.headers.get("Accept-Encoding", "")
+                if zipped:
+                    body = gzip.compress(body)
+                self.send_response(status)
+                if kind:
+                    self.send_header("Content-Type", kind)
+                if zipped:
+                    self.send_header("Content-Encoding", "gzip")
+                for name, value in extra.items():
+                    self.send_header(name, value)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+        self._server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.port = self._server.server_address[1]
+        threading.Thread(target=self._server.serve_forever, daemon=True).start()
+
+    def stop(self) -> None:
+        if self._server is not None:
+            self._server.shutdown()
+            self._server.server_close()
             self._server = None

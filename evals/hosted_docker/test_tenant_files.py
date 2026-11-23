@@ -1,6 +1,7 @@
 """Acceptance 15 -- no privileged process follows a tenant's symlink.
 
-THE PROVISIONING HALF. F3 adds backup and restore, F4 archive and inspect.
+THE PROVISIONING HALF, F3'S BACKUP AND RESTORE HALVES, AND F4'S ARCHIVE AND
+INSPECT HALVES.
 
 THE SHAPE: plant the symlinks a tenant could plant, run provisioning, and check
 the target by LISTING ITS PARENT rather than by an exit code or a `.exists()`.
@@ -21,7 +22,9 @@ from spawnerlib.py.
 from __future__ import annotations
 
 import itertools
+import json
 import os
+from pathlib import Path
 
 import dockerlib
 import pytest
@@ -34,7 +37,7 @@ from spawnerlib import (
     capture_task_containers,
 )
 
-from hosted.core.tenant import ALPHABET, FIRST_PROJECT_ID
+from hosted.core.tenant import ALPHABET, FIRST_PROJECT_ID, INSPECT_NETWORK
 from hosted.spawner import template
 
 # Far enough above test_spawner.py's PROJECT_A/PROJECT_B that the two modules
@@ -255,3 +258,265 @@ def test_a_second_start_issues_no_recursive_walk(spawner, tenant):
         "That directory holds whatever the tenant wrote and this process is "
         "root with CAP_SYS_ADMIN.")
     assert "limit -p" in after
+
+
+def _task_ok(spawner, tenant_id: str, project_id: int, task: str) -> dict:
+    """One spawner task, and it HAS to have worked.
+
+    spawnerlib has no ask_ok: a task that failed comes back as a JSON object
+    with an `error` key and exit status nought, so a test that ran a backup and
+    then asserted something about a restore would be asserting against two
+    no-ops. The tests below set up state with this and measure with `ask`.
+    """
+    answer = ask(spawner, {"op": "task", "tenant_id": tenant_id,
+                           "task": task, "project_id": project_id})
+    assert "error" not in answer, f"the {task} task failed: {answer}"
+    return answer
+
+
+# NO TRAILING NEWLINE, and that is not a style choice: the value is rendered
+# into a shell command with !r, so a Python "\n" would arrive inside single
+# quotes as a literal backslash and an n and the comparison below would never
+# match what the container wrote.
+_SENTINEL = "the bytes a followed link would have copied"
+
+
+def _plant_target(spawner_root, tenant_id: str, name: str) -> None:
+    """Write a real file into the tenant's env directory, as they would."""
+    env = spawner_root / "tenants" / tenant_id / "env"
+    dockerlib.run_once(
+        SERVICES_TAG,
+        ["bash", "-euc", f"printf '%s' {_SENTINEL!r} > /work/{name}"],
+        read_only=False, binds=[f"{env}:/work"])
+
+
+def test_a_backup_copies_a_planted_symlink_as_a_link_and_does_not_follow_it(
+        spawner, spawner_root, tenant):
+    """Acceptance 15, the backup half.
+
+    THE TARGET EXISTS, AND THAT IS WHAT MAKES THIS ABLE TO FAIL. The first
+    version of this test pointed `.env` at a path nothing ever created and
+    then asserted that path was absent from the tenant's directory --
+    `_BACKUP_SCRIPT` only ever READS /work (`tar --create`), so that assertion
+    was true whatever tar did, and a dangling link would additionally have
+    made `tar -h` error rather than copy. With a real file behind the link, a
+    tar that followed it puts a REGULAR file holding `_SENTINEL` into the
+    staging slot, and `is_symlink()` is the assertion that tells the two
+    apart. Same fix as `test_backup_restic.py`'s.
+
+    THE TARGET IS INSIDE THE TENANT'S OWN MOUNT, for the reason the
+    provisioning tests above give: one on the read-only root fails whatever
+    the backup does, so the assertion could not tell the guard from the
+    containment.
+    """
+    tenant_id, project_id = tenant
+    _plant_target(spawner_root, tenant_id, "backup-link-target.txt")
+    _plant(spawner_root, tenant_id, ".env", "/work/backup-link-target.txt")
+
+    answer = ask(spawner, {"op": "task", "tenant_id": tenant_id, "task": "backup",
+                           "project_id": project_id})
+    assert "error" not in answer, answer
+
+    slot = spawner_root / "staging" / tenant_id
+    staged = slot / "env" / ".env"
+    # THE DISCRIMINATOR: a followed link is a regular file holding the bytes.
+    assert staged.is_symlink(), (
+        "the backup followed the planted .env symlink and copied its target's "
+        "bytes into the staging slot")
+    assert os.readlink(staged) == "/work/backup-link-target.txt"
+    # And the slot is not empty for some unrelated reason: the target itself
+    # was copied, as an ordinary file, so tar really did walk /work.
+    assert (slot / "env" / "backup-link-target.txt").read_text(
+        encoding="utf-8") == _SENTINEL
+    # And the backup declared that it finished.
+    manifest = json.loads((slot / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["version"] == 1
+    assert sorted(manifest["parts"]) == ["env", "home"]
+
+
+def test_a_restore_puts_the_link_back_as_a_link_and_archives_the_old_tree(
+        spawner, spawner_root, tenant):
+    """Acceptance 15, the restore half, and the pre-restore archive the spec
+    requires: a moved directory keeps its XFS project id, so an old tree left
+    on disk would keep counting against the tenant's quota.
+
+    THE ARCHIVE LIVES UNDER THE TENANT'S OWN SUBDIRECTORY of the archive root
+    -- `_archive` calls `_tenant_directory_under(archive_root, tenant_id)` and
+    binds that, not the shared root, because the container runs as 10001 and
+    binding the shared root would put every other tenant's archives inside a
+    tenant-owned container. A glob over the root itself finds nothing.
+    """
+    tenant_id, project_id = tenant
+    env = spawner_root / "tenants" / tenant_id / "env"
+    _plant_target(spawner_root, tenant_id, "restore-link-target.txt")
+    _plant(spawner_root, tenant_id, ".env", "/work/restore-link-target.txt")
+    _task_ok(spawner, tenant_id, project_id, "backup")
+
+    answer = ask(spawner, {"op": "task", "tenant_id": tenant_id, "task": "restore",
+                           "project_id": project_id})
+    assert "error" not in answer, answer
+
+    # The target exists for the same reason as in the backup half: a restore
+    # that wrote THROUGH the link would leave `.env` a regular file holding
+    # the sentinel, and only `is_symlink()` separates that from a link put
+    # back as a link.
+    assert (env / ".env").is_symlink(), (
+        "the restore replaced the planted .env symlink with a regular file")
+    assert os.readlink(env / ".env") == "/work/restore-link-target.txt"
+    assert (env / "restore-link-target.txt").read_text(
+        encoding="utf-8") == _SENTINEL
+    archives = list((spawner_root / "archive" / tenant_id)
+                    .glob(f"{tenant_id}-*-pre-restore*"))
+    assert archives, "a restore archives the old tree before it removes it"
+
+
+def test_a_restored_tenant_still_cannot_write_past_their_disk_limit(
+        spawner, spawner_root, tenant):
+    """Acceptance 16, after a restore.
+
+    A restore removes the tenant's two directories and re-creates them, and the
+    only place `xfs_quota project -s` ever runs is provision()'s CREATE path. A
+    restore that took provision's repeat path instead would leave a directory on
+    XFS project 0 -- uncounted and unlimited -- for the rest of that tenant's
+    life, and that tenant could then fill the shared disk and stop every other
+    tenant on the VM. The project id is invisible from inside the container; the
+    write is not.
+
+    The same assertion as `test_a_tenant_cannot_write_past_their_disk_limit` in
+    test_isolation.py, on a tenant who HAS been restored. It differs from it
+    only in the two task calls.
+    """
+    dockerlib.require_xfs()
+    tenant_id, project_id = tenant
+    _task_ok(spawner, tenant_id, project_id, "backup")
+    _task_ok(spawner, tenant_id, project_id, "restore")
+
+    home = spawner_root / "tenants" / tenant_id / "home"
+    over = dockerlib.run_once(
+        SERVICES_TAG,
+        ["bash", "-c",
+         # conv=fsync, so a delayed-allocation write cannot report success here
+         # and fail at writeback where nothing is watching. The size is twice
+         # spawnerlib.TEST_DISK_BYTES.
+         "dd if=/dev/zero of=/data/fill bs=1M count=128 conv=fsync"],
+        user="10001:10001", read_only=False, network="none",
+        binds=[f"{home}:/data"],
+        # check=False: dockerlib.run_once RAISES on a non-zero exit by default,
+        # and a non-zero exit is the PASS condition here.
+        check=False)
+    assert over.returncode != 0, (
+        "a restored tenant wrote past their disk limit, so the restore did not "
+        "give their directories their project id back")
+
+
+_EXTRACT = """
+mkdir -p /tmp/out
+zstd -dc "/archive/$1-env.tar.zst" | tar -x -C /tmp/out
+if [ -L /tmp/out/.env ]; then
+  printf 'LINK %s\\n' "$(readlink /tmp/out/.env)"
+else
+  printf 'FILE\\n'
+fi
+cat /tmp/out/archive-link-target.txt
+printf '\\n'
+"""
+
+
+def test_an_archive_does_not_follow_a_planted_symlink(spawner, spawner_root, tenant):
+    """Acceptance 15, the archive half.
+
+    `tenant.sh delete` archives the tree and the spec then removes it, so a
+    followed link here packs a file from outside the tenant's directories into
+    an archive an operator keeps for 30 days -- and that archive is the only
+    copy a deleted tenant has.
+
+    THE TARGET EXISTS, AND THAT IS WHAT MAKES THIS ABLE TO FAIL, for the
+    reason the backup half above gives. `_ARCHIVE_SCRIPT` only ever READS the
+    two mounts, so asserting that a path is absent from the tenant's directory
+    is true whatever tar did, and a dangling link would additionally make a
+    following tar error rather than copy. With a real file behind the link, a
+    tar that followed it puts a REGULAR file holding `_SENTINEL` into the
+    archive, and reading the entry back out is what tells the two apart.
+    """
+    tenant_id, project_id = tenant
+    _plant_target(spawner_root, tenant_id, "archive-link-target.txt")
+    _plant(spawner_root, tenant_id, ".env", "/work/archive-link-target.txt")
+
+    answer = ask(spawner, {"op": "task", "tenant_id": tenant_id, "task": "archive",
+                           "project_id": project_id})
+    assert "error" not in answer, answer
+
+    base = Path(answer["path"])
+    assert base.parent == spawner_root / "archive" / tenant_id, (
+        "the archive went somewhere other than this tenant's own archive "
+        "directory, so binding the shared root would put every other tenant's "
+        "archives inside a container running tenant-owned code")
+    for part in ("home", "env"):
+        assert base.with_name(f"{base.name}-{part}.tar.zst").exists(), part
+
+    read_back = dockerlib.run_once(
+        SERVICES_TAG, ["bash", "-euc", _EXTRACT, "extract", base.name],
+        read_only=False, network="none",
+        binds=[f"{base.parent}:/archive"])
+    # THE DISCRIMINATOR: a followed link is a regular file holding the bytes.
+    assert read_back.stdout.startswith("LINK /work/archive-link-target.txt"), (
+        f"the archive followed the planted .env symlink: {read_back.stdout!r}")
+    # And the archive is not empty for some unrelated reason: the target itself
+    # was packed, as an ordinary file, so tar really did walk the directory.
+    assert _SENTINEL in read_back.stdout
+
+
+def test_inspect_runs_on_the_inspect_bridge_and_stops_again(
+        spawner, spawner_root, tenant):
+    """Acceptance 15's inspect half, plus the property the separate bridge
+    exists for: an inspect container takes a DYNAMIC address, and the whole
+    fixed-address scheme rests on nothing but tenant containers being on
+    10.88/16.
+
+    The mounts are held to `allowed_bind_sources`' default-deny set, which for
+    `inspect` is the tenant's own two directories and nothing else: an inspect
+    container runs a stock waku dashboard on tenant-owned data, so a third
+    mount here is a path that dashboard can reach.
+    """
+    tenant_id, project_id = tenant
+    answer = ask(spawner, {"op": "task", "tenant_id": tenant_id, "task": "inspect",
+                           "project_id": project_id})
+    assert "error" not in answer, answer
+    assert answer["address"] == "127.0.0.1", (
+        "the inspect dashboard has no authentication and is reached over an "
+        "SSH tunnel, so it is published on the host's loopback only")
+    try:
+        info = dockerlib.inspect(
+            template.container_name(tenant_id, template.KIND_INSPECT))
+        networks = set(info["NetworkSettings"]["Networks"])
+        assert networks == {INSPECT_NETWORK}
+        binds = {bind.split(":", 1)[0].rstrip("/")
+                 for bind in info["HostConfig"]["Binds"]}
+        assert binds == allowed_bind_sources(spawner_root, tenant_id, "inspect")
+    finally:
+        _task_ok(spawner, tenant_id, project_id, "inspect-stop")
+
+
+def test_an_archive_refuses_while_an_inspect_container_holds_the_tenant(
+        spawner, spawner_root, tenant):
+    """`tenant.sh delete` reaches `archive` through the admin verb `delete`,
+    which never went past `_refuse_if_busy`.
+
+    An inspect container is operator-started, AutoRemove is off, and it lives
+    until `inspect-stop`, so it survives `launcher.stop` and `stop-all` with
+    `state.db` open. The archive taken from under it is the only copy a deleted
+    tenant has, so a torn database there is not recoverable from anywhere.
+    """
+    tenant_id, project_id = tenant
+    _task_ok(spawner, tenant_id, project_id, "inspect")
+    try:
+        answer = ask(spawner, {"op": "task", "tenant_id": tenant_id,
+                               "task": "archive", "project_id": project_id})
+        assert answer.get("code") == "busy", answer
+        assert not list((spawner_root / "archive" / tenant_id).glob("*.tar.zst")), (
+            "the refusal landed after the tree had already been packed")
+    finally:
+        _task_ok(spawner, tenant_id, project_id, "inspect-stop")
+    # And the refusal was the inspect container and not something permanent:
+    # once it is gone the archive runs.
+    _task_ok(spawner, tenant_id, project_id, "archive")

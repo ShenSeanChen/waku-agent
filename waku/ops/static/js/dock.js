@@ -4,10 +4,30 @@
 
 // --- chat sessions (the "New chat" + history picker, like a chat app)
 let SESSION = "default";
-async function newChat(){
-  const r = await postJSON("/api/session", {action:"new"});
-  if (r.session_id){ liveView = null; SESSION = r.session_id; CHAT.length = 0; syncChatLogs(); }
+// The column empties at once, before the server answers: through the hosted
+// gateway that answer takes 0.3-0.5 s, and the old conversation sitting there
+// meanwhile reads as a slow open. `sessionChange` (render.js) holds the request
+// until it settles, and sendChat waits on it, so a message typed in that gap
+// goes to the new conversation and never to the old one. If the server says
+// no, the old conversation comes back with an error card under it, the way a
+// failed turn shows, and anything typed meanwhile follows it.
+function newChat(){
   closeSessMenu();
+  if (sessionChange) return sessionChange;   // a second click while the first is out
+  const before = {chat: CHAT.slice(), session: SESSION, liveView};
+  liveView = null; CHAT.length = 0; syncChatLogs();
+  sessionChange = (async () => {
+    let r = null, why = "";
+    try { r = await postJSON("/api/session", {action:"new"}); }
+    catch(e){ why = String(e); }
+    if (r && r.session_id){ SESSION = r.session_id; return; }
+    SESSION = before.session; liveView = before.liveView;
+    const failed = {role:"waku", reply:"Error: could not start a new chat. "
+      + ((r && r.error) || why || "The server did not answer.")};
+    CHAT.splice(0, 0, ...before.chat, failed);   // typed-meanwhile rows stay last
+    syncChatLogs();
+  })().finally(() => { sessionChange = null; });
+  return sessionChange;
 }
 // The ONE way to pull a thread's rows into the dock, so the paths can't drift
 // (they used to: some dropped meta, some added a length-guard, some didn't).
@@ -102,6 +122,26 @@ function toggleTele(){
   localStorage.setItem("waku_tele", off ? "1" : "0");   // flip
   applyTele();
 }
+// --- the embedded chat's "..." menu: the two controls that used to be buttons
+// in the toolbar. They are rarely used and their old labels ("stats",
+// "Dashboard") did not say what they did, so each is a sentence here, with the
+// per-turn stats' on/off shown beside it. Choosing either closes the menu.
+function toggleMoreMenu(ev){
+  ev.stopPropagation();
+  if (document.getElementById("ui-menu") && _menuTrigger === ev.currentTarget){ closeMenu(); return; }
+  const on = localStorage.getItem("waku_tele") !== "0";
+  openMenu(ev.currentTarget,
+    uiMenuItem("Show how it answered",
+      {sub: on ? "on" : "off", on,
+       title: "Under each reply: the memory check, seconds, steps and tools used",
+       onclick: "closeMenu();toggleTele()"})
+    + uiMenuSep()
+    + uiMenuItem("Open full dashboard",
+      {sub: "new tab",
+       title: "Your agent's models, memory and settings, signed in",
+       onclick: "closeMenu();openDashboard()"}),
+    {width: "min(300px, 92vw)"});
+}
 function toggleModelMenu(ev){
   ev.stopPropagation();
   if (document.getElementById("ui-menu") && _menuTrigger === ev.currentTarget){ closeMenu(); return; }
@@ -115,8 +155,10 @@ function toggleModelMenu(ev){
       {sub: esc(p.provider), on: p.provider === st.provider && p.model === st.model,
        onclick: `switchTo('${esc(p.provider)}','${esc(p.model)}')`})
   ).join("") : `<div class="menu-empty">No models pinned yet.</div>`;
-  openMenu(ev.currentTarget, uiMenuLabel("Your models") + items + uiMenuSep()
-    + uiMenuItem("Manage models…", {onclick: "location.hash='models';closeMenu()"}));
+  // The embedded chat has no Models page to manage them on (spec 008).
+  const manage = document.body.classList.contains("embed") ? ""
+    : uiMenuSep() + uiMenuItem("Manage models…", {onclick: "location.hash='models';closeMenu()"});
+  openMenu(ev.currentTarget, uiMenuLabel("Your models") + items + manage);
 }
 // Switch BOTH provider and model in one click (a pinned model can be any
 // provider). Same-provider switch keeps the gate model; cross-provider lets the

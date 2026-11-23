@@ -31,13 +31,21 @@ from __future__ import annotations
 import asyncio
 import time
 from collections.abc import Callable
+from typing import TYPE_CHECKING
 
 from hosted import log
 from hosted.core import idle
 from hosted.core import tenant as tenant_core
+from hosted.gateway.secretbox import Unreadable
 from hosted.gateway.spawner_client import SpawnerBusy, SpawnerClient, SpawnerError
 from hosted.ports.control import ControlStore, Tenant
 from hosted.ports.runtime import RunningContainer
+
+if TYPE_CHECKING:
+    # For the annotation only: container_api imports forward, and forward
+    # imports this module.
+    from hosted.gateway.container_api import ContainerApi
+    from hosted.gateway.team_homes import HomeKeys
 
 _LOG = log.get(__name__)
 
@@ -56,12 +64,26 @@ class StartFailed(RuntimeError):
     """The container did not start. The caller sends the spec's sentence."""
 
 
+class StartTimedOut(StartFailed):
+    """The start outlasted idle.START_TIMEOUT_SECONDS. It may still finish: a
+    page navigation is shown the starting page, which reloads, rather than
+    the sentence."""
+
+
 class Launcher:
     def __init__(self, *, store: ControlStore, spawner: SpawnerClient,
-                 fleet: idle.Fleet, now: Callable[[], float] = time.time) -> None:
+                 fleet: idle.Fleet, now: Callable[[], float] = time.time,
+                 containers: ContainerApi | None = None,
+                 home_keys: HomeKeys | None = None) -> None:
         self._store = store
+        # Spec 032 A4: what opens a team home's sealed Waku Memory key. None
+        # means this gateway has no sealing key, and no team home starts.
+        self._home_keys = home_keys
         self._spawner = spawner
         self._fleet = fleet
+        # Spec 026: how stop_idle asks a container what work it has left.
+        # None means nothing is asked and the fleet's answer is final.
+        self._containers = containers
         # E2's own logic never reads this: every clock decision it makes is
         # a delegate's (Fleet.adopt, Fleet.set_status, ControlDb's own
         # `now`). It is stored anyway because the brief's signature takes
@@ -129,6 +151,18 @@ class Launcher:
         found = self._store.tenant_by_sub(sub)
         if found is not None:
             self.require_active(found)
+            # No page lets a person choose a zone yet, so `UTC` here means
+            # "none was recorded": a tenant first made by a route that sends
+            # no zone. On 2026-11-19 such a tenant's agent told its person a
+            # reminder was "set for 21:26" at 1:26 pm. A sign-in from a
+            # browser with a real zone fills it in, once. When /account
+            # exists, a zone chosen there is not UTC-by-default and is never
+            # touched here.
+            zone = tenant_core.normalise_timezone(timezone)
+            if found.timezone == "UTC" and zone != "UTC":
+                self._store.set_timezone(found.id, zone)
+                _LOG.info("tenant=%s zone recorded: %s", found.id, zone)
+                found = self._store.tenant_by_sub(sub) or found
             return (found, False)
         record = self._store.create_tenant(
             sub=sub, email=email, timezone=tenant_core.normalise_timezone(timezone))
@@ -140,6 +174,38 @@ class Launcher:
             _LOG.warning("first provision of tenant=%s failed (%s); the next "
                          "start provisions again", record.id, exc)
         return (record, True)
+
+    def _connectors(self, tenant_id: str) -> dict:
+        """The connectors this tenant signed in to, as the keyword the
+        spawner takes, or nothing when there are none (spec 029 B2). One that
+        needs a new sign-in stays listed: its tools then say so."""
+        names = tuple(row.server for row in self._store.connections(tenant_id))
+        return {"connectors": names} if names else {}
+
+    async def reprovision(self, tenant_id: str) -> bool:
+        """Write a running tenant's list of connectors again, after the
+        person signed in to one or disconnected one (spec 029 B2). True when
+        the spawner was asked.
+
+        The container is not restarted. Its agent reads mcp.json before each
+        run and builds itself again when the list changed. A stopped tenant
+        needs nothing: every start provisions. A failure is logged and left,
+        for the same reason: the next start writes the list.
+        """
+        tenant = self._store.tenant_by_id(tenant_id)
+        if tenant is None or tenant_id not in self._addresses:
+            return False
+        try:
+            # connectors is sent even when empty here: the spawner's default
+            # is the empty list, which removes the last entry.
+            await self._spawner.provision(
+                tenant.id, tenant.project_id,
+                **(self._connectors(tenant.id) or {"connectors": ()}))
+        except (SpawnerError, OSError) as exc:
+            _LOG.warning("tenant=%s: the connector list was not written (%s); the "
+                         "next start writes it", tenant_id, exc)
+            return False
+        return True
 
     async def start(self, tenant: Tenant) -> RunningContainer:
         """Issue a fresh token and ask the spawner for a container.
@@ -220,19 +286,48 @@ class Launcher:
         if event is not None:
             event.set()
 
+    def _memory(self, tenant: Tenant) -> tuple[str, dict]:
+        """(the Waku Memory key this tenant's container starts with, the
+        extra keywords of its start).
+
+        A person's container gets the person's own key and nothing else. A
+        team home's gets its space's agent's key, opened from team_home, and
+        the space it saves into (spec 032 A4). Raises Unreadable when a team
+        home's key cannot be opened: it never starts on a person's key or
+        with no key, because either would run the team's agent as something
+        it is not."""
+        if tenant.kind != "team":
+            return self._store.memory_key(tenant.id), {}
+        if self._home_keys is None:
+            raise Unreadable("this gateway has no key to open a team's key with")
+        key, space_id = self._home_keys.for_start(tenant)
+        return key, {"memory_space": space_id}
+
     async def _start_locked(self, tenant: Tenant) -> RunningContainer:
         event = self._start_event(tenant.id)
         self._fleet.set_status(tenant.id, idle.STARTING)
         token = self._store.issue_token(tenant.id)
         try:
+            memory_key, team = self._memory(tenant)
             running = await asyncio.wait_for(
                 self._spawner.start(tenant.id, tenant.project_id,
-                                    tenant.timezone, token),
+                                    tenant.timezone, token, memory_key,
+                                    **self._connectors(tenant.id), **team),
                 idle.START_TIMEOUT_SECONDS)
+        except Unreadable as exc:
+            self._forget_running(tenant.id)
+            # The reason and never the key. The spawner was not asked.
+            _LOG.error("team home tenant=%s was not started: %s", tenant.id, exc)
+            raise StartFailed(idle.START_TIMEOUT_MESSAGE) from exc
         except SpawnerBusy as exc:
             self._forget_running(tenant.id)
             raise InMaintenance(idle.MAINTENANCE_MESSAGE) from exc
-        except (TimeoutError, SpawnerError, OSError) as exc:
+        except TimeoutError as exc:
+            self._forget_running(tenant.id)
+            _LOG.warning("start of tenant=%s took longer than %ss",
+                         tenant.id, idle.START_TIMEOUT_SECONDS)
+            raise StartTimedOut(idle.START_TIMEOUT_MESSAGE) from exc
+        except (SpawnerError, OSError) as exc:
             self._forget_running(tenant.id)
             _LOG.warning("start of tenant=%s failed: %s", tenant.id, exc)
             raise StartFailed(idle.START_TIMEOUT_MESSAGE) from exc
@@ -365,6 +460,169 @@ class Launcher:
             _LOG.warning("stop of tenant=%s failed: %s; resync will stop it "
                          "again -- its token is already revoked", tenant_id, exc)
 
+    async def stop_idle(self) -> list[str]:
+        """Stop every container the fleet says is idle, and say so in the log.
+        Returns the tenant ids stopped. The idle loop (hosted/gateway/sweep.py)
+        calls this once a minute.
+
+        THE DECISION IS Fleet's, AND IT IS ASKED TWICE. idle_stops() gives the
+        list; is_idle() is asked again right before each stop, because each
+        stop awaits the spawner and a request for the next tenant on the list
+        can arrive in that await. That request either touched the idle clock
+        (a non-background one, in Fleet.admit) or entered the fleet (every
+        forwarded one, in ContainerForwarder._deliver), and either makes
+        is_idle() false. There is no await between the second question and
+        the stop's own _forget_running, so nothing can slip in after it.
+
+        NOTHING HERE STOPS A CONTAINER MID-TURN. A turn is a forwarded request,
+        and a forwarded request is in flight from before it reaches the
+        container until its last streamed byte is written; idle_stops() skips
+        anything with in_flight above zero, whatever its clock says.
+
+        The next request from a stopped tenant goes through Fleet.admit like
+        any other: a non-background one starts a new container from the
+        current tenant image, and a background poll reads `paused`.
+
+        THE CONTAINER IS ASKED TOO (spec 026), in _settled, and that is a
+        third question with an await in front of it. _settled asks is_idle()
+        again after its await, and it is the last thing before the stop, so
+        the rule above still holds.
+        """
+        stopped: list[str] = []
+        for tenant_id in self._fleet.idle_stops():
+            if not self._fleet.is_idle(tenant_id):
+                continue
+            if not await self._settled(tenant_id):
+                continue
+            _LOG.info("idle stop tenant=%s: nothing in flight and no request "
+                      "for %d minutes", tenant_id,
+                      self._fleet.seconds_idle(tenant_id) // 60)
+            await self.stop(tenant_id)
+            stopped.append(tenant_id)
+        return stopped
+
+    async def _settled(self, tenant_id: str) -> bool:
+        """Whether an idle container may be stopped now, after asking it what
+        work it has left (spec 026, decision 3). When the answer is yes, the
+        container's next timer is already in tenant_wakeups.
+
+          no report   it did not answer, its image has no such route, or the
+                      answer was not the agreed shape: stop it, and leave the
+                      stored wakeup as it is. Keeping a container that cannot
+                      answer would keep a broken one for ever, and would keep
+                      an old image from ever being replaced.
+          busy        a run, an event or an outgoing message still waits: do
+                      not stop it, until Fleet.worked_too_long says the
+                      report can no longer be believed.
+          quiet       store its earliest timer, or delete the stored one when
+                      it has none, then stop it.
+        """
+        running = self._addresses.get(tenant_id)
+        if self._containers is None or running is None:
+            return True
+        left = idle.work_left(await self._containers.next_work(running))
+        if not self._fleet.is_idle(tenant_id):
+            # A request arrived while the container was answering.
+            return False
+        if left is None:
+            _LOG.info("tenant=%s gave no report of its work; stopping it and "
+                      "keeping the wakeup it had", tenant_id)
+            return True
+        if left.busy and not self._fleet.worked_too_long(tenant_id):
+            return False
+        if left.busy:
+            _LOG.warning("tenant=%s has reported work for %d minutes with no "
+                         "request; stopping it", tenant_id,
+                         self._fleet.seconds_idle(tenant_id) // 60)
+        self._keep_wakeup(tenant_id, left)
+        return True
+
+    async def stop_stale(self) -> list[str]:
+        """Stop every container that runs an older build of the tenant image
+        than the current one, as soon as it is between two turns. Returns the
+        tenant ids stopped. The idle loop calls this once a minute.
+
+        WHY THE IDLE STOP IS NOT ENOUGH. upgrade.sh rebuilds the tenant image
+        and leaves running containers alone, and a start is what moves a
+        tenant to the new image. A person who sends a message every few
+        minutes never reaches the idle window, so they kept the old code for
+        as long as they kept talking.
+
+        WHO KNOWS A CONTAINER IS STALE. The spawner: its `list` compares the
+        image each container was created from with the image the tag names
+        now. This asks `list` on every sweep, because an upgrade does not
+        always restart the gateway.
+
+        A TURN IS NEVER CUT. A stale container is stopped only when all of
+        these hold, and the last check has no await between it and the stop:
+
+          the fleet   nothing in flight, and no non-background request for
+                      idle.STALE_QUIET_SECONDS
+          the book    the address is the object recorded before `list` was
+                      asked, so no start finished meanwhile and the answer
+                      is about this container
+          its report  no run, no event and no outgoing message waits. A
+                      container that gives no report is left for the idle
+                      stop, which is the only path that may stop one blind.
+
+        The stop is an idle stop in every other way: the container's next
+        timer is stored first, its token is revoked, and the next message or
+        the stored wakeup starts a new container from the current image.
+        """
+        known = dict(self._addresses)
+        if not known:
+            return []
+        try:
+            listed = await self._spawner.list()
+        except (SpawnerError, OSError) as exc:
+            _LOG.warning("could not ask the spawner which containers run an "
+                         "old image: %s", exc)
+            return []
+        stopped: list[str] = []
+        for container in sorted(listed, key=lambda c: c.tenant_id):
+            running = known.get(container.tenant_id)
+            if not container.stale or running is None:
+                continue
+            if not await self._between_turns(running):
+                continue
+            _LOG.info("stale stop tenant=%s: its container runs an older "
+                      "image and nothing is in progress", running.tenant_id)
+            await self.stop(running.tenant_id)
+            stopped.append(running.tenant_id)
+        return stopped
+
+    def _still_and_quiet(self, running: RunningContainer) -> bool:
+        return (self._addresses.get(running.tenant_id) is running
+                and self._fleet.quiet_for(running.tenant_id,
+                                          idle.STALE_QUIET_SECONDS))
+
+    async def _between_turns(self, running: RunningContainer) -> bool:
+        """Whether a stale container may be stopped now. When the answer is
+        yes, its next timer is already in tenant_wakeups, as _settled leaves
+        it for an idle stop."""
+        tenant_id = running.tenant_id
+        if not self._still_and_quiet(running):
+            return False
+        if self._containers is None:
+            return True
+        left = idle.work_left(await self._containers.next_work(running))
+        if not self._still_and_quiet(running):
+            # A request arrived, or the container was replaced, while it
+            # was answering.
+            return False
+        if left is None or left.busy:
+            return False
+        self._keep_wakeup(tenant_id, left)
+        return True
+
+    def _keep_wakeup(self, tenant_id: str, left: idle.WorkLeft) -> None:
+        """Store a container's earliest timer before it is stopped, or delete
+        the stored one when it has none."""
+        if left.wakeup is None:
+            self._store.clear_wakeup(tenant_id)
+        else:
+            self._store.set_wakeup(tenant_id, left.wakeup)
+
     def _forget_running(self, tenant_id: str) -> None:
         self._addresses.pop(tenant_id, None)
         self._fleet.set_status(tenant_id, idle.STOPPED)
@@ -384,6 +642,20 @@ class Launcher:
         self._locks.pop(tenant_id, None)
         self._starts.pop(tenant_id, None)
         self._addresses.pop(tenant_id, None)
+
+    async def running_tenant_ids(self) -> list[str]:
+        """Every tenant container the spawner has, by id, unfiltered.
+
+        NOT `resync`, AND THE DIFFERENCE IS THE POINT. `resync` decides what
+        the gateway may FORWARD to: it drops a container whose address is not
+        the one its project id derives and one whose tenant control.db does
+        not know, and it forgets both. Stopping is a different question, and
+        those two are precisely the containers a restore is about to delete
+        the directories out from under. This exists so `stop-all` can ask the
+        wider one without making `resync` destructive, which would change what
+        a consistency function is.
+        """
+        return await self._spawner.tenant_ids()
 
     async def spawner_task(self, tenant_id: str, task: str,
                            project_id: int = 0) -> dict:
@@ -413,8 +685,19 @@ class Launcher:
         it in that state -- a stop whose spawner call failed, an eviction, an
         idle sweep, a restore, a delete. On this branch that means it is
         repaired at gateway startup, on a refused connection, and on
-        `restart-all`; the once-a-minute sweep that would also call this is
-        E4's and E4 is deferred.
+        `restart-all`.
+
+        THE ONCE-A-MINUTE IDLE LOOP DOES NOT CALL THIS, on purpose. Its list
+        is a snapshot taken before an await, and the loop at the bottom
+        forgets every address that is not in it. A start that finishes inside
+        that await records an address the snapshot never saw, and this would
+        mark that tenant STOPPED while their first turn is still streaming;
+        their next request would then start a second container over the
+        first. Here that window opens only on a refused connection or at
+        startup. Run every minute, it would open every minute. A container
+        whose idle stop failed is repaired anyway: its token is revoked and
+        the fleet says STOPPED, so the tenant's next request starts a new
+        one.
 
         THE ADDRESS IS CHECKED AGAINST THE PROJECT ID. DockerRuntime.list
         already refuses an address outside the tenant subnet, and this is the

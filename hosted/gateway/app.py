@@ -27,7 +27,10 @@ worse answer than 400 for the same reason "/api/ch%61t/stream" is.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import html
+import json
+import re
 import time
 from collections.abc import Awaitable, Callable
 from pathlib import Path
@@ -36,13 +39,30 @@ from aiohttp import web
 
 from hosted import log
 from hosted.core import policy, quota
-from hosted.gateway import answers, guards, sessions
+from hosted.gateway import (
+    answers,
+    connect,
+    embed,
+    guards,
+    sessions,
+    setup_page,
+    slack,
+    slack_state,
+    team_homes,
+)
 from hosted.gateway.config import GatewayConfig
 from hosted.gateway.identity import NotSignedIn
-from hosted.gateway.launch import InMaintenance, Launcher, NotActive, StartFailed
+from hosted.gateway.launch import (
+    DISABLED_MESSAGE,
+    InMaintenance,
+    Launcher,
+    NotActive,
+    StartFailed,
+)
 from hosted.gateway.store import SESSION_TTL_SECONDS
 from hosted.ports.control import ControlStore, Tenant
-from hosted.ports.identity import IdentityVerifier
+from hosted.ports.identity import Identity, IdentityVerifier
+from hosted.ports.memory import MemoryKeys
 
 _LOG = log.get(__name__)
 
@@ -55,17 +75,126 @@ STATIC = Path(__file__).resolve().parent / "static"
 # STATIC sits inside hosted/, which the services image copies whole, so a
 # directory walk would serve whatever anybody ever drops in there.
 #
-# supabase-js-2.117.1.js is the un-minified UMD build of @supabase/supabase-js
-# 2.117.1, taken from cdn.jsdelivr.net on 2026-09-24. 217945 bytes, sha256
-# dff1e545f4f35bd42895cd6f46431e56137dd13031e46a9759c446447c11a567.
+# A key may contain a slash, and the VALUE is what reaches the filesystem, so
+# a nested file costs an entry here and nothing else. No request string is
+# ever joined to STATIC, which is what keeps `..` a 404 rather than a
+# traversal that has to be defended against.
+#
+# design/ and fonts/ are copies of the Waku design system, byte-identical to
+# waku/ops/static/. They are copies rather than a shared directory because
+# the services image's build context refuses waku/ outright
+# (services.Dockerfile.dockerignore) -- that refusal is the hosted/waku
+# boundary, and it is worth more than the duplication.
+# evals/deterministic/hosted/test_login_page.py fails if the two ever differ.
+#
+# supabase-js-2.117.1.js is GONE as of 2026-09-27: 217945 bytes, thrown away
+# by this page's own Clear-Site-Data and refetched on every sign-in, to make
+# one call login.js now makes with fetch. See that file.
 STATIC_FILES: dict[str, tuple[str, str]] = {
-    "supabase.js": ("supabase-js-2.117.1.js", "text/javascript"),
     "login.css": ("login.css", "text/css"),
     "login.js": ("login.js", "text/javascript"),
+    "setup.css": ("setup.css", "text/css"),
+    "waku-mark.svg": ("waku-mark.svg", "image/svg+xml"),
+    "design/tokens.css": ("design/tokens.css", "text/css"),
+    "design/type.css": ("design/type.css", "text/css"),
+    "design/fonts.css": ("design/fonts.css", "text/css"),
+    "design/controls.css": ("design/controls.css", "text/css"),
+    "fonts/InstrumentSans-var.woff2": ("fonts/InstrumentSans-var.woff2", "font/woff2"),
+    "fonts/JetBrainsMono-var.woff2": ("fonts/JetBrainsMono-var.woff2", "font/woff2"),
+    "fonts/PlayfairDisplaySC-400.woff2": ("fonts/PlayfairDisplaySC-400.woff2", "font/woff2"),
 }
 
-CLEAR_SITE_DATA = '"cache", "storage"'
+# A woff2 is bytes. Sending `font/woff2; charset=utf-8` says it is text in a
+# character set, which is false, and aiohttp will not let charset be set on
+# some binary types at all.
+TEXT_STATIC_TYPES = frozenset({"text/css", "text/javascript", "image/svg+xml"})
+
+# "storage" and NOT "cache", since 2026-09-28.
+#
+# The spec (line 509) writes both. "storage" is the half that protects a
+# person: it clears localStorage, sessionStorage and IndexedDB, so nothing
+# Supabase or this page wrote survives for the next person at this browser.
+# "cache" clears the HTTP cache for this origin -- which on the apex holds
+# four stylesheets, three fonts, the Waku mark and a 2.5 KB script, all of
+# them public, identical for every visitor, and none of them a credential.
+#
+# It cost 113591 bytes on EVERY sign-in, measured against the live
+# deployment: ten requests, zero cache hits, 88 KB of it incompressible
+# woff2, on every visit forever. That is the whole of what "cache" bought
+# and the whole of what it cost.
+#
+# Cookies are untouched either way, and deliberately: the spec notes that
+# this header "carries no cookies", because the session cookie is cleared by
+# the logout that sends this, not by the browser.
+# --- the public static files, and the ONE place they are allowed to cache ---
+#
+# WHY THESE AND NOTHING ELSE. answers.harden sends `Cache-Control: no-store`
+# on every response, which is right for what the spec's acceptance 14 names:
+# "every CONTAINER response carries Cache-Control: no-store". A tenant's
+# dashboard data is theirs and must never sit in a shared cache.
+#
+# /auth/static/ is the opposite kind of thing. Every byte is public, identical
+# for every visitor, and carries no credential: four stylesheets, three fonts,
+# the Waku mark and the sign-in script. `no-store` on those bought nothing and
+# cost 113591 bytes per sign-in.
+#
+# REVALIDATION AND NOT A LIFETIME, on purpose. `no-cache` means "you may keep
+# it, ask me before using it". The browser sends the tag it holds and an
+# unchanged file answers 304 with no body -- so a repeat visit costs round
+# trips instead of bytes, and a deploy is picked up IMMEDIATELY. A max-age
+# would be faster and would serve the previous release's stylesheet to
+# somebody signing in after a deploy, which on the page that holds a
+# credential is not a trade worth a few hundred milliseconds.
+STATIC_CACHE_CONTROL = "no-cache"
+
+# The file's bytes, so the tag changes exactly when the file does. Computed
+# per request and not at import: the files are small, and a cache keyed on a
+# process's startup would serve a stale tag for the life of a container that
+# outlived a `docker cp`. Weak would be wrong -- these are byte-identical
+# copies checked by an eval, and a strong tag is what they are.
+def _etag(filename: str, body: bytes) -> str:
+    return '"' + hashlib.sha256(body).hexdigest()[:32] + '"'
+
+
+def _cacheable(response: web.Response, tag: str) -> web.Response:
+    """harden(), then the two headers that let this one file be kept.
+
+    The order matters and is the whole of this function: harden sets
+    Cache-Control: no-store, so a caller that hardened afterwards would put it
+    back and silently undo the caching. One place does both, in one order.
+    """
+    answers.harden(response)
+    response.headers["Cache-Control"] = STATIC_CACHE_CONTROL
+    response.headers["ETag"] = tag
+    return response
+
+
+CLEAR_SITE_DATA = '"storage"'
 SIGN_IN_REFUSED = "That sign-in did not work. Ask for a new link."
+# Spec 004 B: the chat API every gateway calls, and the container route it
+# becomes. The container's own path, so the forwarder's policy, turn quota and
+# wake-up apply exactly as they do to a turn typed into the dashboard.
+CHAT_API_PATH = "/v1/chat"
+CHAT_STREAM_PATH = "/api/chat/stream"
+CHAT_API_POST_ONLY = "Send the message as a POST."
+# Spec 007 D: chat history over the same front door. Three routes, one
+# container route: the dashboard's own /api/session, which already lists,
+# reads, starts and switches conversations for the chat dock. The two reads go
+# as GET with the action in the query; the two writes go as the POST body the
+# caller sent, after the gateway has read it and checked the action.
+CONVERSATIONS_API_PATH = "/v1/conversations"
+SESSION_PATH = "/api/session"
+CONVERSATION_ACTIONS = ("new", "switch")
+# What a conversation id looks like: the dashboard's s-YYYYMMDD-HHMMSS, a
+# channel's name (terminal, voice, whatsapp), telegram-<chat>. A leading
+# letter or digit, so the dock's "__all__" timeline is not a conversation.
+CONVERSATION_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}")
+CONVERSATIONS_METHODS = "Read conversations with GET; start or switch one with a POST."
+CONVERSATION_ACTION_REFUSED = ('Send {"action": "new"} or '
+                               '{"action": "switch", "id": "<conversation id>"}.')
+NO_SUCH_CONVERSATION = "That is not a conversation id."
+# Spec 004 A7: how often a tenant's Waku Memory key is checked for revocation.
+MEMORY_KEY_CHECK_SECONDS = 3600
 
 # aiohttp's own default is 1 MiB. Set explicitly, and equal to the proxy's
 # body cap in the spec's proxy step 1, so hosted waku has ONE body limit
@@ -76,8 +205,14 @@ MAX_BODY_BYTES = 4 * 1024 * 1024
 async def _harden_on_prepare(_request: web.Request,
                              response: web.StreamResponse) -> None:
     """The five security headers on every response this process writes,
-    including the ones aiohttp writes on its own. harden() is idempotent, so
-    a response that already went through it is unchanged."""
+    including the ones aiohttp writes on its own.
+
+    THIS RUNS AFTER THE HANDLER, which is the whole reason harden() defaults
+    Cache-Control rather than imposing it. A response that set its own -- the
+    public static files, which may be kept and revalidated -- keeps it; every
+    other response gets no-store here even if its handler never thought about
+    it. Before that, this line silently undid the caching and the only symptom
+    was a slow sign-in page."""
     answers.harden(response)
 
 
@@ -91,14 +226,52 @@ def _sentence_for(status: int) -> str:
     return answers.NOT_FOUND if status == 404 else answers.REFUSED
 
 
+def _conversation_action_refusal(body: bytes) -> web.Response | None:
+    """None when a POST /v1/conversations body is one the container should
+    get, the refusal when it is not. Only the two writes: the reads have their
+    own GET routes, and an action the front door does not name is not passed
+    through to find out what the container makes of it."""
+    try:
+        payload = json.loads(body or b"null")
+    except ValueError:
+        return answers.json_error(guards.UNSUPPORTED_MEDIA, answers.NOT_JSON)
+    if not isinstance(payload, dict):
+        return answers.json_error(guards.UNSUPPORTED_MEDIA, answers.NOT_JSON)
+    action = payload.get("action")
+    if action not in CONVERSATION_ACTIONS:
+        return answers.json_error(400, CONVERSATION_ACTION_REFUSED)
+    if action == "switch" and not (isinstance(payload.get("id"), str)
+                                   and CONVERSATION_ID.fullmatch(payload["id"])):
+        return answers.json_error(400, CONVERSATION_ACTION_REFUSED)
+    return None
+
+
 class Gateway:
     def __init__(self, *, config: GatewayConfig, store: ControlStore,
                  launcher: Launcher, verifier: IdentityVerifier,
                  forward: Forward,
                  turns: quota.TurnWindow | None = None,
                  plans: dict[str, quota.Plan] | None = None,
+                 memory_keys: MemoryKeys | None = None,
+                 slack: slack.SlackRoutes | None = None,
+                 connect: connect.Connect | None = None,
+                 team_homes: team_homes.TeamHomeRoutes | None = None,
                  now: Callable[[], float] = time.time) -> None:
         self._config = config
+        # Spec 032: None when config/gateway.env has no platform secret, or
+        # no key to seal a team's Waku Memory key with. Every route under
+        # /v1/team-homes then answers 503 with the reason.
+        self._team_homes = team_homes
+        # Spec 029: None when config/gateway.env has no key to seal a
+        # connector's tokens with. Every connector route then answers 503
+        # with config.connect_problem.
+        self._connect = connect
+        # Spec 026 C: None when config/gateway.env lacks one of the four Slack
+        # values. Every Slack route then answers 503 with config.slack_problem.
+        self._slack = slack
+        self._memory_keys = memory_keys
+        # tenant id -> when its Waku Memory key was last minted or checked (A7).
+        self._key_checked: dict[str, float] = {}
         self._store = store
         self._launcher = launcher
         self._verifier = verifier
@@ -106,6 +279,12 @@ class Gateway:
         self._now = now
         self._sessions = sessions.SessionCache(now)
         self._handoffs = sessions.HandoffCodes(now)
+        # Spec 008 C: the embedded chat's one-time codes, a separate set so a
+        # sign-in code cannot be redeemed as an embed code or the other way.
+        self._embed_codes = sessions.HandoffCodes(now, ttl=embed.EMBED_CODE_SECONDS)
+        # The setup page's way in from waku.one (setup_page.LINK_API_PATH): a
+        # third set, for the same reason as the embed codes.
+        self._setup_codes = sessions.HandoffCodes(now)
         # ONE TurnWindow per process, shared with E3's forwarder, which is
         # built BEFORE the Gateway because the Gateway requires a forwarder.
         # Two windows would mean the forwarder counts turns and `disable`
@@ -138,6 +317,14 @@ class Gateway:
         return self._handoffs
 
     @property
+    def embed_codes(self) -> sessions.HandoffCodes:
+        return self._embed_codes
+
+    @property
+    def setup_codes(self) -> sessions.HandoffCodes:
+        return self._setup_codes
+
+    @property
     def turns(self) -> quota.TurnWindow:
         return self._turns
 
@@ -162,6 +349,8 @@ class Gateway:
         self._store.delete_sessions(tenant_id)
         self._sessions.forget_tenant(tenant_id)
         self._handoffs.forget_tenant(tenant_id)
+        self._embed_codes.forget_tenant(tenant_id)
+        self._setup_codes.forget_tenant(tenant_id)
 
     def build(self) -> web.Application:
         """One catch-all route, one explicit body cap, and the five security
@@ -214,6 +403,34 @@ class Gateway:
         host = guards.normalise_host(request.headers.get("Host"))
         if not host:
             return answers.refusal(request, guards.MISDIRECTED, answers.WRONG_HOST)
+        if host == self._config.apex_host:
+            # Before the CSRF pair, on purpose: see _chat_api. The history
+            # routes are bearer routes on the same terms.
+            path = policy.split_path(request.raw_path)[0]
+            if path == CHAT_API_PATH:
+                return await self._chat_api(request)
+            if path == embed.EMBED_API_PATH:
+                return await self._embed_api(request)
+            if path == setup_page.LINK_API_PATH:
+                return await self._setup_link_api(request)
+            if path == slack.EVENTS_PATH:
+                # Before the CSRF pair, like the bearer routes: its credential
+                # is Slack's signature (slack.SlackRoutes.events).
+                if self._slack is None:
+                    return slack.not_configured(self._config.slack_problem)
+                return await self._slack.events(request)
+            if (path == CONVERSATIONS_API_PATH
+                    or path.startswith(CONVERSATIONS_API_PATH + "/")):
+                return await self._conversations_api(request, path)
+            if path == team_homes.PATH or path.startswith(team_homes.PATH + "/"):
+                # Before the CSRF pair, like the bearer routes: waku.one's
+                # API calls these with the platform secret and no Origin.
+                if self._team_homes is None:
+                    return team_homes.not_configured(
+                        self._config.platform_problem
+                        if not self._config.platform_secret
+                        else self._config.connect_problem)
+                return await self._team_homes.handle(request, path)
         if guards.csrf_refusal(request, host):
             return answers.refusal(request, guards.UNSUPPORTED_MEDIA, answers.NOT_JSON)
         if host == self._config.apex_host:
@@ -230,14 +447,186 @@ class Gateway:
         if request.method == "GET" and path == "/login":
             return self._login_page()
         if request.method == "GET" and path.startswith("/auth/static/"):
-            return self._static(path[len("/auth/static/"):])
+            return self._static(request, path[len("/auth/static/"):])
         if request.method == "POST" and path == "/auth/session":
             return await self._sign_in(request)
         if request.method == "POST" and path == "/auth/logout":
             return self._sign_out(request)
+        if request.method == "GET" and path == slack.SETUP_PATH:
+            return self._setup_page(request)
+        if request.method == "GET" and path == setup_page.AUTH_PATH:
+            return self._setup_enter(request)
+        if request.method == "GET" and path == slack.INSTALL_PATH:
+            return self._slack_install(request)
+        if request.method == "GET" and path == slack.CALLBACK_PATH:
+            return await self._slack_callback(request)
+        if request.method == "GET" and path == connect.START_PATH:
+            return await self._connect_start(request)
+        if request.method == "GET" and path == connect.CALLBACK_PATH:
+            return await self._connect_callback(request)
+        if request.method == "POST" and path == connect.DISCONNECT_PATH:
+            return await self._connect_disconnect(request)
         if request.method == "GET" and path == "/":
             return answers.redirect("/login")
         return answers.refusal(request, 404, answers.NOT_FOUND)
+
+    def _setup_page(self, request: web.Request) -> web.Response:
+        """GET /setup: the three steps for the person this browser's session
+        names, or for a visitor who has not signed in (spec 026 C4)."""
+        tenant = self._apex_tenant(request)
+        return setup_page.render(
+            signed_in=tenant is not None, slack_on=self._slack is not None,
+            install=self._store.slack_install(tenant.id) if tenant else None,
+            outcome=request.query.get("slack", ""),
+            login_url="/login",
+            dashboard_url=(f"https://{tenant.id}.{self._config.apex_host}/"
+                           if tenant else ""),
+            connectors=[(vendor.name, vendor.title, state)
+                        for vendor, state in self._connector_states(tenant)],
+            connect_outcome=request.query.get("connect", ""),
+            connect_server=request.query.get("server", ""))
+
+    async def _setup_link_api(self, request: web.Request) -> web.Response:
+        """`POST /v1/setup-link`: a one-time way onto /setup, signed in, for
+        waku.one's Integrations page (setup_page.LINK_API_PATH).
+
+            -> {"url": "https://<apex>/auth/setup?code=<code>",
+                "expires_at": <unix seconds>}
+
+        Bearer-checked exactly like /v1/embed, through the same two helpers, so
+        the tenant is found or created and its Waku Memory key minted here too.
+        The Supabase token never goes into the URL.
+        """
+        if request.method != "POST":
+            return answers.json_error(405, setup_page.LINK_POST_ONLY)
+        if request.content_type != guards.JSON_CONTENT_TYPE:
+            return answers.json_error(guards.UNSUPPORTED_MEDIA, answers.NOT_JSON)
+        signed_in = await self._bearer(request)
+        if isinstance(signed_in, web.Response):
+            return signed_in
+        tenant = await self._bearer_tenant(*signed_in)
+        if isinstance(tenant, web.Response):
+            return tenant
+        code = self._setup_codes.issue(tenant.id)
+        url = f"https://{self._config.apex_host}{setup_page.AUTH_PATH}?code={code}"
+        return answers.json_ok({"url": url,
+                                "expires_at": int(self._now() + sessions.HANDOFF_TTL_SECONDS)})
+
+    def _setup_enter(self, request: web.Request) -> web.Response:
+        """GET /auth/setup?code=: the code becomes this browser's apex
+        session, then /setup.
+
+        THE SAME THREE CHECKS AS /auth/enter, with the same answer for all
+        three: a navigation that is same-site and a document
+        (guards.handoff_refusal), a code that is spent here and names a
+        tenant, and a tenant that is still active. waku.one and the apex share
+        the registrable domain, so the real link from waku.one is same-site,
+        and a link from any other site bounces to /login.
+
+        Like /auth/enter, `?code=` must never reach an access log.
+        """
+        if guards.handoff_refusal(request):
+            return answers.redirect(f"https://{self._config.apex_host}/login")
+        tenant_id = self._setup_codes.take(request.query.get("code", ""))
+        tenant = self._store.tenant_by_id(tenant_id) if tenant_id else None
+        if tenant is None or tenant.status != "active":
+            return answers.redirect(f"https://{self._config.apex_host}/login")
+        value = sessions.new_secret()
+        self._remember(sessions.apex_key(value), tenant.id)
+        response = answers.redirect(slack.SETUP_PATH)
+        sessions.set_session_cookie(response, sessions.APEX_COOKIE, value,
+                                    max_age=int(SESSION_TTL_SECONDS))
+        return response
+
+    # --- "Connect Notion" (spec 029 A2) ---------------------------------
+
+    def _connector_states(self, tenant: Tenant | None) -> list:
+        """(vendor, state) for the setup page; nothing when connectors are off."""
+        if self._connect is None:
+            return []
+        states = self._connect.states(tenant.id if tenant else None)
+        return [(vendor, states[name]) for name, vendor in self._connect.vendors.items()]
+
+    async def _connect_start(self, request: web.Request) -> web.Response:
+        """GET /connect/start?server=<name>: the "Connect" link. A GET, for
+        /slack/install's reason: it is a link a person follows, it changes
+        nothing but the state it issues, and the vendor's own page asks the
+        person before anything is granted."""
+        if self._connect is None:
+            return connect.not_configured(self._config.connect_problem)
+        tenant = self._apex_tenant(request)
+        if tenant is None:
+            return answers.redirect(f"https://{self._config.apex_host}/login")
+        return await self._connect.start(tenant.id, request.query.get("server", ""))
+
+    async def _connect_callback(self, request: web.Request) -> web.Response:
+        """GET /connect/callback: the vendor sends the browser back here. The
+        session cookie is SameSite=Lax, so it rides this top-level navigation,
+        and the callback checks it against the state."""
+        if self._connect is None:
+            return connect.not_configured(self._config.connect_problem)
+        tenant = self._apex_tenant(request)
+        return await self._connect.callback(request, tenant.id if tenant else None)
+
+    async def _connect_disconnect(self, request: web.Request) -> web.Response:
+        """POST /connect/disconnect {"server": "<name>"}: forget this person's
+        sign-in to one vendor. A POST behind the gateway's Origin and JSON
+        checks, because it changes something: a link on another site must not
+        be able to disconnect a person's Notion."""
+        if self._connect is None:
+            return connect.not_configured(self._config.connect_problem)
+        tenant = self._apex_tenant(request)
+        if tenant is None:
+            return answers.json_error(401, answers.NO_SESSION)
+        try:
+            payload = await request.json()
+        except ValueError:
+            payload = None
+        server = payload.get("server") if isinstance(payload, dict) else None
+        if self._connect.vendor(server) is None:
+            return answers.json_error(400, connect.DISCONNECT_BODY)
+        return answers.json_ok({"ok": True,
+                                "disconnected": await self._connect.disconnect(tenant.id, server)})
+
+    # --- "Add to Slack" (spec 026 C1) -----------------------------------
+
+    def _apex_tenant(self, request: web.Request) -> Tenant | None:
+        """The active tenant this browser's apex session names, or None."""
+        value = request.cookies.get(sessions.APEX_COOKIE, "")
+        tenant_id = self._resolve(sessions.apex_key(value)) if value else None
+        tenant = self._store.tenant_by_id(tenant_id) if tenant_id else None
+        return tenant if tenant is not None and tenant.status == "active" else None
+
+    def _slack_install(self, request: web.Request) -> web.Response:
+        """GET /slack/install: the "Add to Slack" link. A GET, because it is a
+        link a person follows; it changes nothing but the state it issues, and
+        Slack's own page asks the person before anything is installed.
+
+        Like /auth/enter, `?home=<ticket>` must never reach an access log."""
+        if self._slack is None:
+            return slack.not_configured(self._config.slack_problem)
+        if "home" in request.query:
+            # Spec 032 A3: an owner of a team space, sent here by waku.one
+            # with a ticket and no session. The ticket is read once, and a
+            # session in this browser is neither needed nor used.
+            home = (self._team_homes.redeem_ticket(request.query.get("home", ""))
+                    if self._team_homes is not None else None)
+            if home is None:
+                return answers.html_error(410, slack.HOME_LINK_ENDED, retry=False)
+            return self._slack.start_home(home)
+        tenant = self._apex_tenant(request)
+        if tenant is None:
+            return answers.redirect(f"https://{self._config.apex_host}/login")
+        return self._slack.start(tenant.id)
+
+    async def _slack_callback(self, request: web.Request) -> web.Response:
+        """GET /slack/oauth/callback: Slack sends the browser back here. The
+        session cookie is SameSite=Lax, so it rides this top-level navigation
+        from slack.com, and the callback checks it against the state."""
+        if self._slack is None:
+            return slack.not_configured(self._config.slack_problem)
+        tenant = self._apex_tenant(request)
+        return await self._slack.callback(request, tenant.id if tenant else None)
 
     def _login_page(self) -> web.Response:
         """The sign-in page, with its own strict policy and Clear-Site-Data.
@@ -262,23 +651,35 @@ class Gateway:
         policy_header = (
             "default-src 'none'; script-src 'self'; style-src 'self'; "
             f"connect-src 'self' {self._config.supabase_url}; img-src 'self'; "
+            # font-src, because the page now serves the design system's own
+            # faces from this origin. Without it they are refused and the
+            # page silently falls back to the system stack.
+            "font-src 'self'; "
             "form-action 'none'; base-uri 'none'; frame-ancestors 'none'")
         response = web.Response(text=body, content_type="text/html", charset="utf-8")
         response.headers["Content-Security-Policy"] = policy_header
         response.headers["Clear-Site-Data"] = CLEAR_SITE_DATA
         return answers.harden(response)
 
-    def _static(self, name: str) -> web.Response:
+    def _static(self, request: web.Request, name: str) -> web.Response:
         found = STATIC_FILES.get(name)
         if found is None:
             return answers.json_error(404, answers.NOT_FOUND)
         filename, content_type = found
-        # charset explicitly: without it a classic script or stylesheet is
-        # decoded in the encoding the BROWSER picks, and the vendored client
-        # is 218 KB of UTF-8 nobody re-reads after a mojibake bug report.
-        return answers.harden(web.Response(
-            body=(STATIC / filename).read_bytes(), content_type=content_type,
-            charset="utf-8"))
+        # charset explicitly on TEXT: without it a classic script or
+        # stylesheet is decoded in the encoding the BROWSER picks, and this
+        # page's copy is the one a mojibake bug report would be about. A font
+        # is not text and does not get one.
+        charset = "utf-8" if content_type in TEXT_STATIC_TYPES else None
+        body = (STATIC / filename).read_bytes()
+        tag = _etag(filename, body)
+        # A conditional request costs one round trip and no body. The browser
+        # asks with the tag it holds; an unchanged file answers 304 and sends
+        # nothing.
+        if request.headers.get("If-None-Match") == tag:
+            return _cacheable(web.Response(status=304), tag)
+        return _cacheable(web.Response(
+            body=body, content_type=content_type, charset=charset), tag)
 
     async def _sign_in(self, request: web.Request) -> web.Response:
         try:
@@ -301,6 +702,7 @@ class Gateway:
                 timezone=str(payload.get("timezone", "")))
         except NotActive as exc:
             return answers.json_error(403, str(exc))
+        await self._ensure_memory_key(tenant.id, token)
         value = sessions.new_secret()
         self._remember(sessions.apex_key(value), tenant.id)
         code = self._handoffs.issue(tenant.id)
@@ -324,6 +726,203 @@ class Gateway:
         sessions.set_session_cookie(response, sessions.APEX_COOKIE, value,
                                     max_age=int(SESSION_TTL_SECONDS))
         return response
+
+    async def _chat_api(self, request: web.Request) -> web.StreamResponse:
+        """`POST /v1/chat`: one person's message to their own Waku Agent (spec 004 B).
+
+        The front door every gateway calls -- the waku.one Waku Agent tab
+        first, Slack later -- server to server, with the person's Supabase
+        token as `Authorization: Bearer`. It finds or creates their tenant,
+        mints their Waku Memory key if they have none, and hands the request
+        to the forwarder as the container's own `/api/chat/stream`, so the
+        turn quota, the wake-up and the header allowlist are the ones every
+        dashboard turn already goes through. The forwarder never passes
+        Authorization on: the container does not see the person's token.
+
+        WHY THE ORIGIN CHECK DOES NOT APPLY. CSRF needs a credential the
+        browser attaches on its own. This route ignores cookies and reads only
+        the Authorization header, which a browser never attaches by itself, so
+        a forged cross-site request arrives with no credential at all. A
+        server-to-server caller sends no Origin, and requiring one would refuse
+        every legitimate call. The JSON half stays.
+        """
+        if request.method != "POST":
+            return answers.json_error(405, CHAT_API_POST_ONLY)
+        if request.content_type != guards.JSON_CONTENT_TYPE:
+            return answers.json_error(guards.UNSUPPORTED_MEDIA, answers.NOT_JSON)
+        signed_in = await self._bearer(request)
+        if isinstance(signed_in, web.Response):
+            return signed_in
+        tenant = await self._bearer_tenant(*signed_in)
+        if isinstance(tenant, web.Response):
+            return tenant
+        return await self._forward(request.clone(rel_url=CHAT_STREAM_PATH), tenant)
+
+    async def _embed_api(self, request: web.Request) -> web.Response:
+        """`POST /v1/embed`: a one-time way into the person's own chat, for
+        waku.one to put in an iframe (spec 008 C).
+
+            -> {"url": "https://<tenant>.<apex>/auth/embed?code=<code>",
+                "expires_at": <unix seconds>}
+
+        Bearer-checked exactly like /v1/chat, through the same two helpers, so
+        the tenant is found or created and its Waku Memory key minted here
+        too. The Supabase token never goes into the URL: a URL lands in
+        history, logs and Referer headers, and a sixty-second, single-use code
+        bound to one tenant is worth nothing once the frame has used it.
+
+        Nothing is started here. The frame's first request does that, through
+        the forwarder, exactly as the first request after a sign-in does.
+        """
+        if request.method != "POST":
+            return answers.json_error(405, embed.EMBED_POST_ONLY)
+        if request.content_type != guards.JSON_CONTENT_TYPE:
+            return answers.json_error(guards.UNSUPPORTED_MEDIA, answers.NOT_JSON)
+        signed_in = await self._bearer(request)
+        if isinstance(signed_in, web.Response):
+            return signed_in
+        tenant = await self._bearer_tenant(*signed_in)
+        if isinstance(tenant, web.Response):
+            return tenant
+        code = self._embed_codes.issue(tenant.id)
+        url = (f"https://{tenant.id}.{self._config.apex_host}"
+               f"{embed.AUTH_PATH}?code={code}")
+        return answers.json_ok({"url": url,
+                                "expires_at": int(self._now() + embed.EMBED_CODE_SECONDS)})
+
+    async def _conversations_api(self, request: web.Request,
+                                 path: str) -> web.StreamResponse:
+        """Chat history over the front door (spec 007 D).
+
+            GET  /v1/conversations        -> GET  /api/session?action=list
+            GET  /v1/conversations/<id>   -> GET  /api/session?action=history&id=<id>
+            POST /v1/conversations        -> POST /api/session, the body as sent
+
+        Everything /v1/chat does, in the same order and through the same two
+        helpers: the bearer token, the tenant (found or created), the Waku
+        Memory key, then the forwarder, which wakes the container exactly as a
+        turn would. The container keeps the one copy of the history, in its
+        own chat_log; the gateway only checks the person and forwards. The
+        forwarder never passes Authorization on.
+
+        THE POST BODY IS READ HERE, FROM THE CLONE. aiohttp refuses to clone a
+        request whose body has been read, but a clone keeps what IT read: the
+        forwarder's own read() of the same clone answers the same bytes. So
+        the gateway checks the action on the object it then hands over, and
+        the container receives exactly the bytes that were checked.
+        """
+        rest = path[len(CONVERSATIONS_API_PATH):]
+        if rest:
+            conversation = rest[1:]
+            if not CONVERSATION_ID.fullmatch(conversation):
+                return answers.json_error(404, NO_SUCH_CONVERSATION)
+            if request.method != "GET":
+                return answers.json_error(405, CONVERSATIONS_METHODS)
+            target = f"{SESSION_PATH}?action=history&id={conversation}"
+        elif request.method == "GET":
+            target = f"{SESSION_PATH}?action=list"
+        elif request.method == "POST":
+            if request.content_type != guards.JSON_CONTENT_TYPE:
+                return answers.json_error(guards.UNSUPPORTED_MEDIA, answers.NOT_JSON)
+            target = SESSION_PATH
+        else:
+            return answers.json_error(405, CONVERSATIONS_METHODS)
+        signed_in = await self._bearer(request)
+        if isinstance(signed_in, web.Response):
+            return signed_in
+        forwarded = request.clone(rel_url=target)
+        if request.method == "POST":
+            refused = _conversation_action_refusal(await forwarded.read())
+            if refused is not None:
+                return refused
+        tenant = await self._bearer_tenant(*signed_in)
+        if isinstance(tenant, web.Response):
+            return tenant
+        return await self._forward(forwarded, tenant)
+
+    async def _bearer(self, request: web.Request) -> tuple[Identity, str] | web.Response:
+        """The person behind `Authorization: Bearer`, verified exactly as at
+        sign-in, or the 401 every bearer route answers."""
+        values = request.headers.getall("Authorization", ())
+        scheme, _, token = (values[0] if len(values) == 1 else "").partition(" ")
+        if scheme.lower() != "bearer" or not token:
+            return answers.json_error(401, SIGN_IN_REFUSED)
+        try:
+            identity = await asyncio.to_thread(self._verifier.verify, token)
+        except NotSignedIn as exc:
+            _LOG.info("bearer route refused: %s", exc)
+            return answers.json_error(401, SIGN_IN_REFUSED)
+        return identity, token
+
+    async def _bearer_tenant(self, identity: Identity, token: str) -> Tenant | web.Response:
+        """Their tenant, found or created, with its Waku Memory key in place,
+        or the 403 a disabled one gets."""
+        try:
+            tenant, _created = await self._launcher.ensure_tenant(
+                sub=identity.sub, email=identity.email, timezone="")
+        except NotActive as exc:
+            return answers.json_error(403, str(exc))
+        if tenant.status != "active":
+            return answers.json_error(403, DISABLED_MESSAGE)
+        await self._ensure_memory_key(tenant.id, token)
+        return tenant
+
+    async def _ensure_memory_key(self, tenant_id: str, access_token: str) -> None:
+        """Mint the tenant's Waku Memory key the first time they sign in (spec 004).
+
+        Before the pre-warm, so the container that boots during this sign-in
+        already has it. Never fails the sign-in: a person who cannot reach Waku
+        Memory today can still use their agent, and the next sign-in tries again.
+        """
+        if self._memory_keys is None:
+            return
+        if self._store.memory_key(tenant_id):
+            await self._check_memory_key(tenant_id, access_token)
+            return
+        await self._mint_memory_key(tenant_id, access_token)
+
+    async def _check_memory_key(self, tenant_id: str, access_token: str) -> None:
+        """Replace the key if the person revoked it on waku.one (spec 004 A7).
+
+        At most once an hour per tenant: a sign-in and every /v1/chat call pass
+        through here, and Waku Memory need not be asked about each one. Only a
+        definite "revoked" replaces the key; an unreachable Waku Memory is not
+        evidence of anything. The running container still holds the old key,
+        so it is stopped, and the next request starts it on the new one.
+        """
+        now = self._now()
+        if now - self._key_checked.get(tenant_id, now) < MEMORY_KEY_CHECK_SECONDS:
+            return
+        self._key_checked[tenant_id] = now
+        try:
+            live = await self._memory_keys.is_live(
+                access_token, self._store.memory_key_id(tenant_id))
+        except Exception as exc:
+            _LOG.info("tenant=%s: Waku Memory key check failed: %s", tenant_id, exc)
+            return
+        if live is not False:
+            return
+        _LOG.info("tenant=%s: Waku Memory key was revoked; minting a new one", tenant_id)
+        if await self._mint_memory_key(tenant_id, access_token):
+            try:
+                await self._launcher.stop(tenant_id)
+            except Exception as exc:
+                _LOG.info("tenant=%s: stop after key replacement failed: %s", tenant_id, exc)
+
+    async def _mint_memory_key(self, tenant_id: str, access_token: str) -> bool:
+        self._key_checked[tenant_id] = self._now()
+        try:
+            minted = await self._memory_keys.mint(access_token)
+        except Exception as exc:  # network, timeout, a malformed answer
+            _LOG.info("tenant=%s: Waku Memory key not minted: %s", tenant_id, exc)
+            return False
+        if minted is None:
+            _LOG.info("tenant=%s: Waku Memory issued no key", tenant_id)
+            return False
+        key, key_id = minted
+        self._store.set_memory_key(tenant_id, key=key, key_id=key_id)
+        _LOG.info("tenant=%s: Waku Memory key %s minted", tenant_id, key_id)
+        return True
 
     def _sign_out(self, request: web.Request) -> web.Response:
         value = request.cookies.get(sessions.APEX_COOKIE, "")
@@ -351,6 +950,14 @@ class Gateway:
         path, _query = policy.split_path(request.raw_path)
         if request.method == "GET" and path == "/auth/enter":
             return self._enter(request, label)
+        if request.method == "GET" and path == embed.AUTH_PATH:
+            return self._enter_embed(request, label)
+        if request.method == "GET" and path.startswith("/auth/static/"):
+            # The sign-in page's public stylesheets and faces, on this host
+            # too: the gateway's own error page (answers.html_error) links
+            # them, and CORP same-origin keeps a tenant host from loading
+            # the apex's copies.
+            return self._static(request, path[len("/auth/static/"):])
         value = request.cookies.get(sessions.TENANT_COOKIE, "")
         tenant_id = (self._resolve(sessions.tenant_key(label, value))
                      if value else None)
@@ -363,17 +970,123 @@ class Gateway:
                 self.end_sessions(tenant_id)
                 _LOG.info("signed out tenant=%s on its own host", tenant_id)
             return self._signed_out_response(sessions.TENANT_COOKIE)
+        embed_only = False
         if tenant_id != label:
-            # Not signed in here, or signed in as somebody else. The same
-            # answer for both: a session that names another tenant tells the
-            # holder nothing about whether this tenant exists.
-            return self._no_session(request)
+            # Not signed in here, or signed in as somebody else. Either way the
+            # embed cookie is the only other way in, and it opens the chat
+            # alone (spec 008 E). The dashboard's own cookie, when it is
+            # valid, wins: it can already reach everything this one can.
+            tenant_id = self._embed_session(request, label)
+            embed_only = tenant_id is not None
+        if tenant_id != label:
+            # The same answer for no session and somebody else's: a session
+            # that names another tenant tells the holder nothing about whether
+            # this tenant exists.
+            return self._no_session(request, path)
         tenant = self._store.tenant_by_id(tenant_id)
         if tenant is None or tenant.status != "active":
             if tenant is not None:
                 self.end_sessions(tenant.id)
-            return self._no_session(request)
+            return self._no_session(request, path)
+        if request.method == "POST" and path == embed.DASHBOARD_PATH:
+            return self._dashboard_handoff(tenant)
+        if embed_only:
+            body = await request.read() if request.method == "POST" else b""
+            refused = embed.route_refusal(request.method, path, body)
+            if refused and guards.is_top_level_page(request):
+                # A tab, not the frame: the partitioned embed cookie reached
+                # it because both have top-level site waku.one (see
+                # guards.is_top_level_page). It is no session here. The tab
+                # gets what a signed-out visitor gets, the sign-in page.
+                _LOG.info("embed cookie ignored on a top-level page for "
+                          "tenant=%s: %s", tenant.id, path)
+                return answers.redirect(f"https://{self._config.apex_host}/login")
+            if refused:
+                # From inside the frame (its fetches, or a navigation of the
+                # frame itself): 403 and not 401, because a 401 tells
+                # waku.one the session ended and it would re-mint and reload
+                # the chat, which would ask again.
+                _LOG.info("embed session for tenant=%s refused %s %s: %s",
+                          tenant.id, request.method, path, refused)
+                return answers.refusal(request, 403, embed.EMBED_REFUSED)
+        if request.method == "GET" and path == embed.PAGE_PATH:
+            return await self._embed_page(request, tenant)
+        if path == slack_state.PATH:
+            # Spec 030: the Slack card's facts. Answered here, so a stopped
+            # container is not started to say what only the gateway knows.
+            if request.method != "GET":
+                return answers.json_error(405, slack_state.GET_ONLY)
+            return answers.json_ok(slack_state.facts(
+                slack_on=self._slack is not None,
+                install=self._store.slack_install(tenant.id),
+                apex_host=self._config.apex_host))
         return await self._forward(request, tenant)
+
+    def _embed_session(self, request: web.Request, label: str) -> str | None:
+        value = request.cookies.get(embed.EMBED_COOKIE, "")
+        return self._resolve(embed.embed_key(label, value)) if value else None
+
+    async def _embed_page(self, request: web.Request,
+                          tenant: Tenant) -> web.StreamResponse:
+        """GET /embed/chat: the container's page, framable by the allowlist.
+
+        The origins ride on the REQUEST for the forwarder, which sends them to
+        the container as X-Waku-Embed-Origins and marks the container's answer
+        framable before its headers go out -- a streamed response cannot have
+        a header changed after prepare(). A refusal the forwarder writes
+        itself (paused, maintenance, at capacity) comes back unprepared and
+        is marked here, so the frame shows the sentence rather than the
+        browser's own "refused to connect".
+        """
+        request[embed.REQUEST_ORIGINS_KEY] = self._config.embed_origins
+        response = await self._forward(request, tenant)
+        if not response.prepared:
+            answers.allow_framing(response, self._config.embed_origins)
+        return response
+
+    def _enter_embed(self, request: web.Request, label: str) -> web.Response:
+        """The embed's hand-off: a code from /v1/embed becomes an embed session.
+
+        _enter's three checks, with the fetch-metadata rule for a frame (see
+        guards.embed_refusal), and two differences that are the point of it:
+        the cookie is the embed one (12 hours, SameSite=None, Partitioned) and
+        the redirect goes to the chat page, not the dashboard, carrying the
+        console's `theme` when it is exactly light or dark. Every answer,
+        including a refusal, is framable by the allowlist: a refusal is the
+        expired page, which tells waku.one to ask for a new code.
+
+        The same warning as _enter: `?code=` must never reach an access log.
+        """
+        origins = self._config.embed_origins
+        refused = guards.embed_refusal(request)
+        if refused:
+            _LOG.info("embed hand-off on %s refused: %s", label, refused)
+            return embed.expired_page(origins)
+        if not self._embed_codes.redeem(request.query.get("code", ""), label):
+            return embed.expired_page(origins)
+        tenant = self._store.tenant_by_id(label)
+        if tenant is None or tenant.status != "active":
+            return embed.expired_page(origins)
+        value = sessions.new_secret()
+        self._remember(embed.embed_key(label, value), label,
+                       ttl=embed.EMBED_SESSION_SECONDS)
+        response = answers.allow_framing(
+            web.Response(status=302, headers={
+                "Location": embed.page_location(request.query.get("theme", ""))}),
+            origins)
+        embed.set_embed_cookie(response, value)
+        return answers.harden(response)
+
+    def _dashboard_handoff(self, tenant: Tenant) -> web.Response:
+        """POST /auth/dashboard: a sign-in hand-off code for the frame's
+        "Dashboard" button (embed.DASHBOARD_PATH says why this is safe).
+
+        The code is the apex's kind, from the same HandoffCodes, so it is
+        redeemed by _enter and nothing else: 60 seconds, once, this tenant
+        only, and only as a document navigation that is not cross-site.
+        """
+        code = self._handoffs.issue(tenant.id)
+        return answers.json_ok({"url": f"/auth/enter?code={code}"})
 
     def _enter(self, request: web.Request, label: str) -> web.Response:
         """The hand-off: a code from the apex becomes this host's session.
@@ -408,12 +1121,18 @@ class Gateway:
                                     max_age=int(SESSION_TTL_SECONDS))
         return response
 
-    def _no_session(self, request: web.Request) -> web.Response:
+    def _no_session(self, request: web.Request, path: str = "") -> web.Response:
+        if request.method == "GET" and path == embed.PAGE_PATH:
+            # Inside a frame the sign-in page is a blank box (it carries
+            # frame-ancestors 'none'), so the chat page says it signed out and
+            # tells waku.one, which asks /v1/embed for a new code.
+            return embed.expired_page(self._config.embed_origins)
         if answers.wants_html(request):
             return answers.redirect(f"https://{self._config.apex_host}/login")
         return answers.json_error(401, answers.NO_SESSION)
 
-    def _remember(self, key: str, tenant_id: str) -> None:
+    def _remember(self, key: str, tenant_id: str, *,
+                  ttl: float = SESSION_TTL_SECONDS) -> None:
         """One writer for a session: the row and the cache, on the SCOPED key.
 
         The row is what survives this process; the cache is what keeps a
@@ -422,7 +1141,7 @@ class Gateway:
         one that works only after a restart.
         """
         self._store.create_session(tenant_id=tenant_id, value=key,
-                                   expires_at=self._now() + SESSION_TTL_SECONDS)
+                                   expires_at=self._now() + ttl)
         self._sessions.put(key, tenant_id)
 
     def _resolve(self, key: str) -> str | None:

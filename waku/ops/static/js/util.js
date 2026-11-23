@@ -26,6 +26,9 @@ function mdInline(s){   // s is already HTML-escaped
 }
 function renderMarkdown(text){
   const lines = esc(text).split(/\r?\n/);
+  // The same lines unescaped, for the JSON in a report's fenced blocks. esc()
+  // never adds or removes a line break, so the two line up index for index.
+  const rawLines = (text??"").toString().split(/\r?\n/);
   const row = l => /^\s*\|.*\|\s*$/.test(l);
   const sep = l => /^\s*\|?[\s:|-]*-[\s:|-]*\|?\s*$/.test(l);
   const cells = l => l.trim().replace(/^\||\|$/g, "").split("|").map(c => c.trim());
@@ -55,9 +58,15 @@ function renderMarkdown(text){
     if (/^\s*`{3,}/.test(l)){                                       // fenced code block
       const lang = l.replace(/^\s*`{3,}/, "").trim();
       i++;
+      const start = i;
       const codeLines = [];
       while (i < lines.length && !/^\s*`{3,}\s*$/.test(lines[i])){ codeLines.push(lines[i]); i++; }
-      if (i < lines.length) i++;   // skip closing ```
+      const closed = i < lines.length;
+      if (closed) i++;   // skip closing ```
+      // A closed waku-* fence of a research report (blocks.js) is drawn as
+      // its UI; one still streaming, unknown or unreadable stays code.
+      const block = closed && /^waku-/.test(lang) ? reportBlock(lang, rawLines.slice(start, start + codeLines.length).join("\n")) : null;
+      if (block){ out.push(block); continue; }
       const langLabel = lang ? `<span class="mdcode-lang">${lang}</span>` : "";
       out.push(`<div class="mdcode"><div class="mdcode-head">${langLabel}${uiButton("Copy", {level: "tertiary", size: "sm", cls: "mdcode-copy", onclick: "copyCode(this)"})}</div><pre><code>${codeLines.join("\n")}</code></pre></div>`);
       continue;
@@ -65,7 +74,7 @@ function renderMarkdown(text){
     if (/^\s*[-*_]{3,}\s*$/.test(l)){ out.push("<hr class='mdhr'>"); i++; continue; } // hr
     if (/^\s*$/.test(l)){ i++; continue; }
     const para = [];                                                // paragraph
-    while (i < lines.length && lines[i].trim() && !/^\s*[-*]\s|^\s*\d+\.\s|^\s*#{1,6}\s/.test(lines[i])
+    while (i < lines.length && lines[i].trim() && !/^\s*[-*]\s|^\s*\d+\.\s|^\s*#{1,6}\s|^\s*`{3,}/.test(lines[i])
            && !(row(lines[i]) && i+1<lines.length && sep(lines[i+1]))){
       para.push(mdInline(lines[i])); i++;
     }
@@ -98,7 +107,17 @@ const reveal = (path, label) => uiButton(esc(label), {level: "tertiary", size: "
 // --- memory CRUD (dashboard side). `editing` pauses the 5s rebuild so an
 // in-progress edit isn't wiped (same idea as the animation guard).
 let editing = false;
-async function postJSON(url, body, headers = {}){ return (await fetch(url,{method:"POST",headers:{"Content-Type":"application/json",...headers},body:JSON.stringify(body)})).json(); }
+async function postJSON(url, body, headers = {}){
+  const res = await fetch(url,{method:"POST",headers:{"Content-Type":"application/json",...headers},body:JSON.stringify(body)});
+  noteStatus(res.status);
+  return res.json();
+}
+// Every chat call reports its HTTP status here (the helper above, sendChat and
+// the embedded chat's state read). Nobody listens on the dashboard; the
+// embedded chat (embed.js) listens for 401, an ended session, to tell
+// waku.one.
+const statusWatchers = [];
+function noteStatus(status){ statusWatchers.forEach(w => { try { w(status); } catch(e){} }); }
 
 // --- Shared row atoms.
 //

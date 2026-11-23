@@ -26,6 +26,10 @@ dependencies = [
     "openai>=1.50",      # openai wire format: OpenAI, Gemini, DeepSeek (and embeddings)
     "python-dotenv>=1.0",
     "rich>=13.0",
+    # Waku Memory connects over MCP (spec 020), so a fresh install can sign in
+    # without a second install command. The one exception to "no new default
+    # dependency" in AGENTS.md rule 3. >=2.1 for the reason under [mcp] below.
+    "mcp>=2.1",
 ]
 
 [project.urls]
@@ -64,6 +68,11 @@ gcal = [
     # The browser consent flow. Without it the only way in is `gcloud auth
     # application-default login`, which is a developer ritual, not a sign-in.
     "google-auth-oauthlib>=1.0",
+]
+# Optional source for `waku serve`: Slack mentions over Socket Mode, which
+# needs no public address. The built-in Socket Mode client is stdlib only.
+slack = [
+    "slack_sdk>=3.27",
 ]
 # Optional gateway: message Waku from Discord
 discord = [
@@ -108,7 +117,9 @@ arena = [
 notion = [
     "notion-client>=2.5",
 ]
-# Optional: connect MCP servers (.waku/mcp.json)
+# `mcp` is a default dependency now (above). This extra stays so
+# `pip install 'waku-agent[mcp]'` and `uv sync --extra mcp` keep working.
+# Connect MCP servers (.waku/mcp.json)
 # >=2.1: the Streamable HTTP transport is `streamable_http_client` and takes a
 # pre-built httpx client. 1.x spelled it `streamablehttp_client`, took headers
 # directly, and yielded a third element — so mcp_client.py's remote branch does
@@ -118,7 +129,11 @@ mcp = [
 ]
 # Hosted waku (hosted/): the gateway, the metering proxy and the spawner.
 # The CODE is not on PyPI -- hosted/ ships in neither the wheel nor the sdist,
-# and comes from a git checkout (hosted/README.md). This extra exists so that
+# and comes from a git checkout (hosted/README.md). That is now a LICENSING
+# fact as well as a packaging one: hosted/ is Elastic License 2.0
+# (hosted/LICENSE) and everything this project publishes is MIT, so the
+# `license` expression above stays true precisely because hosted/ never ships.
+# test_hosted_and_lab_never_ship_in_the_wheel_or_sdist is what keeps it true. This extra exists so that
 # a checkout can install the two libraries those services need, and so CI can
 # run their evals. `pip install waku-agent[hosted]` from PyPI therefore
 # installs these two libraries and nothing else; that is accepted.

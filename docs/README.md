@@ -48,7 +48,7 @@ videos about other projects live with their topic in [../lab/](../lab/README.md)
 
 | Chart | What it explains |
 |---|---|
-| [`waku-architecture.excalidraw`](whiteboards/waku-architecture.excalidraw) | Waku itself — harness, loop, memory pillars, LLM Ops (editable rebuild of [the whiteboard](architecture-whiteboard.png)) |
+| [`waku-architecture.excalidraw`](whiteboards/waku-architecture.excalidraw) | Waku itself — harness, loop, memory pillars, LLM Ops (editable rebuild of [the whiteboard](architecture-whiteboard.png)); its LLM Ops panel is the whiteboard's, with observe, two evals and a release gate, not the dashboard's four boxes (Trace, Observability, Evals, Release) |
 | [`loop-vs-graph.excalidraw`](whiteboards/loop-vs-graph.excalidraw) | Loop vs graph engineering — the ladder, and two timelines from a measured run of `waku brief` against `waku gather` ([the write-up](loop-vs-graph.md)) |
 | [`k3-architecture.excalidraw`](../lab/kimi-k3/whiteboards/k3-architecture.excalidraw) | Kimi K3: the 16-of-896 MoE, KDA + AttnRes attention, why agent loops get cheap |
 | [`pi-architecture.excalidraw`](../lab/pi-agent/whiteboards/pi-architecture.excalidraw) | pi (72K-star coding agent): 4-tool core, extensions, one EventStream |

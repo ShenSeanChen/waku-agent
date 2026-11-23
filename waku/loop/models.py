@@ -178,15 +178,18 @@ def _no_key_message(name: str, key_env: str) -> str:
     the URL to get a key, the absolute path of the .env actually in play, and
     the fact that Waku speaks to eleven providers, not one.
     """
-    from waku.config import DOTENV_PATH
+    from waku import config
 
-    # Name the variable in BOTH branches. "add the line there" without saying
+    # Name the variable in every branch. "add the line there" without saying
     # which line is the same dead end as pointing at .env.example was.
-    where = (f"Add it to {DOTENV_PATH}:\n"
+    read = config.DOTENV_PATH or config.HOME_DOTENV_PATH
+    home_env = config.resolve_home().path / ".env"
+    where = (f"Add it to {read}:\n"
              f"    {key_env}=your-key-here"
-             if DOTENV_PATH else
-             f"No .env found from {os.getcwd()} upward — create one here:\n"
-             f"    echo '{key_env}=your-key-here' >> .env")
+             if read else
+             f"No .env found from {os.getcwd()} upward or in {home_env.parent}.\n"
+             f"    Create {home_env} so Waku finds the key from any folder:\n"
+             f"    mkdir -p {home_env.parent} && echo '{key_env}=your-key-here' >> {home_env}")
     url = KEY_URLS.get(name)
     return (
         f"No API key for provider '{name}'.\n\n"
@@ -220,9 +223,9 @@ def _belongs_elsewhere(model: str, provider_name: str) -> bool:
     that produces a 400 rather than a surprise.
 
     A row with claims_families = false (the hosted free tier) is left out of
-    the OWNER map below, because it fronts a live catalog behind a single
+    the owners below, because it fronts a live catalog behind a single
     placeholder id and its own family tells you nothing about what is valid
-    there. It is still JUDGED by the map, and that is deliberate
+    there. It is still checked against those owners, and that is deliberate
     (spec 001, "The free tier is a provider"): a real anthropic owns
     "claude", so a leftover
     claude-* WAKU_MODEL under the hosted row is replaced by the row's own
@@ -231,10 +234,12 @@ def _belongs_elsewhere(model: str, provider_name: str) -> bool:
     family = model.split("-")[0].lower()
     if "/" in model or not family:
         return False
-    owner = {f: name for name, p in PROVIDERS.items()
-             if p.claims_families and "/" not in (p.model or "x")
-             for f in _families(p)}.get(family)
-    return bool(owner) and owner != provider_name
+    # DeepSeek and OpenCode both serve deepseek-* models. Keep every owner:
+    # choosing the last row silently reset valid DeepSeek overrides to Pro.
+    owners = {name for name, p in PROVIDERS.items()
+              if p.claims_families and "/" not in (p.model or "x")
+              and family in _families(p)}
+    return bool(owners) and provider_name not in owners
 
 
 def models_for(provider_name: str, model: str = "", small_model: str = "") -> tuple[str, str]:
@@ -326,14 +331,82 @@ def get_client(settings: Settings):
         kwargs: dict = {"api_key": api_key, "timeout": timeout}
         if base_url:
             kwargs["base_url"] = base_url
-        return anthropic.Anthropic(**kwargs)
+        client = anthropic.Anthropic(**kwargs)
+        # Spec 011 B1: the hosted free tier's proxy is told which turn each
+        # call belongs to, and answers what the turn was charged.
+        return TurnTagged(client) if settings.provider == PLATFORM else client
     return OpenAICompatClient(api_key=api_key, base_url=base_url, timeout=timeout)
+
+
+# The hosted free tier's provider row (providers.toml), whose endpoint is the
+# metering proxy in hosted/proxy/.
+PLATFORM = "waku-platform"
+
+
+class _TaggedMessages:
+    def __init__(self, owner: TurnTagged) -> None:
+        self._owner = owner
+
+    def _tag(self, kwargs: dict) -> dict:
+        # The proxy reads the platform token from `x-api-key`. anthropic 2.x
+        # sends an API key as `Authorization: Bearer` instead, so the header
+        # is set here and the proxy gets the same one from every SDK version.
+        headers = {**(kwargs.get("extra_headers") or {}), **self._owner.auth_headers()}
+        if self._owner.turn_id:
+            headers["X-Waku-Turn"] = self._owner.turn_id
+        kwargs["extra_headers"] = headers
+        return kwargs
+
+    def create(self, **kwargs):
+        return self._owner.client.messages.create(**self._tag(kwargs))
+
+    def stream(self, **kwargs):
+        return self._owner.client.messages.stream(**self._tag(kwargs))
+
+    def __getattr__(self, name: str):
+        return getattr(self._owner.client.messages, name)
+
+
+class TurnTagged:
+    """The `waku-platform` client (spec 011 B1). Every model call carries
+    `X-Waku-Turn: <turn_id>`, which the metering proxy reads and never
+    forwards to Anthropic, and `charges()` asks the proxy what the turn was
+    charged: `GET /v1/turns/<turn_id>/charges` answers
+    `{"model_usd", "calls", "credits"}`. It goes to the same proxy, with the
+    same platform token, as every model call; no other provider sends either.
+    """
+
+    def __init__(self, client) -> None:
+        self.client = client
+        self.turn_id = ""
+        self.messages = _TaggedMessages(self)
+
+    def __getattr__(self, name: str):
+        return getattr(self.client, name)
+
+    def auth_headers(self) -> dict:
+        """The platform token as `x-api-key`, which hosted/proxy/ authenticates
+        on, whatever header the installed anthropic SDK sends by default."""
+        key = getattr(self.client, "api_key", None)
+        return {"x-api-key": key} if key else {}
+
+    def charges(self, turn_id: str) -> dict | None:
+        """The proxy's answer for one turn, or None: an older proxy, a turn
+        it never saw (404) and an unreachable proxy all leave the receipt's
+        estimate in place, and never fail the turn."""
+        try:
+            answer = self.client.get(f"/v1/turns/{turn_id}/charges", cast_to=object,
+                                     options={"timeout": 10.0, "max_retries": 0,
+                                              "headers": self.auth_headers()})
+        except Exception:
+            return None
+        return answer if isinstance(answer, dict) else None
 
 
 class OpenAICompatClient:
     """Speaks the Anthropic Messages shape the loop expects, backed by an
-    OpenAI-style chat.completions API. ~60 lines is the entire difference
-    between the two wire formats — worth reading once.
+    OpenAI-style chat.completions API. The adapter preserves reasoning and
+    provider metadata that subsequent tool requests need to echo back.
     """
 
     def __init__(self, api_key: str, base_url: str | None = None, timeout: float = 120.0):
@@ -342,7 +415,22 @@ class OpenAICompatClient:
         self._client = openai.OpenAI(api_key=api_key, base_url=base_url, timeout=timeout)
         self.messages = SimpleNamespace(create=self._create, stream=self._stream)
 
-    def _to_openai(self, *, model, messages, max_tokens, system=None, tools=None) -> dict:
+    def _remember_reasoning(self, model: str) -> None:
+        # One endpoint can serve several models (for example OpenRouter).
+        # Learn this requirement per model, never for every model on the client.
+        if not hasattr(self, "_reasoning_models"):
+            self._reasoning_models: set[str] = set()
+        self._reasoning_models.add(model)
+
+    @staticmethod
+    def _with_reasoning(kwargs: dict) -> dict:
+        """Old text-only history has no reasoning to recover. Fill only gaps."""
+        return {**kwargs, "messages": [
+            {"reasoning_content": "", **m} if m["role"] == "assistant" else m
+            for m in kwargs["messages"]]}
+
+    def _to_openai(self, *, model, messages, max_tokens, system=None, tools=None,
+                   tool_choice=None) -> dict:
         oai_messages = []
         if system:
             oai_messages.append({"role": "system", "content": system})
@@ -364,6 +452,9 @@ class OpenAICompatClient:
                         call["extra_content"] = extra
                     calls.append(call)
                 entry: dict = {"role": "assistant", "content": text or None}
+                thinking = [b.thinking for b in content if getattr(b, "type", "") == "thinking"]
+                if thinking:
+                    entry["reasoning_content"] = "".join(thinking)
                 if calls:
                     entry["tool_calls"] = calls
                 oai_messages.append(entry)
@@ -386,12 +477,27 @@ class OpenAICompatClient:
                               "parameters": t["input_schema"]}}
                 for t in tools
             ]
+            # Anthropic's {"type": "none"} is OpenAI's "none": the tools are
+            # described but may not be called (the loop's final answer).
+            if tool_choice and tool_choice.get("type") == "none":
+                kwargs["tool_choice"] = "none"
+            # GPT-5.6 (sol/terra/luna) defaults to reasoning.effort=medium.
+            # Chat Completions rejects function tools unless effort is none
+            # (otherwise: use /v1/responses). Waku's loop is chat.completions,
+            # so pin none whenever tools are on the request. Gate/summarizer
+            # calls have tools=None and keep the model's default reasoning.
+            # Default stays gpt-5.5 (#136); this only unlocks WAKU_MODEL=gpt-5.6-*.
+            if (model or "").lower().startswith("gpt-5.6"):
+                kwargs["reasoning_effort"] = "none"
+        if tools and model in getattr(self, "_reasoning_models", set()):
+            kwargs = self._with_reasoning(kwargs)
         return kwargs
 
     def _call(self, kwargs: dict, **extra):
-        """Run chat.completions.create with the max_tokens key-name fallback
-        (older OpenAI-compatible endpoints only know max_tokens, not the newer
-        max_completion_tokens). Only retry when the error is ABOUT that param —
+        """Run chat.completions.create with bounded compatibility fallbacks.
+
+        Older OpenAI-compatible endpoints only know max_tokens, not the newer
+        max_completion_tokens. Only retry when the error is ABOUT that param —
         retrying on any error masked the real failure (e.g. a gpt-5.x call would
         fail for some other reason, then the max_tokens retry buried it under a
         confusing 'use max_completion_tokens' message)."""
@@ -399,15 +505,26 @@ class OpenAICompatClient:
             return self._client.chat.completions.create(**kwargs, **extra)
         except Exception as exc:
             m = str(exc).lower()
-            if "max_completion_tokens" not in m and "max_tokens" not in m:
-                raise
-            k = dict(kwargs)
-            k["max_tokens"] = k.pop("max_completion_tokens", None)
-            return self._client.chat.completions.create(**k, **extra)
+            # A fresh client may first see restored text-only history. Repair
+            # only a 400 naming this field, once: filled messages cannot match
+            # again. Preserve existing reasoning and all streaming options.
+            if (getattr(exc, "status_code", None) == 400 and "reasoning_content" in m
+                    and kwargs.get("tools") and any(
+                        msg["role"] == "assistant" and "reasoning_content" not in msg
+                        for msg in kwargs["messages"])):
+                self._remember_reasoning(kwargs["model"])
+                return self._call(self._with_reasoning(kwargs), **extra)
+            if ("max_completion_tokens" in kwargs
+                    and ("max_completion_tokens" in m or "max_tokens" in m)):
+                k = dict(kwargs)
+                k["max_tokens"] = k.pop("max_completion_tokens")
+                return self._call(k, **extra)
+            raise
 
-    def _create(self, *, model, messages, max_tokens, system=None, tools=None):
+    def _create(self, *, model, messages, max_tokens, system=None, tools=None, tool_choice=None):
         response = self._call(self._to_openai(
-            model=model, messages=messages, max_tokens=max_tokens, system=system, tools=tools))
+            model=model, messages=messages, max_tokens=max_tokens, system=system, tools=tools,
+            tool_choice=tool_choice))
         if not getattr(response, "choices", None):
             # some OpenAI-compatible endpoints (e.g. OpenRouter on a rate
             # limit) return 200 with an error body and no choices: surface
@@ -416,6 +533,10 @@ class OpenAICompatClient:
             raise RuntimeError(f"{model}: {err}")
         choice = response.choices[0].message
         blocks = []
+        reasoning = getattr(choice, "reasoning_content", None)
+        if isinstance(reasoning, str):
+            self._remember_reasoning(model)
+            blocks.append(SimpleNamespace(type="thinking", thinking=reasoning))
         if choice.content:
             blocks.append(SimpleNamespace(type="text", text=choice.content))
         for call in choice.tool_calls or []:
@@ -456,7 +577,8 @@ class _OpenAIStream:
         self._client = client
         self._kwargs = kwargs
         self._text: list[str] = []
-        self._tools: dict[int, dict] = {}   # index → {id, name, args}
+        self._reasoning: list[str] = []
+        self._tools: dict[int, dict] = {}   # index → {id, name, args, extra?}
         self._usage = None
 
     def __enter__(self):
@@ -475,6 +597,10 @@ class _OpenAIStream:
             if not chunk.choices:
                 continue
             delta = chunk.choices[0].delta
+            reasoning = getattr(delta, "reasoning_content", None)
+            if isinstance(reasoning, str):
+                self._client._remember_reasoning(self._kwargs["model"])
+                self._reasoning.append(reasoning)
             if getattr(delta, "content", None):
                 self._text.append(delta.content)
                 yield delta.content
@@ -486,16 +612,22 @@ class _OpenAIStream:
                     slot["name"] = tc.function.name
                 if tc.function and tc.function.arguments:
                     slot["args"] += tc.function.arguments
+                # Gemini requires this metadata on the follow-up request.
+                # Later argument chunks may omit it; keep what we received.
+                if getattr(tc, "extra_content", None):
+                    slot["extra"] = tc.extra_content
 
     def get_final_message(self):
         blocks = []
+        if self._reasoning:
+            blocks.append(SimpleNamespace(type="thinking", thinking="".join(self._reasoning)))
         text = "".join(self._text)
         if text:
             blocks.append(SimpleNamespace(type="text", text=text))
         for slot in self._tools.values():
             blocks.append(SimpleNamespace(
                 type="tool_use", id=slot["id"], name=slot["name"],
-                input=json.loads(slot["args"] or "{}")))
+                input=json.loads(slot["args"] or "{}"), extra=slot.get("extra")))
         usage = self._usage
         return SimpleNamespace(
             stop_reason="tool_use" if self._tools else "end_turn",

@@ -22,6 +22,8 @@ import json
 
 from aiohttp import web
 
+from hosted.core import idle
+
 NOT_FOUND = "That is not a page this service serves."
 WRONG_HOST = "That host is not served here."
 NOT_JSON = "This route takes a JSON body sent from its own page."
@@ -37,7 +39,8 @@ FRAME_ANCESTORS = "frame-ancestors 'none'"
 # Every one of these is on EVERY response, apex and tenant host alike: the two
 # hosts are same-site, so without nosniff and CORP one tenant's page can embed
 # another person's responses with their cookie attached, and without the two
-# framing headers it can frame their dashboard.
+# framing headers it can frame their dashboard. The embedded chat (spec 008) is
+# the one page that is framed on purpose; see FRAMABLE below.
 SECURITY_HEADERS = {
     "Cache-Control": "no-store",
     "Cross-Origin-Resource-Policy": "same-origin",
@@ -46,8 +49,35 @@ SECURITY_HEADERS = {
 }
 
 
+# Spec 008 D: the ONE exception to the two framing headers, and it is opt-in
+# per response. A response marked with this key in its own state (aiohttp's
+# StreamResponse is a mapping for exactly this) keeps the frame-ancestors
+# allowlist allow_framing wrote and gets no X-Frame-Options. Only the embed
+# page and /auth/embed are ever marked; nothing a container sends can mark one,
+# because the mark is on the gateway's own response object, not a header.
+FRAMABLE = web.ResponseKey("waku_framable", bool)
+
+
+def allow_framing(response: web.StreamResponse, origins: tuple[str, ...], *,
+                  policy: str = "") -> web.StreamResponse:
+    """`frame-ancestors <origins>` instead of 'none', and no X-Frame-Options.
+
+    X-Frame-Options has no allowlist form -- ALLOW-FROM was never implemented
+    by Chrome and was dropped by Firefox -- so it cannot be narrowed, only
+    left off; frame-ancestors is what every current browser reads instead.
+    `policy` is the rest of a page's own policy, for a page that has one.
+    """
+    response[FRAMABLE] = True
+    ancestors = "frame-ancestors " + " ".join(origins)
+    response.headers["Content-Security-Policy"] = (
+        f"{policy}; {ancestors}" if policy else ancestors)
+    response.headers.popall("X-Frame-Options", None)
+    return response
+
+
 def harden(response: web.StreamResponse) -> web.StreamResponse:
-    """The five headers, applied without clobbering a page's own CSP.
+    """The five headers, applied without clobbering a page's own CSP or a
+    response's own Cache-Control.
 
     /login carries a full policy of its own, which already contains
     frame-ancestors 'none'. Two Content-Security-Policy headers intersect
@@ -56,6 +86,22 @@ def harden(response: web.StreamResponse) -> web.StreamResponse:
     left alone and the default is added only where there is none.
     """
     for name, value in SECURITY_HEADERS.items():
+        # Cache-Control is DEFAULTED, not imposed, for the same reason the
+        # policy below is. The default is no-store and every response that
+        # says nothing gets it, which is what the spec's acceptance 14
+        # requires of a container response. But this function also runs from
+        # `on_response_prepare`, on every response, AFTER the handler -- so
+        # imposing it silently undid the one place that deliberately sets
+        # something else: the apex's public static files, which are allowed
+        # to be kept and revalidated (app.py, _cacheable).
+        #
+        # That is not hypothetical either. The first version of this change
+        # set the header in the handler, passed its own unit test, and still
+        # served `no-store` on the wire, because this loop ran last.
+        if name == "Cache-Control" and name in response.headers:
+            continue
+        if name == "X-Frame-Options" and response.get(FRAMABLE):
+            continue
         response.headers[name] = value
     if "Content-Security-Policy" not in response.headers:
         response.headers["Content-Security-Policy"] = FRAME_ANCESTORS
@@ -73,15 +119,55 @@ def json_ok(payload: dict) -> web.Response:
                                content_type="application/json"))
 
 
-def html_error(status: int, message: str) -> web.Response:
+# The sign-in page's stylesheets, in its order (tokens first: login.css reads
+# them). Both hosts serve /auth/static/ (app.py), so the link is always
+# same-origin, which CORP same-origin requires.
+ERROR_PAGE_STYLES = ("design/tokens.css", "design/type.css", "design/fonts.css",
+                     "design/controls.css", "login.css")
+
+
+def _page(message: str, *, head: str = "", action: str = "") -> str:
+    links = "".join(f"<link rel=\"stylesheet\" href=\"/auth/static/{name}\">"
+                    for name in ERROR_PAGE_STYLES)
+    return ("<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
+            "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
+            f"{head}<title>waku</title>"
+            "<link rel=\"icon\" href=\"/auth/static/waku-mark.svg\" type=\"image/svg+xml\">"
+            f"{links}</head><body><main>"
+            "<img id=\"mark\" src=\"/auth/static/waku-mark.svg\" alt=\"\" width=\"44\" height=\"44\">"
+            f"<h1>Waku</h1><p id=\"lede\">{html.escape(message)}</p>{action}"
+            "</main></body></html>")
+
+
+# The starting page is a 503 with Retry-After, so a script or a monitor reads
+# "not yet" while a person reads the sentence. It reloads ITSELF, the URL the
+# browser asked for and nothing else: the dashboard, or /embed/chat inside
+# waku.one's frame. Each reload is an ordinary request, so it joins the start
+# already under way (Fleet.admit says "wait") rather than starting another.
+STARTING_STATUS = 503
+
+
+def starting_page(path: str) -> web.Response:
+    """A page navigation whose container is still starting: a sentence, and
+    a reload every idle.STARTING_RELOAD_SECONDS until the container answers."""
+    target = path if path.startswith("/") and not path.startswith("//") else "/"
+    seconds = idle.STARTING_RELOAD_SECONDS
+    head = f"<meta http-equiv=\"refresh\" content=\"{seconds}; url={html.escape(target)}\">"
+    action = f"<p><a href=\"{html.escape(target)}\">Open it now</a></p>"
+    body = _page(idle.STARTING_MESSAGE, head=head, action=action)
+    response = web.Response(status=STARTING_STATUS, text=body, content_type="text/html",
+                            charset="utf-8", headers={"Retry-After": str(seconds)})
+    return harden(response)
+
+
+def html_error(status: int, message: str, *, retry: bool = True) -> web.Response:
     """A page navigation that fails gets a sentence and a way back, not a
-    JSON body the browser renders as text (spec, "Error shape")."""
-    safe = html.escape(message)
-    body = ("<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
-            "<meta name=\"viewport\" content=\"width=device-width\">"
-            "<title>waku</title></head><body>"
-            f"<h1>waku</h1><p>{safe}</p><p><a href=\"/\">Try again</a></p>"
-            "</body></html>")
+    JSON body the browser renders as text (spec, "Error shape"). It wears the
+    sign-in page's card, so it is recognisably Waku rather than bare HTML.
+
+    `retry=False` leaves the link out, for a person whose way back is on
+    another site: "Try again" leads to this host's sign-in page."""
+    body = _page(message, action="<p><a href=\"/\">Try again</a></p>" if retry else "")
     return harden(web.Response(status=status, text=body,
                                content_type="text/html", charset="utf-8"))
 

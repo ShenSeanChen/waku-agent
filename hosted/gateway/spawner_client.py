@@ -2,7 +2,7 @@
 
 The spawner is root with CAP_SYS_ADMIN and the data disk's block device, and
 this is the only thing that speaks to it. hosted/core/requests.py already
-allowlists the five operations, the five tasks and the exact key set of each,
+allowlists the six operations, the five tasks and the exact key set of each,
 so this module's job is narrow: send exactly those keys, give each call a
 timeout that matches the work it asks for, and turn the spawner's two answer
 shapes into a value or an exception.
@@ -26,12 +26,14 @@ from __future__ import annotations
 from pathlib import Path
 
 from hosted import jsonsock
+from hosted.core.tenant import is_tenant_id
 from hosted.ports.runtime import RunningContainer
 
-# Long enough that the gateway's own 15-second start budget is what expires
-# first, so the tenant is told "taking too long to start" rather than being
-# handed a socket error the sentence for does not exist.
-START_ASK_TIMEOUT = 30.0
+# Longer than the gateway's own 60-second start budget
+# (idle.START_TIMEOUT_SECONDS), so that budget is what expires first and the
+# tenant is shown the starting page rather than a socket error the sentence
+# for does not exist.
+START_ASK_TIMEOUT = 75.0
 # An operator task: a backup, a restore, an archive. Nobody is watching a
 # browser tab on these; the admin command is.
 TASK_ASK_TIMEOUT = 900.0
@@ -62,15 +64,32 @@ class SpawnerClient:
             raise SpawnerError(message)
         return answer
 
-    async def provision(self, tenant_id: str, project_id: int) -> None:
-        await self._ask({"op": "provision", "tenant_id": tenant_id,
-                         "project_id": project_id}, timeout=QUICK_ASK_TIMEOUT)
+    async def provision(self, tenant_id: str, project_id: int,
+                        connectors: tuple[str, ...] = ()) -> None:
+        """`connectors` names the connectors the tenant signed in to (spec
+        029 B2). It is sent only when there is one, so a spawner from before
+        the key existed still takes every other request."""
+        payload = {"op": "provision", "tenant_id": tenant_id, "project_id": project_id}
+        if connectors:
+            payload["connectors"] = list(connectors)
+        await self._ask(payload, timeout=QUICK_ASK_TIMEOUT)
 
     async def start(self, tenant_id: str, project_id: int, timezone: str,
-                    token: str) -> RunningContainer:
-        answer = await self._ask(
-            {"op": "start", "tenant_id": tenant_id, "project_id": project_id,
-             "timezone": timezone, "token": token}, timeout=START_ASK_TIMEOUT)
+                    token: str, memory_key: str = "",
+                    connectors: tuple[str, ...] = (),
+                    memory_space: str = "") -> RunningContainer:
+        payload = {"op": "start", "tenant_id": tenant_id, "project_id": project_id,
+                   "timezone": timezone, "token": token}
+        if memory_key:
+            # Sent only when there is one: `start` takes it as optional, and an
+            # empty string is not a Waku Memory key the spawner would accept.
+            payload["memory_key"] = memory_key
+        if connectors:
+            payload["connectors"] = list(connectors)
+        if memory_space:
+            # Spec 032 A4: only a team home's start carries its space.
+            payload["memory_space"] = memory_space
+        answer = await self._ask(payload, timeout=START_ASK_TIMEOUT)
         return self._container(tenant_id, answer)
 
     async def stop(self, tenant_id: str) -> None:
@@ -95,6 +114,23 @@ class SpawnerClient:
         return [self._container(str(entry.get("tenant_id", "")), entry)
                 for entry in entries]
 
+    async def tenant_ids(self) -> list[str]:
+        """Every tenant container the spawner labelled, by id.
+
+        Validated the same way `list`'s answer is, and for the same reason:
+        what comes back is joined to a container name and stopped, so a shape
+        that is not a tenant id is a refusal rather than a thing to act on.
+        """
+        answer = await self._ask({"op": "tenants"}, timeout=QUICK_ASK_TIMEOUT)
+        entries = answer.get("tenant_ids")
+        if not isinstance(entries, list):
+            raise SpawnerError(
+                f"tenants answered {type(entries).__name__}, not a list")
+        for entry in entries:
+            if not isinstance(entry, str) or not is_tenant_id(entry):
+                raise SpawnerError(f"tenants answered {entry!r}, not a tenant id")
+        return list(entries)
+
     async def task(self, tenant_id: str, task: str, project_id: int = 0) -> dict:
         payload = {"op": "task", "tenant_id": tenant_id, "task": task}
         if project_id:
@@ -116,4 +152,7 @@ class SpawnerClient:
             raise SpawnerError(f"no address in the spawner's answer: {answer!r}")
         if not isinstance(port, int) or port <= 0:
             raise SpawnerError(f"no port in the spawner's answer: {answer!r}")
-        return RunningContainer(tenant_id=tenant_id, address=address, port=port)
+        # `stale` is in a `list` answer only, and only True counts. A spawner
+        # from before the key existed sends none, and nothing is restarted.
+        return RunningContainer(tenant_id=tenant_id, address=address, port=port,
+                                stale=answer.get("stale") is True)

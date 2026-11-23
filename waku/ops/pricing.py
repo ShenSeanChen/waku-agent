@@ -1,7 +1,10 @@
 """Pricing — what a call cost, in dollars a human can feel.
 
-The loop writes a permanent ledger (`.waku/usage.jsonl`): one line per API call
-with provider, model, and token counts. It deliberately does NOT store a price.
+The tracer writes a permanent ledger (`.waku/usage.jsonl`): one line per API call
+with provider, model, token counts, the turn's `turn_id` and a `kind`: "loop" for
+the loop's own calls, "subagent" for a delegated agent, and "gate",
+"consolidation", "report", "triage" or "quick" for the small-model calls around
+the loop (spec 011). It deliberately does NOT store a price.
 Prices change; tokens don't. So cost is derived HERE, at read time, from the
 current tables — which means fixing a wrong rate silently corrects every past
 race and every historical spend chart.
@@ -17,8 +20,8 @@ Three tables, checked in this order by `price_for()`:
 each brain's world knowledge ends, so a 2025 model denying that 2026 models
 exist reads as stale data, not stupidity.
 
-Imported by the arena (per-race cost), the dashboard (the spend chart), and
-`scripts/shootout.py`.
+Imported by the arena (per-race cost), the dashboard (the spend chart), the turn
+receipt (`receipt.py`), and `scripts/shootout.py`.
 """
 
 from __future__ import annotations

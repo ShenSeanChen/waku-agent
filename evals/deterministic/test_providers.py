@@ -13,7 +13,7 @@ import anthropic
 import pytest
 
 from waku.config import Settings
-from waku.loop.models import PROVIDERS, OpenAICompatClient, get_client
+from waku.loop.models import PLATFORM, PROVIDERS, OpenAICompatClient, TurnTagged, get_client
 
 
 @pytest.fixture(autouse=True)
@@ -41,6 +41,10 @@ def test_get_client_builds_the_right_wire(name):
     settings = Settings(provider=name, model="", small_model="", api_key="", base_url=None)
     client = get_client(settings)
     expected = anthropic.Anthropic if provider.kind == "anthropic" else OpenAICompatClient
+    if name == PLATFORM:
+        # spec 011 B1: the free tier's client tags each call with its turn
+        assert isinstance(client, TurnTagged)
+        client = client.client
     assert isinstance(client, expected)
     # defaults must be filled in so the loop never sends model=""
     assert settings.model == provider.model
@@ -149,6 +153,39 @@ def test_catalog_url_is_used_with_both_auth_styles(monkeypatch):
     catalog._models_cache.clear()
 
 
+def test_openai_wire_catalog_gets_no_anthropic_headers(monkeypatch):
+    """OpenRouter answers a request carrying anthropic-version with its
+    Anthropic-compatible listing: 20 ids prefixed "anthropic/", which 400 when
+    used. An OpenAI-wire provider's catalog request must be Bearer only."""
+    import io
+    import json
+    import urllib.request
+
+    from waku.ops import catalog
+
+    captured = {}
+
+    def fake_urlopen(req, timeout=10):
+        captured["headers"] = {k.lower(): v for k, v in req.header_items()}
+        body = io.BytesIO(json.dumps({"data": [{"id": "stepfun/step-5-preview"}]}).encode())
+        body.__enter__ = lambda *a: body
+        body.__exit__ = lambda *a: None
+        return body
+
+    monkeypatch.setenv("WAKU_PROVIDER", "openrouter")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "fake-key-for-tests")
+    monkeypatch.delenv("WAKU_BASE_URL", raising=False)
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    catalog._models_cache.clear()
+
+    result = catalog.list_models("openrouter")
+    assert captured["headers"]["authorization"] == "Bearer fake-key-for-tests"
+    assert "x-api-key" not in captured["headers"]
+    assert "anthropic-version" not in captured["headers"]
+    assert [m["id"] for m in result["models"]] == ["stepfun/step-5-preview"]
+    catalog._models_cache.clear()
+
+
 def test_price_for_layers_model_over_provider():
     """Receipts correctness: a kimi-k3 run must be priced at K3's $3/$15, not
     the kimi provider's K2.7 rate — and unknown models still fall back to the
@@ -201,6 +238,28 @@ def test_every_priced_model_has_a_knowledge_cutoff():
 # gate fails open on error BY DESIGN, so this did not surface as a failure — it
 # surfaced as "retrieve", on every turn, for every non-anthropic model in the
 # arena. These pin the rule that stops it.
+
+@pytest.mark.parametrize("provider", ["deepseek", "opencode_zen", "opencode_go"])
+@pytest.mark.parametrize("reverse_registry", [False, True])
+def test_shared_model_family_keeps_saved_selection(monkeypatch, provider, reverse_registry):
+    """Saving Flash must survive both dashboard readback and client creation."""
+    from waku.loop import models
+    from waku.ops.settings_api import settings_info
+
+    if reverse_registry:
+        monkeypatch.setattr(models, "PROVIDERS", dict(reversed(list(PROVIDERS.items()))))
+    monkeypatch.setenv("WAKU_PROVIDER", provider)
+    monkeypatch.setenv("WAKU_MODEL", "deepseek-v4-flash")
+    monkeypatch.setenv("WAKU_SMALL_MODEL", "deepseek-v4-flash")
+
+    info = settings_info()
+    assert info["model"] == "deepseek-v4-flash"
+    assert info["small_model"] == "deepseek-v4-flash"
+    settings = Settings(provider=provider)
+    get_client(settings)
+    assert settings.model == "deepseek-v4-flash"
+    assert settings.small_model == "deepseek-v4-flash"
+
 
 def test_env_model_names_do_not_leak_into_another_provider(monkeypatch):
     from waku.config import Settings

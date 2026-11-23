@@ -328,6 +328,7 @@ def main() -> None:
             wake_loop(waku, mouth, wake_word)
         except KeyboardInterrupt:
             pass
+        waku.close()   # spec 021: lets the last turn's Stop hook finish
         print("\nbye — your memory stays in state.db")
         return
 
@@ -353,6 +354,7 @@ def main() -> None:
         print(f"waku › {result.reply}")
         mouth.speak(result.reply)
 
+    waku.close()   # spec 021: lets the last turn's Stop hook finish
     print("bye — your memory stays in state.db")
 
 

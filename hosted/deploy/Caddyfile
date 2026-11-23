@@ -1,0 +1,89 @@
+# One certificate for the apex and the wildcard, by DNS-01.
+#
+# {$VAR} is substituted from Caddy's own environment before the file is parsed,
+# and compose.yaml puts the four values there. That is what lets one Caddyfile
+# serve any operator's domain and any caddy-dns module.
+#
+# A provider whose module takes an inline argument (Cloudflare wants its token)
+# sets WAKU_DNS_PROVIDER to the whole directive, for example
+#   WAKU_DNS_PROVIDER="cloudflare {env.CLOUDFLARE_API_TOKEN}"
+# Route 53 takes none: it reads AWS credentials from config/caddy.env.
+#
+# THE SITE ADDRESS IS A CLOSED SET. Two names and no more: the apex and one
+# label under it. Caddy serves nothing it was not given a matching site block
+# for, so a request arriving with any other Host is refused here rather than
+# forwarded to the gateway to be sorted out. The wildcard matches exactly one
+# label, which is what a tenant id is.
+#
+# reverse_proxy passes the original Host upstream by default, and the gateway
+# routes by Host -- apex or tenant -- so that default is load-bearing. Do not
+# add a header_up that rewrites it.
+#
+# flush_interval -1 disables response buffering. Without it a streamed turn
+# (/api/chat/stream, /api/graph/stream) arrives at the browser in one lump when
+# the turn ends, which looks exactly like a hung dashboard.
+
+{
+	email {$WAKU_ACME_EMAIL}
+}
+
+{$WAKU_DOMAIN}, *.{$WAKU_DOMAIN} {
+	tls {
+		dns {$WAKU_DNS_PROVIDER}
+
+		# RESOLVERS AND A PROPAGATION WAIT, BOTH MEASURED RATHER THAN GUESSED.
+		#
+		# Measured on the first real VM, 2026-09-28: Caddy asked Let's Encrypt
+		# to validate 4.6 SECONDS after writing the TXT record, and Route 53
+		# takes 30 to 60 to publish it, so every attempt died on "No TXT record
+		# found at _acme-challenge.<domain>". The apex still issued, so the
+		# deployment came up looking healthy while every tenant host answered
+		# ERR_SSL_PROTOCOL_ERROR -- which reads as a broken tenant rather than
+		# a missing certificate. It is a race that does win sometimes, which is
+		# worse than never working: it can come up and fail on renewal.
+		#
+		# resolvers is the subtler half. Caddy's own propagation check runs
+		# against the container's resolver, here 127.0.0.53 (systemd-resolved),
+		# which answers instantly from cache and reports the record present
+		# before it is. Only a public resolver sees what the CA sees. The
+		# hand-built Caddyfile this replaced had `resolvers 1.1.1.1`, and the
+		# line was lost in the move to a container.
+		resolvers 1.1.1.1 8.8.8.8
+		propagation_delay 30s
+		propagation_timeout 5m
+	}
+
+	# COMPRESSION, AS A CLOSED SET OF CONTENT TYPES.
+	#
+	# Until 2026-09-27 this deployment compressed nothing at all, so every
+	# stylesheet and every JSON response crossed the wire whole. The sign-in
+	# page alone carries 44 KB of CSS that gzip takes to about 9.
+	#
+	# WHY THE LIST IS WRITTEN OUT AND WHY IT MUST NOT SAY text/*.
+	# Caddy's default match for `encode` includes `text/*`, and a streamed
+	# turn is `text/event-stream`. Compressing a stream is how a dashboard
+	# comes to look hung: the same failure `flush_interval -1` below exists
+	# to prevent, arriving by a different door. Naming the types that ARE
+	# compressed makes every other type -- the two streaming routes today,
+	# and whatever a later route invents -- uncompressed by default, which
+	# is the only direction this rule is safe to be wrong in.
+	#
+	# woff2 is absent on purpose: it is already compressed, and gzipping it
+	# costs CPU to add bytes.
+	#
+	# zstd first, gzip second: Caddy picks the first the client accepts.
+	encode zstd gzip {
+		match {
+			header Content-Type text/html*
+			header Content-Type text/css*
+			header Content-Type text/javascript*
+			header Content-Type text/plain*
+			header Content-Type application/json*
+			header Content-Type image/svg+xml*
+		}
+	}
+
+	reverse_proxy {$WAKU_GATEWAY_ADDRESS} {
+		flush_interval -1
+	}
+}

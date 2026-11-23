@@ -5,11 +5,12 @@ description: Connect Waku Memory, hosted cross-agent memory in Claude Code, Code
 
 ## What Waku Memory is
 
-This app's memory is local. It lives in `.waku/` on this machine and never
-leaves it. Waku Memory (waku.one) is a separate, hosted memory that several
+This app's memory is local. It lives in `~/.waku/` on this machine. Waku also
+writes each fact to `~/.waku/memory/`, one file per fact, so the Waku Memory
+importer can upload it. Waku Memory (waku.one) is a hosted memory that several
 agents share over MCP: a fact saved in Claude Code can be recalled in Codex,
-Grok Bot or this app. The two stores are separate, so never tell the user that
-local memory syncs to Waku Memory.
+Grok Bot or this app. A fact reaches Waku Memory only when it is uploaded, so
+never tell the user a fact is there unless a tool's output says so.
 
 ## Connecting this app
 
