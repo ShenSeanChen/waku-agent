@@ -684,6 +684,10 @@ if [ "$install_env_existed" = yes ]; then
     differs "--data-device" "$data_device" "${WAKU_DATA_DEVICE:-}" )
 fi
 
+# The key that seals Slack bot tokens in control.db (spec 026 C1), made here
+# and nowhere else. On a rerun gateway.env is kept, so this one is discarded
+# and the VM keeps the key its stored tokens were sealed with.
+slack_token_key=$(waku_new_key)
 waku_gateway_env | waku_write_config "$root/config/gateway.env"
 waku_spawner_env | waku_write_config "$root/config/spawner.env"
 waku_proxy_env   | waku_write_config "$root/config/proxy.env"

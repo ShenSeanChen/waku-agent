@@ -61,6 +61,41 @@ def test_a_personal_fact_stays_a_fact(tmp_path):
     assert bridge.calls[0][2]["kind"] == "fact"
 
 
+def test_a_team_agent_saves_into_its_space(tmp_path, monkeypatch):
+    """Acme's agent runs with WAKU_MEMORY_SPACE set to Acme's id. Every send
+    names that space, so the memory is a team memory every member reads."""
+    monkeypatch.setenv("WAKU_MEMORY_SPACE", "0b0f3c1e-8a0e-4c58-9d55-0d2b5b1f7a11")
+    bridge = FakeBridge(_config(tmp_path, [HOSTED]))
+    remember = remember_via(bridge)
+    assert remember("The launch moved to 3 December.", "global") == "4b1c0e2a"
+    assert remember("Descript costs $24 a month.", "project:Acme", "semantic") == "4b1c0e2a"
+    assert [args for _, _, args in bridge.calls] == [
+        {"body": "The launch moved to 3 December.", "kind": "fact", "scope": "global",
+         "space": "0b0f3c1e-8a0e-4c58-9d55-0d2b5b1f7a11"},
+        {"body": "Descript costs $24 a month.", "kind": "semantic", "scope": "project:Acme",
+         "space": "0b0f3c1e-8a0e-4c58-9d55-0d2b5b1f7a11"}]
+
+
+def test_a_persons_agent_sends_no_space(tmp_path, monkeypatch):
+    """Without the variable, and with it empty, the send is the one it was."""
+    bridge = FakeBridge(_config(tmp_path, [HOSTED]))
+    monkeypatch.delenv("WAKU_MEMORY_SPACE", raising=False)
+    remember_via(bridge)("Sergey is the user's swim buddy.", "global")
+    monkeypatch.setenv("WAKU_MEMORY_SPACE", "   ")
+    remember_via(bridge)("Sergey is the user's swim buddy.", "global")
+    assert [args for _, _, args in bridge.calls] == [
+        {"body": "Sergey is the user's swim buddy.", "kind": "fact", "scope": "global"}] * 2
+
+
+def test_the_space_is_read_when_the_fact_is_sent(tmp_path, monkeypatch):
+    monkeypatch.delenv("WAKU_MEMORY_SPACE", raising=False)
+    bridge = FakeBridge(_config(tmp_path, [HOSTED]))
+    remember = remember_via(bridge)
+    monkeypatch.setenv("WAKU_MEMORY_SPACE", "0b0f3c1e-8a0e-4c58-9d55-0d2b5b1f7a11")
+    remember("The launch moved to 3 December.", "global")
+    assert bridge.calls[0][2]["space"] == "0b0f3c1e-8a0e-4c58-9d55-0d2b5b1f7a11"
+
+
 def test_a_failure_reported_as_text_raises(tmp_path):
     """The bridge turns every failure into a string. Consolidation must see a
     failure as a failure, or the fact is marked synced and never retried."""
