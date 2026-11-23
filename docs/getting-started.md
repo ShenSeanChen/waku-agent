@@ -85,13 +85,12 @@ share, so a fact saved in Claude Code can be recalled here, and the other way
 round.
 
 ```bash
-pip install 'waku-agent[mcp]'           # in a checkout: uv pip install -e '.[mcp]'
-waku connect waku-memory                # or /connect waku-memory in the dashboard chat
+waku plugin install waku@waku-memory    # or /plugin install waku@waku-memory in the dashboard chat
+waku mcp login waku_memory              # sign in, once, in your browser
 waku skill export --to claude,codex     # optional: carry Waku's skills too
 ```
 
-Your browser opens once to sign in. Restart Waku to load the `waku_memory_*`
-tools.
+Restart Waku to load the `waku_memory_*` tools.
 
 **Check:** `waku mcp` names the account you signed in as, and
 `waku connections` lists Waku Memory as connected.

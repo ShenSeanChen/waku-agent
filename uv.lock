@@ -5200,6 +5200,15 @@ wheels = [
 ]
 
 [[package]]
+name = "slack-sdk"
+version = "3.47.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/2e/0c/133eb1a6ccf5854bafd908f2dc5bf9d5c28e8531eefb9edad954d5fa45cb/slack_sdk-3.47.0.tar.gz", hash = "sha256:824e91a94a5b72a65531e8db0dd63dc4dc6bbad1a219b19582b48d5661c1c707", size = 274403, upload-time = "2026-11-13T08:45:17.620003Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/12/c3/4de4ce25fdbbd3f4060cb220aa13a814b972e7c6184deae1e03665225861/slack_sdk-3.47.0-py2.py3-none-any.whl", hash = "sha256:8cfab3224d149962ef4313c1430d9ff65b8c3baf09f25988a920858ffa90aaa9", size = 333533, upload-time = "2026-11-13T08:45:15.979320Z" },
+]
+
+[[package]]
 name = "smart-open"
 version = "8.0.0"
 source = { registry = "https://pypi.org/simple" }
@@ -6094,6 +6103,7 @@ name = "waku-agent"
 source = { editable = "." }
 dependencies = [
     { name = "anthropic" },
+    { name = "mcp" },
     { name = "openai" },
     { name = "python-dotenv" },
     { name = "rich" },
@@ -6134,6 +6144,9 @@ mcp = [
 ]
 notion = [
     { name = "notion-client" },
+]
+slack = [
+    { name = "slack-sdk" },
 ]
 supabase = [
     { name = "supabase" },
@@ -6178,6 +6191,7 @@ requires-dist = [
     { name = "kokoro", marker = "extra == 'voice-neural'", specifier = ">=0.9" },
     { name = "langgraph", marker = "extra == 'arena'", specifier = ">=0.3" },
     { name = "langmem", marker = "extra == 'arena'", specifier = ">=0.0.30" },
+    { name = "mcp", specifier = ">=2.1" },
     { name = "mcp", marker = "extra == 'mcp'", specifier = ">=2.1" },
     { name = "mem0ai", marker = "extra == 'arena'", specifier = ">=2.0" },
     { name = "notion-client", marker = "extra == 'notion'", specifier = ">=2.5" },
@@ -6192,12 +6206,13 @@ requires-dist = [
     { name = "python-telegram-bot", marker = "extra == 'telegram'", specifier = ">=21.0" },
     { name = "rich", specifier = ">=13.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = "==0.16.0" },
+    { name = "slack-sdk", marker = "extra == 'slack'", specifier = ">=3.27" },
     { name = "sounddevice", marker = "extra == 'voice'", specifier = ">=0.4" },
     { name = "soundfile", marker = "extra == 'voice-neural'", specifier = ">=0.12" },
     { name = "supabase", marker = "extra == 'supabase'", specifier = ">=2.0" },
     { name = "zep-cloud", marker = "extra == 'arena'", specifier = ">=2.0" },
 ]
-provides-extras = ["arena", "dev", "discord", "eval", "gcal", "hosted", "mcp", "notion", "supabase", "telegram", "tracing", "voice", "voice-neural", "whatsapp"]
+provides-extras = ["arena", "dev", "discord", "eval", "gcal", "hosted", "mcp", "notion", "slack", "supabase", "telegram", "tracing", "voice", "voice-neural", "whatsapp"]
 
 [[package]]
 name = "wasabi"

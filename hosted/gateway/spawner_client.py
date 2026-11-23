@@ -64,18 +64,31 @@ class SpawnerClient:
             raise SpawnerError(message)
         return answer
 
-    async def provision(self, tenant_id: str, project_id: int) -> None:
-        await self._ask({"op": "provision", "tenant_id": tenant_id,
-                         "project_id": project_id}, timeout=QUICK_ASK_TIMEOUT)
+    async def provision(self, tenant_id: str, project_id: int,
+                        connectors: tuple[str, ...] = ()) -> None:
+        """`connectors` names the connectors the tenant signed in to (spec
+        029 B2). It is sent only when there is one, so a spawner from before
+        the key existed still takes every other request."""
+        payload = {"op": "provision", "tenant_id": tenant_id, "project_id": project_id}
+        if connectors:
+            payload["connectors"] = list(connectors)
+        await self._ask(payload, timeout=QUICK_ASK_TIMEOUT)
 
     async def start(self, tenant_id: str, project_id: int, timezone: str,
-                    token: str, memory_key: str = "") -> RunningContainer:
+                    token: str, memory_key: str = "",
+                    connectors: tuple[str, ...] = (),
+                    memory_space: str = "") -> RunningContainer:
         payload = {"op": "start", "tenant_id": tenant_id, "project_id": project_id,
                    "timezone": timezone, "token": token}
         if memory_key:
             # Sent only when there is one: `start` takes it as optional, and an
             # empty string is not a Waku Memory key the spawner would accept.
             payload["memory_key"] = memory_key
+        if connectors:
+            payload["connectors"] = list(connectors)
+        if memory_space:
+            # Spec 032 A4: only a team home's start carries its space.
+            payload["memory_space"] = memory_space
         answer = await self._ask(payload, timeout=START_ASK_TIMEOUT)
         return self._container(tenant_id, answer)
 
@@ -139,4 +152,7 @@ class SpawnerClient:
             raise SpawnerError(f"no address in the spawner's answer: {answer!r}")
         if not isinstance(port, int) or port <= 0:
             raise SpawnerError(f"no port in the spawner's answer: {answer!r}")
-        return RunningContainer(tenant_id=tenant_id, address=address, port=port)
+        # `stale` is in a `list` answer only, and only True counts. A spawner
+        # from before the key existed sends none, and nothing is restarted.
+        return RunningContainer(tenant_id=tenant_id, address=address, port=port,
+                                stale=answer.get("stale") is True)

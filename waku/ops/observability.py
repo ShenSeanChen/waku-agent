@@ -50,7 +50,7 @@ WAKU_MEMORY_PREFIX = "waku_memory_"
 # Span kinds: what each step in a turn is. The five a turn is made of, plus
 # two that only describe its bookkeeping. Every waterfall step carries one,
 # and the Tools tab groups Waku Memory calls by it.
-SPAN_KINDS = ("llm", "tool", "retrieval", "memory_write", "gate", "route", "receipt")
+SPAN_KINDS = ("llm", "tool", "retrieval", "memory_write", "gate", "route", "receipt", "hook")
 _RETRIEVAL_TOOLS = {"memory_search", "memory_recall", "memory_get"}
 _MEMORY_WRITE_TOOLS = {"memory_remember", "memory_forget", "memory_import"}
 
@@ -354,10 +354,19 @@ def _ts(value) -> datetime | None:
 def group_turns(events: list[dict]) -> list[dict]:
     """Events between `turn_start` and `turn_end`, one dict per turn, oldest
     first. The same grouping `dashboard.collect()` has always used, so a
-    trace written before spec 011 splits into the same turns."""
+    trace written before spec 011 splits into the same turns.
+
+    A plugin's Stop hook runs after its turn ended (spec 021), so its `hook`
+    line arrives after `turn_end`, and maybe inside the next turn. It joins
+    the turn its `turn_id` names."""
     turns, current = [], None
+    by_id: dict[str, dict] = {}
     for ev in events:
         kind = ev.get("type")
+        late = by_id.get(ev.get("turn_id") or "") if kind == "hook" else None
+        if late is not None and late is not current:
+            late["events"].append(ev)
+            continue
         if kind == "turn_start":
             if current is not None:
                 current["unfinished"] = True
@@ -370,6 +379,8 @@ def group_turns(events: list[dict]) -> list[dict]:
                 current["iterations"] = ev.get("iterations")
                 current["reply"] = ev.get("reply") if isinstance(ev.get("reply"), str) else ""
                 turns.append(current)
+                if current["turn_id"]:
+                    by_id[current["turn_id"]] = current
                 current = None
             elif kind != "text":
                 current["events"].append(ev)
@@ -384,11 +395,18 @@ def _step(ev: dict, servers, provider: str, model: str) -> dict | None:
     waterfall does not draw (graph bookkeeping)."""
     kind = ev.get("type")
     span = {"gate": "gate", "llm": "llm", "consolidation": "memory_write", "report": "memory_write",
-            "receipt": "receipt", "triage": "route", "route": "route"}.get(kind)
+            "receipt": "receipt", "triage": "route", "route": "route", "hook": "hook"}.get(kind)
     base = {"kind": kind, "span": span, "ts": ev.get("ts"),
             "node": ev.get("node") if isinstance(ev.get("node"), str) else None}
     if kind == "gate":
         return {**base, "decision": ev.get("decision"), "reason": _trim(str(ev.get("reason") or ""), 160)}
+    if kind == "hook":
+        # spec 021: one plugin hook's call
+        return {**base, "event": str(ev.get("event") or ""), "plugin": str(ev.get("plugin") or ""),
+                "server": str(ev.get("server") or ""), "tool": str(ev.get("tool") or ""),
+                "ok": ev.get("ok") is True, "error": ev.get("error"),
+                "deny": ev.get("deny"), "context_chars": ev.get("context_chars"),
+                "duration_ms": ev.get("duration_ms") if isinstance(ev.get("duration_ms"), int) else None}
     if kind == "llm":
         usage = ev.get("usage") if isinstance(ev.get("usage"), dict) else {}
         call_model = ev.get("model") or model

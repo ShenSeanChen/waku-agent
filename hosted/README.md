@@ -38,10 +38,10 @@ which carries them. Neither license grants any right in them.
 
 | Directory | Holds |
 |---|---|
-| `core/` | pure logic: tenant ids, route policy, quota, idle, provisioning, request validation |
+| `core/` | pure logic: tenant ids, route policy, quota, idle, provisioning, request validation, the connector list |
 | `ports/` | the four replaceable seams, as Protocols and nothing else. The implementations live beside the service that owns each one |
-| `gateway/` | the front door: login, sessions, routing by host, `control.db` |
-| `proxy/` | the metering proxy in front of the model API, and `ledger.db` |
+| `gateway/` | the front door: login, sessions, routing by host, `control.db`, the idle loop, the scheduler that wakes a stopped tenant for an event or a timer, the public Slack app's install, events and send relay, the sign-in to a connector, and the home of a team space's agent |
+| `proxy/` | the metering proxy in front of the model API, `ledger.db`, and the routes a container reaches the platform through: treg, outgoing Slack and a connector's tools |
 | `spawner/` | the one process that talks to Docker |
 | `image/` | the tenant and services Dockerfiles, their allowlist ignore files, and the seccomp profile every container runs under |
 | `templates/` | the hosted `SOUL.md` and the gateway's own pages |
@@ -337,8 +337,8 @@ Memory changes nothing.
 ## The chat API other surfaces call
 
 `POST https://agent.waku.one/v1/chat` sends one message to a person's own Waku
-Agent (spec 004). The waku.one Waku Agent tab calls it, and Slack will. It is
-called server to server:
+Agent (spec 004). The waku.one Waku Agent tab calls it. It is called server to
+server:
 
 ```bash
 curl -N https://agent.waku.one/v1/chat \
@@ -482,6 +482,546 @@ opens `/memories/<id>` in a new tab as before.
 The framing origin is read from `document.referrer`, so the waku.one page must
 not send `Referrer-Policy: no-referrer`; without a referrer nothing is posted.
 
+## Slack: the public Waku app
+
+One Slack app serves every person on the deployment (spec 026, group C). Ana
+signs in at `https://agent.waku.one/setup`, presses "Add to Slack" and
+approves in her workspace. From then on "@Waku remind the channel on Friday
+at 09:00" in a channel reaches her agent, and the agent answers in the
+thread, including while her container is stopped.
+
+This is the hosted setup. A person who runs waku themselves creates their own
+Slack app with Socket Mode instead; see
+[integrations](../docs/integrations.md#slack-two-setups).
+
+```
+Slack --POST /v1/triggers/slack--> gateway --> tenant_events --> scheduler --> container
+container --POST /slack/send--> proxy --gateway.sock--> gateway --chat.postMessage--> Slack
+container --POST /slack/history--> proxy --gateway.sock--> gateway --conversations.history--> Slack
+```
+
+| Route | On | What it does |
+|---|---|---|
+| `GET /setup` | the apex | shows three steps and which are done: Sign in, Add to Slack, Mention @Waku. A connected workspace gets "Update permissions" and "Connect a different workspace", which both open Slack's approval page |
+| `GET /hosted/slack` | a tenant's own host | tells the dashboard's Slack card what the gateway knows: whether this server has a Slack app, whether the person connected a workspace, its name, and the addresses of `/slack/install` and `/setup`. It reads one row, changes nothing, holds no token, and does not start the container |
+| `GET /slack/install` | the apex | sends a signed-in person to Slack's approval page, with a `state` bound to their tenant that works once, for 10 minutes |
+| `GET /slack/oauth/callback` | the apex | checks the `state` and the browser's own session, exchanges Slack's code for the workspace's bot token, and stores it |
+| `POST /v1/triggers/slack` | the apex | takes every workspace's events. It checks Slack's signature over the raw body, refuses a timestamp more than 5 minutes from now, and stores a mention, or a direct message from the person who added the app, as one row in `tenant_events` under Slack's event id |
+| `POST /slack/send` | the proxy, on the tenant network | takes a container's outgoing message with the container's platform token, and has the gateway post it. A tenant may send 30 a minute; one more answers 429, and the container tries it again after 10 seconds and then a minute |
+| `POST /slack/history` | the proxy, on the tenant network | takes a container's request for the messages of one channel (the last ones, a window of days, or one person's), with the container's platform token, and has the gateway read them. The gateway reads a channel only when this tenant's agent was mentioned there. A tenant may read 20 times a minute |
+
+A bad signature answers 403 and writes nothing. A workspace no tenant
+connected answers 200 and writes nothing. A stored mention asks the scheduler
+for a tick at once, and the tick is repeated every 2 seconds, at most 10
+times, until the container has the event.
+
+**The bot token never enters a container.** The gateway stores each
+workspace's token in `control.db`, encrypted with AES-256-GCM under
+`WAKU_SLACK_TOKEN_KEY`. The key is in `config/gateway.env` and nowhere else,
+and `backup.sh` copies `control.db` and not `config/`, so a backup holds no
+token that works. A container's message names a channel and a text. The
+proxy finds the tenant from the platform token, and the gateway posts with
+that tenant's token, which Slack accepts only in that tenant's workspace.
+
+### Turning it on
+
+Create the Slack app once at <https://api.slack.com/apps>, from scratch, in
+the workspace that will own it. In the app's settings:
+
+| Page | Field | Value |
+|---|---|---|
+| OAuth & Permissions | Redirect URLs | `https://agent.waku.one/slack/oauth/callback` |
+| OAuth & Permissions | Bot Token Scopes | `app_mentions:read`, `chat:write`, `channels:history`, `groups:history`, `users:read`, `reactions:write`, `channels:read`, `groups:read`, `im:history` |
+| Event Subscriptions | Request URL | `https://agent.waku.one/v1/triggers/slack` |
+| Event Subscriptions | Subscribe to bot events | `app_mention`, `app_uninstalled`, `message.channels`, `message.groups`, `message.im` |
+| App Home | Show Tabs | Messages Tab on, and "Allow users to send Slash commands and messages from the messages tab" ticked |
+| Manage Distribution | Activate Public Distribution | on, so another workspace can add the app |
+
+The last scope, the last event and the App Home row are what a direct
+message needs. For an app created before 2026-11-20, add them in this order,
+then have each workspace's person approve again:
+
+1. **OAuth & Permissions**, "Scopes", "Bot Token Scopes": press "Add an OAuth
+   Scope" and choose `im:history`.
+2. **Event Subscriptions**, "Subscribe to bot events": press "Add Bot User
+   Event", choose `message.im`, and press "Save Changes" at the bottom.
+3. **App Home**, "Show Tabs": switch "Messages Tab" on and tick "Allow users to
+   send Slash commands and messages from the messages tab".
+4. If Slack's settings page asks you to reinstall the app, that reinstalls it
+   in the app's own workspace only, and not through this gateway, so it
+   records nobody. Do step 5 for that workspace too.
+5. In each connected workspace, the person who added Waku opens
+   `https://agent.waku.one/setup`, signed in, and presses "Update
+   permissions", then "Allow" on Slack's page. That gives the workspace the
+   new scope and records that person as the one whose direct messages are
+   answered.
+
+A workspace that skips step 5 keeps working in channels exactly as before:
+Slack sends it no direct message at all.
+
+Leave Socket Mode off. Slack checks the Request URL when you save it, so the
+gateway has to be running with the four values below first.
+
+Copy three values from the app's Basic Information page into
+`/srv/waku/config/gateway.env`, as root:
+
+```
+WAKU_SLACK_CLIENT_ID=<Client ID>
+WAKU_SLACK_CLIENT_SECRET=<Client Secret>
+WAKU_SLACK_SIGNING_SECRET=<Signing Secret>
+```
+
+`install.sh` wrote the fourth line, `WAKU_SLACK_TOKEN_KEY`, with a key it
+generated on the VM. A VM installed before spec 026 has no such line, because
+`install.sh` and `upgrade.sh` keep an existing `gateway.env`. Add it once:
+
+```bash
+sudo bash -c 'printf "WAKU_SLACK_TOKEN_KEY=%s\n" \
+  "$(od -An -N32 -tx1 /dev/urandom | tr -d " \n")" >> /srv/waku/config/gateway.env'
+```
+
+Never replace that key: the tokens already stored would stop opening, and
+each person would have to add the app again. Then start the gateway on the
+new file. A plain `restart` keeps the old environment, so recreate it:
+
+```bash
+sudo docker compose --env-file /srv/waku/config/install.env \
+  -f /srv/waku/src/hosted/deploy/compose.yaml --project-name waku \
+  up -d --force-recreate gateway
+```
+
+The gateway's log then says `Slack: on`. With a value missing it says `Slack:
+off` and names the missing names, the gateway serves everything else, and
+`/slack/install`, `/slack/oauth/callback` and `/v1/triggers/slack` answer 503
+with the same names.
+
+### Limits
+
+- **One workspace has one tenant, and one tenant has one workspace.** A
+  workspace stays with the tenant that connected it first, and everyone who
+  mentions the agent there uses that tenant's agent. The tenant is a person,
+  or the home of a team space's agent ([Team homes](#team-homes-a-team-spaces-agent-in-slack)).
+  A second install by the same tenant replaces its workspace.
+- **A mention in a thread arrives with the thread above it, and with
+  nothing else.** The gateway asks Slack for that one thread, at most 30
+  messages, and for the names in it (`slack_thread.py`). It has 2 seconds:
+  past that the mention goes to the agent alone.
+- **The agent reads the rest of the channel only when it asks** (spec 029).
+  Its `slack_history` tool reads the channel the run is in, four ways: the
+  last messages (30 by default, 100 at most); the messages of the last `days`
+  days, 30 at most ("summarize this channel for the past week"); only the
+  messages of one `person`, matched on the name Slack shows or its first
+  word ("what did Emily say in the past month"); or one thread, from its
+  first message. Two people who match a name are both named, and no message
+  is returned. The tool names no channel, and the gateway refuses any channel
+  the tenant's agent was never mentioned in.
+- **A `slack_history` answer is bounded, and says when it was cut.** A window
+  is read in at most 10 pages of 200 messages, and no page starts after 7
+  seconds. An answer holds the channel's own messages, without thread
+  replies, each with its count of replies, its author and its time in the
+  tenant's time zone: at most 400 messages, 2,000 characters of each and
+  40,000 bytes in all. Past any of those the newest part is kept, the answer
+  carries `cut`, and the agent reads "Older messages in this window were
+  left out". One request is one of the tenant's 20 reads a minute, however
+  many pages it took. It needs `channels:history` or `groups:history`, and
+  `users:read` for the names.
+- **A reply in a thread the agent was mentioned in reaches it without a
+  second mention.** Slack sends every message of a channel the bot is in
+  (`message.channels`, `message.groups`). The gateway keeps one only when it
+  is a person's reply in a thread that already holds a mention for this
+  tenant, and drops the rest without storing them. The agent is told that
+  people also talk to each other there, and that saying nothing is an answer.
+- **A message the agent was given gets an eyes reaction at once**
+  (`reactions:write`), so the person sees it was heard while a stopped
+  container starts. A follow-up the agent then answers with silence keeps the
+  reaction and gets no reply.
+- **A direct message is answered for one person: the one who added the app**
+  (spec 032, version A). The callback keeps the Slack user who pressed Allow
+  (`authed_user.id` in Slack's answer), and a `message.im` event becomes a row
+  only when Slack names that user as its sender. It needs no mention, the
+  answer goes into the chat itself (into a thread only when the person wrote
+  in one), and the message gets the eyes reaction. It is the same tenant, the
+  same container and the same key as a mention in a channel. The row's
+  `reply_to` carries `private: true`, written by the gateway and by nothing
+  else, and the container reads it as its person's own chat: the sentence
+  about a place several people read is not added, and a timer or a daily
+  brief set there is delivered there. A direct-message id alone never means
+  private.
+- **Anybody else who writes to the bot directly gets one fixed line**, that it
+  answers only the person who added it in a private chat for now and that
+  they can mention it in a channel. At most once a day for each person, kept
+  in the gateway's memory, so a restart can repeat it once. No row is stored,
+  so no container starts and no model is called. An edit, a deletion, any
+  other subtype and the bot's own messages are dropped.
+- **A workspace added before 2026-11-20 has no recorded installer**, and
+  neither has a team home. Nobody is treated as the owner there: everybody
+  gets the fixed line. The person who added Waku presses "Update permissions"
+  on `/setup` once, and the callback records them. Without that the workspace
+  also lacks `im:history`, so Slack sends it no direct message in the first
+  place.
+- **`slack_history` does not read a direct message.** In a private chat the
+  tool says that what was said there is already in the conversation.
+- **Every channel the bot is invited to is heard.** The hosted app has no
+  channel allowlist. A mention by a person from another workspace, in a
+  shared channel, is dropped.
+- **Replies need the free tier.** `POST /slack/send` is a route on the
+  metering proxy, and a container knows the proxy's address only on a
+  deployment installed with `--free-model`.
+- **A restore onto a new VM needs `WAKU_SLACK_TOKEN_KEY` carried over by
+  hand**, because no backup holds it. Without it each person is asked to
+  reconnect ([Restoring](#restoring)).
+- **Slack reviews a public app** before more than a handful of workspaces
+  can add it.
+- **None of this has run against Slack.** The evals use a fake Slack on
+  loopback.
+
+## Team homes: a team space's agent in Slack
+
+A team space on waku.one has an agent of its own, with its own Waku Memory
+key. A team home is where that agent runs on this deployment: one more
+tenant, marked as a team, with its own container, disk and platform token
+(spec 032, group A). Ana is an owner of the team space Acme. She presses "Add
+Waku to Slack" on Acme's page on waku.one and approves in the workspace "Acme
+HQ". From then on "@Waku remember that the launch moved to 3 December" in a
+channel of Acme HQ reaches Acme's agent, on Acme's key, and not the agent of
+any person.
+
+```
+waku.one API --POST /v1/team-homes--> gateway: tenant (kind team) + team_home (key sealed)
+Ana's browser --GET /slack/install?home=<ticket>--> Slack's page --> /slack/oauth/callback --> Acme's page on waku.one
+Slack --POST /v1/triggers/slack--> gateway --> tenant_events of Acme's home --> scheduler --> Acme's container
+```
+
+| Route | On | What it does |
+|---|---|---|
+| `POST /v1/team-homes` | the apex | makes the home of one space's agent from `space_id`, `space_name`, `agent_id`, `agent_name`, `memory_key`, `memory_api_url` and `return_url`. It answers `201` with `home_id` (the tenant's id) and `install_url`, and starts no container. A second call for the same space keeps the tenant and replaces the key |
+| `GET /v1/team-homes/{space_id}` | the apex | answers `home_id`, `slack` (the workspace's `team_id` and `team_name`, or `null` until Slack's page was completed) and `refused` (always `null` for now). `404` when the space has no home |
+| `DELETE /v1/team-homes/{space_id}` | the apex | answers `405` and changes nothing. Removing a home is group B of spec 032 |
+| `GET /slack/install?home=<ticket>` | the apex | sends the owner's browser to Slack's approval page. The ticket names one home, works once and ends after 10 minutes. The page sets a cookie that lasts 10 minutes, and the callback installs only when that cookie and the `state` arrive together |
+
+waku.one's API is the only caller of the three `/v1/team-homes` routes. Each
+request carries `Authorization: Bearer <WAKU_AGENT_PLATFORM_SECRET>`. The
+gateway compares the value in constant time and answers 401 to anything else,
+before it reads the path or the body. It logs no request body.
+
+**The team's key is sealed, and a person's key is not.** The gateway stores
+the agent's Waku Memory key in `control.db`, in `team_home`, encrypted with
+AES-256-GCM under `WAKU_SLACK_TOKEN_KEY` and bound to the space's id. A
+backup of `control.db` holds no team key that works. The key leaves the
+gateway in two places. A start request carries it to the spawner, which sets
+`WAKU_MEMORY_API_KEY` and `WAKU_MEMORY_SPACE=<space id>` in the home's
+container. The proxy receives it when it resolves the home's platform token,
+and charges the home's model calls with it. A home whose key does not open
+is not started.
+
+**What the agent saves belongs to the team.** With `WAKU_MEMORY_SPACE` set,
+stock waku sends `space` with every `memory.remember` it makes itself: a
+fact `save_note` saves, a fact consolidation keeps and a research report.
+Every Slack event of a home starts with one line: "You are Waku, the agent of
+the team space Acme. What you save here is read by every member of Acme."
+
+### Turning it on
+
+Make one secret and enter it in two places by hand: in
+`/srv/waku/config/gateway.env` on the VM, and on waku.one as its own
+`WAKU_AGENT_PLATFORM_SECRET`. waku.one also needs `WAKU_AGENT_PLATFORM_URL`,
+which is `https://agent.waku.one`.
+
+```bash
+openssl rand -hex 32          # 64 characters; the gateway refuses fewer than 32
+```
+
+```
+WAKU_AGENT_PLATFORM_SECRET=<the value>
+```
+
+Never paste the value into a chat, an issue or a commit: whoever holds it can
+make a team home here. The routes also need `WAKU_SLACK_TOKEN_KEY`, and the
+install page needs the three other Slack values
+([Slack](#slack-the-public-waku-app)). Then recreate the gateway, as for
+Slack. Its log says `team homes: on`. With the secret missing it says `team
+homes: off`, and every `/v1/team-homes` route answers 503 and names the
+variable.
+
+### Limits
+
+- **A workspace that a person's own install holds is left as it is.** An
+  owner who approves that workspace for a team space changes nothing, and
+  `GET /v1/team-homes/{space_id}` keeps answering `slack: null`. The same is
+  true of a workspace another space's home holds. Moving a workspace, and
+  saying which space holds it, are groups B and E of spec 032.
+- **A replaced key reaches a running container at its next start.** A second
+  `POST` stores the new key and does not restart the home (group B).
+- **`return_url` is checked for its shape only**: `https`, or `http` on
+  localhost. `memory_api_url` is not checked against this deployment's own
+  Waku Memory address. Both are group B. Until then the platform secret is
+  what keeps a browser from being sent somewhere else.
+- **A home has no page and no sign-in.** Nobody opens its dashboard, and
+  `tenant.sh` names it by its tenant id: its email is empty.
+- **A home answers no direct message.** Whoever writes to the bot directly in
+  a home's workspace gets the fixed line of a direct message
+  ([Slack](#slack-the-public-waku-app), "Limits"). A person's own agent in a direct message, from
+  a link to their Waku account, is group C. A reply carries no link to the
+  memory it saved (group F).
+- **The model's own `memory.remember` tool call carries no `space`** unless
+  the model writes one. Only the three sends named above add it.
+- **A restore onto a new VM needs `WAKU_SLACK_TOKEN_KEY` carried over by
+  hand**, as for Slack. Without it no team key opens and no home starts,
+  until waku.one sends each key again with a new `POST`.
+- **None of this has run against waku.one, Slack or Waku Memory.** The evals
+  use a fake Slack and a fake spawner on loopback.
+
+## Connectors: Notion, Linear, GitHub and Gmail
+
+A person on hosted waku signs in to Notion, Linear or GitHub from
+`https://agent.waku.one/setup` (spec 029). Ana presses "Connect Notion",
+approves on Notion's own page, and comes back to `/setup` with "Notion is
+connected." The gateway then holds her Notion tokens.
+
+A person who runs waku themselves uses `waku mcp add` instead, and the
+sign-in comes back to a port on their own computer
+([integrations](../docs/integrations.md)).
+
+| Route | On | What it does |
+|---|---|---|
+| `GET /connect/start?server=<name>` | the apex | sends a signed-in person to the vendor's sign-in page, with a `state` bound to their tenant and the vendor that works once, for 10 minutes, and a PKCE challenge |
+| `GET /connect/callback` | the apex | checks the `state` and the browser's own session, exchanges the vendor's code for the person's tokens, and stores them |
+| `POST /connect/disconnect` | the apex | takes `{"server": "<name>"}` from a signed-in person and deletes their tokens for that vendor |
+| `POST /connect/<name>/mcp` | the proxy, on the tenant network | takes one MCP message from a container with the container's platform token, and has the gateway make the call with that tenant's sign-in. A tenant may send 60 a minute to one connector; one more answers 429 |
+| `POST /connect/link` | the proxy, on the tenant network | answers the `/connect/start` address for one connector, so "connect Notion" in a chat can give the person the link. Asked for a name that is not a connector here, it answers the titles of the ones that are. A container's agent asks once when it builds its tools, so `connect_tool` and `connector_status` name these connectors to the model and no others |
+
+```
+container --POST /connect/notion/mcp--> proxy --gateway.sock--> gateway --> mcp.notion.com
+```
+
+`<name>` is `notion`, `linear` or `github` (`hosted/core/connectors.py`). A
+person cannot add another address: the gateway calls a connector from the
+platform's own network. GitHub is on a server's list only when that server
+holds a GitHub App's client id and secret ("GitHub" below).
+
+**The gateway registers itself with Notion and Linear.** At the first sign-in to a
+vendor it reads the vendor's sign-in addresses, registers as a client with the
+one redirect address `https://agent.waku.one/connect/callback` (dynamic
+client registration), and keeps that registration in `control.db` for every
+tenant. Nobody creates an app at Notion or Linear, and no client id is copied
+into a config file. Each address the vendor answers with has to be on the
+origin of the vendor's own MCP address, or the sign-in does not start.
+
+**A vendor's tokens never enter a container.** The gateway stores the access
+token and the refresh token in `control.db`, encrypted with AES-256-GCM under
+`WAKU_SLACK_TOKEN_KEY`, the key that seals a workspace's Slack token. Each
+value is bound to its tenant and its vendor, so one row's value does not open
+in another row. The gateway renews an access token in its last minute, and a
+vendor that refuses the renewal puts "Reconnect Notion" on the person's
+`/setup`.
+
+**The container sees an MCP server at the proxy.** When a person signs in to
+Notion, the gateway has the spawner provision their tenant again, and
+provisioning writes a `notion` server into the tenant's `mcp.json`:
+`{"name": "notion", "url": "http://10.88.0.1:8788/connect/notion/mcp",
+"auth_env": "WAKU_PLATFORM_TOKEN"}`. The container is not restarted: its agent
+reads `mcp.json` before each run and builds itself again when the list
+changed. Disconnecting removes the entry the same way. A server the tenant
+added themselves under the same name is left alone.
+
+**The gateway reads every message, and a tool that writes is not run.** A
+container may send `initialize`, `tools/list`, `tools/call` and `ping`, and
+anything else is refused. A `tools/call` whose tool matches the vendor's
+write patterns (`hosted/core/connectors.py`, the same patterns as
+`waku/connectors.toml`) is answered by the gateway with "Not run:
+'notion-create-pages' changes something in Notion, and a change needs your yes
+first. Saying yes is not built on hosted Waku yet." Notion is never called for
+it. Spec 029's group C adds the yes.
+
+The gateway keeps the vendor's `Mcp-Session-Id` itself, per tenant and
+vendor, and opens a new session when the vendor has forgotten one or the
+gateway restarted. It reads the vendor's answer to its end, as JSON or as an
+event stream, compressed or not, and returns at most 1 MiB of it as plain
+JSON. A message from a container is at most 48 KB.
+
+### GitHub
+
+GitHub's MCP server does not let a client register itself: "Dynamic Client
+Registration is NOT supported by Remote GitHub MCP Server at this time"
+([host integration](https://github.com/github/github-mcp-server/blob/main/docs/host-integration.md),
+read 2026-11-19). The operator registers one GitHub App, once, and the
+gateway signs every person in through it. It is a GitHub App and not an OAuth
+App because an OAuth App's only scope for a private repository, `repo`, also
+writes.
+
+Register the app at github.com: your profile picture, **Settings**,
+**Developer settings**, **GitHub Apps**, **New GitHub App**.
+
+| Field | Value |
+|---|---|
+| GitHub App name | a name nobody else has, for example `Waku Agent` |
+| Homepage URL | `https://agent.waku.one` |
+| Callback URL | `https://agent.waku.one/connect/callback` |
+| Expire user authorization tokens | ticked |
+| Request user authorization (OAuth) during installation | not ticked. Ticked, GitHub sends a browser to the callback without the gateway's `state`, and the page answers "That link expired" |
+| Enable Device Flow | not ticked |
+| Webhook, Active | not ticked |
+| Repository permissions | **Contents**, **Issues**, **Pull requests** and **Metadata**: "Read-only". Every other permission: "No access" |
+| Where can this GitHub App be installed? | "Any account", so a person can install it on their own repositories |
+
+Press **Create GitHub App**. On the app's page, copy the **Client ID** and
+press **Generate a new client secret**. Put both into
+`/srv/waku/config/gateway.env`, as root, and restart the gateway:
+
+```
+WAKU_GITHUB_CLIENT_ID=<Client ID>
+WAKU_GITHUB_CLIENT_SECRET=<the client secret>
+```
+
+The gateway's log then says `connectors: on (notion, linear, github)`.
+Without both values it says why GitHub is not offered, `/setup` has no GitHub
+card, and an agent asked to connect GitHub answers that it cannot be
+connected here yet.
+
+A person presses "Connect GitHub" on `/setup` and approves on github.com. The
+agent then reads the repositories the app is installed on, so the person also
+installs the app from its public page, `https://github.com/apps/<the app's
+name>`, on the account or the repositories the agent may read.
+
+**Reading is enforced three times.** The app's permissions are read-only, so
+GitHub refuses a write with the person's token. The gateway calls
+`https://api.githubcopilot.com/mcp/readonly`, where GitHub's server offers no
+tool that writes. And the gateway refuses a `tools/call` whose tool matches
+GitHub's write patterns before GitHub is called, as it does for Notion.
+
+GitHub's token lasts eight hours and its refresh token six months. The
+gateway renews the token in its last minute and keeps the new refresh token,
+because GitHub ends the old one when it is used.
+
+### Gmail
+
+A person connects one Gmail mailbox, and their agent can search it, read a
+thread and write a draft reply in it (spec 031, part A). **It cannot send.**
+Google has no MCP server a client can sign in to, so Gmail is not relayed as
+one: the gateway calls Gmail's own API.
+
+```
+container --POST /mail/read--> proxy --gateway.sock--> gateway --> gmail.googleapis.com
+```
+
+| Tool in the container | Route on the proxy | What the gateway asks Gmail |
+|---|---|---|
+| `mail_search` | `POST /mail/search` `{"query", "limit"}` | `messages.list` with Gmail's own search, then each message's headers. 10 by default, 20 at most |
+| `mail_read` | `POST /mail/read` `{"thread_id"}` | `threads.get`. The last 10 mails of the thread, 4,000 characters of each, without the lines a reply quotes |
+| `mail_draft` | `POST /mail/draft` `{"thread_id", "body"}` | `threads.get`, then `drafts.create` in that thread |
+
+**Nothing sends.** The proxy's route is `/mail/search`, `/mail/read` or
+`/mail/draft`, and `/mail/send` is a 404. The gateway's socket takes those
+three actions and no other. `hosted/gateway/mail.py` holds five Gmail
+addresses, four that read and `drafts.create`, and an eval reads the file to
+keep a sending address out of it. Google's `gmail.compose` scope would let a
+client send a draft; what stops it is that no code here asks. The person
+opens Drafts in Gmail and presses Send.
+
+**The gateway addresses the draft.** The agent gives a thread and a text. The
+reply goes to the last mail in the thread that the person did not write, at
+its `Reply-To` or else its `From`, so a mail that says "send this to
+somebody" cannot put an address on a draft. There is no draft outside a
+thread yet.
+
+**A mail is other people's text.** The tool puts everything read from Gmail
+between two lines that carry a mark made for that one call, under a sentence
+that says it is information and never an instruction. A mail cannot know the
+mark, so it cannot close the frame itself.
+
+**One mailbox per person, for now.** The spec wants several. `control.db`
+keeps one sign-in per tenant and connector, so a second sign-in replaces the
+first.
+
+The operator sets it up once, in the Google Cloud console
+(`console.cloud.google.com`), project `waku-agent`:
+
+1. **APIs & Services**, **Enabled APIs & services**: "Gmail API" is listed.
+   If it is not, **Enable APIs and services**, search "Gmail API", **Enable**.
+2. **Google Auth Platform**, **Audience** (in the older console, **OAuth
+   consent screen**): publishing status is "Testing". Under **Test users**,
+   **Add users**, and enter every Google address that will connect a mailbox.
+   Only these addresses can sign in, up to 100.
+3. **Google Auth Platform**, **Data Access**, **Add or remove scopes**: tick
+   `https://www.googleapis.com/auth/gmail.readonly` and
+   `https://www.googleapis.com/auth/gmail.compose`, **Update**, **Save**.
+   Not `gmail.send` and not `gmail.modify`.
+4. **Google Auth Platform**, **Clients** (in the older console, **APIs &
+   Services**, **Credentials**), the client "Waku hosted agent", type "Web
+   application". Under **Authorized redirect URIs** it has exactly
+   `https://agent.waku.one/connect/callback`.
+5. On that client's page, copy the **Client ID**. Under **Client secrets**,
+   **Add secret**, and copy it then: Google shows a secret once.
+
+Put both into `/srv/waku/config/gateway.env`, as root, and recreate the
+gateway with the command under "Slack: the public Waku app", "Turning it on":
+
+```
+WAKU_GOOGLE_CLIENT_ID=<Client ID, ending in .apps.googleusercontent.com>
+WAKU_GOOGLE_CLIENT_SECRET=<the client secret>
+```
+
+The gateway's log then says `connectors: on (notion, linear, github, gmail)`.
+Without both values it says why Gmail is not offered, `/setup` has no Gmail
+card, an agent has no mail tools, and one asked to connect Gmail answers that
+it cannot be connected here yet. A container builds its tools when it
+starts, so an agent that was running before the values were added gets the
+three tools at its next start.
+
+A person presses "Connect Gmail" on `/setup`, or says "connect Gmail" to
+their agent and opens the link. Google shows "Google hasn't verified this
+app" while the app is in testing: **Continue**, then leave both permissions
+ticked, then **Continue**.
+
+**In testing mode Google ends a sign-in after 7 days.** The gateway's renewal
+is then refused, `/setup` says "Reconnect Gmail", and the mail tools answer
+with the link to sign in again. This ends when the app passes Google's
+review, which is not started (spec 031, open question 1).
+
+### Turning it on
+
+Connectors are on when `config/gateway.env` has a usable
+`WAKU_SLACK_TOKEN_KEY`, which `install.sh` writes ("Slack: the public Waku
+app" above says how to add one to an older VM). They need none of the other
+three Slack values. The gateway's log says `connectors: on (notion, linear)`,
+or `connectors: off` with the reason, and the three routes then answer 503.
+
+### Limits
+
+- **Linear is asked for `read` alone**, and Notion for `default`, the one
+  scope its server names.
+- **A connector's tools need the free tier**, as a Slack reply does:
+  `POST /connect/<name>/mcp` is a route on the metering proxy, and a container
+  knows the proxy's address only on a deployment installed with
+  `--free-model`. Without it a person can sign in, and no server is written
+  into their `mcp.json`.
+- **A connector's write tools never run**, whatever the person says in chat.
+  A write tool whose name matches none of the vendor's write patterns would
+  run: the patterns list verbs, and a verb can be missing.
+- **Calls are not charged credits.** There is no limit by plan: every person
+  may connect all three.
+- **No button disconnects yet.** `POST /connect/disconnect` is the route; the
+  Connections page (spec 030) is where its button goes.
+- **Disconnecting deletes the gateway's copy of the tokens and does not
+  revoke them at the vendor.** The person removes Waku in the vendor's own
+  settings to end the grant there.
+- **A restore onto a new VM needs `WAKU_SLACK_TOKEN_KEY` carried over by
+  hand**, as for Slack. Without it each person signs in to their connectors
+  again, and the gateway registers with each vendor again.
+- **Removing the two GitHub values takes GitHub off the list** and leaves
+  each person's sealed tokens in `control.db`. Their `github` tools answer an
+  error until the values are back.
+- **Removing the two Google values takes Gmail off the list** the same way.
+- **Gmail has run against a fake Google only.** Not verified against Google:
+  that its sign-in accepts the PKCE challenge beside the client secret, the
+  `iss` it sends back, and how Gmail fills a draft's `From`. A mail's
+  attachments are not read, a mailbox's new mail does not wake the agent
+  (spec 031, decision 3), and a mail call is not charged credits.
+- **None of this has run against Notion, Linear or GitHub.** The evals use a
+  fake vendor on loopback. Whether each vendor's registration accepts
+  `https://agent.waku.one/connect/callback` as a redirect address is not
+  verified.
+
 ## The free tier
 
 With `--free-model` and `--platform-key-file`, every tenant can use Waku
@@ -615,7 +1155,7 @@ server of their own keeps it.
 
 A person who has a treg team of their own can use it instead (spec 014). On
 the Connections page the treg card reads "Through waku.one: paid in your Waku
-credits." and has a Configure button. They paste their org-scoped treg key,
+credits." and has a Manage button. They paste their org-scoped treg key,
 Test connection asks treg (`GET https://treg.to/tools`, free) whether it is
 good, and Save writes `TREG_API_KEY` to their own `.env`, like a Tavily key.
 The card then reads "Your own treg key: paid by your treg account."
@@ -786,21 +1326,34 @@ Each tick, in order:
 
 **An automatic upgrade can cut off a chat turn in progress.** `upgrade.sh`
 recreates the gateway when its image changed, and every turn streams through
-the gateway. The timer never passes `--now`, so a running tenant keeps the old
-tenant image until their container next starts.
+the gateway. The timer never passes `--now`, so no tenant container is
+restarted by the upgrade itself.
 
-**A running tenant moves to the new image after 15 minutes idle.** Once a
-minute the gateway stops every tenant container that has had nothing in flight
-and no request other than a background poll for the idle window, and logs one
-`idle stop tenant=<id>` line for each. The tenant's next message starts a new
-container from the current tenant image. A gateway restart adopts the
-containers already running and starts their idle clocks fresh. A tenant who
-keeps chatting keeps the old image until they pause for the window, or until
-an operator runs `upgrade.sh --now`, which restarts every running tenant at
-once and can cut off a turn in progress.
+**A running tenant moves to the new image between two turns.** A container
+keeps the image it was created from, and an upgrade rebuilds the tenant image
+under it. Once a minute the gateway asks the spawner which running containers
+were created from an older build than the one the image tag names now. It
+stops each of those that has nothing in flight, has had no request other than
+a background poll for 60 seconds (`STALE_QUIET_SECONDS` in
+`hosted/core/idle.py`), and reports no run in progress, no unfinished event
+and no unsent message. It logs one `stale stop tenant=<id>` line for each. The
+container's next timer is stored first, as at an idle stop, and the tenant's
+next message or that timer starts a new container from the current image. A
+person who sends a message every few minutes therefore runs the new code about
+a minute or two after an upgrade, at the cost of one container start. A
+container that reports work, or that does not answer the question, is not
+stopped this way: it waits for the idle stop below. `upgrade.sh --now` still
+restarts every running tenant at once and can cut off a turn in progress.
+
+**An idle container stops after 15 minutes.** Once a minute the gateway also
+stops every tenant container that has had nothing in flight and no request
+other than a background poll for the idle window, and logs one `idle stop
+tenant=<id>` line for each. The tenant's next message starts a new container
+from the current tenant image. A gateway restart adopts the containers already
+running and starts their idle clocks fresh.
 
 **The first open after a stop starts the container, and waits for it.** The
-request that finds a tenant stopped (after an idle stop or `upgrade.sh --now`)
+request that finds a tenant stopped (after an idle stop, a stale stop or `upgrade.sh --now`)
 waits up to 60 seconds for the spawner to provision and start the container
 (`START_TIMEOUT_SECONDS` in `hosted/core/idle.py`), then up to 30 more for the
 dashboard inside to accept a connection (`READY_TIMEOUT_SECONDS`): the spawner
@@ -818,10 +1371,47 @@ the container, from before it reaches the container until the last byte of a
 streamed answer, so a container is never stopped mid-turn. Background requests
 (the dashboard's timers, sent with `X-Waku-Background: 1`) never reset the idle
 clock and never start a stopped container: they get `paused`, and the page
-waits for the next user action. Two cases the gateway cannot see: a turn that
-keeps running inside the container after the browser closed the tab, and work
-the container starts on its own. Both stop with the container once the window
-has passed since the last real request.
+waits for the next user action.
+
+**A container that is still working is not idle.** Before the gateway stops a
+container that has passed the window, it asks the container what work it has
+left (`GET /api/alwayson/next`). The container is kept while it reports a run
+in progress, an event no run has finished with, or an outgoing message not yet
+sent. A run that waits for the owner's yes does not keep it: the yes arrives
+as an event. A container that still reports work 2 hours past the window
+(`WORK_LIMIT_SECONDS` in `hosted/core/idle.py`) is stopped anyway, and so is
+one that does not answer, which includes every container on an image older
+than this rule. One case the gateway still cannot see: a chat turn that keeps
+running inside the container after the browser closed the tab. It stops with
+the container once the window has passed since the last real request.
+
+**What still works while a container is stopped.** The gateway keeps two
+tables in `control.db` for a tenant whose container is not running, and a
+scheduler reads both every 30 seconds (`hosted/gateway/scheduler.py`).
+
+| Table | Holds | What the scheduler does |
+|---|---|---|
+| `tenant_events` | one row per event for a tenant, unique on tenant, source and the sender's own id | starts the tenant's container, posts the rows to it (`POST /api/events`), and marks them `handed` when the container answers 200 |
+| `tenant_wakeups` | the time of the tenant's earliest timer, as the container reported it before it was stopped | starts the container at that time; the container's own timer loop then fires the timer |
+
+A wake goes through the same running cap as a request, so at the cap it stops
+the container idle longest, and it waits when none can be stopped. An event
+that could not be handed over stays `pending` and is offered again 30 seconds
+later. The container stores each event once, so an event offered twice is one
+run. A browser cannot call either route: the gateway refuses `POST
+/api/events` and `/api/alwayson/next` from a signed-in person, and the
+container answers them only when it was started with `WAKU_HOSTED=1`, which
+the spawner sets on a tenant container and not on an inspect container.
+
+Three limits as of this change. Only a Slack mention writes a row into
+`tenant_events` ([Slack](#slack-the-public-waku-app)): chat and the embed
+arrive in group B of spec 026. A hosted container sends to Slack and nowhere
+else, so a run that a timer starts in a conversation that is not a Slack
+thread answers in that conversation's history and sends nothing. And a wakeup
+is stored only at an idle stop or a stale stop: a container stopped by an
+eviction at the cap, by `upgrade.sh --now` or by a VM reboot keeps the wakeup
+stored at its last such stop, so a timer set after that fires when the tenant
+next opens the dashboard.
 
 **Changing the window.** Set `WAKU_IDLE_MINUTES` in `config/gateway.env` to a
 whole number of minutes, at least 1, and restart the gateway; it reads the
@@ -930,6 +1520,20 @@ snapshot carries none and needs none: it holds two SQLite files, and a single
 SQLite file carries its own completeness check, which both `backup.sh` and
 `restore.sh` run as `PRAGMA integrity_check`.
 
+A tenant's `state.db` is copied with SQLite's own `.backup`, inside the
+tenant's task container, and `state.db`, `state.db-wal` and `state.db-shm`
+are left out of the file copy that follows. `state.db` runs in WAL mode, so a
+row that was just written sits in `state.db-wal` until SQLite moves it into
+`state.db`, and a file copy of `state.db` alone would miss it. The staged file
+is a whole database, so `restore.sh` copies it back as a file.
+
+**One thing is left out on purpose: `WAKU_SLACK_TOKEN_KEY`.** `control.db` is
+backed up and holds each workspace's Slack token encrypted. The key that opens
+them is a line in `/srv/waku/config/gateway.env`, and `config/` is never backed
+up, so a copy of the repository holds no Slack token that works. Keep a copy
+of that one line somewhere other than the VM and the repository. `backup.sh
+--all` prints a line saying so every night.
+
 `backup.sh` and `restore.sh` share one `flock` on the staging directory, so a
 backup and a restore never run at once. List what is in the repository with
 restic's own environment, which is exactly what `config/backup.env` holds:
@@ -948,6 +1552,15 @@ tenant container, stop the gateway and the proxy, replace `control.db` and
 `ledger.db`, start both services, then restore every tenant one at a time. It
 checks the control snapshot before it stops anything, so a repository that is
 empty or unreachable costs a refusal and no downtime.
+
+**After a restore onto another VM, Slack needs its key.** The restored
+`control.db` holds Slack tokens that open only with the old VM's
+`WAKU_SLACK_TOKEN_KEY`. Copy that line into the new VM's
+`/srv/waku/config/gateway.env` and recreate the gateway, and every workspace
+stays connected. Without it the gateway still starts, logs how many tokens it
+cannot open, and shows each affected person "Reconnect Slack" on `/setup`;
+adding the app again stores a new token. `restore.sh --all` prints a line
+saying so.
 
 Two refusals you may meet, and what each one means:
 
@@ -1045,8 +1658,13 @@ What you cannot get back this way: the archives of tenants deleted in the last
 ```
 /srv/waku/
   src/        this checkout. install.sh, the Compose file and the scripts
-  config/     one env file per service, plus backup.env. Root-only, mode 0600
-  control/    control.db: tenants, sessions, tokens. Owned by uid 10002
+  config/     one env file per service, plus backup.env. Root-only, mode 0600.
+              gateway.env holds the Slack app's secrets, the secret
+              waku.one's calls carry, and the key that encrypts Slack tokens
+              and each team's Waku Memory key in control.db
+  control/    control.db: tenants, sessions, tokens, waiting events, each
+              tenant's Slack workspace and each team space's home. Owned by
+              uid 10002
   ledger/     ledger.db: the spend ledger. Owned by uid 10003
   tenants/    one directory per tenant, home and env. Owned by uid 10001
   staging/    the handoff area backup.sh and restore.sh share

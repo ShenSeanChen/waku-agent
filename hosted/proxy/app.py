@@ -38,6 +38,18 @@ QUEUE_SECONDS = 30.0
 # Where the treg relay answers (spec 004 E). Here rather than in treg.py, which
 # imports this module, so the router can name them.
 RELAY_PATHS = ("/treg/mcp", "/treg/mcp/")
+# Where a container's Slack sender posts (spec 026 C3; hosted/proxy/slack.py).
+# Here for RELAY_PATHS' reason: that module imports this one.
+SLACK_SEND_PATH = "/slack/send"
+# Where a container's slack_history tool asks (spec 029 D; hosted/proxy/slack.py).
+SLACK_HISTORY_PATH = "/slack/history"
+# Where a container's MCP client reaches a connector, and where it asks for
+# the sign-in address (spec 029 B; hosted/proxy/connect.py).
+CONNECT_MCP_PATH = "/connect/{name}/mcp"
+CONNECT_LINK_PATH = "/connect/link"
+# Where a container's three mail tools ask (spec 031 A; hosted/proxy/mail.py).
+# The three actions are the whole route: /mail/send matches nothing.
+MAIL_PATH = "/mail/{action:search|read|draft}"
 RATE_WINDOW_SECONDS = 60.0
 # Waku-agent spec 011 B1: what one chat turn was charged.
 CHARGES_PATH = re.compile(r"/v1/turns/([^/]+)/charges")
@@ -46,6 +58,7 @@ TURN_HEADER = "X-Waku-Turn"
 Resolve = Callable[[str], Awaitable[tuple[str, str] | None]]
 # Spec 004 E: the treg relay's handler (hosted/proxy/treg.py), or None when
 # config/proxy.env carries no treg token and the route does not exist.
+# Spec 026 C3: the Slack send relay's handler has the same shape.
 Handler = Callable[[web.Request], Awaitable[web.StreamResponse]]
 
 
@@ -143,7 +156,12 @@ class MeteringProxy:
                  monotonic: Callable[[], float] = time.monotonic,
                  memory_key: Callable[[str], str] | None = None,
                  wallet: Wallet | None = None, treg: Handler | None = None,
-                 turns: TurnCharges | None = None) -> None:
+                 turns: TurnCharges | None = None,
+                 slack: Handler | None = None,
+                 slack_history: Handler | None = None,
+                 connect: Handler | None = None,
+                 connect_link: Handler | None = None,
+                 mail: Handler | None = None) -> None:
         self._config = config
         self._ledger = ledger
         self._resolve = resolve
@@ -153,6 +171,11 @@ class MeteringProxy:
         self._memory_key = memory_key
         self._wallet = wallet
         self._treg = treg
+        self._slack = slack
+        self._slack_history = slack_history
+        self._connect = connect
+        self._connect_link = connect_link
+        self._mail = mail
         self._turns = turns if turns is not None else TurnCharges(monotonic)
         self._in_flight: dict[str, int] = defaultdict(int)
         self._recent: dict[str, deque[float]] = defaultdict(deque)
@@ -164,6 +187,16 @@ class MeteringProxy:
             # Before the catch-all, which would answer them 404.
             for path in RELAY_PATHS:
                 app.router.add_route("*", path, self._treg)
+        if self._slack is not None:
+            app.router.add_route("*", SLACK_SEND_PATH, self._slack)
+        if self._slack_history is not None:
+            app.router.add_route("*", SLACK_HISTORY_PATH, self._slack_history)
+        if self._connect_link is not None:
+            app.router.add_route("*", CONNECT_LINK_PATH, self._connect_link)
+        if self._connect is not None:
+            app.router.add_route("*", CONNECT_MCP_PATH, self._connect)
+        if self._mail is not None:
+            app.router.add_route("*", MAIL_PATH, self._mail)
         app.router.add_route("*", "/{tail:.*}", self._dispatch)
         return app
 

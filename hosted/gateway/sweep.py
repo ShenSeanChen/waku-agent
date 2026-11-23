@@ -5,19 +5,29 @@ WHAT IT DOES, EVERY SWEEP_SECONDS:
   1. Launcher.stop_idle(): stop every tenant container with nothing in flight
      and no non-background request for the idle window (15 minutes, or
      WAKU_IDLE_MINUTES). Fleet decides; the Launcher stops; one log line per
-     stop.
-  2. The disk warning: log idle.disk_warning() when the filesystem holding
+     stop. Since spec 026 the Launcher first asks each such container what
+     work it has left: one that is still running an event or sending a reply
+     is left alone, and one that is stopped has its next timer stored in
+     tenant_wakeups, where the scheduler (scheduler.py) finds it.
+  2. Launcher.stop_stale(): stop every container that still runs an older
+     build of the tenant image, once it is between two turns: nothing in
+     flight, no request for a minute, and no work in its own report. This is
+     how an upgrade reaches a person who never goes idle.
+  3. The disk warning: log idle.disk_warning() when the filesystem holding
      /srv/waku passes 80%, the spec's "the idle loop also logs a warning".
 
 WHY IT LIVES IN THE GATEWAY AND NOT THE SPAWNER. Idle is a fact about
 requests, and only the gateway sees requests: Fleet's idle clock and in-flight
 count are in the gateway's memory. The spawner knows which containers exist
-and nothing about whether anybody is using them.
+and nothing about whether anybody is using them. A run that an event or a
+timer started has no request, so the container reports that part itself.
 
 WHY IT MATTERS BEYOND MEMORY. Every start creates a new container from the
-current tenant image tag, so an idle stop is also how an upgrade reaches a
-tenant: autodeploy runs upgrade.sh without --now, and a tenant who was idle for
-the window gets the new image on their next message.
+current tenant image tag, so a stop is how an upgrade reaches a tenant:
+autodeploy runs upgrade.sh without --now. A tenant who was idle for the window
+gets the new image on their next message. A tenant who kept messaging did not,
+until step 2 existed: on 2026-11-19 a tool merged and deployed twenty minutes
+earlier was still missing from a container that had never been idle.
 
 A SWEEP THAT RAISES DOES NOT END THE LOOP. It is logged, and the next sweep
 runs a minute later. A loop that died on its first spawner timeout would stop
@@ -56,6 +66,7 @@ class IdleLoop:
     async def sweep(self) -> list[str]:
         """One pass. Returns the tenant ids it stopped."""
         stopped = await self._launcher.stop_idle()
+        stopped += await self._launcher.stop_stale()
         self._check_disk()
         return stopped
 
