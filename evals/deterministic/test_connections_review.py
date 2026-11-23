@@ -127,7 +127,7 @@ def test_hosted_draws_no_second_slack_card(home, monkeypatch):
 
 
 def test_env_example_names_each_slack_value_once():
-    text = (Path(integrations.__file__).resolve().parents[1] / ".env.example").read_text()
+    text = (Path(integrations.__file__).resolve().parents[1] / ".env.example").read_text(encoding="utf-8")
     for name in ("SLACK_BOT_TOKEN", "SLACK_APP_TOKEN", "SLACK_ALLOWED_CHANNELS"):
         assert text.count(f"# {name}=") == 1, name
 

@@ -23,7 +23,7 @@ EXAMPLE = ROOT / "hosted" / "deploy" / "proxy.env.example"
 
 def _example_env() -> dict[str, str]:
     env = {}
-    for line in EXAMPLE.read_text().splitlines():
+    for line in EXAMPLE.read_text(encoding="utf-8").splitlines():
         if line and not line.startswith("#") and "=" in line:
             name, value = line.split("=", 1)
             env[name] = value
@@ -88,7 +88,7 @@ def test_the_worst_case_is_ten_percent_more_input_and_every_output_token():
 
 def test_no_price_is_ever_written_as_a_literal_outside_the_table():
     """One table, so a price change is one edit."""
-    source = (ROOT / "hosted" / "proxy" / "app.py").read_text() if (ROOT / "hosted" / "proxy" / "app.py").exists() else ""
+    source = (ROOT / "hosted" / "proxy" / "app.py").read_text(encoding="utf-8") if (ROOT / "hosted" / "proxy" / "app.py").exists() else ""
     assert not re.search(r"\b10\.00\b|\b2\.00\b", source)
 
 

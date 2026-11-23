@@ -69,7 +69,7 @@ def test_the_printed_command_copies_into_home_without_nesting(tmp_path):
     cwd, user_home = _layout(tmp_path, legacy_db=True, global_dir=True, global_db=False)
     subprocess.run(["sh", "-c", COPY_COMMAND], cwd=cwd, check=True,
                    env={**os.environ, "HOME": str(user_home)})
-    assert (user_home / ".waku" / "state.db").read_text() == "legacy"
+    assert (user_home / ".waku" / "state.db").read_text(encoding="utf-8") == "legacy"
     assert (user_home / ".waku" / "message.txt").exists()
     assert not (user_home / ".waku" / ".waku").exists()
     assert (cwd / ".waku" / "state.db").exists(), "the copy must leave the original in place"
@@ -214,10 +214,10 @@ def test_demo_seed_refuses_to_reset_the_global_home(tmp_path):
     result = _run_demo_seed(cwd, user_home, waku_home=None)
     assert result.returncode == 2
     assert "WAKU_HOME" in result.stdout
-    assert (user_home / ".waku" / "state.db").read_text() == "global"
+    assert (user_home / ".waku" / "state.db").read_text(encoding="utf-8") == "global"
     assert not list(user_home.glob(".waku.bak-*"))
 
 
 def test_makefile_pins_the_maintainers_home_to_the_repo():
-    makefile = (Path(__file__).resolve().parents[2] / "Makefile").read_text()
+    makefile = (Path(__file__).resolve().parents[2] / "Makefile").read_text(encoding="utf-8")
     assert "export WAKU_HOME ?= $(CURDIR)/.waku" in makefile
