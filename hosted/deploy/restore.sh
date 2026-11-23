@@ -461,4 +461,8 @@ $tenants
 EOF
 
 [ -z "$failures" ] || waku_die "these tenants were not restored:$failures"
+# The restored control.db holds Slack tokens sealed with the backed-up VM's
+# key, which no backup holds (backup.sh says so every night). The gateway
+# starts either way and says in its own log how many it cannot open.
+waku_log "the Slack tokens in the restored control.db open only with the WAKU_SLACK_TOKEN_KEY line of the VM that was backed up. No backup holds it. If $WAKU_ROOT/config/gateway.env has another key, each person sees \"Reconnect Slack\" on /setup until that line is copied here and the gateway is recreated."
 waku_log "restore finished"
