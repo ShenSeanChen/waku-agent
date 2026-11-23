@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Set up Waku</title>
+<link rel="icon" href="/auth/static/waku-mark.svg" type="image/svg+xml">
+<!-- The design system, then the sign-in page's card, then this page. Order
+     matters: each stylesheet reads tokens the ones before it declare. -->
+<link rel="stylesheet" href="/auth/static/design/tokens.css">
+<link rel="stylesheet" href="/auth/static/design/type.css">
+<link rel="stylesheet" href="/auth/static/design/fonts.css">
+<link rel="stylesheet" href="/auth/static/design/controls.css">
+<link rel="stylesheet" href="/auth/static/login.css">
+<link rel="stylesheet" href="/auth/static/setup.css">
+</head>
+<body>
+<main>
+  <img id="mark" src="/auth/static/waku-mark.svg" alt="" width="44" height="44">
+  <h1>Waku</h1>
+  <p id="lede">Three steps, and your agent answers in Slack.</p>
+@@NOTICE@@  <ol id="steps">
+@@STEPS@@  </ol>
+@@CONNECTORS@@</main>
+</body>
+</html>

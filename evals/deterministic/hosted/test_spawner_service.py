@@ -26,12 +26,16 @@ class FakeRuntime:
     def __init__(self) -> None:
         self.calls: list[tuple] = []
 
-    async def provision(self, tenant_id, project_id):
-        self.calls.append(("provision", tenant_id, project_id))
+    async def provision(self, tenant_id, project_id, connectors=()):
+        self.calls.append(("provision", tenant_id, project_id)
+                          + ((connectors,) if connectors else ()))
 
-    async def start(self, tenant_id, project_id, timezone, token, memory_key=""):
+    async def start(self, tenant_id, project_id, timezone, token, memory_key="",
+                    connectors=(), memory_space=""):
         self.calls.append(("start", tenant_id, project_id, timezone, token)
-                          + ((memory_key,) if memory_key else ()))
+                          + ((memory_key,) if memory_key else ())
+                          + ((connectors,) if connectors else ())
+                          + ((memory_space,) if memory_space else ()))
         return RunningContainer(tenant_id=tenant_id, address="10.88.0.2", port=7777)
 
     async def stop(self, tenant_id):
@@ -68,7 +72,8 @@ def test_each_operation_answers_the_shape_the_specs_table_names():
     assert answer == {"address": "10.88.0.2", "port": 7777}
     assert ask({"op": "stop", "tenant_id": TENANT})[0] == {"ok": True}
     assert ask({"op": "list"})[0] == {
-        "containers": [{"tenant_id": TENANT, "address": "10.88.0.2", "port": 7777}]}
+        "containers": [{"tenant_id": TENANT, "address": "10.88.0.2", "port": 7777,
+                        "stale": False}]}
     # The PRODUCER half of the `tenants` wire contract. Its key is agreed with
     # SpawnerClient.tenant_ids and was asserted by neither side, so renaming it
     # here was green and a SpawnerError on the VM.
@@ -138,6 +143,8 @@ _VALID = {
     "token": TOKEN,
     "task": "backup",
     "memory_key": "mem_sk_" + "v" * 43,
+    "memory_space": "0b0f3c1e-8a0e-4c58-9d55-0d2b5b1f7a11",
+    "connectors": ["notion"],
 }
 
 
