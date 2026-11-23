@@ -44,9 +44,13 @@ S.validate(e)                       # catches broken bound-text ids
 doc = S.document(e)                 # wraps with appState + white bg
 ```
 
-Write `json.dumps(doc, indent=2)` to `docs/whiteboards/<name>.excalidraw` if the board
-explains Waku, or to `lab/<topic>/whiteboards/<name>.excalidraw` if it is for a video
-about another project.
+Where the board goes depends on who it is for:
+
+- **A board that explains Waku's own code:** write it to `docs/whiteboards/<name>.excalidraw`.
+- **A board for a video** (anything a `lab/` topic films): the `.excalidraw` source and the
+  script that draws it go to `~/Developer/Excalidraw/waku-lab/<topic>/`, **never into the
+  repo**. Commit only a PNG screenshot, to `lab/<topic>/screenshots/<name>.png`.
+  `evals/deterministic/test_rulebook.py` fails if a `.excalidraw` file appears in a lab topic.
 See `lab/kimi-k3/build_k3_tutorial.py` for a full two-board example.
 
 ## Palette (name → fill/stroke), meaning follows Sean's color system

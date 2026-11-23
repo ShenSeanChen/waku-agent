@@ -10,7 +10,9 @@
 <link rel="stylesheet" href="/static/design/controls.css">
 <link rel="stylesheet" href="/static/style.css"></head><body>
 <nav id="nav" class="rail">
-  <div class="r-top"><i class="mark" aria-hidden="true"></i><span class="r-name">WAKU</span>
+  <div class="r-top"><a class="r-home" href="https://waku.one" target="_blank"
+      rel="noopener noreferrer" title="waku.one"><i class="mark" aria-hidden="true"></i><span
+      class="r-name">WAKU</span></a>
     <button id="nav-collapse" class="r-chev" aria-label="Collapse the sidebar" aria-expanded="true">&#8249;</button></div>
   <div class="r-grp">System</div>
   <a href="#overview" data-v="overview" data-short="O" aria-label="Overview"><span class="lbl">Overview</span></a>
@@ -19,8 +21,8 @@
   <a href="#graph" data-v="graph" data-short="G" aria-label="Graph"><span class="lbl">Graph</span><span class="n" id="n-graph"></span></a>
   <a href="#memory" data-v="memory" data-short="M" aria-label="Memory"><span class="lbl">Memory</span><span class="n" id="n-mem"></span></a>
   <a href="#tools" data-v="tools" data-short="T" aria-label="Tools"><span class="lbl">Tools</span><span class="n" id="n-tools"></span></a>
-  <a href="#database" data-v="database" data-short="D" aria-label="Database"><span class="lbl">Database</span><span class="n" id="n-db"></span></a>
-  <a href="#ops" data-v="ops" data-short="O" aria-label="Ops"><span class="lbl">Ops</span><span class="n" id="n-ops"></span></a>
+  <a href="#observability" data-v="observability" data-short="O" aria-label="Observability"><span class="lbl">Observability</span><span class="n" id="n-obs"></span></a>
+  <a href="#evals" data-v="evals" data-short="E" aria-label="Evals"><span class="lbl">Evals</span></a>
   <!-- Arena gets its own section. It was one row under System with the two
        races behind sub-tabs, on the reasoning that "Models" must not appear
        twice in the nav. It appears twice now, on purpose, because the two
@@ -32,12 +34,15 @@
   <div class="r-grp">Arena</div>
   <a href="#compare/models" data-v="compare" data-sub="models" data-short="M" aria-label="Model race"><span class="lbl">Model race</span></a>
   <a href="#compare/memory" data-v="compare" data-sub="memory" data-short="M" aria-label="Memory race"><span class="lbl">Memory race</span></a>
+  <a href="#judgment" data-v="judgment" data-short="J" aria-label="Judgment race"><span class="lbl">Judgment race</span></a>
   <div class="r-grp">Setup</div>
   <a href="#models" data-v="models" data-short="M" aria-label="Models"><span class="lbl">Models</span></a>
   <a href="#connections" data-v="connections" data-short="C" aria-label="Connections"><span class="lbl">Connections</span></a>
   <a href="#settings" data-v="settings" data-short="B" aria-label="Behaviour"><span class="lbl">Behaviour</span></a>
+  <a href="#sql" data-v="sql" data-short="S" aria-label="SQL console"><span class="lbl">SQL console</span></a>
   <div class="r-bottom">
     <a class="r-gh" href="https://github.com/ShenSeanChen/waku-agent" target="_blank" rel="noopener noreferrer">GitHub</a>
+    <a class="r-gh r-one" href="https://waku.one" target="_blank" rel="noopener noreferrer">waku.one</a>
     <button id="theme-toggle" onclick="cycleTheme()"></button>
   </div>
 </nav>
@@ -63,9 +68,19 @@
   </div>
   <div class="chatlog" id="docklog"></div>
   <div class="chatbar">
-    <input id="dmsg" placeholder="Message Waku&hellip;" autocomplete="off">
-    <button id="mic" class="btn btn-secondary" title="Click to talk — local Whisper, no cloud"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg></button>
-    <button id="dsend" class="btn btn-primary">Send</button>
+    <!-- A <textarea>, not an <input>: an input is a single line by definition,
+         so a long message scrolled out of sight sideways. rows="1" starts it at
+         one line and autogrow() in render.js grows it. No whitespace inside the
+         tags - a textarea's content IS its value, so a newline here would make
+         the box open pre-filled and two rows tall. -->
+    <textarea id="dmsg" rows="1" placeholder="Message Waku&hellip;" autocomplete="off"></textarea>
+    <!-- Grouped so the two buttons stretch to EACH OTHER, not to the composer.
+         #mic carries no vertical padding while .btn gives Send 10px, so left to
+         their natural heights the mic comes out half the size. -->
+    <div class="chatbar-actions">
+      <button id="mic" class="btn btn-secondary" title="Click to talk — local Whisper, no cloud"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg></button>
+      <button id="dsend" class="btn btn-primary">Send</button>
+    </div>
   </div>
 </aside>
 <button id="dock-reopen" class="btn btn-primary" title="Open chat">&lsaquo; Chat</button>
@@ -75,12 +90,20 @@
 <script src="/static/js/util.js"></script>
 <script src="/static/js/theme.js"></script>
 <script src="/static/js/ui.js"></script>
+<script src="/static/js/blocks.js"></script>
 <script src="/static/js/memory.js"></script>
 <script src="/static/js/models.js"></script>
 <script src="/static/js/render.js"></script>
 <script src="/static/js/diagram.js"></script>
 <script src="/static/js/graph.js"></script>
 <script src="/static/js/views.js"></script>
+<script src="/static/js/observe.js"></script>
 <script src="/static/js/compare.js"></script>
+<script src="/static/js/judgment.js"></script>
+<script src="/static/js/setup.js"></script>
+<script src="/static/js/memorychoice.js"></script>
+<script src="/static/js/waiting.js"></script>
+<script src="/static/js/connectors.js"></script>
+<script src="/static/js/hosted.js"></script>
 <script src="/static/js/dock.js"></script>
 <script src="/static/js/main.js"></script></body></html>

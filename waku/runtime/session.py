@@ -12,6 +12,7 @@ away. What persists lives in waku/memory. Working memory =
 from __future__ import annotations
 
 from waku.config import Settings
+from waku.memory import tool_note
 
 DEFAULT_SOUL = """\
 You are Waku, a personal assistant running locally on your user's laptop.
@@ -24,21 +25,62 @@ Rules:
   what time it is.
 - When the user asks what's on their calendar (a day, a week, "yesterday"), use
   list_events — you CAN read the calendar, not just write to it.
-- When the user shares something durable about a person, project, or preference,
-  use save_note to remember it.
-- When asked to message someone, use send_message (it drafts to a local outbox).
+- When the user asks you to remember or save something, use save_note. Do not
+  save a fact the user only mentions; Waku keeps what matters by itself.
+- When asked to message someone, use send_message. Relay what the tool says: a
+  refusal means nothing was sent.
+- When something has to happen or be checked later, use schedule_task with an
+  absolute time. You are woken then with your note. Relay what the tool says:
+  a refusal means no timer was set.
+- Do not describe how you run (processes, queues, tables, commands) unless the
+  user asks. Say what happened and what happens next, in the user's words.
 - If memory context is provided below, trust it — it came from your own store.
 - Call each tool at most once per request. Your history shows [tools used: ...]
   lines for past turns — if a tool already ran, do NOT run it again; answer
   from that record instead.
 - Be honest about where things live. Every tool's output states exactly where
   its artifact landed (local calendar file, Apple Calendar, memory database at
-  .waku/state.db) — relay that truthfully, and never claim something synced
-  anywhere the tool output doesn't say.
+  ~/.waku/state.db, with each fact also a file in ~/.waku/memory/) — relay
+  that truthfully, and never claim something synced anywhere the tool output
+  doesn't say.
 - You can manage your own memory: use manage_memory to correct or forget facts,
   update_soul to save a standing preference the user gives you, and create_skill
   to save a repeatable workflow the user teaches you (only after they say yes).
 """
+
+
+# A harness rule, not a SOUL.md one: SOUL.md is written once, so a rule added
+# there never reaches an assistant that already has one. On 2026-10-05 a turn
+# spent nine of its ten steps guessing at a YouTube channel by name.
+LOOKUP_RULE = ("\nWhen a lookup of the same target (a channel, profile, company or page found "
+               "by name) fails twice, stop guessing: use the exact URL, handle or domain the "
+               "user gave, or ask them for it.")
+
+
+# A harness rule for the same reason. On 2026-11-17 a person read "You can
+# connect these via `connect_tool`" in a Telegram reply.
+PLAIN_RULE = ("\nNever say the name of a tool to the user (send_message, connect_tool and "
+              "the like). Say what you can do in their words: \"I can connect Notion\", "
+              "\"I can remind you at five\".")
+
+
+# Spec 022: a harness rule for the same reason as LOOKUP_RULE. An older SOUL.md
+# tells the model to save everything durable, and on 2026-11-13 the model saved
+# "releases need two reviewers", which the person had only mentioned. That fact
+# then reached Waku Memory twice: once from save_note and once from the turn.
+SAVE_RULE = ("\nUse save_note only when the user asks you to remember or save something, or "
+             "states a standing preference and asks you to keep it. Do not save a fact the "
+             "user only mentions; Waku keeps what matters from the conversation by itself. "
+             "This rule replaces any other instruction, in SOUL.md or in a skill, to save "
+             "what the user only mentions.")
+
+
+def one_tool_line(remember_tool: str) -> str:
+    """Spec 022: the line that keeps the model to one save tool while Waku
+    Memory's own remember tool is also offered to it."""
+    return (f"\nTo remember something, use save_note, not {remember_tool}. A skill may name "
+            f"{remember_tool} memory.remember; use save_note there too. save_note keeps the "
+            "fact here and sends it to Waku Memory.")
 
 
 def load_soul(settings: Settings) -> str:
@@ -59,6 +101,14 @@ class Session:
         self.memory = memory  # waku.memory.Memory (None until Phase-2 wiring)
         self.session_id = session_id
         self.history: list[dict] = []
+        # what the retrieval gate found for the latest build_system, so
+        # consolidation can tell a fact the turn read from one it learned
+        self.retrieved = ""
+        # Spec 022: the name the model calls Waku Memory's own remember tool by,
+        # such as waku_memory_memory_remember, or None. Set by app.py once the
+        # MCP bridge is up; while it is set, one line steers the model to
+        # save_note, so one turn does not save the same fact with both tools.
+        self.remember_tool: str | None = None
 
     def build_system(self, user_message: str, notify=None) -> str:
         from datetime import datetime
@@ -72,13 +122,26 @@ class Session:
                  # is the first question every curious user asks
                  (f"Your model: you are running on '{self.settings.model}' via the "
                  f"'{self.settings.provider}' provider, inside Waku, a local-first "
-                 f"open-source agent harness (github.com/ShenSeanChen/waku-agent).")]
+                 f"open-source agent harness (github.com/ShenSeanChen/waku-agent)."),
+                 LOOKUP_RULE, PLAIN_RULE, SAVE_RULE]
+        # Spec 009 E: a call the deployment refuses is a wasted step and, on a
+        # metered tenant, a wasted turn. Spec 014: with the person's own treg
+        # key the relay is not in the path, so treg's tools are all theirs.
+        from waku.tools.treg import unavailable
+
+        if unavailable_tools := unavailable(self.settings.unavailable_tools):
+            parts.append("\nNot available here, so never call them: "
+                         + ", ".join(unavailable_tools) + ".")
+
+        if self.remember_tool:
+            parts.append(one_tool_line(self.remember_tool))
 
         if self.memory is not None:
             # Hero moment #1: a cheap judge decides IF we retrieve at all —
             # default-on retrieval is slow and biases answers (see
             # memory/retrieval_gate.py for the why).
             retrieved = self.memory.gated_retrieve(user_message, notify=notify)
+            self.retrieved = retrieved
             if retrieved:
                 parts.append("\nRelevant memory:\n" + retrieved)
             skills = self.memory.matching_skills(user_message)
@@ -88,23 +151,28 @@ class Session:
         return "\n".join(parts)
 
     def add_exchange(self, user_message: str, reply: str, tool_calls: list | None = None,
-                     source: str = "cli", meta: dict | None = None) -> None:
+                     source: str = "cli", meta: dict | None = None) -> int | None:
         """Record the turn in history (working memory) and, if memory is wired,
-        in the chat log (so consolidation can distill it later).
+        in the chat log (so consolidation can distill it later). Returns the
+        chat log's assistant row id, or None without memory.
 
         Tool activity is folded into the assistant's history entry as a compact
         [tools used: ...] line. Without it, the model forgets it already acted
         and happily re-runs the same tool next turn (the triple-booked-meeting
-        bug from the first live test)."""
+        bug from the first live test). Compact means name, short args and the
+        output cut to ~300 characters, never the full output: this record is
+        re-sent to the model on every later turn and kept in chat_log, so a
+        full search result here cost tokens on every turn after it and drew a
+        block thousands of lines tall in a reopened thread (waku/memory/tool_note.py)."""
         record = reply
         if tool_calls:
-            summary = "; ".join(f"{c['tool']}({c['args']}) -> {c['output']}" for c in tool_calls)
-            record = f"{reply}\n[tools used: {summary}]"
+            record = f"{reply}\n{tool_note.note(tool_calls)}"
         self.history.append({"role": "user", "content": user_message})
         self.history.append({"role": "assistant", "content": record})
-        if self.memory is not None:
-            self.memory.log_chat(user_message, record, session_id=self.session_id,
-                                 source=source, meta=meta)
+        if self.memory is None:
+            return None
+        return self.memory.log_chat(user_message, record, session_id=self.session_id,
+                                    source=source, meta=meta)
 
     # ---- session lifecycle (the "New chat" / history feature)
     # A session is just a tag on chat_log rows. Starting a new one clears working
@@ -124,4 +192,5 @@ class Session:
         turns = self.settings.history_turns
         for user_msg, reply in list(self.memory.session_history(session_id))[-turns:]:
             self.history.append({"role": "user", "content": user_msg})
-            self.history.append({"role": "assistant", "content": reply})
+            # rows from before notes were compact may carry a full tool output
+            self.history.append({"role": "assistant", "content": tool_note.clip(reply)})

@@ -31,8 +31,10 @@ Waku registers is sent to the model on every call, so the bar for adding one
 is deliberately high. Start at the top of this ladder and move down only when
 the rung above cannot do the job:
 
-1. **Extend something that already exists.** A new provider is usually one
-   `PROVIDERS` row. A new memory backend matches an existing interface.
+1. **Extend something that already exists.** A new provider is one table in
+   `waku/providers.toml` plus a logo — see
+   [providers-registry.md](../providers-registry.md). A new memory backend
+   matches an existing interface.
 2. **A skill**: `skills/community/<name>/SKILL.md`. It is Markdown with no
    Python, and it costs no context until the model needs it.
 3. **A CLI and a README.** Waku can already run any program on your machine,
@@ -41,19 +43,45 @@ the rung above cannot do the job:
    an extra and off by default.
 5. **A gateway**: one file in `waku/gateway/`. Gateways only move text: in
    through `waku.respond()` and out again, with no memory, tools or loop logic.
+   A source for `waku serve` is one file in `waku/alwayson/sources/`. Its
+   handler checks who sent the message, inserts one row into `events` and
+   returns; it never calls `waku.respond()`.
 6. **A new core tool, as a last resort.** It has to earn its place in every
    prompt.
 
 The ladder has no rung for a new top-level package (like `waku/graph/`). That
-is an architecture decision and needs a proposal (§2).
+is an architecture decision and needs a proposal (§2). `hosted/` is a
+deployment of waku, not new capability inside it, so it sits on no rung of
+this ladder either.
 
 ## 4. Testing
 
 - `evals/deterministic/` holds 0/1 tests that run offline with no API key.
   `evals/judge/` holds scored LLM-judge evals. The two never mix: one is a unit
-  test, and the other is a scored opinion.
+  test, and the other is a scored opinion. `evals/hosted_docker/` is a third
+  tier: 0/1 and offline like the first, but needing a Docker daemon, so
+  `make gate` does not run it and it has its own CI job.
 - Every behaviour change gets a deterministic eval. A bug fix adds the case
   that would have caught the bug.
+- **Prove the test can fail.** Break the thing it guards, watch it go red, put
+  it back. A test that has never failed has never been tested. Say in the PR
+  what you broke.
+- Three shapes that pass forever, all three found in this repo: comparing a
+  value to the constant that sets it (`assert payload["X"] == module.X` holds
+  for every value of `X`, zero included); resting on a number that happens to
+  equal a library default; and a `pytest.raises(match=...)` needle that matches
+  pytest's `tmp_path`, which spells the test's own name, rather than the
+  message the code writes. Pin the literal, or assert the behaviour.
+- Never assert that a string appears in source. A test that greps for a
+  function's name passes whether or not the function works, and keeps passing
+  after it is deleted and written again wrong. Import it and call it.
+- Write a guard as a closed set: allow what is named, refuse the rest. A guard
+  that enumerates the ways to go wrong is a guess about an open set.
+- A new route in `waku/ops/dashboard.py` needs two things beyond its handler:
+  a pin in `evals/deterministic/test_dashboard_routes.py`, and a decision in
+  `hosted/core/policy.py` about whether the hosted gateway passes, filters or
+  blocks it. `test_route_contract.py` fails until you make that decision, and
+  it does not guess a default for you.
 - Run `make gate` and `make lint` before you push. CI runs the deterministic
   tier. The judge tier needs a key, so only `make gate` runs it.
 - The dashboard's JavaScript has no test runner. Verify a frontend change in a
@@ -108,9 +136,11 @@ the code went, and the lab keeps the experiment as the on-its-own-terms
 baseline.
 
 **Whiteboards.** `docs/whiteboards/` holds only boards that explain this
-codebase. A board drawn for a video about another project lives in that
-topic's `lab/` folder. The drawing toolkit is `scripts/whiteboard/`, and it
-never ships.
+codebase. A board drawn for a video stays private: its `.excalidraw` source
+and the script that draws it live outside the repo, and the lab topic commits
+PNG screenshots only, in `screenshots/`. `lab/kimi-k3/` and `lab/pi-agent/`
+predate this rule. The drawing toolkit is `scripts/whiteboard/`, and it never
+ships.
 
 **What stays out of the repo:** video scripts, subtitles and shot-by-shot
 filming notes. A topic's "Video angle" section is a brief: the hook, the one
@@ -118,8 +148,8 @@ surprising finding, and which board to film.
 
 ## 7. Dependencies and extras
 
-The default install is the stdlib plus the Anthropic and OpenAI clients. An
-optional feature goes behind an extra in `pyproject.toml`, and it fails with an
+The default install is the stdlib plus the Anthropic and OpenAI clients, and
+`mcp`, which connects Waku Memory. An optional feature goes behind an extra in `pyproject.toml`, and it fails with an
 install hint, not a crash, when the extra is missing. A new core dependency
 needs a discussion on an issue first.
 

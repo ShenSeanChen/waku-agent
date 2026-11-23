@@ -13,6 +13,11 @@ name: release
 on:
   push:
     tags: ["v*"]
+  # release-tag pushes the tag with the default token, and GitHub does not run
+  # tag-push workflows for that token, so release-tag starts this one by hand
+  # on the tag. Run it from a tag, never a branch: the next step refuses
+  # anything where the ref name and __version__ disagree.
+  workflow_dispatch:
 
 jobs:
   publish:
@@ -44,7 +49,7 @@ jobs:
       # action here that cannot be undone: PyPI does not allow re-uploading a
       # version, even after a delete.
       - name: Install
-        run: pip install -e '.[dev]'
+        run: pip install -e '.[dev,hosted]'
       - name: Deterministic evals
         run: python -m pytest -q evals/deterministic
 

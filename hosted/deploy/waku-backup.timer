@@ -1,0 +1,16 @@
+# When the nightly backup runs.
+
+[Unit]
+Description=waku nightly backup
+
+[Timer]
+# 03:17 rather than 03:00: every VM on the internet runs something at the hour,
+# and the object store is shared with whoever else is backing up then.
+OnCalendar=*-*-* 03:17:00
+# A VM that was off at 03:17 backs up when it comes back, rather than skipping
+# the night.
+Persistent=true
+RandomizedDelaySec=900
+
+[Install]
+WantedBy=timers.target

@@ -24,7 +24,7 @@ Facts and numbers, each one checked. Say what was measured, and on what.
 ## Video angle
 
 A brief, not a script: the hook, the one surprising finding, and which board
-in `whiteboards/` to film.
+to film (a PNG screenshot in `screenshots/`; the board's source stays private).
 
 ## Graduation
 

@@ -43,6 +43,18 @@ skill, never `gh pr checkout`. Frontend and TUI diffs are **Sean's to test**:
 stand them up on port 7778 so the live 7777 is untouched, hand him the URL,
 and never merge on my own screenshots.
 
+## Keep small tasks open for contributors
+
+A contributor who finds no small task open leaves. Right after the community
+queue, count the open `good first issue` issues that nobody has claimed. With
+fewer than five, add one line to the queue report and draft new ones with the
+`seed-issues` skill in `.claude/skills/seed-issues/`. Draft them from work that
+already happened: a lasting fix a review named and did not build, a declined
+pull request that came with an invitation, a "Known broken" row in
+`docs/status.md` with no fix in flight. Then stop: Sean approves each issue
+before it is filed. Do the same after any batch of pull requests is merged or
+closed, because reviews are where these tasks turn up.
+
 ## Merging
 
 - **`main` is protected, and `git push origin main` is rejected for everyone.**
@@ -71,6 +83,25 @@ because a tag is not a release. So:
   if a second one is ever added.
 - When a user-visible change lands on `main`, **cut the release in the same
   session**. Don't let releasable work sit behind an unpublished tag.
+- **Check the gap at the start of every session**, right after the community
+  queue. If the last release is 14 or more days old and a user-visible change
+  has landed since, or 10 or more commits have landed regardless of age, add one
+  line to the queue report and propose the next version with the `release`
+  skill in `.claude/skills/release/`. Then stop: Sean says go before anything is
+  bumped or tagged. A rule nobody checks failed twice, once at `v0.1.3` and
+  `v0.1.4` and again when `main` ran 115 commits past `v0.1.8` in 25 days.
+- **A schedule backs the session check.** `.github/workflows/release-due.yml`
+  runs Tuesday and Friday and opens a `release/vX.Y.Z` PR that changes only
+  `__version__` when a release is due (14 or more days and 3 or more commits
+  past the last tag, or 10 or more commits). Open the PR and press "Approve and
+  run workflows": GitHub holds a bot PR's checks until a person does. Merging
+  that PR is the approval:
+  `release-tag.yml` then tags the merge commit and starts `release.yml`. If the
+  tag step fails, push the tag by hand as above. To test the schedule, run
+  `release-due` from the Actions tab with `force` set, then close the PR.
+- **A star is not a subscription.** GitHub notifies only people who watch the
+  repo with Releases selected, so each release also gets an X post and a
+  Discussions announcement, drafted by the agent and posted by Sean.
 - **The release step is `git tag vX.Y.Z && git push origin vX.Y.Z`.**
   `.github/workflows/release.yml` then runs the gate, builds, publishes to PyPI
   over Trusted Publishing (no stored token), and creates the GitHub Release for

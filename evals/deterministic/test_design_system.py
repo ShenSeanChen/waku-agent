@@ -72,7 +72,8 @@ def test_copied_files_match_source():
     recorded = {name: digest for digest, name in re.findall(r"^([0-9a-f]{64})  (\S+)$", source, re.MULTILINE)}
     assert set(recorded) == set(COPIED)
     for name in COPIED:
-        assert hashlib.sha256((DESIGN / name).read_bytes()).hexdigest() == recorded[name], (
+        data = (DESIGN / name).read_bytes().replace(b"\r\n", b"\n")
+        assert hashlib.sha256(data).hexdigest() == recorded[name], (
             f"design/{name} differs from the copy recorded in SOURCE.md")
 
 
@@ -259,7 +260,7 @@ def test_rail_links_carry_their_letter():
     """Collapsed, the rail shows each item's first letter (from data-short);
     the full name stays in aria-label for a screen reader and the tooltip."""
     links = re.findall(r'(<a href="#[^"]*"[^>]*data-v="[^"]*"[^>]*>)<span class="lbl">([^<]+)</span>', _index())
-    assert len(links) == 13, f"expected 13 rail links with a .lbl label, found {len(links)}"
+    assert len(links) == 15, f"expected 15 rail links with a .lbl label, found {len(links)}"
     for tag, label in links:
         assert f'data-short="{label[0]}"' in tag, f"{label}: data-short must be its first letter"
         assert f'aria-label="{label}"' in tag, f"{label}: aria-label must be its full name"
@@ -369,3 +370,22 @@ def test_views_call_the_primitives():
             continue
         for cls in PRIMITIVE_CLASSES:
             assert not re.search(rf'class="{cls}[ "]', src), f"{name} writes a {cls} by hand — call the ui.js function"
+
+
+SEG_TOKENS = re.compile(r"var\(--(rule|chart-[1-5]|accent|radius|spacing)\)")
+
+
+def test_the_segmented_bar_is_drawn_from_tokens():
+    """Spec 016: the segmented bar is a modifier class (.seg) on the existing
+    bars, not a new primitive. Its rules read only --rule, --chart-*,
+    --accent, --radius and --spacing, and draw no glyph."""
+    rules = [(sel, body) for sel, body in _blocks(_style()) if re.search(r"\.seg\b", sel)]
+    assert rules, "style.css must define the .seg modifier"
+    assert any("mask-image" in body and "repeating-linear-gradient" in body for _, body in rules)
+    for sel, body in rules:
+        for prop, value in _decls(body):
+            assert prop != "content", f"{sel} draws glyph content"
+            for var in re.findall(r"var\([^)]*\)", value):
+                assert SEG_TOKENS.fullmatch(var), f"{sel} {prop} reads {var}"
+    js = _js()["observe.js"]
+    assert 'class="obs-bar seg"' in js and 'class="wf-track seg"' in js

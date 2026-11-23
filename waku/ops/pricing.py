@@ -1,7 +1,10 @@
 """Pricing — what a call cost, in dollars a human can feel.
 
-The loop writes a permanent ledger (`.waku/usage.jsonl`): one line per API call
-with provider, model, and token counts. It deliberately does NOT store a price.
+The tracer writes a permanent ledger (`.waku/usage.jsonl`): one line per API call
+with provider, model, token counts, the turn's `turn_id` and a `kind`: "loop" for
+the loop's own calls, "subagent" for a delegated agent, and "gate",
+"consolidation", "report", "triage" or "quick" for the small-model calls around
+the loop (spec 011). It deliberately does NOT store a price.
 Prices change; tokens don't. So cost is derived HERE, at read time, from the
 current tables — which means fixing a wrong rate silently corrects every past
 race and every historical spend chart.
@@ -17,27 +20,24 @@ Three tables, checked in this order by `price_for()`:
 each brain's world knowledge ends, so a 2025 model denying that 2026 models
 exist reads as stale data, not stupidity.
 
-Imported by the arena (per-race cost), the dashboard (the spend chart), and
-`scripts/shootout.py`.
+Imported by the arena (per-race cost), the dashboard (the spend chart), the turn
+receipt (`receipt.py`), and `scripts/shootout.py`.
 """
 
 from __future__ import annotations
 
 import json
 
+from waku.loop.models import REGISTRY
+
 # Rough $/million tokens (in, out) for a dollar ESTIMATE — the number humans
 # actually feel. Keyed by provider; deliberately approximate and labelled "est".
-PRICING = {
-    "anthropic": (3.0, 15.0), "openai": (2.5, 15.0), "gemini": (0.3, 2.5),
-    "deepseek": (0.435, 0.87), "minimax": (0.30, 1.20), "kimi": (0.6, 2.5), "glm": (0.6, 2.2),
-    "xai": (3.0, 15.0),   # Grok — rough est; keyed users get exact from the catalog
-    "opencode_zen": (0.435, 0.87),   # rough est (matching deepseek — same underlying model)
-    "opencode_go": (0.435, 0.87),    # rough est
-    # openrouter fallback for paid models when the live catalog is unreachable
-    # (rough mid-catalog guess). ":free" ids and catalog-priced models never
-    # hit this: see price_for().
-    "openrouter": (1.0, 3.0),
-}
+# Rough $/million tokens (in, out) for a dollar ESTIMATE — the number humans
+# actually feel. Read from waku/providers.toml so a provider is one table
+# there and not a row to remember here; deliberately approximate and labelled
+# "est" in the UI. A live catalog (OpenRouter reports one) overrides it per
+# model, and ":free" ids never reach it at all — see price_for().
+PRICING = {name: tuple(row["price"]) for name, row in REGISTRY.items()}
 
 # model id -> exact ($/M in, $/M out), filled from the live catalog fetch in
 # list_models(). OpenRouter reports per-model pricing, so cost estimates can

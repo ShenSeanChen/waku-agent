@@ -23,9 +23,16 @@ def _isolate(monkeypatch, tmp_path):
 
 def test_registry_contract():
     items = integrations.registry()
-    assert len(items) == 24
+    # waku-platform is hidden_unless_env: it's in the registry only when its
+    # WAKU_PLATFORM_BASE_URL is set (see test_platform_provider.py for the
+    # row's own visibility contract) — so the expected count is DERIVED from
+    # the live environment, not hardcoded. A hardcoded 24 passes on a laptop
+    # and fails inside a tenant container, where the row is visible and the
+    # true count is 25.
+    visible_providers = {name for name, p in PROVIDERS.items() if p.is_visible()}
+    assert len(items) == len(visible_providers) + len(integrations.INTEGRATIONS)
     assert len({item.key for item in items}) == len(items)
-    assert {item.key for item in items if item.group == "AI Providers"} == set(PROVIDERS)
+    assert {item.key for item in items if item.group == "AI Providers"} == visible_providers
     for item in items:
         assert callable(item.enabled)
         for field in item.env:
@@ -452,3 +459,136 @@ def test_a_genuinely_missing_required_field_still_says_needs_setup(monkeypatch, 
     view = next(v for v in integrations.list_integrations() if v.key == "notion")
     assert view.status.state is IntegrationState.INSTALLED_BUT_UNCONFIGURED
     assert required[1] in view.status.message
+
+
+# ---- spec 025, D2: `waku connections` checks the Slack tokens ---------------
+
+BOT, APP = "xoxb-test-bot-token", "xapp-test-app-token"
+
+
+class FakeSlack:
+    """Stands in for slack.com. It records which method each token was sent
+    to, and answers as Slack does: a JSON body, and the token's scopes in the
+    `x-oauth-scopes` header."""
+
+    def __init__(self, scopes="app_mentions:read,chat:write", auth=None, connections=None):
+        self.scopes = scopes
+        self.auth = auth or {"ok": True, "team": "Acme", "user": "waku"}
+        self.connections = connections or {"ok": True, "url": "wss://example.invalid/link"}
+        self.calls = []
+
+    def __call__(self, method, token):
+        self.calls.append((method, token))
+        if method == "auth.test":
+            return self.auth, {"x-oauth-scopes": self.scopes}
+        return self.connections, {}
+
+
+def _slack_env(**more):
+    return {"SLACK_BOT_TOKEN": BOT, "SLACK_APP_TOKEN": APP, "SLACK_ALLOWED_CHANNELS": "C1",
+            **more}
+
+
+def _slack(env, fake=None, extra=True):
+    return integrations.slack_status(env, fetch=fake or FakeSlack(), extra_installed=extra)
+
+
+def test_slack_without_tokens_is_not_configured_and_slack_is_not_called():
+    fake = FakeSlack()
+    ok, line = _slack({}, fake)
+
+    assert ok is None and line.startswith("not configured")
+    assert "slack-app-manifest.yaml" in line
+    assert fake.calls == []
+
+
+def test_slack_with_one_token_names_the_one_that_is_missing():
+    fake = FakeSlack()
+    ok, line = _slack({"SLACK_BOT_TOKEN": BOT}, fake)
+    assert ok is False and "SLACK_APP_TOKEN is not set" in line
+
+    ok, line = _slack({"SLACK_APP_TOKEN": APP}, fake)
+    assert ok is False and "SLACK_BOT_TOKEN is not set" in line
+    assert fake.calls == []
+
+
+def test_slack_tokens_in_each_others_place_are_caught_before_slack_is_asked():
+    fake = FakeSlack()
+    ok, line = _slack({"SLACK_BOT_TOKEN": APP, "SLACK_APP_TOKEN": BOT}, fake)
+
+    assert ok is False and "xoxb-" in line and "xapp-" in line
+    assert fake.calls == []
+
+
+def test_slack_connected_names_the_workspace_and_sends_each_token_to_its_own_check():
+    fake = FakeSlack()
+    ok, line = _slack(_slack_env(), fake)
+
+    assert ok is True
+    assert line == "connected · workspace Acme as waku · hears 1 channel"
+    assert fake.calls == [("auth.test", BOT), ("apps.connections.open", APP)]
+
+
+def test_slack_names_a_missing_scope():
+    """Spec 025, decision 5: the check names the scope Slack did not grant."""
+    ok, line = _slack(_slack_env(), FakeSlack(scopes="app_mentions:read"))
+    assert ok is False
+    assert "the bot token is missing the scope chat:write" in line
+    assert "reinstall" in line
+
+    ok, line = _slack(_slack_env(), FakeSlack(scopes="channels:read"))
+    assert "missing the scopes app_mentions:read and chat:write" in line
+
+
+def test_slack_names_the_scope_the_app_token_lacks_when_slack_refuses_it():
+    fake = FakeSlack(connections={"ok": False, "error": "missing_scope",
+                                  "needed": "connections:write"})
+    ok, line = _slack(_slack_env(), fake)
+
+    assert ok is False
+    assert "SLACK_APP_TOKEN is missing the scope connections:write" in line
+
+
+def test_slack_says_which_token_slack_refused_and_never_prints_one():
+    ok, line = _slack(_slack_env(), FakeSlack(auth={"ok": False, "error": "invalid_auth"}))
+    assert ok is False and "Slack refused SLACK_BOT_TOKEN (invalid_auth)" in line
+
+    ok, other = _slack(_slack_env(),
+                       FakeSlack(connections={"ok": False, "error": "invalid_auth"}))
+    assert ok is False and "Slack refused SLACK_APP_TOKEN (invalid_auth)" in other
+
+    for text in (line, other):
+        assert BOT not in text and APP not in text
+
+
+def test_slack_says_when_nobody_would_be_heard():
+    ok, line = _slack(_slack_env(SLACK_ALLOWED_CHANNELS=""))
+    assert ok is False and "SLACK_ALLOWED_CHANNELS is empty" in line
+
+
+def test_slack_without_the_extra_says_how_to_install_it():
+    fake = FakeSlack()
+    ok, line = _slack(_slack_env(), fake, extra=False)
+    assert ok is False and "pip install 'waku-agent[slack]'" in line
+    assert fake.calls == []
+
+
+def test_slack_that_cannot_be_reached_is_said_plainly():
+    def down(method, token):
+        raise OSError("no route to host")
+
+    ok, line = _slack(_slack_env(), down)
+    assert ok is False and line == "could not reach Slack to check the tokens"
+
+
+def test_slack_line_is_in_waku_connections(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("WAKU_HOME", str(tmp_path))
+    monkeypatch.setattr(integrations, "slack_status",
+                        lambda: (False, "the bot token is missing the scope chat:write"))
+    integrations._HEALTH = None
+
+    code = integrations.cli_main()
+
+    out = capsys.readouterr().out
+    assert "Slack" in out and "the bot token is missing the scope chat:write" in out
+    assert code == 1, "a Slack setup that would not work fails the command"

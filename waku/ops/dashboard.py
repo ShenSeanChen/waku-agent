@@ -15,13 +15,15 @@ voice/telegram gateways drive light up in the browser as it runs.
 
 The frontend is plain static files (static/index.html + style.css + app.js)
 served as-is — no build step, no framework. This file is just the server + API.
-Bound to 127.0.0.1 only. For deep trace waterfalls use Phoenix (`make trace`).
+Bound to 127.0.0.1 unless WAKU_DASHBOARD_HOST says otherwise, which warns.
 """
 
 from __future__ import annotations
 
+import html
 import json
 import os
+import re
 import shutil
 import threading
 import time
@@ -30,6 +32,7 @@ from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+from waku.alwayson import handover
 from waku.config import load_settings
 from waku.db import connect
 from waku.integrations import (
@@ -40,6 +43,11 @@ from waku.integrations import (
     list_providers,
     test_integration,
 )
+from waku.key_locations import model_key_locations
+from waku.loop.agent import error_text
+from waku.loop.models import models_for
+from waku.memory import tool_note
+from waku.memory_choice import card as memory_choice_card
 from waku.ops import browser_agent, commands, compare_history
 from waku.ops.arena import (
     compare_clear,
@@ -53,6 +61,7 @@ from waku.ops.catalog import list_models
 from waku.ops.pricing import price_for, usage_summary
 from waku.ops.settings_api import apply_settings, pin_action, settings_info
 from waku.ops.tracing import TraceEncodingError, iter_trace_lines
+from waku.tools import treg
 
 PORT = 7777
 # The frontend lives in its own files (static/index.html + style.css + app.js),
@@ -98,10 +107,13 @@ def chat_stream(message: str, emit) -> None:
     events: list[dict] = []
 
     def observer(kind, ev):
-        if kind in ("gate", "consolidation", "route", "triage"):
+        if kind in ("gate", "consolidation", "route", "triage", "slot", "report"):
             events.append({"kind": kind, **ev})
         emit(kind, ev)
 
+    # Hosted Waku: a connector the person just signed in to has its tools in
+    # this answer (spec 029).
+    browser_agent.follow_connectors()
     with agent_lock:
         agent = get_agent()
         maybe_rotate_session(agent)
@@ -113,6 +125,8 @@ def chat_stream(message: str, emit) -> None:
     cons = next((e for e in events if e["kind"] == "consolidation"), None)
     route = next((e for e in events if e["kind"] == "route"), None)
     triage = next((e for e in events if e["kind"] == "triage"), None)
+    slot = next((e for e in events if e["kind"] == "slot"), None)
+    report = next((e for e in events if e["kind"] == "report"), None)
     quick = bool(route) and route.get("target") == "quick_reply"
     emit("done", {
         "reply": result.reply,
@@ -120,14 +134,32 @@ def chat_stream(message: str, emit) -> None:
         "graph": ({"workflow": route.get("workflow", "triage"),
                    "route": "quick" if quick else "full",
                    "reason": (triage or {}).get("reason", "")} if route else None),
+        # Spec 009 A: the Waku Memory searches run before a research turn come
+        # first, as the cards they were while the turn streamed.
         "tools": [{"tool": c["tool"], "args": c["args"], "output": c["output"],
-                   "status": _tool_status(c["output"]),
-                   "summary": (c["output"] or "").split(". ")[0][:120]} for c in result.tool_calls],
-        "consolidation": {"new_facts": cons["new_facts"]} if cons else None,
+                   "status": "denied" if c.get("denied") else _tool_status(c["output"]),
+                   "summary": (c["output"] or "").split(". ")[0][:120],
+                   **({"read_first": True} if c.get("read_first") else {})}
+                  for c in [*getattr(result, "read_first", []), *result.tool_calls]],
+        # ... and what they found: the turn's Used list
+        "used": getattr(result, "used", []),
+        "consolidation": ({"new_facts": cons["new_facts"], "kept": cons.get("kept", [])}
+                          if cons else None),
+        # Spec 005: how many retrieved memories Jev let into the prompt.
+        "slot": ({"kept": sum(1 for v in slot["verdicts"] if v["kept"]),
+                  "total": len(slot["verdicts"])} if slot else None),
+        # Spec 007: the research report this turn saved to Waku Memory, for
+        # the chat's card. Also sent as its own `report` event, before this one.
+        "report": ({k: v for k, v in report.items() if k != "kind"} if report else None),
         "iterations": result.iterations,
         "latency_ms": latency_ms,
         # which brain answered — shown per card; a quick graph turn was the small model
         "model": agent.settings.small_model if quick else agent.settings.model,
+        # Spec 011: the turn's receipt, the same object the chat log keeps in
+        # meta.receipt, so a reopened thread draws the same line
+        "receipt": getattr(result, "receipt", None),
+        # Spec 021: the lines a plugin's hooks asked to show the person
+        "notices": getattr(result, "notices", []),
     })
 
 
@@ -169,7 +201,7 @@ def graph_stream(payload: dict, emit) -> None:
     except Exception as exc:
         # Includes GraphStateCollision, which run_graph raises OUT (unlike node
         # errors) — better shown in the card than dropped on the floor.
-        emit("done", {"error": f"{type(exc).__name__}: {exc}"})
+        emit("done", {"error": error_text(exc)})
 
 
 def _run_command(command: tuple[str, str], emit) -> None:
@@ -190,6 +222,17 @@ def _run_command(command: tuple[str, str], emit) -> None:
         from waku.connect import usage as connect_usage
 
         reply = connect_integration(arg, load_settings().home) if arg else connect_usage()
+        emit("done", {"reply": reply, "tools": [], "iterations": 0, "latency_ms": 0, "gate": None})
+        return
+    if name == "plugin":
+        # Spec 021 B3: an install previews what the plugin brings, and the
+        # person sends the command again with --yes. A hosted container's
+        # servers are set at sign-in, so it refuses every /plugin command.
+        from waku.config import load_settings
+        from waku.plugins.cli import chat as plugin_chat
+
+        settings = load_settings()
+        reply = plugin_chat(arg, settings.home, hosted=settings.provider == "waku-platform")
         emit("done", {"reply": reply, "tools": [], "iterations": 0, "latency_ms": 0, "gate": None})
         return
     if name in ("graphs", "help", "?"):
@@ -505,10 +548,228 @@ def collect() -> dict:
         "db": db_info,
         "settings": info,
         "providers": [asdict(view) for view in list_providers()],
+        # Where a model key was looked for, for the setup page (spec 013).
+        # Paths and yes-or-no only: no value ever enters this payload.
+        "key_locations": model_key_locations(),
+        # The first-run Waku Memory question (spec 020): {pending, what}.
+        "memory_choice": memory_choice_card(settings),
+        # What waits (spec 024): timers, calls that wait for a yes, messages.
+        "waiting": waiting_data(),
+        # The servers a person connected themselves, and adding one (spec 025).
+        "connectors": connectors_data(),
         "connections": [asdict(view) for view in list_connections()],
-        "tools": tools_info(),
+        # MCP servers that sign in on their own page rather than through an
+        # .env field (spec 007 E). Files only: no browser, no network.
+        "mcp_connections": [treg.card(home)],
+        # Whether this dashboard runs in a hosted container (WAKU_HOSTED=1).
+        # The page then asks the gateway about Slack (spec 030).
+        "hosted": handover.enabled(),
+        # The Connections page itself: cards in groups (spec 030).
+        "connections_page": connections_page_data(),
+        "tools": tools_info(events),
+        # The outside memory, for the Memory page's "which memory is which".
+        "waku_memory": waku_memory_info(settings),
         "usage": usage_summary(home),
     }
+
+
+def waiting_data() -> dict:
+    """The "Waiting" card (spec 024): the timers that have not fired, the
+    calls that wait for a yes, and the messages that are queued or dead. The
+    same three lists `waku waiting` prints."""
+    from dataclasses import asdict as as_dict
+
+    from waku.alwayson import waiting
+
+    settings = load_settings()
+    settings.ensure_home()
+    conn = connect(settings.home)
+    try:
+        found = waiting.listing(conn)
+    finally:
+        conn.close()
+    return {name: [as_dict(item) for item in getattr(found, name)]
+            for name in ("timers", "calls", "messages")}
+
+
+def connectors_data() -> dict:
+    """The servers behind the Connections page's cards (spec 025, moved there
+    by spec 030): every MCP server Waku would connect,
+    with its account and its tool count, and the sign-in link while one
+    waits. Reads files and this process's own state; opens nothing."""
+    from waku.tools import connectors
+
+    settings = load_settings()
+    home = settings.home
+    live = browser_agent.current()
+    tools = list(live.tools._tools.values()) if live is not None else []
+    rows = []
+    allowed = connectors.writes_allowed(home)
+    for spec in mcp_servers(home):
+        row = _mcp_row(home, spec, live, tools)
+        # A plugin's server goes when the plugin goes (`waku plugin`).
+        row["removable"] = not row["plugin"]
+        # The switch of spec 025, decision 4. Waku Memory has none: its
+        # tools always run.
+        kind = getattr(connectors.connector_of(home, row["name"]), "kind", connectors.OWN)
+        row["writes"] = ("allow" if kind == connectors.MEMORY or row["name"] in allowed
+                         else "ask")
+        row["switch"] = kind != connectors.MEMORY
+        # How many of its tools ask first, once an agent has listed them.
+        own = [t for t in tools if (getattr(t, "mcp", None) or ("",))[0] == row["name"]]
+        row["asks"] = connectors.asking(home, row["name"], own) if own else None
+        # Waku Memory and treg each have a card of their own on Connections
+        # (spec 030), so their server is not drawn a second time.
+        row["own_card"] = kind == connectors.MEMORY or row["name"] == treg.NAME
+        row["memory"] = kind == connectors.MEMORY
+        rows.append(row)
+    waiting = connectors.sign_in_waiting(home)
+    # A server counts as a starter connector by its address, never by its name.
+    at = {str(spec.get("url", "")).rstrip("/"): str(spec.get("name", ""))
+          for spec in reversed(mcp_servers(home)) if spec.get("url")}
+    return {
+        # The starter list; `server` names the entry of mcp.json at the
+        # connector's address, and is empty until somebody adds it.
+        "starter": [{"name": entry["name"], "title": entry["title"], "docs": entry["docs"],
+                     "added": entry["url"].rstrip("/") in at,
+                     "server": at.get(entry["url"].rstrip("/"), "")}
+                    for entry in connectors.starter().values()],
+        # A hosted container's servers are set when the person signs in, and
+        # the hosted gateway blocks the three routes (hosted/core/policy.py).
+        # The container is hosted whatever provider its person picked.
+        "available": settings.provider != "waku-platform" and not handover.enabled(),
+        "servers": rows,
+        "sign_in": ({"name": waiting.name, "link": waiting.link}
+                    if waiting is not None and waiting.link else None),
+    }
+
+
+def connections_page_data() -> dict:
+    """The Connections page (spec 030): every card, in its group, with its
+    state and its one button. `waku/ops/connections_page.py` composes it from
+    the registry, treg's card, the servers a person connected and Waku
+    Memory. Reads files and this process's own state; opens nothing."""
+    from waku.ops import connections_page
+
+    settings = load_settings()
+    return connections_page.page(
+        [asdict(view) for view in list_connections()],
+        [treg.card(settings.home)],
+        connectors_data(),
+        waku_memory_info(settings),
+        hosted=handover.enabled())
+
+
+def connectors_add(payload: dict) -> dict:
+    """Add the server a starter button names or the card's field holds, and
+    start its sign-in. The card takes a starter name or an address only: a web page that makes Waku run a
+    program is the attack spec 025 names, so a command is added from the
+    command line."""
+    from waku.tools import connectors
+
+    if len(payload) != 1 or set(payload) - {"url", "name"}:
+        return {"error": "The card takes a starter name or the address of a server."}
+    home = load_settings().ensure_home()
+    try:
+        if "name" in payload and str(payload["name"]).lower() not in connectors.starter():
+            raise connectors.Refused(f"'{payload['name']}' is not on the starter list.")
+        _, url, _ = connectors.resolve(str(payload.get("url") or payload.get("name") or ""))
+        message = connectors.connect(home, url)
+        spec = connectors.find(home, url) or {}
+    except connectors.Refused as refused:
+        return {"error": str(refused)}
+    waiting = connectors.sign_in_waiting(home)
+    return {"ok": True, "name": str(spec.get("name", "")), "message": message,
+            "link": waiting.link if waiting is not None else None}
+
+
+def connectors_approve(payload: dict) -> dict:
+    """The card's switch: let one connector write without asking, or make
+    its writes ask again."""
+    from waku.tools import connectors
+
+    name, allow = str(payload.get("name") or ""), payload.get("allow")
+    if not isinstance(allow, bool):
+        return {"error": "`allow` is true or false."}
+    try:
+        connectors.set_writes(load_settings().ensure_home(), name, allow)
+    except connectors.Refused as refused:
+        return {"error": str(refused)}
+    return {"ok": True, "name": name, "writes": "allow" if allow else "ask"}
+
+
+def connectors_remove(payload: dict) -> dict:
+    """Remove one server of the card by its name, and its sign-in."""
+    from waku.tools import connectors
+
+    name = str(payload.get("name") or "")
+    try:
+        connectors.remove(load_settings().home, name)
+    except connectors.Refused as refused:
+        return {"error": str(refused)}
+    return {"ok": True, "removed": name}
+
+
+def waiting_cancel(payload: dict) -> dict:
+    """Cancel one row of the "Waiting" card by its id (t3, r7 or m12)."""
+    from dataclasses import asdict as as_dict
+
+    from waku.alwayson import waiting
+
+    settings = load_settings()
+    settings.ensure_home()
+    conn = connect(settings.home)
+    try:
+        item = waiting.cancel(conn, str(payload.get("id") or ""))
+    except waiting.NotWaiting as exc:
+        return {"error": str(exc)}
+    finally:
+        conn.close()
+    return {"ok": True, "cancelled": as_dict(item)}
+
+
+def observability_data(window: str = "7d") -> dict:
+    """The Observability page's data (spec 012, `waku/ops/observability.py`).
+    A hosted container runs the `waku-platform` provider and ships no
+    `evals/`, so the Evals page explains where evals run instead, and shows
+    the release record its image was built with when WAKU_RELEASE_FILE names
+    one (hosted/image/tenant.Dockerfile sets it)."""
+    from waku.ops import observability
+
+    settings = load_settings()
+    settings.ensure_home()
+    if settings.base_url or settings.provider == "openrouter":
+        list_models()  # warm the per-model price cache, as collect() does
+    try:   # the model "Judge this turn" would call: the provider's small model
+        judge_model = models_for(settings.provider, settings.model or "", settings.small_model or "")[1]
+    except Exception:
+        judge_model = ""
+    return observability.payload(settings.home, provider=settings.provider,
+                                 model=settings.model or "", window=window, judge_model=judge_model,
+                                 hosted=settings.provider == "waku-platform",
+                                 release_file=Path(os.environ["WAKU_RELEASE_FILE"])
+                                 if os.environ.get("WAKU_RELEASE_FILE") else None)
+
+
+def judge_turn(payload: dict) -> dict:
+    """POST /api/turn-evals/judge {turn_id} (spec 015): ask the small model of
+    the provider in use whether one stored turn's reply answers its question
+    and stays grounded in its tool outputs. The turn is read from this home's
+    own traces, so a request cannot supply text to judge. On the hosted free
+    tier the call goes through the metering proxy and is charged in credits.
+    Answers {"score": <the score event>} or {"error": <sentence>}."""
+    from waku.ops import turn_evals
+
+    settings = load_settings()
+    settings.ensure_home()
+    turn_id = payload.get("turn_id") if isinstance(payload, dict) else None
+    try:
+        client, model, provider = turn_evals.judge_client(settings)
+        return {"score": turn_evals.judge_turn(settings.home, turn_id, client, model, provider)}
+    except turn_evals.JudgeRefused as exc:
+        return {"error": str(exc)}
+    except SystemExit as exc:   # get_client's "no key" and "unknown provider" sentences
+        return {"error": str(exc)}
 
 
 def _rel_to_home(path, home) -> str:
@@ -542,7 +803,9 @@ def session_list(conn) -> list[dict]:
             "SELECT DISTINCT source FROM chat_log WHERE session_id=?", (sid,)).fetchall()]
         preview = ""
         if last:
-            preview = ("you: " if last["role"] == "user" else "waku: ") + last["content"][:80]
+            content = tool_note.strip(last["content"])
+            excerpt = content[:80] + ("..." if len(content) > 80 else "")
+            preview = ("you: " if last["role"] == "user" else "waku: ") + excerpt
         out.append({"id": sid,
                     "title": (first["content"][:60] if first else "(empty)"),
                     "last": preview,
@@ -553,7 +816,7 @@ def session_list(conn) -> list[dict]:
 
 
 # A tool's origin, for grouping in the Tools tab (name → category).
-_FLAGSHIP = {"create_event", "list_events", "save_note", "send_message"}
+_FLAGSHIP = {"create_event", "list_events", "save_note", "send_message", "schedule_task"}
 _SELFMGMT = {"manage_memory", "update_soul", "create_skill"}
 _APPLE = {"read_apple_calendar", "read_apple_mail", "create_reminder", "create_note"}
 _WEB = {"search_web"}
@@ -573,21 +836,130 @@ def _tool_source(name: str, mcp_servers: list[str]) -> str:
     return "other"
 
 
-def tools_info() -> dict:
-    """The agent's available tools + any configured MCP servers — so the Tools
-    tab shows CAPABILITIES, not just the artifacts tool calls produced. Reflects
-    the live agent's registry when one exists (exact), else builds a display-only
-    catalog (no MCP subprocess is spawned just to render the page)."""
+def mcp_servers(home: Path) -> list[dict]:
+    """Every MCP server Waku would connect: mcp.json's, then the ones enabled
+    plugins bring, merged as the bridge merges them. Reads files, opens
+    nothing. Until 2026-11-14 the Tools page read mcp.json alone, so the
+    server a plugin brought (Waku Memory, after `waku plugin install`) was
+    not listed anywhere and its tools were filed under "Other"."""
+    from waku.plugins import store
+    from waku.tools.mcp_client import merge
+
+    try:
+        config = json.loads((home / "mcp.json").read_text(encoding="utf-8")).get("servers", [])
+    except (OSError, ValueError, AttributeError):
+        config = []
+    try:
+        brought = store.servers(home)
+    except (OSError, ValueError):
+        brought = []
+    return merge(config if isinstance(config, list) else [], brought)[0]
+
+
+def _mcp_row(home: Path, spec: dict, live, tools: list) -> dict:
+    """One server as the Connections page lists it. `connected` and `tools` are None
+    until a chat turn has built the agent: the page never opens a connection
+    of its own."""
+    from waku.tools.mcp_cli import _auth_file, _identity
+
+    name = str(spec.get("name", "?"))
+    bridge = getattr(live, "mcp_bridge", None) if live is not None else None
+    remote = bool(spec.get("url"))
+    account = None
+    if remote and not spec.get("auth_env") and not spec.get("headers"):
+        # a server that signs in on its own page; the line says who, or that
+        # nobody has yet
+        try:
+            account = _identity(_auth_file(home, name))
+        except Exception:
+            account = None
+    return {
+        "name": name,
+        "address": str(spec.get("url") or f"{spec.get('command', '')} (runs on this machine)").strip(),
+        "plugin": str(spec.get("plugin") or ""),
+        "connected": bool(bridge.connected(name)) if bridge is not None else None,
+        "tools": (sum(1 for t in tools if t.name.startswith(f"{name}_"))
+                  if bridge is not None else None),
+        "account": account,
+    }
+
+
+def hooks_info(home: Path, events: list[dict] | None = None) -> dict:
+    """The hooks enabled plugins declare (spec 021), one row per hook, with
+    the last time each ran. A hook is a call Waku makes by itself at a fixed
+    moment of a turn, so it is listed beside the tools: Observability shows
+    each run, and this shows what exists. An event no plugin uses is listed
+    too, so the four moments are all visible."""
+    from waku.plugins import manifest, store
+
+    try:
+        plugins = store.enabled(home)
+    except (OSError, ValueError):
+        plugins = []
+    last: dict[tuple, dict] = {}
+    for ev in events or []:
+        if ev.get("type") == "hook":
+            last[(ev.get("plugin"), ev.get("event"), ev.get("tool"))] = {
+                "ok": bool(ev.get("ok")), "duration_ms": ev.get("duration_ms"),
+                "ts": ev.get("ts"), "error": (str(ev.get("error"))[:200] if ev.get("error") else None)}
+    rows = []
+    for event in manifest.EVENTS:
+        found = [(p, h) for p in plugins for h in p.hooks.get(event, [])]
+        if not found:
+            rows.append({"event": event, "plugin": None})
+            continue
+        for plugin, hook in found:
+            tool = str(hook.get("tool") or hook.get("command") or "")
+            rows.append({"event": event, "plugin": plugin.name,
+                         "kind": str(hook.get("type") or ""),
+                         "server": str(hook.get("server") or ""), "tool": tool,
+                         "last": last.get((plugin.name, event, tool))})
+    return {"rows": rows, "count": sum(1 for r in rows if r["plugin"]),
+            # a Claude Code plugin loads here without its hooks (spec 021)
+            "skipped": [p.name for p in plugins if p.hooks_skipped]}
+
+
+def waku_memory_info(settings) -> dict:
+    """What the Memory page says about the outside memory: whether Waku
+    Memory is connected, as whom, and which of the two ways facts reach it.
+    Files only."""
+    from waku.memory_choice import already_connected
+    from waku.plugins import store
+    from waku.tools.mcp_cli import _auth_file, _identity
+    from waku.tools.waku_memory import is_waku_memory
+
+    home = settings.home
+    try:
+        connected = already_connected(home)
+    except (OSError, ValueError):
+        connected = False
+    spec = next((s for s in mcp_servers(home) if is_waku_memory(s)), None)
+    account = None
+    if spec is not None and not spec.get("auth_env"):
+        try:
+            account = _identity(_auth_file(home, str(spec.get("name"))))
+        except Exception:
+            account = None
+    try:
+        by_plugin = any(is_waku_memory(s) for s in store.servers(home))
+    except (OSError, ValueError):
+        by_plugin = False
+    return {"connected": connected, "account": account, "by_plugin": by_plugin,
+            "mode": settings.memory_mode}
+
+
+def tools_info(events: list[dict] | None = None) -> dict:
+    """The agent's available tools, every MCP server it would connect and
+    every hook its plugins declare — so the Tools tab shows CAPABILITIES, not
+    just the artifacts tool calls produced. Reflects the live agent's registry
+    when one exists (exact), else builds a display-only catalog (no MCP
+    subprocess is spawned just to render the page). `events` are the trace
+    events `data()` already read; a hook's last run comes from them."""
     settings = load_settings()
     settings.ensure_home()
-    mcp = {"configured": False, "servers": [], "live": False}
-    mcp_path = settings.home / "mcp.json"
-    if mcp_path.exists():
-        mcp["configured"] = True
-        try:
-            mcp["servers"] = [s.get("name", "?") for s in json.loads(mcp_path.read_text(encoding="utf-8")).get("servers", [])]
-        except (json.JSONDecodeError, OSError):
-            pass
+    specs = mcp_servers(settings.home)
+    mcp = {"configured": bool(specs), "servers": [str(s.get("name", "?")) for s in specs],
+           "live": False, "rows": []}
 
     catalog = []
     live = browser_agent.current()
@@ -640,13 +1012,27 @@ def tools_info() -> dict:
             from waku.tools import experimental as experimental_tools
 
             tools += experimental_tools.make_tools(settings)
+    # Where each ability comes from (spec 030): None for a tool that is
+    # built in, or the card on the Connections page that controls it.
+    from waku.ops import connections_page
+
+    page = connections_page_data()
+    servers = connectors_data()
+    origin = connections_page.tool_sources([t.name for t in tools], page, servers)
     for t in tools:
         catalog.append({"name": t.name, "description": t.description,
-                        "source": _tool_source(t.name, mcp["servers"])})
+                        "source": _tool_source(t.name, mcp["servers"]),
+                        "from": origin[t.name]})
     catalog.sort(key=lambda c: (c["source"], c["name"]))
     from waku.tools.experimental import PLANNED
 
-    return {"catalog": catalog, "mcp": mcp, "apple_on": settings.apple_tools,
+    mcp["rows"] = [_mcp_row(settings.home, spec, live, tools) for spec in specs]
+    return {"catalog": catalog, "mcp": mcp, "hooks": hooks_info(settings.home, events),
+            "apple_on": settings.apple_tools,
+            # Starter connections nobody connected, listed once on the page.
+            "not_connected": connections_page.not_connected(page),
+            # What is connected right now, with logos: the page's first row.
+            "connected": connections_page.connected(page),
             "planned": PLANNED}   # whiteboard boxes not wired in yet (coming soon)
 
 
@@ -732,15 +1118,58 @@ def _thread_history(conn, sid: str) -> list[dict]:
             "SELECT role, content, meta FROM chat_log WHERE session_id=? ORDER BY id",
             (sid,),
         ).fetchall()
-    return [{"role": r["role"], "content": r["content"],
+    # An assistant row's content is the model's record, which ends in a
+    # "[tools used: ...]" note (waku/memory/tool_note.py). People read the
+    # reply, so the note comes off here, for the dock and for the front door's
+    # GET /v1/conversations/<id> alike; render.js's histItem strips it again.
+    return [{"role": r["role"],
+             "content": tool_note.strip(r["content"]) if r["role"] == "assistant" else r["content"],
              "meta": json.loads(r["meta"]) if r["meta"] else None} for r in rows]
+
+
+def conversation_list(conn) -> list[dict]:
+    """session_list in the shape the front door's GET /v1/conversations
+    answers (spec 007 D): id, title, last_at, count. The title is the first
+    user message with its whitespace folded, so a multi-line opener reads as
+    one line in a list."""
+    return [{"id": s["id"], "title": " ".join(s["title"].split()),
+             "last_at": s["last_at"], "count": s["messages"]}
+            for s in session_list(conn)]
+
+
+def chat_state() -> dict:
+    """What the chat column draws besides the conversation, and nothing else
+    (spec 008). The embedded chat reads this instead of /api/data, which
+    carries the memory, the traces, the spend and the database: the chat's
+    header needs the conversations for History, the current one to restore,
+    and the model and pinned models for the picker."""
+    settings = load_settings()
+    settings.ensure_home()
+    conn = connect(settings.home)
+    live = browser_agent.current()
+    info = settings_info()
+    return {"ok": True, "sessions": session_list(conn),
+            "current_session": live.session.session_id if live is not None else dash_session(),
+            "settings": {k: info.get(k) for k in
+                         ("provider", "model", "small_model", "pinned", "disabled_providers")}}
 
 
 def session_action(payload: dict) -> dict:
     """Chat history control: start a new conversation, switch to a past one, or
     read a conversation's history (read-only, for the live inbox). Sessions live
-    in chat_log."""
+    in chat_log. "list", "history" and "state" never touch the agent, which is
+    why they are also served on GET (the hosted front door's two reads, and
+    the embedded chat's header)."""
     action = payload.get("action")
+    if action == "state":
+        return chat_state()
+    if action == "list":
+        settings = load_settings()
+        settings.ensure_home()
+        conn = connect(settings.home)
+        live = browser_agent.current()
+        return {"ok": True, "conversations": conversation_list(conn),
+                "current": live.session.session_id if live is not None else dash_session()}
     if action == "history":
         # read-only view of a conversation — never touches the agent, so the
         # dashboard can poll it live (e.g. to show new Telegram messages arrive).
@@ -891,6 +1320,93 @@ def events_since(cursor):
     return {"events": out, "cursor": len(lines)}
 
 
+# --- the embedded chat (spec 008) ------------------------------------------
+#
+# GET /embed/chat serves the chat column alone (static/embed.html) for
+# waku.one to put in an iframe. The page posts to the page around it only when
+# that page's origin is on this list. Hosted, the gateway sends the list it
+# lets frame the page (X-Waku-Embed-Origins, set by the gateway alone);
+# locally nothing sends it and the default is waku.one's three hosts, the same
+# three the gateway defaults to (hosted/gateway/config.py -- duplicated, not
+# imported: waku/ never imports hosted/).
+EMBED_ORIGINS = ("https://www.waku.one", "https://waku.one", "https://dev.waku.one")
+EMBED_ORIGINS_HEADER = "X-Waku-Embed-Origins"
+_ORIGIN = re.compile(r"https?://[a-z0-9.-]+(?::[0-9]{1,5})?")
+
+
+def same_origin(origin: str | None, host: str | None) -> bool:
+    """Whether a POST may run: it carries no Origin, or its Origin's host and
+    port are the Host it was sent to (spec 021 review). A browser adds Origin
+    to every cross-site POST, so another site's page cannot post /plugin or
+    anything else to localhost:7777 directly. This does not stop DNS
+    rebinding, where the attacker's own name is made to mean this machine and
+    Origin and Host both carry it; host_allowed() below does. The hosted
+    gateway forwards no Origin (hosted/gateway/forward.py REQUEST_HEADERS) and
+    checks it itself, so a container sees none, and a script with no browser
+    sends none."""
+    if not origin:
+        return True
+    from urllib.parse import urlsplit
+
+    netloc = urlsplit(origin.strip()).netloc.lower()
+    return bool(netloc) and netloc == (host or "").strip().lower()
+
+
+def loopback_only() -> bool:
+    """Whether this dashboard listens on this machine alone. A container binds
+    0.0.0.0 and sits behind the hosted gateway, which checks the Host itself."""
+    host = os.getenv("WAKU_DASHBOARD_HOST", "127.0.0.1").strip() or "127.0.0.1"
+    return host in LOOPBACK
+
+
+def host_allowed(host: str | None) -> bool:
+    """Whether a request's Host names this machine. DNS rebinding makes a
+    page's own name, say evil.test, resolve to 127.0.0.1 after the page loads,
+    so the browser sends this dashboard `Host: evil.test` and the same name in
+    Origin. same_origin() sees two matching labels and passes it. A dashboard
+    bound to loopback therefore answers only to localhost, 127.0.0.1 and
+    [::1], on any port. A request with no Host is a script, not a browser, and
+    a dashboard bound anywhere else was exposed on purpose."""
+    if not loopback_only() or not host or not host.strip():
+        return True
+    value = host.strip().lower()
+    if value.startswith("["):                       # [::1]:7777
+        name = value[1:].split("]", 1)[0]
+    else:
+        name = value.rsplit(":", 1)[0] if value.count(":") == 1 else value
+    return name in LOOPBACK
+
+
+def embed_origins(header: str | None) -> tuple[str, ...]:
+    """The header's origins, or the default. Anything that is not exactly an
+    origin is dropped: these land in the page and in postMessage's target."""
+    given = tuple(v for v in (header or "").split() if _ORIGIN.fullmatch(v))
+    return given or EMBED_ORIGINS
+
+
+# The theme of the page around the frame (waku-memory spec 040 T): waku.one
+# adds ?theme=light|dark to the embed address, the gateway carries it to
+# /embed/chat, and the page is served with data-theme already on <html>, so
+# its first paint is the console's and there is no light flash in a dark
+# console. Exactly these two values; anything else is no attribute at all.
+EMBED_THEMES = ("light", "dark")
+
+
+def embed_theme(query: str) -> str | None:
+    """The one `theme` in the request's query string, when it is light or dark."""
+    from urllib.parse import parse_qs
+
+    given = parse_qs(query).get("theme", [])
+    return given[0] if len(given) == 1 and given[0] in EMBED_THEMES else None
+
+
+def embed_page(header: str | None, theme: str | None = None) -> bytes:
+    page = (STATIC / "embed.html").read_text(encoding="utf-8")
+    attr = f' data-theme="{theme}"' if theme in EMBED_THEMES else ""
+    return (page.replace("@@EMBED_ORIGINS@@", html.escape(" ".join(embed_origins(header))))
+                .replace("<html@@THEME@@>", f"<html{attr}>")).encode("utf-8")
+
+
 # Content types for /static/. .woff2 is here because the dashboard serves its
 # own fonts (static/design/fonts.css) instead of fetching them.
 STATIC_TYPES = {".css": "text/css", ".js": "text/javascript", ".svg": "image/svg+xml",
@@ -909,9 +1425,65 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _send_json(self, status: int, payload: dict) -> None:
+        body = json.dumps(payload).encode()
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _foreign_host(self) -> bool:
+        """Refuse a request whose Host is not this machine (DNS rebinding).
+        True when it did, and the caller returns."""
+        if host_allowed(self.headers.get("Host")):
+            return False
+        body = json.dumps({"error": "this request used a name that is not this machine"}).encode()
+        self.send_response(403)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+        return True
+
     def do_GET(self):
+        if self._foreign_host():
+            return
         if self.path == "/api/data":
             self._send(json.dumps(collect(), default=str).encode(), "application/json")
+        elif self.path == "/api/session" or self.path.startswith("/api/session?"):
+            # The two reads of chat history, for the hosted front door
+            # (spec 007 D): ?action=list, and ?action=history&id=<session>.
+            # The writes (new, switch) stay POST-only.
+            from urllib.parse import parse_qs, urlparse
+
+            q = parse_qs(urlparse(self.path).query)
+            action = (q.get("action", [""])[0] or "").strip()
+            out = (session_action({"action": action, "id": q.get("id", [""])[0]})
+                   if action in ("list", "history", "state")
+                   else {"error": "GET /api/session reads only: action=list, history or state"})
+            self._send(json.dumps(out, default=str).encode(), "application/json")
+        elif self.path == "/api/observability" or self.path.startswith("/api/observability?"):
+            # Spec 012: the Observability page's turns, tools, memory, spend
+            # and evals, read from this home's traces and ledger only.
+            from urllib.parse import parse_qs, urlparse
+
+            window = parse_qs(urlparse(self.path).query).get("window", ["7d"])[0]
+            self._send(json.dumps(observability_data(window), default=str).encode(),
+                       "application/json")
+        elif self.path == "/api/waiting":
+            # Spec 024: what waits in this home, the lists `waku waiting` prints.
+            self._send(json.dumps(waiting_data()).encode(), "application/json")
+        elif self.path == "/api/connectors":
+            # Spec 025: the connected servers and the waiting sign-in.
+            self._send(json.dumps(connectors_data()).encode(), "application/json")
+        elif self.path == "/api/judgment-arena":
+            from waku.ops import judgment_arena, judgment_cases  # noqa: PLC0415
+            self._send(json.dumps({"suites": judgment_cases.suite_list(),
+                                   "contestants": judgment_arena.contestants(),
+                                   "runs": judgment_arena.load_runs()}).encode(),
+                       "application/json")
+            return
         elif self.path == "/api/compare/history":
             runs = compare_history.load_runs(load_settings().home)
             self._send(json.dumps(history_response(runs)).encode(), "application/json")
@@ -975,6 +1547,17 @@ class Handler(BaseHTTPRequestHandler):
 
             prov = parse_qs(urlparse(self.path).query).get("provider", [None])[0]
             self._send(json.dumps(list_models(prov)).encode(), "application/json")
+        elif self.path == "/api/alwayson/next":
+            # Spec 026: the hosted gateway asks this before it stops an idle
+            # container. The route exists only in a hosted container.
+            if not handover.enabled():
+                self._send_json(404, {})
+                return
+            conn = connect(load_settings().home)
+            try:
+                self._send_json(200, handover.next_work(conn))
+            finally:
+                conn.close()
         elif self.path.startswith("/api/events"):
             from urllib.parse import parse_qs, urlparse
 
@@ -986,6 +1569,12 @@ class Handler(BaseHTTPRequestHandler):
 
             rel = unquote(parse_qs(urlparse(self.path).query).get("path", [""])[0])
             self._send(json.dumps(reveal_path(rel)).encode(), "application/json")
+        elif self.path == "/embed/chat" or self.path.startswith("/embed/chat?"):
+            from urllib.parse import urlparse
+
+            self._send(embed_page(self.headers.get(EMBED_ORIGINS_HEADER),
+                                  embed_theme(urlparse(self.path).query)),
+                       "text/html; charset=utf-8", no_cache=True)
         elif self.path.startswith("/static/"):
             self._serve_static(self.path)
         else:
@@ -1002,6 +1591,16 @@ class Handler(BaseHTTPRequestHandler):
         self._send(target.read_bytes(), ctype, no_cache=True)
 
     def do_POST(self):
+        if self._foreign_host():
+            return
+        if not same_origin(self.headers.get("Origin"), self.headers.get("Host")):
+            body = json.dumps({"error": "this request came from another site"}).encode()
+            self.send_response(403)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
         length = int(self.headers.get("Content-Length", 0))
         # /api/voice takes a raw audio blob, not JSON — handle it first.
         if self.path == "/api/voice":
@@ -1009,6 +1608,24 @@ class Handler(BaseHTTPRequestHandler):
             self._send(json.dumps(transcribe_audio(raw)).encode(), "application/json")
             return
         # /api/chat/stream streams harness events (SSE) as the turn runs.
+        if self.path == "/api/events":
+            # Spec 026: the hosted gateway hands over the events it kept while
+            # this container was stopped. GET /api/events is the page's own
+            # feed and has nothing to do with this.
+            if not handover.enabled():
+                self._send_json(404, {})
+                return
+            try:
+                payload = json.loads(self.rfile.read(length) or "{}")
+            except ValueError:
+                self._send_json(400, {"error": "the body is not JSON"})
+                return
+            conn = connect(load_settings().home)
+            try:
+                self._send_json(*handover.accept(conn, payload))
+            finally:
+                conn.close()
+            return
         if self.path == "/api/chat/stream":
             payload = json.loads(self.rfile.read(length) or "{}")
             message = (payload.get("message") or "").strip()
@@ -1030,7 +1647,7 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 chat_stream(message, emit)
             except Exception as exc:  # surface as a terminal event, don't 500
-                emit("done", {"error": f"{type(exc).__name__}: {exc}"})
+                emit("done", {"error": error_text(exc)})
             return
         # /api/compare/stream races several models, emitting each result as it lands.
         if self.path == "/api/compare/stream":
@@ -1052,6 +1669,37 @@ class Handler(BaseHTTPRequestHandler):
                                judge_spec=(payload.get("judge_model") or ""), apple=bool(payload.get("apple")))
             except Exception as exc:
                 emit("done", {"error": f"{type(exc).__name__}: {exc}"})
+            return
+        if self.path == "/api/judgment-arena/key":
+            from waku.ops import judgment_arena
+
+            payload = json.loads(self.rfile.read(length) or "{}")
+            out = judgment_arena.save_key(payload.get("key", ""))
+            self._send(json.dumps(out).encode(), "application/json")
+            return
+        # /api/judgment-arena/stream — the third race: same harness, same cases,
+        # same policy, and only WHO makes the judgment changes.
+        if self.path == "/api/judgment-arena/stream":
+            from waku.ops import judgment_arena
+
+            payload = json.loads(self.rfile.read(length) or "{}")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-cache")
+            self.end_headers()
+
+            def emit_judge(kind, ev):
+                try:
+                    self.wfile.write(
+                        f"data: {json.dumps({'kind': kind, **ev}, default=str)}\n\n".encode())
+                    self.wfile.flush()
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
+            try:
+                judgment_arena.race((payload.get("suite") or "").strip(),
+                                    payload.get("specs") or [], emit_judge)
+            except Exception as exc:
+                emit_judge("done", {"error": f"{type(exc).__name__}: {exc}"})
             return
         # /api/memory-arena/stream — same shape as the model race above, one dial
         # over: every contestant is the same agent on the same model, and only
@@ -1130,7 +1778,12 @@ class Handler(BaseHTTPRequestHandler):
                   "/api/connections": None, "/api/connections/test": None,
                   "/api/providers": None,
                   "/api/compare/clear": compare_clear,
-                  "/api/compare/regrade": compare_regrade, "/api/compare/delete_run": compare_delete_run}
+                  "/api/compare/regrade": compare_regrade, "/api/compare/delete_run": compare_delete_run,
+                  "/api/turn-evals/judge": judge_turn,
+                  "/api/waiting/cancel": waiting_cancel,
+                  "/api/connectors/add": connectors_add,
+                  "/api/connectors/remove": connectors_remove,
+                  "/api/connectors/approve": connectors_approve}
         if self.path not in routes:
             self.send_response(404)
             self.end_headers()
@@ -1166,13 +1819,39 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
 
+LOOPBACK = {"127.0.0.1", "::1", "localhost"}
+
+
+def bind_host() -> str:
+    """Where the dashboard listens. Loopback unless told otherwise.
+
+    A container has to answer on its own address, so this is configurable —
+    but the dashboard has no authentication and its SQL console runs
+    arbitrary SQL, so leaving loopback prints a warning to the terminal that
+    chose it.
+    """
+    host = os.getenv("WAKU_DASHBOARD_HOST", "127.0.0.1").strip() or "127.0.0.1"
+    if host not in LOOPBACK:
+        print(f"warning: WAKU_DASHBOARD_HOST={host} — the dashboard has no "
+              f"authentication and its SQL console runs arbitrary SQL. "
+              f"Only do this behind something that authenticates.")
+    return host
+
+
 def main() -> None:
     # Port precedence: WAKU_DASHBOARD_PORT, then the conventional PORT (used by
     # deploy platforms and IDE preview panes), then 7777. If it's taken, walk on.
     base = int(os.getenv("WAKU_DASHBOARD_PORT") or os.getenv("PORT") or PORT)
+    # Resolved once, above the walk: the environment cannot change between
+    # iterations, and bind_host() prints the off-loopback security warning. Ten
+    # busy ports used to print it ten times, which teaches people to skip it.
+    host = bind_host()
+    from waku.config import home_notice
+    if notice := home_notice():
+        print(notice)
     for port in range(base, base + 10):  # walk past a busy port instead of crashing
         try:
-            server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+            server = ThreadingHTTPServer((host, port), Handler)
         except OSError:
             print(f"port {port} busy, trying {port + 1}…")
             continue
@@ -1196,10 +1875,16 @@ def main() -> None:
         register_gateway_status_provider(supervisor.status)
         register_gateway_reloader(supervisor.reconcile)
         supervisor.reconcile()
+        # Spec 026: a hosted container runs the always-on worker, timer loop
+        # and dispatcher in this process. None on a person's own machine,
+        # where `waku serve` is its own command.
+        alwayson = handover.start(load_settings())
         print(f"Waku dashboard → http://localhost:{port}  (Ctrl-C to stop)")
         try:
             server.serve_forever()
         finally:
+            if alwayson is not None:
+                alwayson.stop()
             supervisor.shutdown()
         return
     raise SystemExit(f"no free port in {base}–{base + 9}")

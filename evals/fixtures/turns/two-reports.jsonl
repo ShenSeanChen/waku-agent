@@ -1,0 +1,5 @@
+{"type": "turn_start", "turn_id": "t_2a7c9e0b1d3f4a58", "user_message": "research the competitors of Letta", "ts": "2026-10-05T14:02:30.000+00:00"}
+{"type": "llm", "provider": "waku-platform", "model": "claude-sonnet-5", "iteration": 1, "stop_reason": "end_turn", "usage": {"in": 9000, "out": 600}, "turn_id": "t_2a7c9e0b1d3f4a58", "cost_usd": 0.036, "span": "llm", "gen_ai.operation.name": "chat", "ts": "2026-10-05T14:02:38.000+00:00"}
+{"type": "report", "turn_id": "t_2a7c9e0b1d3f4a58", "memory_id": "mem_a1", "title": "Letta competitors", "ts": "2026-10-05T14:02:39.000+00:00"}
+{"type": "report", "turn_id": "t_2a7c9e0b1d3f4a58", "memory_id": "mem_a2", "title": "Letta competitors (2)", "ts": "2026-10-05T14:02:40.000+00:00"}
+{"type": "turn_end", "turn_id": "t_2a7c9e0b1d3f4a58", "iterations": 1, "ts": "2026-10-05T14:02:41.000+00:00", "reply": "Letta competes with Mem0 and Zep.\n\n<!-- waku-report v1 -->\n# Letta competitors\n"}
