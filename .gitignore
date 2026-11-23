@@ -29,3 +29,26 @@ credentials.json
 client_secret*.json
 *token*.json
 .gcp/
+
+# Disposable design mockups: propose, decide, implement, delete.
+docs/proposals/*.html
+
+# DeepEval writes a telemetry file here on every run
+.deepeval/
+
+# built by lab/one-memory-every-agent/build_grok_plugin.py
+lab/one-memory-every-agent/grok-plugin/
+
+# board sources for videos stay private (conventions §6); commit PNG screenshots
+lab/**/*.excalidraw
+!lab/kimi-k3/**/*.excalidraw
+!lab/pi-agent/**/*.excalidraw
+
+# evals/hosted_docker/test_image.py plants waku/_c1_context_probe/ inside an
+# admitted build-context tree to prove the ignore files keep secrets out of the
+# image. Its files are NAMED like real secrets -- deploy.pem, deploy.key,
+# id_rsa, .aws/credentials -- and the fixture deletes them in a finally. This
+# line covers the run that is killed before the finally: without it, the next
+# `git add -A` stages two files called deploy.pem and deploy.key into a public
+# repository, and nobody reads that diff twice.
+waku/_c1_context_probe/

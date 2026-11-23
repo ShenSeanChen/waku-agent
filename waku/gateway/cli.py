@@ -49,10 +49,16 @@ def _observer(kind: str, event: dict) -> None:
     elif kind == "gate":
         console.print(f"  [dim]gate · {event['decision']} — {event.get('reason','')}[/dim]")
     elif kind == "consolidation":
-        console.print(f"  [dim]memory · consolidated {event['new_facts']} fact(s) from recent chats[/dim]")
+        missed = sum(1 for k in event.get("kept") or [] if k.get("sent") is False)
+        note = f"; Waku Memory did not answer, {missed} kept here only" if missed else ""
+        console.print(f"  [dim]memory · consolidated {event['new_facts']} fact(s) from recent chats{note}[/dim]")
 
 
 def main() -> None:
+    from waku.config import load_settings
+    from waku.memory_choice import maybe_ask
+
+    maybe_ask(load_settings())   # spec 020: asked once, only in a terminal
     waku = Waku()
     waku.session.session_id = "terminal"   # its own conversation thread in the inbox
     console.print(Panel.fit(
@@ -61,6 +67,9 @@ def main() -> None:
         "Commands: /memory · /quit",
         border_style="cyan",
     ))
+    from waku.config import home_notice
+    if notice := home_notice():
+        console.print(f"[yellow]{notice}[/yellow]", markup=True)
     while True:
         try:
             user_message = console.input("[bold cyan]you ›[/bold cyan] ").strip()
@@ -81,6 +90,7 @@ def main() -> None:
             continue
         result = waku.respond(user_message, observer=_observer, source="cli")
         console.print(f"[bold green]waku ›[/bold green] {result.reply}\n")
+    waku.close()   # spec 021: lets the last turn's Stop hook finish
     console.print("[dim]bye — your memory stays in state.db[/dim]")
 
 

@@ -10,13 +10,45 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The lockfile check below diffs against the base branch, which is
+          # not fetched by the default shallow clone.
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      # A lockfile refresh is thousands of lines nobody reads, so it hides
+      # inside any PR it rides along with — and an unreviewed lockfile is how a
+      # dependency arrives that nobody chose. If the dependencies really
+      # changed, pyproject.toml says so; if they did not, the lock does not
+      # belong beside other work.
+      #
+      # A refresh on its own IS allowed, because that is the shape where the
+      # lock is the diff rather than the noise around it. This check used to
+      # refuse it — it demanded a pyproject.toml change even from a PR that
+      # touched nothing else, so the one shape the comment invited was the one
+      # shape it rejected. Hiding is what makes a lock change unreviewable, and
+      # a PR carrying only the lock hides nothing.
+      - name: uv.lock rides alone or alongside pyproject.toml
+        if: github.event_name == 'pull_request'
+        run: |
+          base="origin/${{ github.base_ref }}"
+          changed=$(git diff --name-only "$base"...HEAD)
+          others=$(grep -vx 'uv.lock' <<<"$changed" | grep -c . || true)
+          if grep -qx 'uv.lock' <<<"$changed" \
+             && ! grep -qx 'pyproject.toml' <<<"$changed" \
+             && [ "$others" -gt 0 ]; then
+            echo "::error::uv.lock changed beside $others other file(s), but pyproject.toml did not."
+            echo "If you did not mean to change dependencies:  git checkout $base -- uv.lock"
+            echo "If you did, say so in pyproject.toml."
+            echo "If this is a deliberate refresh, send it as a PR that changes only uv.lock."
+            exit 1
+          fi
+
       - name: Install
-        run: pip install -e '.[dev]'
+        run: pip install -e '.[dev,hosted]'
       - name: Lint (ruff)
-        run: python -m ruff check waku evals scripts
+        run: python -m ruff check waku evals scripts hosted
       - name: Validate skills (community PRs land here)
         run: python scripts/validate_skills.py
       # .env.example's Connections block is GENERATED from waku/integrations.py.
@@ -26,4 +58,9 @@ jobs:
       - name: .env.example matches the integrations registry
         run: python scripts/generate_env_example.py --check
       - name: Deterministic evals (offline tier — no API key in CI)
-        run: python -m pytest -q evals/deterministic
+        run: python -m pytest -q evals/deterministic --junitxml=/tmp/deterministic.xml
+      # The counts, as a notice on this job's check run. hosted/deploy/
+      # autodeploy.sh reads it back for the commit it deploys, and the hosted
+      # Evals page shows it. The AI judge is not here: it needs an API key.
+      - name: Report the deterministic counts
+        run: python scripts/ci_test_counts.py "Deterministic evals" /tmp/deterministic.xml

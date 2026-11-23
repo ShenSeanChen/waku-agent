@@ -1,0 +1,15 @@
+/* The three faces Waku Memory uses, served from this package. Nothing is
+   fetched. tokens.css reads the faces from --font-instrument-sans,
+   --font-jetbrains-mono and --font-playfair-sc; in the console next/font sets
+   them, and here this file does. */
+@font-face{font-family:"Instrument Sans";font-style:normal;font-weight:400 700;font-display:swap;
+  src:url(../fonts/InstrumentSans-var.woff2) format("woff2")}
+@font-face{font-family:"JetBrains Mono";font-style:normal;font-weight:100 800;font-display:swap;
+  src:url(../fonts/JetBrainsMono-var.woff2) format("woff2")}
+@font-face{font-family:"Playfair Display SC";font-style:normal;font-weight:400;font-display:swap;
+  src:url(../fonts/PlayfairDisplaySC-400.woff2) format("woff2")}
+:root{
+  --font-instrument-sans:"Instrument Sans";
+  --font-jetbrains-mono:"JetBrains Mono";
+  --font-playfair-sc:"Playfair Display SC";
+}

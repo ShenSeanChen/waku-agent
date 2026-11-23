@@ -1,0 +1,335 @@
+"""Waku Memory: one memory shared by every agent you use.
+
+The Waku agent's own memory is local. Waku Memory is a hosted MCP server at
+https://api.waku.one/mcp. Claude Code, Codex, Grok Bot and this agent can all
+connect to it, so a fact saved in one can be recalled in another. Waku also
+writes each of its facts to <home>/memory/<id>.md, one file per fact, which
+is the shape the Waku Memory importer reads.
+
+Spec 006: once the server is connected, remember_via() gives consolidation a
+callable that sends each fact it keeps with memory.remember. Spec 007 sends a
+turn's research report through the same callable, and spec 018 sends the fact `save_note`
+saves the same way. They go to the server the person connected, with their
+sign-in. Spec 009: search_via() gives a research turn one read of
+memory.search before the model starts, so research begins from what the
+person's brain already holds.
+
+Spec 021: the Waku plugin (`waku plugin install waku@waku-memory`) brings the
+same server, named `waku_memory`, and three hooks. Under
+WAKU_MEMORY_MODE=plugin the plugin's Stop hook sends each turn and the server
+extracts the memories, so consolidation sends none of a captured turn's
+facts. It does send a batch's facts when Waku Memory's capture was paused
+for a turn in it, and it sends again any fact an earlier send failed on
+(spec 021 amendment E2). The report and `save_note` still send. The server is found in the bridge's merged list, so
+a plugin's server and an mcp.json entry are found the same way.
+
+With WAKU_MEMORY_SPACE set to a team space's id, every one of those sends
+names that space, so the memory belongs to the team and not to the agent.
+
+`waku connect waku-memory` (or `/connect waku-memory` in the dashboard chat)
+connects without the plugin: it adds the server to WAKU_HOME/mcp.json next to
+any servers already there, then signs you in once in your browser. Its tools
+then load like any MCP server's, named `waku_memory_*`.
+"""
+
+from __future__ import annotations
+
+import importlib.util
+import json
+import os
+from pathlib import Path
+
+NAME = "waku_memory"
+URL = "https://api.waku.one/mcp"
+DOCS = "https://www.waku.one/docs"
+# The host Waku Memory answered on before 2026-08-29. It now refuses clients,
+# and the README showed it until 2026-09-14, so a config copied from that
+# README is moved to the current address instead of failing like an outage.
+RETIRED_HOSTS = ("d1o2fv4416yi84.cloudfront.net",)
+
+
+def is_waku_memory(spec: dict) -> bool:
+    """Whether an mcp.json entry is Waku Memory: named waku_memory, or at URL
+    under any name."""
+    return isinstance(spec, dict) and (
+        spec.get("name") == NAME or str(spec.get("url", "")).rstrip("/") == URL)
+
+
+def consolidation_every(settings, connected: bool) -> int:
+    """How many exchanges pass between consolidations. A person who chose
+    Waku Memory and has it connected gets one per turn, as a hosted container
+    does, so a short chat reaches Waku Memory before it ends (spec 020).
+    WAKU_CONSOLIDATE_EVERY, when set, always wins."""
+    if "WAKU_CONSOLIDATE_EVERY" in os.environ:
+        return settings.consolidate_every
+    if connected and settings.memory_mode == "agent":
+        return 1
+    return settings.consolidate_every
+
+
+def _server(bridge) -> str | None:
+    """The connected Waku Memory server's name, or None. It is the one named
+    waku_memory or the one at URL; a person may have added it by hand under
+    another name."""
+    if bridge is None:
+        return None
+    # Spec 021: the bridge's merged list, so a server a plugin brought is
+    # found as readily as one mcp.json names.
+    servers = getattr(bridge, "servers", None)
+    if not servers:
+        try:
+            servers = json.loads(bridge.config_path.read_text(encoding="utf-8")).get("servers", [])
+        except (OSError, ValueError, AttributeError):
+            return None
+    # A plugin's server counts only at Waku Memory's address: a plugin that
+    # calls a server waku_memory somewhere else must never receive a person's
+    # facts (spec 021 review). The person's own mcp.json entry may still name
+    # waku_memory at another address on purpose, a self-hosted one or a test.
+    names = [s.get("name") for s in servers if isinstance(s, dict)
+             and (str(s.get("url", "")).rstrip("/") == URL
+                  or (s.get("name") == NAME and not s.get("plugin")))]
+    return next((n for n in names if n and bridge.connected(n)), None)
+
+
+CREDIT_LIMIT_CODE = "credit_limit_reached"
+# The id of the team space this agent saves into, or unset for a person's own
+# agent. Not a secret and not a setting a person chooses: whoever runs the
+# agent for a team sets it beside that team's agent's WAKU_MEMORY_API_KEY.
+SPACE_ENV = "WAKU_MEMORY_SPACE"
+
+
+class CreditsUsedUp(RuntimeError):
+    """Waku Memory refused memory.remember because a Free account has spent its
+    monthly credits (the server's `credit_limit_reached`). A subclass of
+    RuntimeError, so every caller that handles a failed send still does; only
+    save_note tells this one apart, to say when the fact will be sent (spec 022)."""
+
+
+def remember_via(bridge):
+    """A remember(body, scope, kind=None) for consolidation and for research
+    reports, or None if Waku Memory is not connected. It returns the new memory's id and raises when the send
+    failed: the bridge reports a failure as text, which is not this JSON.
+    """
+    server = _server(bridge)
+    if server is None:
+        return None
+
+    def remember(body: str, scope: str, kind: str | None = None) -> str | None:
+        # A company-research finding is knowledge about the world, which
+        # waku.one files under Knowledge only for the kinds semantic, decision
+        # and reference; `fact` shows as Activity, "what a session observed".
+        # A research report (spec 007) names its own kind, `semantic`.
+        if kind is None:
+            kind = "reference" if scope.startswith("project:") else "fact"
+        args = {"body": body, "kind": kind, "scope": scope}
+        # An agent that belongs to a team space saves into that space. Waku
+        # Memory takes `space` only from the space's own agent; without it a
+        # save made with the agent's key is the agent's own memory, which no
+        # member of the team reads. Read on each save, so it follows the
+        # environment the process has now.
+        space = os.getenv(SPACE_ENV, "").strip()
+        if space:
+            args["space"] = space
+        text = bridge.call(server, "memory.remember", args)
+        try:
+            return json.loads(text)["memory"]["id"]
+        except (ValueError, KeyError, TypeError):
+            if CREDIT_LIMIT_CODE in text:
+                raise CreditsUsedUp(text[:200]) from None
+            raise RuntimeError(text[:200]) from None
+
+    return remember
+
+
+def search_via(bridge):
+    """A search(args) for a research turn's read-first step (spec 009 A), or
+    None if Waku Memory is not connected. `args` are memory.search's own
+    (query, kind, scope, limit). It returns the server's answer as text, the
+    same text the model would see from waku_memory_memory_search, and raises
+    when that is not memory.search's JSON: the bridge reports a failure as text.
+    """
+    server = _server(bridge)
+    if server is None:
+        return None
+
+    def search(args: dict) -> str:
+        text = bridge.call(server, "memory.search", args)
+        try:
+            found = isinstance(json.loads(text)["entries"], list)
+        except (ValueError, KeyError, TypeError):
+            found = False
+        if not found:
+            raise RuntimeError(text[:200])
+        return text
+
+    return search
+
+
+def get_via(bridge):
+    """A get(memory_id) for the read-first step's earlier reports (spec 009 A),
+    or None if Waku Memory is not connected. It returns memory.get's answer as
+    text and raises when that is not a memory: the bridge reports a failure
+    as text."""
+    server = _server(bridge)
+    if server is None:
+        return None
+
+    def get(memory_id: str) -> str:
+        text = bridge.call(server, "memory.get", {"id": memory_id})
+        try:
+            found = isinstance(json.loads(text), dict)
+        except ValueError:
+            found = False
+        if not found:
+            raise RuntimeError(text[:200])
+        return text
+
+    return get
+
+
+def captured_by(plugin) -> bool:
+    """Whether a plugin's Stop hook calls one of its servers at Waku Memory's
+    address (spec 021). Only then does the server extract this agent's turns,
+    and only then may the agent stop sending what consolidation keeps."""
+    urls = {s["name"]: str(s.get("url", "")).rstrip("/") for s in plugin.servers}
+    for hook in plugin.hooks.get("Stop", []):
+        server = str(hook.get("server", ""))
+        if server.startswith("plugin:"):
+            server = server.split(":", 2)[-1]
+        if hook.get("type") == "mcp_tool" and urls.get(server) == URL:
+            return True
+    return False
+
+
+def tool_name(bridge, tool: str) -> str | None:
+    """The name the model calls one of Waku Memory's tools by, such as
+    waku_memory_memory_remember, or None if Waku Memory is not connected."""
+    server = _server(bridge)
+    if server is None:
+        return None
+    from waku.tools.mcp_client import _model_safe_name
+
+    return _model_safe_name(server, tool)
+
+
+def _has_mcp() -> bool:
+    return importlib.util.find_spec("mcp") is not None
+
+
+def add_server(home: Path) -> tuple[str, dict]:
+    """Make sure mcp.json names Waku Memory, and say what that took.
+
+    Returns (status, server spec). Status is "added", "present", "moved"
+    (a retired address was updated) or "conflict" (a server named
+    waku_memory points somewhere else on purpose, so it is left alone).
+    """
+    config = home / "mcp.json"
+    data = json.loads(config.read_text(encoding="utf-8")) if config.exists() else {}
+    servers = data.setdefault("servers", [])
+
+    for spec in servers:
+        if spec.get("url", "").rstrip("/") == URL:
+            return "present", spec
+    for spec in servers:
+        if spec.get("name") != NAME:
+            continue
+        if any(host in spec.get("url", "") for host in RETIRED_HOSTS):
+            spec["url"] = URL
+            config.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+            return "moved", spec
+        return "conflict", spec
+
+    spec = {"name": NAME, "url": URL, "oauth": True}
+    servers.append(spec)
+    home.mkdir(parents=True, exist_ok=True)
+    config.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    return "added", spec
+
+
+def status(home: Path) -> str:
+    """One line for `waku connections`: is Waku Memory connected, and as whom.
+    It reads files only, so listing connections never opens a browser."""
+    config = home / "mcp.json"
+    try:
+        servers = json.loads(config.read_text(encoding="utf-8")).get("servers", []) if config.exists() else []
+    except json.JSONDecodeError:
+        return f"not connected · {config} is not valid JSON"
+    # Spec 021: a server the Waku plugin brought counts the same as one in
+    # mcp.json. Reading the plugin files connects nothing.
+    from waku.plugins import store
+
+    own = len(servers)
+    servers = [*servers, *store.servers(home)]
+    found = next((i for i, s in enumerate(servers) if s.get("url", "").rstrip("/") == URL), None)
+    spec = servers[found] if found is not None else None
+    if spec is None:
+        return "not connected · run: waku connect waku-memory"
+    if spec.get("auth_env"):
+        return f"configured · API key in ${spec['auth_env']}"
+    if not _has_mcp():
+        return "configured · the mcp package is missing: reinstall waku-agent"
+
+    from waku.tools.mcp_cli import _auth_file, _identity
+
+    token = _auth_file(home, spec["name"])
+    if not token.exists():
+        # A server the plugin brought signs in with `waku mcp login`. Running
+        # `waku connect waku-memory` there would add a second entry to
+        # mcp.json and undo the move to the plugin (spec 021 D3).
+        if found >= own:
+            return f"configured · not signed in: run waku mcp login {spec['name']}"
+        return "configured · not signed in: run waku connect waku-memory"
+    return f"connected · {_identity(token)}"
+
+
+def connect(home: Path) -> str:
+    message = _connect(home)
+    _record_choice(home)
+    return message
+
+
+def _record_choice(home: Path) -> None:
+    """A person who runs `waku connect waku-memory` and ends up connected has
+    chosen Waku Memory, so the first-run question is not asked later. A mode
+    already chosen, hosted's included, is left as it is."""
+    if os.getenv("WAKU_MEMORY_MODE", "").strip():
+        return
+    if status(home).startswith(("connected", "configured · API key")):
+        from waku.memory_choice import save
+
+        save("agent")
+
+
+def _connect(home: Path) -> str:
+    if not _has_mcp():
+        return ("Waku Memory connects over MCP, which needs an extra: "
+                "pip install 'waku-agent[mcp]' (in a checkout: pip install -e '.[mcp]'). "
+                "Then run this again.")
+
+    status, spec = add_server(home)
+    name, config = spec["name"], home / "mcp.json"
+    if status == "conflict":
+        return (f"'{name}' in {config} already points at {spec.get('url')}, not {URL}. "
+                "Change it there if you meant the hosted Waku Memory.")
+
+    done = {"added": f"Added Waku Memory to {config}. ",
+            "moved": f"Moved '{name}' to {URL}; the old address refuses clients. ",
+            "present": ""}[status]
+    elsewhere = f"To use the same memory in Claude Code, Codex or Grok Bot: {DOCS}"
+
+    if spec.get("auth_env"):
+        return (f"{done}Waku Memory is set up as '{name}', using the API key in "
+                f"${spec['auth_env']}. Restart Waku to load its tools. {elsewhere}")
+
+    from waku.tools.mcp_cli import _auth_file, _identity, sign_in
+
+    token = _auth_file(home, name)
+    if token.exists() and status == "present":
+        return (f"Waku Memory is already connected as {_identity(token)}. "
+                f"To switch accounts: waku mcp login {name}. {elsewhere}")
+
+    ok, message = sign_in(home, name)
+    if not ok:
+        return f"{done}{message.strip()} Help: {DOCS}"
+    return (f"{done}Connected to Waku Memory as {_identity(token)}. "
+            f"Restart Waku to load its tools (waku_memory_*). {elsewhere}")

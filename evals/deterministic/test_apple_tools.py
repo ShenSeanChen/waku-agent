@@ -59,7 +59,7 @@ def _code_lines(module) -> list[str]:
 def test_probe_apple_tools_checks_all_apps_without_touching_user_data(monkeypatch):
     calls = []
 
-    def osa(script, timeout):
+    def osa(script, timeout, **_):
         calls.append((script, timeout))
         return True, "1.0"
 
@@ -81,7 +81,7 @@ def test_probe_apple_tools_aggregates_failures_and_checks_every_app(monkeypatch)
     ])
     calls = []
 
-    def osa(script, timeout):
+    def osa(script, timeout, **_):
         calls.append((script, timeout))
         return next(responses)
 
@@ -107,7 +107,7 @@ def test_probe_apple_tools_aggregates_failures_and_checks_every_app(monkeypatch)
     ],
 )
 def test_probe_apple_tools_names_the_app_for_transport_failures(monkeypatch, detail):
-    def osa(script, timeout):
+    def osa(script, timeout, **_):
         if 'application "Mail"' in script:
             return False, detail
         return True, "1.0"
@@ -197,7 +197,7 @@ def test_create_note_success_and_failure_paths(monkeypatch):
     """create_note must report success/failure from _osa without real Notes.app."""
     calls: list[tuple[str, float | None]] = []
 
-    def fake_osa(script: str, timeout: float | None = None):
+    def fake_osa(script: str, timeout: float | None = None, **_):
         calls.append((script, timeout))
         return True, "ok"
 
@@ -206,7 +206,7 @@ def test_create_note_success_and_failure_paths(monkeypatch):
     assert "Notes" in calls[-1][0]
     assert calls[-1][1] is not None
     # force failure path
-    def bad_osa(script: str, timeout: float | None = None):
+    def bad_osa(script: str, timeout: float | None = None, **_):
         return False, "denied"
     monkeypatch.setattr(apple, "_osa", bad_osa)
     assert apple.create_note("x").startswith("Note failed:")
@@ -215,7 +215,7 @@ def test_create_note_success_and_failure_paths(monkeypatch):
 def test_create_reminder_includes_due_when_set(monkeypatch):
     captured: dict[str, str] = {}
 
-    def fake_osa(script: str, timeout: float | None = None):
+    def fake_osa(script: str, timeout: float | None = None, **_):
         captured["script"] = script
         return True, "ok"
 
@@ -227,7 +227,7 @@ def test_create_reminder_includes_due_when_set(monkeypatch):
 
 
 def test_read_apple_mail_uses_bounded_osa_and_formats_failure(monkeypatch):
-    def fake_osa(script: str, timeout: float | None = None):
+    def fake_osa(script: str, timeout: float | None = None, **_):
         assert timeout == 20
         assert "Mail" in script
         return False, "timeout"

@@ -15,7 +15,7 @@ that Waku's view flattens away, and how to clean up after a benchmark run.
 | Zep | [app.getzep.com](https://app.getzep.com) → your project → Graph | the entity/edge graph and validity intervals |
 | LangMem | **none — it is a library, not a service** | nothing; there is no server to look at |
 | Supabase | your project → Table editor → the vector table | raw rows and embeddings |
-| sqlite | Waku's own **Memory** page, or `.waku/state.db` | nothing — this one is fully visible already |
+| sqlite | Waku's own **Memory** page, or `~/.waku/state.db` | nothing — this one is fully visible already |
 
 ---
 
@@ -108,7 +108,7 @@ hosted options: what you see is what the adapter wrote.
 ## After a benchmark run: cleaning up
 
 **Arena contestants run in throwaway homes**, so a race never touches
-`.waku/state.db`. But the *hosted* backends have no such isolation — Mem0 and Zep
+`~/.waku/state.db`. But the *hosted* backends have no such isolation — Mem0 and Zep
 write to your real account under user `waku`, and those memories persist after
 the run.
 
