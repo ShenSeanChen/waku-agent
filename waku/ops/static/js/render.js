@@ -524,6 +524,8 @@ function wireComposer(){
   // Enter sends; Shift+Enter is a real newline now that this is a textarea.
   // preventDefault stops the sending keystroke also inserting that newline.
   if (i) i.onkeydown = e => {
+    // Some browsers clear isComposing before the IME's final keydown (229).
+    if (e.isComposing || e.keyCode === 229) return;
     if (e.key === "Enter" && !e.shiftKey){ e.preventDefault(); sendChat(i); }
   };
   if (i) i.oninput = () => autogrow(i);
