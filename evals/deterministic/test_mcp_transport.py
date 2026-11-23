@@ -318,7 +318,7 @@ def test_a_pending_sign_in_is_waited_for_longer_than_it_takes():
         encoding="utf-8",
     )
     bridge = MCPBridge(config)
-    servers = json.loads(config.read_text())["servers"]
+    servers = json.loads(config.read_text(encoding="utf-8"))["servers"]
     assert bridge._deadline(servers) > SIGN_IN_TIMEOUT, "would abandon a sign-in still in progress"
 
 

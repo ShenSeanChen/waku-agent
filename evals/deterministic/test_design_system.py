@@ -20,15 +20,15 @@ COPIED = ("tokens.css", "controls.css")
 
 
 def _style() -> str:
-    return (STATIC / "style.css").read_text()
+    return (STATIC / "style.css").read_text(encoding="utf-8")
 
 
 def _index() -> str:
-    return (STATIC / "index.html").read_text()
+    return (STATIC / "index.html").read_text(encoding="utf-8")
 
 
 def _js() -> dict[str, str]:
-    return {f.name: f.read_text() for f in sorted((STATIC / "js").glob("*.js"))}
+    return {f.name: f.read_text(encoding="utf-8") for f in sorted((STATIC / "js").glob("*.js"))}
 
 
 def _blocks(css: str) -> list[tuple[str, str]]:
@@ -68,7 +68,7 @@ def _is_svg_text(selector: str) -> bool:
 def test_copied_files_match_source():
     """A hand edit to a copied file fails here. Change it in Waku Memory, then
     run scripts/sync_design.py."""
-    source = (DESIGN / "SOURCE.md").read_text()
+    source = (DESIGN / "SOURCE.md").read_text(encoding="utf-8")
     recorded = {name: digest for digest, name in re.findall(r"^([0-9a-f]{64})  (\S+)$", source, re.MULTILINE)}
     assert set(recorded) == set(COPIED)
     for name in COPIED:
@@ -77,7 +77,7 @@ def test_copied_files_match_source():
 
 
 def test_fonts_are_local():
-    css = (DESIGN / "fonts.css").read_text()
+    css = (DESIGN / "fonts.css").read_text(encoding="utf-8")
     assert "http" not in css, "fonts.css must not fetch anything"
     urls = re.findall(r"url\(([^)]+)\)", css)
     assert len(urls) == 3
@@ -111,9 +111,9 @@ def test_sync_design_copies_and_records(tmp_path, monkeypatch):
     monkeypatch.setattr(mod, "DEST", dest)
 
     assert mod.main(["sync_design.py", str(src)]) == 0
-    source = (dest / "SOURCE.md").read_text()
+    source = (dest / "SOURCE.md").read_text(encoding="utf-8")
     for name in COPIED:
-        assert (dest / name).read_text() == f"/* {name} */\n"
+        assert (dest / name).read_text(encoding="utf-8") == f"/* {name} */\n"
         assert f"{hashlib.sha256((dest / name).read_bytes()).hexdigest()}  {name}" in source
 
 
@@ -298,7 +298,7 @@ def test_line_heights_use_tokens():
     allowed = {"1", "var(--leading-tight)", "var(--leading-snug)", "var(--leading-normal)"}
     found = [(f, s, v) for f, s, p, v in _declarations() if p == "line-height" and v not in allowed]
     assert not found, f"line-height must be a --leading-* token: {found[:10]}"
-    assert re.search(r"--leading-normal:\s*1\.55;", (DESIGN / "type.css").read_text())
+    assert re.search(r"--leading-normal:\s*1\.55;", (DESIGN / "type.css").read_text(encoding="utf-8"))
 
 
 def test_primitives_are_defined_and_load_first():

@@ -37,7 +37,7 @@ def _yes(shown):
 def test_installing_the_plugin_saves_plugin_and_removing_it_goes_back(home):
     reply = cli.run(["install", "waku@waku-memory"], home, _yes)
     assert "extracts each turn from the plugin's Stop hook" in reply
-    assert os.environ["WAKU_MEMORY_MODE"] == "plugin" and "plugin" in (home / ".env").read_text()
+    assert os.environ["WAKU_MEMORY_MODE"] == "plugin" and "plugin" in (home / ".env").read_text(encoding="utf-8")
 
     # no mcp.json entry to fall back to: the mode stays, and the reply says so
     reply = cli.run(["disable", "waku"], home, _yes)

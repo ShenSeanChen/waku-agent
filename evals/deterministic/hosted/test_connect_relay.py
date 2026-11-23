@@ -198,7 +198,7 @@ def test_the_agents_mcp_client_reads_notion_through_the_proxy(
                 bridge.call, "notion", "notion-search", {"query": "roadmap"})
         finally:
             await asyncio.to_thread(bridge.close)
-        return tools, answer, (tmp_path / "home" / "mcp.json").read_text()
+        return tools, answer, (tmp_path / "home" / "mcp.json").read_text(encoding="utf-8")
 
     tools, answer, config = _run(tmp_path, sock_dir, body, notion=notion)
     assert [tool.name for tool in tools] == ["notion_notion-search",

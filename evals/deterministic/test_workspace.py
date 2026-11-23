@@ -61,6 +61,6 @@ def test_manifest_documents_the_run(tmp_path, monkeypatch):
     files = ws.created_files(folder)
     run = ws.autorun(folder)
     ws.write_manifest(folder, "kimi", "kimi-k3", "make a game", files, run)
-    text = (folder / "MANIFEST.md").read_text()
+    text = (folder / "MANIFEST.md").read_text(encoding="utf-8")
     assert "kimi:kimi-k3" in text and "make a game" in text
     assert "game.py" in text and "Auto-run" in text
