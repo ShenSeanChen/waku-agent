@@ -481,6 +481,14 @@ class OpenAICompatClient:
             # described but may not be called (the loop's final answer).
             if tool_choice and tool_choice.get("type") == "none":
                 kwargs["tool_choice"] = "none"
+            # GPT-5.6 (sol/terra/luna) defaults to reasoning.effort=medium.
+            # Chat Completions rejects function tools unless effort is none
+            # (otherwise: use /v1/responses). Waku's loop is chat.completions,
+            # so pin none whenever tools are on the request. Gate/summarizer
+            # calls have tools=None and keep the model's default reasoning.
+            # Default stays gpt-5.5 (#136); this only unlocks WAKU_MODEL=gpt-5.6-*.
+            if (model or "").lower().startswith("gpt-5.6"):
+                kwargs["reasoning_effort"] = "none"
         if tools and model in getattr(self, "_reasoning_models", set()):
             kwargs = self._with_reasoning(kwargs)
         return kwargs

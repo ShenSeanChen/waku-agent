@@ -253,6 +253,15 @@ It runs through the normal harness, so it animates on the dashboard like any tur
 
 ## Mirror created events to Google Calendar
 
+`create_event` validates both dates before saving an event and requires the end
+to follow the start. A timestamp with an explicit offset keeps its instant and
+is stored in local time with the machine's local offset for the event date. A timestamp
+without an offset remains a floating local time, including existing events.
+Waku compares event instants when checking duplicates. The ICS export writes
+aware timestamps in UTC and escapes multiline text for calendar import.
+`list_events` filters aware events by the machine's current local day and sorts
+events by their instant, including repeated clock hours when daylight saving ends.
+
 The local SQLite database and `calendar.ics` stay authoritative. To also write
 `create_event` results to Google Calendar, install the opt-in extra and configure
 [Application Default Credentials](https://cloud.google.com/docs/authentication/provide-credentials-adc):
@@ -298,10 +307,10 @@ does both steps when you answer yes. A `waku_memory` entry you added to
 
 From then on, the plugin's `Stop` hook sends each message and reply to Waku
 Memory, and Waku Memory's server extracts the memories (spec 021). You can
-turn that off for Waku Agent at waku.one/integrations. Waku keeps the facts
-it finds on this machine and sends a captured turn's facts nowhere. Waku
-Memory pauses remembering from conversations on an account whose trial or
-plan has ended, and says so in its answer to each hook. While it is paused,
+turn that off for Waku Agent with the "Auto-save from conversations" switch
+at waku.one/integrations. Waku keeps the facts it finds on this machine and
+sends none of them while Waku Memory saves the turn. Waku Memory pauses
+auto-save from conversations on an account whose trial or plan has ended, and says so in its answer to each hook. While it is paused,
 Waku sends the facts it finds itself, and tells you once (spec 021
 amendment). While you have turned it off, Waku sends no facts from your
 conversations. Three things are still sent while it is off: a note you ask

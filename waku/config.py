@@ -76,7 +76,8 @@ def resolve_home(env: Mapping[str, str] | None = None, cwd: Path | None = None,
     """
     env = os.environ if env is None else env
     cwd = Path.cwd() if cwd is None else cwd
-    user_home = Path.home() if user_home is None else user_home
+    if user_home is None:
+        user_home = Path(env["HOME"]) if "HOME" in env else Path.home()
     if env.get("WAKU_HOME"):
         return HomeChoice(Path(env["WAKU_HOME"]), "WAKU_HOME")
     legacy, global_home = cwd / ".waku", user_home / ".waku"

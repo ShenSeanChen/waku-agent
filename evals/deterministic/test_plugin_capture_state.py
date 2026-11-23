@@ -300,7 +300,7 @@ def test_the_line_reads_exactly_as_the_spec_quotes_it():
     from waku.app import CAPTURE_PAUSED_LINE
 
     assert CAPTURE_PAUSED_LINE == ("Waku Agent will send the facts it keeps from this conversation "
-                                   "to Waku Memory itself until remembering from conversations is "
+                                   "to Waku Memory itself until auto-save from conversations is "
                                    "back on.")
 
 
@@ -347,7 +347,7 @@ def test_capture_json_is_written_in_one_step_and_never_by_the_stop_hook(agent, m
 def test_the_first_run_question_says_what_is_sent_while_paused():
     from waku.memory_choice import WHAT_LEAVES
 
-    assert "If remembering from conversations is paused on your account" in WHAT_LEAVES
+    assert "If auto-save from conversations is paused on your account" in WHAT_LEAVES
     assert "Waku sends the facts it keeps itself instead" in WHAT_LEAVES
 
 
