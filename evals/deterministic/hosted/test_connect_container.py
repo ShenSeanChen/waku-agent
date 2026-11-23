@@ -39,7 +39,7 @@ GOOD_ID = "t" + "a" * 11
 
 
 def _servers(home) -> list[dict]:
-    return json.loads((home / "mcp.json").read_text())["servers"]
+    return json.loads((home / "mcp.json").read_text(encoding="utf-8"))["servers"]
 
 
 # --- provisioning writes the list into mcp.json --------------------------------
@@ -82,7 +82,7 @@ def test_without_a_proxy_a_symlink_or_a_wrong_shape_nothing_is_written(tmp_path)
     assert not (tmp_path / "mcp.json").exists()
     (tmp_path / "mcp.json").write_text("not json")
     assert sync_connectors(tmp_path, PROXY, ["notion"]) is False
-    assert (tmp_path / "mcp.json").read_text() == "not json"
+    assert (tmp_path / "mcp.json").read_text(encoding="utf-8") == "not json"
     (tmp_path / "mcp.json").unlink()
     target = tmp_path / "elsewhere.json"
     (tmp_path / "mcp.json").symlink_to(target)

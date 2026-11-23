@@ -105,7 +105,7 @@ def test_a_backup_taken_while_a_writer_holds_rows_in_the_wal_restores_every_row(
         assert check.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
     finally:
         check.close()
-    assert '"state_db":true' in (tmp_path / "staging" / "manifest.json").read_text()
+    assert '"state_db":true' in (tmp_path / "staging" / "manifest.json").read_text(encoding="utf-8")
 
     restored, env = tmp_path / "restored", tmp_path / "restored-env"
     restored.mkdir()

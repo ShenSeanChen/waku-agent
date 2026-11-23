@@ -96,7 +96,7 @@ def test_reported_steps(tmp_path, monkeypatch, transition, restore_history):
         assert created["reply"] == SAVED
         assert created["tools"][0]["tool"] == "create_event"
         assert "Not synced to any calendar app" in created["tools"][0]["output"]
-        assert "SUMMARY:Food festival" in (home / "calendar.ics").read_text()
+        assert "SUMMARY:Food festival" in (home / "calendar.ics").read_text(encoding="utf-8")
         sid = browser_agent.current().session.session_id
         if transition == "settings":
             saved = _request(base, "/api/connections", {

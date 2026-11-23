@@ -30,7 +30,7 @@ def test_toggle_persists_and_roundtrips(monkeypatch, tmp_path):
     assert os.environ["WAKU_DISABLED_PROVIDERS"] == "openai"
     # dotenv.set_key quotes the value — verify it roundtrips correctly instead
     # of asserting the exact format.
-    assert "WAKU_DISABLED_PROVIDERS" in (tmp_path / ".env").read_text()
+    assert "WAKU_DISABLED_PROVIDERS" in (tmp_path / ".env").read_text(encoding="utf-8")
     from dotenv import dotenv_values
     assert dotenv_values(tmp_path / ".env")["WAKU_DISABLED_PROVIDERS"] == "openai"
     assert integrations.apply_provider_disabled("openai", disabled=False).ok

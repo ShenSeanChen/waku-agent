@@ -115,7 +115,7 @@ def test_update_copies_the_marketplace_again(tmp_path, monkeypatch):
     home = _added(tmp_path, monkeypatch)
     cli.run(["install", "waku@waku-memory"], home, _yes)
     source = tmp_path / "market" / "plugins" / "waku" / ".waku-plugin" / "plugin.json"
-    data = json.loads(source.read_text())
+    data = json.loads(source.read_text(encoding="utf-8"))
     source.write_text(json.dumps({**data, "version": "0.16.0"}))
     assert "Updated waku@waku-memory to 0.16.0" in cli.run(["update", "waku"], home, _no)
     assert store.read(home)["waku@waku-memory"]["version"] == "0.16.0"
@@ -200,7 +200,7 @@ def test_a_plugin_that_changed_after_its_preview_is_not_installed(tmp_path, monk
     home = _added(tmp_path, monkeypatch)
     digest = cli.chat("install waku@waku-memory", home, hosted=False).rsplit("--yes ", 1)[1].strip()
     hooks = tmp_path / "market" / "plugins" / "waku" / "hooks" / "waku-agent.json"
-    hooks.write_text(hooks.read_text().replace("session.hook", "memory.export"))
+    hooks.write_text(hooks.read_text(encoding="utf-8").replace("session.hook", "memory.export"))
     reply = cli.chat(f"install waku@waku-memory --yes {digest}", home, hosted=False)
     assert "changed since that preview" in reply and store.read(home) == {}
     assert "memory.export" in reply                      # the new preview is shown
@@ -210,13 +210,13 @@ def test_an_update_that_changes_hooks_needs_a_new_yes(tmp_path, monkeypatch):
     home = _added(tmp_path, monkeypatch)
     cli.run(["install", "waku@waku-memory"], home, _yes)
     hooks = tmp_path / "market" / "plugins" / "waku" / "hooks" / "waku-agent.json"
-    hooks.write_text(hooks.read_text().replace("session.hook", "memory.export"))
+    hooks.write_text(hooks.read_text(encoding="utf-8").replace("session.hook", "memory.export"))
     reply = cli.run(["update", "waku"], home, _no)
     assert "changes the plugin's servers" in reply and reply.endswith("Nothing was updated.")
     installed = store.folder(home) / "waku-memory" / "waku" / "hooks" / "waku-agent.json"
-    assert "memory.export" not in installed.read_text()
+    assert "memory.export" not in installed.read_text(encoding="utf-8")
     assert "Updated" in cli.run(["update", "waku"], home, _yes)
-    assert "memory.export" in installed.read_text()
+    assert "memory.export" in installed.read_text(encoding="utf-8")
 
 
 def test_the_terminal_installs_exactly_what_it_previewed(tmp_path, monkeypatch):
@@ -224,7 +224,7 @@ def test_the_terminal_installs_exactly_what_it_previewed(tmp_path, monkeypatch):
     plugin_json = tmp_path / "market" / "plugins" / "waku" / ".waku-plugin" / "plugin.json"
 
     def confirm_then_change(shown):
-        plugin_json.write_text(plugin_json.read_text().replace("0.15.0", "9.9.9"))
+        plugin_json.write_text(plugin_json.read_text(encoding="utf-8").replace("0.15.0", "9.9.9"))
         return True
 
     calls = []
@@ -255,7 +255,7 @@ def test_extract_writes_nothing_outside_its_folder_and_no_links(tmp_path):
     data = _archive({"repo-main/a.txt": "a", "repo-main/../../escaped.txt": "out"},
                     links=(("repo-main/link", "/etc/passwd"),))
     top = marketplace._extract(data, dest)
-    assert (top / "a.txt").read_text() == "a"
+    assert (top / "a.txt").read_text(encoding="utf-8") == "a"
     assert not (tmp_path / "x" / "escaped.txt").exists() and not (top / "link").exists()
 
 
