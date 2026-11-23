@@ -1,16 +1,22 @@
 [project]
 name = "waku-agent"
-version = "0.1.4"
+# Single source of truth is waku/__init__.py — pyproject and the package
+# disagreed for four releases (0.1.4 here, 0.1.0 there) because nothing
+# forced them to match. Now there is only one number to bump.
+dynamic = ["version"]
 description = "A minimal, transparent, local-first Waku: harness + loop + memory + eval, in code you can read in an afternoon."
 readme = "README.md"
-license = { text = "MIT" }
+# Code is MIT; the Waku brand assets are not (LICENSE-BRAND); the bundled fonts
+# are SIL OFL 1.1. PEP 639 lets the package say all three, so PyPI no longer
+# reports the whole wheel as MIT.
+license = "MIT AND OFL-1.1 AND LicenseRef-Waku-Brand"
+license-files = ["LICENSE", "LICENSE-BRAND", "waku/ops/static/fonts/OFL-*.txt"]
 authors = [{ name = "Sean Chen (ShenSeanChen)" }]
 requires-python = ">=3.11"
 keywords = ["ai-agent", "llm", "agent-framework", "local-first", "llmops", "memory", "eval"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
@@ -20,6 +26,10 @@ dependencies = [
     "openai>=1.50",      # openai wire format: OpenAI, Gemini, DeepSeek (and embeddings)
     "python-dotenv>=1.0",
     "rich>=13.0",
+    # Waku Memory connects over MCP (spec 020), so a fresh install can sign in
+    # without a second install command. The one exception to "no new default
+    # dependency" in AGENTS.md rule 3. >=2.1 for the reason under [mcp] below.
+    "mcp>=2.1",
 ]
 
 [project.urls]
@@ -58,6 +68,11 @@ gcal = [
     # The browser consent flow. Without it the only way in is `gcloud auth
     # application-default login`, which is a developer ritual, not a sign-in.
     "google-auth-oauthlib>=1.0",
+]
+# Optional source for `waku serve`: Slack mentions over Socket Mode, which
+# needs no public address. The built-in Socket Mode client is stdlib only.
+slack = [
+    "slack_sdk>=3.27",
 ]
 # Optional gateway: message Waku from Discord
 discord = [
@@ -102,9 +117,29 @@ arena = [
 notion = [
     "notion-client>=2.5",
 ]
-# Optional: connect MCP servers (.waku/mcp.json)
+# `mcp` is a default dependency now (above). This extra stays so
+# `pip install 'waku-agent[mcp]'` and `uv sync --extra mcp` keep working.
+# Connect MCP servers (.waku/mcp.json)
+# >=2.1: the Streamable HTTP transport is `streamable_http_client` and takes a
+# pre-built httpx client. 1.x spelled it `streamablehttp_client`, took headers
+# directly, and yielded a third element — so mcp_client.py's remote branch does
+# not work on 1.x at all, and an unpinned floor would fail at import time.
 mcp = [
-    "mcp>=1.0",
+    "mcp>=2.1",
+]
+# Hosted waku (hosted/): the gateway, the metering proxy and the spawner.
+# The CODE is not on PyPI -- hosted/ ships in neither the wheel nor the sdist,
+# and comes from a git checkout (hosted/README.md). That is now a LICENSING
+# fact as well as a packaging one: hosted/ is Elastic License 2.0
+# (hosted/LICENSE) and everything this project publishes is MIT, so the
+# `license` expression above stays true precisely because hosted/ never ships.
+# test_hosted_and_lab_never_ship_in_the_wheel_or_sdist is what keeps it true. This extra exists so that
+# a checkout can install the two libraries those services need, and so CI can
+# run their evals. `pip install waku-agent[hosted]` from PyPI therefore
+# installs these two libraries and nothing else; that is accepted.
+hosted = [
+    "aiohttp>=3.9",
+    "PyJWT[crypto]>=2.8",
 ]
 dev = [
     "pytest>=8.0",
@@ -112,21 +147,49 @@ dev = [
     # red with zero code changes (happened 2026-07-24 — 0.16.0 shipped new
     # rules and 106 violations appeared overnight). Bump deliberately.
     "ruff==0.16.0",
+    # Already the [build-system] backend below, fetched into an isolated
+    # build env on every `pip install` regardless. Declaring it here too
+    # makes it importable in THIS venv, so
+    # test_hosted_and_lab_never_ship_in_the_wheel_or_sdist can ask hatchling
+    # which files a build would include without running one (offline, no
+    # `uv` needed — task-B1-review.md, finding B1-F11).
+    # Pinned EXACTLY, same reasoning as ruff above: that test calls
+    # recurse_included_files, an internal, undocumented API, not part of
+    # hatchling's stable surface. An unpinned floor lets a routine hatchling
+    # release turn CI red with zero code change here. Re-verify the
+    # enumeration still matches a real build before bumping this pin.
+    "hatchling==1.32.4",
 ]
 
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling==1.32.4"]
 build-backend = "hatchling.build"
 
 # An sdist should be what you need to BUILD and TEST waku — source, bundled
 # skills, schema, evals. Left alone it was 2.6 MB, and 2.5 MB of that was a
-# whiteboard PNG and the .excalidraw sources, plus the agent tooling (.claude,
-# .agents, .pi) that only matters inside this repo. All of it stays on GitHub,
+# whiteboard PNG and the .excalidraw sources, plus the agent tooling (.claude)
+# and the lab, which only matter inside this repo. All of it stays on GitHub,
 # where people actually read it; none of it belongs in a package download.
+[tool.hatch.version]
+path = "waku/__init__.py"
+
 [tool.hatch.build.targets.sdist]
 exclude = [
     "docs", "examples",
-    ".claude", ".agents", ".pi", ".deepeval", ".github",
+    # "/lab/**", not the bare "lab" this used to say: hatchling merges
+    # .gitignore's patterns with this list into one ordered pathspec, and
+    # .gitignore's own negated lines for lab/'s committed board diagrams
+    # (`!lab/kimi-k3/**/*.excalidraw`, `!lab/pi-agent/**/*.excalidraw`)
+    # survived a bare "lab" -- only a pattern naming the directory's
+    # CONTENTS reliably re-excludes what an earlier negation un-ignored.
+    # test_hosted_and_lab_never_ship_in_the_wheel_or_sdist caught this by
+    # building the sdist and looking (task-B1-review.md, finding B1-F1).
+    "/lab/**", "scripts/whiteboard",
+    ".claude", ".deepeval", ".github",
+    # Anchored at the repo root on purpose: an unanchored "hosted" would also
+    # drop evals/deterministic/hosted/, and a test run from the sdist would
+    # then fail on a missing directory instead of skipping it.
+    "/hosted",
 ]
 
 [tool.hatch.build.targets.wheel]

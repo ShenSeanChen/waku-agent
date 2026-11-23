@@ -117,7 +117,7 @@ not as a literal translation.
    PR #13 bug surfaced (hardcoded `~/.waku/traces`; the real home is `.waku`
    relative to cwd via `load_settings()`).
 
-5. **Check it against the repo's rules** (CLAUDE.md): stdlib + anthropic/openai
+5. **Check it against the repo's rules** (AGENTS.md and docs/context/conventions.md): stdlib + anthropic/openai
    only — new deps must sit behind an optional extra; tests land in
    `evals/deterministic/`; module + test docstrings in the teaching voice; no
    emojis in any UI surface; the arena must never touch real agent state; and

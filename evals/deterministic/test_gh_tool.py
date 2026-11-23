@@ -122,6 +122,14 @@ def test_list_commands_ask_for_json_and_clamp_the_limit(capture):
     assert capture["argv"][capture["argv"].index("--limit") + 1] == "10"
 
 
+@pytest.mark.parametrize("limit", ["many", [5], float("inf")])
+def test_invalid_list_limits_return_an_error_without_running_gh(limit, no_subprocess):
+    assert "integer limit" in github.gh_read("pr list", limit=limit)
+    ok, error = github.list_issues(limit=limit)
+    assert not ok
+    assert "integer limit" in error
+
+
 def _code_lines(module) -> list[str]:
     """Source with docstrings and comments removed.
 
@@ -213,11 +221,21 @@ def test_malformed_json_does_not_raise(monkeypatch):
     assert "not JSON" in str(res)
 
 
+@pytest.mark.parametrize("payload", ['{"error": "unavailable"}', "null", "[1]"])
+def test_list_results_require_a_list_of_objects(payload, capture):
+    capture["stdout"] = payload
+
+    ok, error = github.list_prs()
+    assert not ok
+    assert "JSON list of objects" in error
+    assert github.gh_read("issue list") == error
+
+
 # --- registration -----------------------------------------------------------
 
 def test_the_tool_is_off_unless_asked_for(tmp_path):
     """Every registered tool ships in every prompt, so a maintainer-only tool
-    must not appear for people who never asked for it (CLAUDE.md's footprint
+    must not appear for people who never asked for it (the footprint
     ladder). The gather workflow imports this module directly and works with
     the switch off — the switch only decides whether the MODEL can reach it."""
     from evals.helpers import ScriptedClient, make_waku

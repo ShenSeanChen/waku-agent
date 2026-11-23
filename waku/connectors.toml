@@ -1,0 +1,82 @@
+# The starter list: connectors Waku adds by name (spec 025).
+#
+#   waku mcp add linear        the command line
+#   "connect Linear"           chat, after the owner's yes
+#   the Connections page      the dashboard
+#
+# Each entry is the vendor's own hosted MCP server. Nobody submits a connector
+# here: the list changes by pull request, and a person adds any other server
+# by its address (waku mcp add <name> <https address>).
+#
+#   name    the server's name in mcp.json and the prefix of its tools
+#   title   what a person reads
+#   url     the server's address, from the vendor's own documentation
+#   auth    "oauth" (the person signs in on the vendor's page), or the name of
+#           the environment variable that holds the person's key
+#   docs    the vendor's page that names the address
+#   writes  patterns of the tool names that change something. A tool that
+#           matches one asks the owner first; every other tool of the server
+#           runs. A pattern is matched against the tool's own name, without
+#           the `<name>_` prefix, the way a shell matches a file name.
+#
+# `writes` lists verbs, not tools, so a write tool the vendor adds later is
+# likely to ask. A tool that changes something under a verb that is missing
+# here runs without a question: add the verb when you find one.
+#
+# Checked against each vendor's documentation on 2026-11-17.
+
+[linear]
+name = "linear"
+title = "Linear"
+url = "https://mcp.linear.app/mcp"   # https://linear.app/docs/mcp, 2026-11-17
+auth = "oauth"
+docs = "https://linear.app/docs/mcp"
+writes = [
+    "create_*", "save_*", "update_*", "delete_*", "remove_*", "add_*", "archive_*",
+    "retire_*", "restore_*", "merge_*", "resolve_*", "submit_*", "share_*", "unshare_*",
+    "mark_*", "prepare_*",
+]
+
+[notion]
+name = "notion"
+title = "Notion"
+url = "https://mcp.notion.com/mcp"   # https://developers.notion.com/docs/get-started-with-mcp, 2026-11-17
+auth = "oauth"
+docs = "https://developers.notion.com/docs/get-started-with-mcp"
+writes = [
+    "notion-create-*", "notion-update-*", "notion-delete-*", "notion-move-*",
+    "notion-duplicate-*", "notion-restore-*", "notion-set-*", "notion-send-*",
+    "notion-spawn-*", "notion-stop-*", "notion-upload-*", "notion-convert-*",
+    "notion-link-*", "notion-resolve-*", "notion-complete-*",
+    "notion-calendar-create-*", "notion-calendar-update-*", "notion-calendar-cancel-*",
+]
+
+[github]
+name = "github"
+title = "GitHub"
+# https://docs.github.com/en/copilot/how-tos/provide-context/use-mcp/set-up-the-github-mcp-server,
+# 2026-11-17. GitHub's own sign-in needs a client registered with GitHub, and
+# Waku registers itself with a server at sign-in, so the entry uses a personal
+# access token, sent as `Authorization: Bearer <token>`.
+url = "https://api.githubcopilot.com/mcp/"
+auth = "GITHUB_PERSONAL_ACCESS_TOKEN"
+docs = "https://docs.github.com/en/copilot/how-tos/provide-context/use-mcp/set-up-the-github-mcp-server"
+writes = [
+    "create_*", "update_*", "delete_*", "remove_*", "add_*", "merge_*", "push_*",
+    "fork_*", "*_write", "request_*", "assign_*", "actions_run_*", "run_*", "rerun_*",
+    "cancel_*", "dismiss_*", "mark_*", "manage_*", "star_*", "unstar_*",
+]
+
+# Left out on 2026-11-17. Each vendor has a hosted server at the address
+# below, and each takes sign-in only from a client that was registered with
+# the vendor beforehand. Waku registers itself at sign-in (mcp_oauth.py), so
+# it cannot sign in to these yet. An entry goes in when it can.
+#
+#   Slack         https://mcp.slack.com/mcp
+#                 https://docs.slack.dev/ai/slack-mcp-server/ : "We do not
+#                 support ... Dynamic Client Registration at this time."
+#   Gmail         https://gmailmcp.googleapis.com/mcp/v1
+#   Google Drive  https://drivemcp.googleapis.com/mcp/v1
+#                 https://developers.google.com/workspace/guides/configure-mcp-servers :
+#                 a Developer Preview that needs an OAuth client of your own
+#                 in a Google Cloud project.

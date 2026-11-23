@@ -1,0 +1,46 @@
+/* Values Waku Memory keeps in app/globals.css instead of tokens.css.
+   Copied by hand from waku-memory-frontend at 03ab1d7 — see SOURCE.md.
+
+   --input is declared on every themed element, not only :root, because a
+   color-mix() in a custom property is worked out where it is declared. */
+:root{
+  --text-xs:12px;
+  --text-sm:13px;
+  --text-base:15px;
+  --text-lg:20px;
+  --text-xl:27px;
+  --text-2xl:36px;
+  --font-weight-normal:400;
+  --font-weight-medium:500;
+  --leading-tight:1.12;
+  --leading-snug:1.3;
+  /* 1.55, not globals.css's 1.72: the design owner's call on 2026-09-13,
+     made first here. Waku Memory's --leading-normal is changing to match. */
+  --leading-normal:1.55;
+  /* The chat bubble's corner. The dashboard's own: Waku Memory has no chat
+     screen, so its tokens do not have this shape. */
+  --shape-bubble:calc(var(--spacing) * 3);
+  /* The narrowest main gets while the chat dock is open: 480px of chart
+     plus main's padding. The dock shrinks to protect it (style.css). */
+  --main-min:calc(480px + 2 * var(--space-8));
+}
+:root,[data-theme]{
+  --input:color-mix(in srgb,var(--text-ink) 48%,var(--surface-bg));
+}
+
+/* A floating menu's shadow (the design owner's call on 2026-09-13): the one
+   exception to "nothing casts a shadow". Made here first; Waku Memory's
+   tokens.css is changing --shadow-md to match, and then this block goes.
+   Built from --scrim (black, 40% on bone and 55% on dark) so no colour is
+   written twice: 8% black on bone, 40% on dark, where a lighter one is lost. */
+:root,[data-theme="light"]{
+  --shadow-md:0 var(--spacing) calc(var(--spacing) * 4) color-mix(in srgb,var(--scrim) 20%,transparent);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --shadow-md:0 var(--spacing) calc(var(--spacing) * 4) color-mix(in srgb,var(--scrim) 73%,transparent);
+  }
+}
+[data-theme="dark"]{
+  --shadow-md:0 var(--spacing) calc(var(--spacing) * 4) color-mix(in srgb,var(--scrim) 73%,transparent);
+}

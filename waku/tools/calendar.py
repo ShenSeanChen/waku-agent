@@ -23,6 +23,7 @@ from datetime import datetime
 from email.utils import parseaddr
 from pathlib import Path
 
+from waku.tools.apple import ensure_running
 from waku.tools.registry import Tool
 
 APPLE_CALENDAR_NAME = "Waku"
@@ -76,8 +77,8 @@ def probe_apple_calendar() -> None:
     """
     if sys.platform != "darwin":
         raise RuntimeError("Apple Calendar probe is macOS-only.")
+    ensure_running("Calendar")
     script = '''
-launch application "Calendar"
 tell application "Calendar"
   repeat with cal in calendars
     try
@@ -130,6 +131,7 @@ def sync_to_apple_calendar(title: str, start: str, end: str, notes: str = "") ->
     # Prefer a dedicated "Waku" calendar, but macOS can't create calendars in
     # iCloud-only accounts via AppleScript — fall back to the first writable
     # calendar and report which one was actually used.
+    ensure_running("Calendar")
     script = (
         _applescript_date("startDate", start)
         + _applescript_date("endDate", end)

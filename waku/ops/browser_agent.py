@@ -80,8 +80,36 @@ def resume_or_new_session(conn) -> str:
     return datetime.now().strftime("dashboard-%Y%m%d-%H%M%S")
 
 
+# The servers the shared agent was built with, in a hosted container.
+_connectors = None
+
+
+def _ready_servers():
+    from waku.tools import connectors
+
+    return connectors.ready(load_settings().home)
+
+
+def follow_connectors() -> None:
+    """In a hosted container, build the shared agent again when the servers
+    in mcp.json changed since it was built (spec 029): the person signed in
+    to Notion on the platform's page, and the platform wrote the server into
+    this container's mcp.json. Call it before taking `agent_lock`, never
+    under it: `rebuild` takes the lock itself. On a person's own machine it
+    does nothing, and a restart loads a new server as before."""
+    global _connectors
+    from waku.tools import connectors
+
+    if not connectors.hosted() or _agent is None:
+        return
+    now = _ready_servers()
+    if _connectors is not None and now != _connectors:
+        rebuild()
+    _connectors = now
+
+
 def get_agent():
-    global _agent, _dashboard_session
+    global _agent, _dashboard_session, _connectors
     if _agent is None:
         from waku.app import Waku
 
@@ -89,11 +117,12 @@ def get_agent():
         settings.ensure_home()
         conn = connect(settings.home, check_same_thread=False)
         _agent = Waku(settings=settings, conn=conn)
+        _connectors = _ready_servers()
         # A dashboard run resumes its last recent thread (so a restart/refresh
         # keeps the chat on screen), or starts fresh if that thread is idle.
         # Same id collect() reports, so the dock restores the right conversation.
         _dashboard_session = resume_or_new_session(conn)
-        _agent.session.session_id = _dashboard_session
+        _agent.session.switch(_dashboard_session)
     return _agent
 
 
@@ -144,12 +173,9 @@ def rebuild() -> str | None:
             settings.ensure_home()
             conn = connect(settings.home, check_same_thread=False)
             fresh = Waku(settings=settings, conn=conn)
-            # Carry the CONVERSATION across the swap. A settings change swaps the
-            # brain, not the thread — but a brand-new Waku starts on the eternal
-            # 'default' session, so without this line switching provider silently
-            # dumped you into a different chat and your history vanished from the
-            # dock. Same resolution get_agent() uses, so both doors agree.
-            fresh.session.session_id = (
+            # Restore the saved exchanges as well as the id; otherwise the dock
+            # shows the conversation while the model receives an empty history.
+            fresh.session.switch(
                 old.session.session_id if old is not None else resume_or_new_session(conn)
             )
             _dashboard_session = fresh.session.session_id

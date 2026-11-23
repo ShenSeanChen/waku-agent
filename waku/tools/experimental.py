@@ -22,7 +22,7 @@ native event stream on stdout — one JSON object per line. Two things fall out:
 
 Older pi builds without --mode json fall back to the plain `-p` text path.
 
-The other three boxes are still SKELETONS on purpose: each shows the *shape* of
+The other two boxes are still SKELETONS on purpose: each shows the *shape* of
 a capability and returns an honest "coming soon" (terminal/browser tools need a
 real sandbox + safety surface first). Everything here is OFF by default; set
 `WAKU_EXPERIMENTAL=1` to register these tools.
@@ -177,9 +177,6 @@ PLANNED = [
     {"name": "browse_web", "box": "Browser tool",
      "description": "Open a page and read/click it — Hermes's 'Browser' tool. (search_web already "
                     "covers read-only web lookups.)"},
-    {"name": "schedule_task", "box": "Cron Job",
-     "description": "Let the agent schedule its own recurring runs. Today `make brief` + a system "
-                    "cron line already does scheduled runs; this would move it in-app."},
 ]
 
 

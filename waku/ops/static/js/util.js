@@ -1,4 +1,5 @@
-// waku dashboard — escaping, markdown, core globals (D/editing), postJSON, reveal.
+// waku dashboard — escaping, markdown, core globals (D/editing), the
+// postJSON helper, reveal.
 // Split out of app.js: classic <script>, shared global scope (no build
 // step, no modules). Load order + rules: static/README.md.
 
@@ -25,6 +26,9 @@ function mdInline(s){   // s is already HTML-escaped
 }
 function renderMarkdown(text){
   const lines = esc(text).split(/\r?\n/);
+  // The same lines unescaped, for the JSON in a report's fenced blocks. esc()
+  // never adds or removes a line break, so the two line up index for index.
+  const rawLines = (text??"").toString().split(/\r?\n/);
   const row = l => /^\s*\|.*\|\s*$/.test(l);
   const sep = l => /^\s*\|?[\s:|-]*-[\s:|-]*\|?\s*$/.test(l);
   const cells = l => l.trim().replace(/^\||\|$/g, "").split("|").map(c => c.trim());
@@ -54,17 +58,23 @@ function renderMarkdown(text){
     if (/^\s*`{3,}/.test(l)){                                       // fenced code block
       const lang = l.replace(/^\s*`{3,}/, "").trim();
       i++;
+      const start = i;
       const codeLines = [];
       while (i < lines.length && !/^\s*`{3,}\s*$/.test(lines[i])){ codeLines.push(lines[i]); i++; }
-      if (i < lines.length) i++;   // skip closing ```
+      const closed = i < lines.length;
+      if (closed) i++;   // skip closing ```
+      // A closed waku-* fence of a research report (blocks.js) is drawn as
+      // its UI; one still streaming, unknown or unreadable stays code.
+      const block = closed && /^waku-/.test(lang) ? reportBlock(lang, rawLines.slice(start, start + codeLines.length).join("\n")) : null;
+      if (block){ out.push(block); continue; }
       const langLabel = lang ? `<span class="mdcode-lang">${lang}</span>` : "";
-      out.push(`<div class="mdcode"><div class="mdcode-head">${langLabel}<button class="mdcode-copy" onclick="copyCode(this)">Copy</button></div><pre><code>${codeLines.join("\n")}</code></pre></div>`);
+      out.push(`<div class="mdcode"><div class="mdcode-head">${langLabel}${uiButton("Copy", {level: "tertiary", size: "sm", cls: "mdcode-copy", onclick: "copyCode(this)"})}</div><pre><code>${codeLines.join("\n")}</code></pre></div>`);
       continue;
     }
     if (/^\s*[-*_]{3,}\s*$/.test(l)){ out.push("<hr class='mdhr'>"); i++; continue; } // hr
     if (/^\s*$/.test(l)){ i++; continue; }
     const para = [];                                                // paragraph
-    while (i < lines.length && lines[i].trim() && !/^\s*[-*]\s|^\s*\d+\.\s|^\s*#{1,6}\s/.test(lines[i])
+    while (i < lines.length && lines[i].trim() && !/^\s*[-*]\s|^\s*\d+\.\s|^\s*#{1,6}\s|^\s*`{3,}/.test(lines[i])
            && !(row(lines[i]) && i+1<lines.length && sep(lines[i+1]))){
       para.push(mdInline(lines[i])); i++;
     }
@@ -92,12 +102,22 @@ let D = null;
 
 // Click a section's data to open the real local file/folder (editor or Finder).
 function revealFile(p){ fetch("/api/reveal?path=" + encodeURIComponent(p)); }
-const reveal = (path, label) => `<a class="reveal" onclick="revealFile('${path}')">${esc(label)}</a>`;
+const reveal = (path, label) => uiButton(esc(label), {level: "tertiary", size: "sm", onclick: `revealFile('${path}')`});
 
 // --- memory CRUD (dashboard side). `editing` pauses the 5s rebuild so an
 // in-progress edit isn't wiped (same idea as the animation guard).
 let editing = false;
-async function postJSON(url, body){ return (await fetch(url,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)})).json(); }
+async function postJSON(url, body, headers = {}){
+  const res = await fetch(url,{method:"POST",headers:{"Content-Type":"application/json",...headers},body:JSON.stringify(body)});
+  noteStatus(res.status);
+  return res.json();
+}
+// Every chat call reports its HTTP status here (the helper above, sendChat and
+// the embedded chat's state read). Nobody listens on the dashboard; the
+// embedded chat (embed.js) listens for 401, an ended session, to tell
+// waku.one.
+const statusWatchers = [];
+function noteStatus(status){ statusWatchers.forEach(w => { try { w(status); } catch(e){} }); }
 
 // --- Shared row atoms.
 //
@@ -123,4 +143,38 @@ const sessionMeta = s =>
 // are otherwise different on purpose (the arena has no gate/reply stage and
 // wraps), but the chip itself must look identical in both or the same tool
 // call appears to be two different things.
-const toolChip = name => `<span class="stage done">tool · ${esc(name)}</span>`;
+// Tool names run long (waku_memory_memory_search), and in a narrow chat dock the
+// badge is cut to fit, so the full name rides along as the hover title.
+const toolChip = name => uiBadge("tool · " + esc(name), "ok", "tool · " + name);
+
+// --- data-slot: how Waku Memory's controls.css finds a control.
+//
+// controls.css styles controls by data-slot, not by class: the shape, the
+// focus ring, pressed and disabled. The views build their controls as HTML
+// strings, so rather than adding the attribute to every string (and every
+// future one), stamp it on native controls as they appear. An element that
+// already has a data-slot is left alone.
+const SLOT_FOR = [
+  ["button", "button"],
+  ["textarea", "textarea"],
+  ["select", "select-trigger"],
+  ['input[type="checkbox"]', "checkbox"],
+  ['input[type="radio"]', "radio-group-item"],
+  ['input:not([type]), input[type="text"], input[type="search"], input[type="password"], input[type="email"], input[type="url"], input[type="number"]', "input"],
+  [".tab", "tabs-trigger"],
+  [".badge, .pill, .chip, .chip-c, .srcpill, .gwtag, .stage, .cmp-score, .cmp-q, .ma-o, .ma-test", "badge"],
+];
+function stampSlots(root){
+  for (const [sel, slot] of SLOT_FOR){
+    if (root.matches && root.matches(sel) && !root.dataset.slot) root.dataset.slot = slot;
+    if (root.querySelectorAll) root.querySelectorAll(sel).forEach(el => { if (!el.dataset.slot) el.dataset.slot = slot; });
+  }
+}
+// Views are rebuilt every 5 s and modals are appended to <body>, so watch the
+// whole body rather than stamping once.
+function watchSlots(){
+  stampSlots(document.body);
+  new MutationObserver(records => {
+    for (const r of records) for (const n of r.addedNodes) if (n.nodeType === 1) stampSlots(n);
+  }).observe(document.body, {childList: true, subtree: true});
+}

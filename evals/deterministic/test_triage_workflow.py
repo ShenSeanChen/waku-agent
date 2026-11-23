@@ -87,7 +87,9 @@ def test_quick_turn_answers_on_the_small_model_and_skips_the_gate(tmp_path):
     kinds = [k for k, _ in events]
     assert "graph_start" in kinds and "route" in kinds and "graph_end" in kinds
     assert "gate" not in kinds, "quick turns never touch memory retrieval"
-    assert "llm" not in kinds, "quick turns never wake the big model's loop"
+    # Spec 011 A2: the two small-model calls are counted, and nothing else is
+    llm_kinds = [ev.get("kind") for k, ev in events if k == "llm"]
+    assert llm_kinds == ["triage", "quick"], "quick turns never wake the big model's loop"
     meta = last_meta(app)
     assert meta["graph"]["route"] == "quick"
     assert meta["graph"]["reason"] == "just thanks"

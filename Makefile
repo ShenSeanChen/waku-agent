@@ -8,6 +8,10 @@
 # `source .venv/bin/activate` — both work, this is just fewer steps.
 PY := $(shell [ -x .venv/bin/python ] && echo .venv/bin/python || echo python)
 
+# Maintainers work on the repo's own .waku, never on the ~/.waku a person's
+# real assistant uses (spec 002). An explicit WAKU_HOME still wins.
+export WAKU_HOME ?= $(CURDIR)/.waku
+
 .PHONY: run voice telegram discord brief dashboard trace eval eval-judge gate lint
 .PHONY: run voice telegram whatsapp brief dashboard trace eval eval-judge gate lint
 
@@ -56,4 +60,4 @@ shootout-coding: ## coding round via pi, scored by tests: make shootout-coding R
 	$(PY) scripts/shootout.py $(RUNS) --coding
 
 lint:
-	$(PY) -m ruff check waku evals scripts
+	$(PY) -m ruff check waku evals scripts hosted

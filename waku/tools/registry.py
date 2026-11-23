@@ -24,6 +24,14 @@ class Tool:
     # (delegate_task uses this to relay pi's live events). The underscore keeps
     # it out of the model-facing schema — the model never supplies it.
     wants_notify: bool = False
+    # A tool from an MCP server may declare `readOnlyHint` in its annotations.
+    # Under `waku serve` such a tool runs without the owner's yes; any other
+    # tool the approval table does not know asks (spec 024, decision 6).
+    read_only: bool = False
+    # For a tool from an MCP server: (the server's name in mcp.json, the
+    # tool's own name there). The approval rules of spec 025 read it: which
+    # connector a tool belongs to decides whether it asks.
+    mcp: tuple[str, str] | None = None
 
     def to_api(self) -> dict[str, Any]:
         """The shape the Messages API expects in its `tools=` parameter."""
@@ -40,6 +48,9 @@ class ToolRegistry:
 
     def register(self, tool: Tool) -> None:
         self._tools[tool.name] = tool
+
+    def get(self, name: str) -> Tool | None:
+        return self._tools.get(name)
 
     def schemas(self) -> list[dict[str, Any]]:
         return [t.to_api() for t in self._tools.values()]
