@@ -559,6 +559,8 @@ shows those instead. A proxy that does not know the turn leaves the estimate.
   row).
 - `waku/runtime/session.py` — working memory for one turn: SOUL.md, memory
   context and chat history.
+  The browser gateway reloads the current thread's recent exchanges from
+  `state.db` after a Settings save or a server restart that resumes that thread.
 - `waku/loop/agent.py` — the loop, with an optional `before_tool` that the
   approval gate of `waku serve` and a plugin's `PreToolUse` hook answer. `loop/models.py` — pluggable providers over
   two wire formats.
