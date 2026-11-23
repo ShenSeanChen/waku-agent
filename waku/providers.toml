@@ -43,6 +43,11 @@
 #   scoped_credentials    ignore WAKU_API_KEY / WAKU_BASE_URL; use only this
 #                         row's own key_env / base_url_env
 #
+# One more opt-in field, for a model server on the person's own machine:
+#   key_optional          the row needs no key. Waku sends a placeholder, never
+#                         says "no API key", and treats the row as set up once
+#                         it is chosen or base_url_env is set
+#
 # Model ids age. When one 404s, fix the row -- every past race and spend figure
 # is derived at read time, so a correction here fixes history too.
 
@@ -220,6 +225,28 @@ model = "deepseek-v4-flash"
 small_model = "deepseek-v4-flash"
 key_url = "https://opencode.ai/zen"
 price = [0.435, 0.87]
+
+# A model server on this computer. Ollama, LM Studio, llama.cpp's server and
+# vLLM all speak the OpenAI API, so one row covers them: WAKU_LOCAL_BASE_URL
+# picks the server (Ollama's address by default; LM Studio is
+# http://localhost:1234/v1) and the picker lists whatever it has loaded. No
+# key, no spend, and nothing leaves the machine unless the address points
+# elsewhere. The model has to support tool calls: qwen3 does, llama3 does not.
+# claims_families is false so a model name here never takes a family such as
+# deepseek-* away from the provider that sells it.
+
+[local]
+kind = "openai"
+key_env = "WAKU_LOCAL_API_KEY"
+base_url = "http://localhost:11434/v1"
+base_url_env = "WAKU_LOCAL_BASE_URL"
+model = "qwen3:8b"
+small_model = "qwen3:8b"
+label = "Local model"
+key_optional = true
+claims_families = false
+key_url = "https://ollama.com/download"
+price = [0.0, 0.0]
 
 # The hosted free tier. Hidden on a local machine: with no
 # WAKU_PLATFORM_BASE_URL set it appears in no page, list or error message,

@@ -69,6 +69,10 @@ class Provider:
     model_env: str = ""
     small_model_env: str = ""
     scoped_credentials: bool = False
+    # A server on your own machine (Ollama, LM Studio, llama.cpp, vLLM) asks
+    # for no key. Such a row sends a placeholder instead of refusing to start,
+    # and counts as set up once it is chosen or its address is set.
+    key_optional: bool = False
 
     def label_text(self, name: str) -> str:
         """What the UI calls this row."""
@@ -110,6 +114,21 @@ class Provider:
         configured = os.getenv(self.base_url_env, "").strip() if self.base_url_env else ""
         return configured or self.base_url
 
+    def has_credentials(self, name: str) -> bool:
+        """Could this row answer a turn without the person typing a key?
+
+        True when its key is set. A key_optional row (a model server on this
+        computer) is also ready once it is the chosen provider or its address
+        is set, because it was never going to have a key.
+        """
+        if os.getenv(self.key_env, "").strip():
+            return True
+        if not self.key_optional:
+            return False
+        chosen = os.getenv("WAKU_PROVIDER", "").strip() == name
+        address = bool(os.getenv(self.base_url_env, "").strip()) if self.base_url_env else False
+        return chosen or address
+
     def catalog_for(self, base_url: str | None) -> str | None:
         """Return the catalog paired with *base_url*'s region."""
         normalized = (base_url or "").rstrip("/")
@@ -149,8 +168,11 @@ def _provider(row: dict) -> Provider:
         model_env=row.get("model_env", ""),
         small_model_env=row.get("small_model_env", ""),
         scoped_credentials=row.get("scoped_credentials", False),
+        key_optional=row.get("key_optional", False),
     )
 
+
+LOCAL_PLACEHOLDER_KEY = "no-key-needed"
 
 REGISTRY: dict[str, dict] = _registry()
 PROVIDERS: dict[str, Provider] = {name: _provider(row) for name, row in REGISTRY.items()}
@@ -302,6 +324,10 @@ def get_client(settings: Settings):
     # the platform token a tenant container was actually given.
     api_key = (os.getenv(provider.key_env, "") if provider.scoped_credentials
               else (settings.api_key or os.getenv(provider.key_env, ""))).strip()
+    if not api_key and provider.key_optional:
+        # The OpenAI client refuses an empty key, and a local server ignores
+        # whatever it is sent, so a fixed word stands in for one.
+        api_key = LOCAL_PLACEHOLDER_KEY
     if not api_key:
         raise SystemExit(_no_key_message(settings.provider, provider.key_env))
     try:
