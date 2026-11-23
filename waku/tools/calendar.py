@@ -19,9 +19,10 @@ import json
 import sqlite3
 import subprocess
 import sys
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from email.utils import parseaddr
 from pathlib import Path
+from uuid import uuid4
 
 from waku.tools.apple import ensure_running
 from waku.tools.registry import Tool
@@ -32,40 +33,68 @@ GOOGLE_CALENDAR_SCOPE = "https://www.googleapis.com/auth/calendar.events"
 GOOGLE_CALENDAR_TIMEOUT = 30
 
 
+def _ics_text(value: str) -> str:
+    return (value.replace("\\", "\\\\").replace("\r\n", "\n").replace("\r", "\n")
+            .replace("\n", "\\n").replace(";", "\\;").replace(",", "\\,"))
+
+
+def _ics_date(value: str) -> str:
+    parsed = datetime.fromisoformat(value)
+    if parsed.tzinfo is not None:
+        return parsed.astimezone(UTC).strftime("%Y%m%dT%H%M%SZ")
+    return parsed.strftime("%Y%m%dT%H%M%S")
+
+
+def _fold_ics(body: str) -> bytes:
+    lines = []
+    for line in body.rstrip("\n").split("\n"):
+        part, size = "", 0
+        for char in line:
+            width = len(char.encode("utf-8"))
+            if size + width > 75:
+                lines.append(part)
+                part, size = " ", 1
+            part += char
+            size += width
+        lines.append(part)
+    return ("\r\n".join(lines) + "\r\n").encode("utf-8")
+
+
 def _write_ics(home: Path, title: str, start: str, end: str, attendees: str) -> None:
     """Append a minimal VEVENT. ISO timestamps like 2026-07-14T09:00 become
     ICS's compact 20260714T090000 form."""
     ics_path = home / "calendar.ics"
 
-    def dt(s: str) -> str:
-        return s.replace("-", "").replace(":", "") + ("00" if len(s) == 16 else "")
-
     event = (
         "BEGIN:VEVENT\n"
-        f"SUMMARY:{title}\n"
-        f"DTSTART:{dt(start)}\n"
-        f"DTEND:{dt(end)}\n"
-        f"DESCRIPTION:attendees: {attendees}\n"
+        f"UID:{uuid4()}@waku-agent\n"
+        f"DTSTAMP:{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}\n"
+        f"SUMMARY:{_ics_text(title)}\n"
+        f"DTSTART:{_ics_date(start)}\n"
+        f"DTEND:{_ics_date(end)}\n"
+        f"DESCRIPTION:{_ics_text('attendees: ' + attendees)}\n"
         "END:VEVENT\n"
     )
     if ics_path.exists():
-        body = ics_path.read_text(encoding="utf-8").replace("END:VCALENDAR\n", "")
+        body = ics_path.read_text(encoding="utf-8").removesuffix("END:VCALENDAR\n")
     else:
         body = "BEGIN:VCALENDAR\nVERSION:2.0\nPRODID:-//waku-agent//EN\n"
-    ics_path.write_text(body + event + "END:VCALENDAR\n", encoding="utf-8")
+    ics_path.write_bytes(_fold_ics(body + event + "END:VCALENDAR\n"))
 
 
 def _applescript_date(var: str, iso: str) -> str:
     """Build an AppleScript date from ISO parts — immune to system locale
     (never feed AppleScript a formatted date string; parsing is locale-bound)."""
     d = datetime.fromisoformat(iso)
+    if d.tzinfo is not None:
+        d = d.astimezone()
     # set day to 1 BEFORE month/year: prevents the classic AppleScript overflow
     # (if today is the 31st, setting month to a 30-day month rolls into next month)
     return (
         f"set {var} to current date\nset day of {var} to 1\n"
         f"set year of {var} to {d.year}\nset month of {var} to {d.month}\n"
         f"set day of {var} to {d.day}\nset hours of {var} to {d.hour}\n"
-        f"set minutes of {var} to {d.minute}\nset seconds of {var} to 0\n"
+        f"set minutes of {var} to {d.minute}\nset seconds of {var} to {d.second}\n"
     )
 
 
@@ -400,6 +429,21 @@ def sync_to_google_calendar(
     )
 
 
+def _event_time(value: str) -> datetime:
+    if not isinstance(value, str) or len(value) <= 10 or value[10] not in "Tt ":
+        raise ValueError("a date and time are required")
+    return datetime.fromisoformat(value)
+
+
+def _stored_time(value: datetime) -> str:
+    # Keep legacy floating local times. Aware inputs keep their instant and
+    # carry the local offset so day-based listing and calendar apps agree.
+    if value.tzinfo is not None:
+        value = value.astimezone()
+    precision = "microseconds" if value.microsecond else "seconds" if value.second else "minutes"
+    return value.isoformat(timespec=precision)
+
+
 def make_tool(
     conn: sqlite3.Connection,
     home: Path,
@@ -419,20 +463,23 @@ def make_tool(
         if not title or not start:
             return ("create_event needs at least a title and a start time "
                     "(ISO 8601, e.g. 2026-07-14T09:00). Please call it again with both.")
-        if not end:
-            # default: one hour
-            from datetime import timedelta
-            end = (datetime.fromisoformat(start) + timedelta(hours=1)).isoformat(timespec="minutes")
+        try:
+            start_time = _event_time(start)
+            end_time = _event_time(end) if end else start_time + timedelta(hours=1)
+            if end_time.astimezone(UTC) <= start_time.astimezone(UTC):
+                raise ValueError("end must be later than start")
+        except (ValueError, TypeError, OverflowError) as exc:
+            return f"create_event needs valid ISO 8601 dates and times with end later than start ({exc})."
 
         # idempotence guard: same title+start = same event. A confused model
         # (or an impatient user) must not be able to triple-book a meeting.
-        start = start[:16]  # normalize 2026-07-11T17:00:00 → 2026-07-11T17:00
-        end = end[:16]
-        existing = conn.execute(
-            "SELECT id FROM calendar_events WHERE title = ? AND start = ?", (title, start)
-        ).fetchone()
-        if existing:
-            return f"Event '{title}' at {start} already exists (not duplicated)."
+        start, end = _stored_time(start_time), _stored_time(end_time)
+        for existing in conn.execute("SELECT start FROM calendar_events WHERE title = ?", (title,)):
+            try:
+                if _event_time(existing["start"]).astimezone(UTC) == start_time.astimezone(UTC):
+                    return f"Event '{title}' at {start} already exists (not duplicated)."
+            except (ValueError, TypeError, OverflowError):
+                continue  # Old malformed rows must not block a valid new event.
 
         conn.execute(
             'INSERT INTO calendar_events (title, start, "end", attendees, notes) VALUES (?,?,?,?,?)',
@@ -509,15 +556,17 @@ def make_list_tool(conn: sqlite3.Connection, home: Path | None = None) -> Tool:
     def local_events(start: str = "", end: str = "", limit: int = 20) -> str:
         query = 'SELECT title, start, "end", attendees FROM calendar_events'
         clauses, params = [], []
+        aware = "(substr(start, -6, 1) IN ('+', '-') OR substr(start, -1) = 'Z')"
+        local_day = f"CASE WHEN {aware} THEN date(start, 'localtime') ELSE substr(start, 1, 10) END"
         if start:
-            clauses.append("start >= ?")
+            clauses.append(f"({local_day}) >= ?")
             params.append(start[:10])                 # inclusive from the start of that day
         if end:
-            clauses.append("start <= ?")
-            params.append(end[:10] + "T23:59")        # inclusive through the end of that day
+            clauses.append(f"({local_day}) <= ?")
+            params.append(end[:10])
         if clauses:
             query += " WHERE " + " AND ".join(clauses)
-        query += " ORDER BY start LIMIT ?"
+        query += f" ORDER BY CASE WHEN {aware} THEN julianday(start) ELSE julianday(start, 'utc') END LIMIT ?"
         params.append(max(1, min(int(limit or 20), 100)))
         rows = conn.execute(query, params).fetchall()
         if not rows:
