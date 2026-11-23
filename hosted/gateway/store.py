@@ -1,16 +1,25 @@
-"""control.db -- tenants, sessions and proxy tokens. The gateway's alone.
+"""control.db -- tenants, sessions, proxy tokens, and each tenant's waiting
+events and next wakeup, the Slack workspace each tenant connected (spec
+026), each tenant's sign-in to a connector (spec 029), and the home of each
+team space's agent (spec 032). The gateway's alone.
 
 On the VM, control/ is owned by UID 10002 with mode 0700, so the one-writer
 rule is enforced by file ownership rather than by convention. The proxy never
 opens this file: it asks over run/gateway/gateway.sock (internal.py) and gets
 back a tenant id and a status, and nothing else.
 
-Neither a cookie value nor a token plaintext is stored. A stolen copy of this
-file is a list of hashes, not a set of live credentials.
+Neither a cookie value nor a proxy token's plaintext is stored: those are
+hashes. Three kinds of credential are stored. A person's Waku Memory key is
+in plaintext (set_memory_key says why). A workspace's Slack bot token is
+sealed with a key that is not in this file (hosted/gateway/secretbox.py), so a
+copy of this file cannot post to anybody's Slack. A connector's tokens, the
+gateway's own registration with the vendor, and the Waku Memory key of a team
+space's agent (team_home) are sealed the same way.
 """
 
 from __future__ import annotations
 
+import json
 import sqlite3
 import threading
 import time
@@ -26,7 +35,14 @@ from hosted.core.tenant import (
     normalise_timezone,
     token_hash,
 )
-from hosted.ports.control import Tenant
+from hosted.ports.control import (
+    ConnectClient,
+    Connection,
+    SlackInstall,
+    TeamHome,
+    Tenant,
+    TenantEvent,
+)
 
 SESSION_TTL_SECONDS = 30 * 24 * 3600
 
@@ -42,7 +58,7 @@ PRAGMAS = (
     # backup.sh opens this file from a second process (spec, F3).
     "PRAGMA busy_timeout=5000",
 )
-# No foreign_keys pragma: neither table declares a foreign key, so turning it
+# No foreign_keys pragma: no table declares a foreign key, so turning it
 # on would enforce nothing while implying a constraint that is not there.
 
 SCHEMA = """
@@ -53,7 +69,9 @@ CREATE TABLE IF NOT EXISTS tenant (
   timezone    TEXT NOT NULL DEFAULT 'UTC',
   status      TEXT NOT NULL DEFAULT 'active',
   project_id  INTEGER NOT NULL UNIQUE,
-  created_at  REAL NOT NULL
+  created_at  REAL NOT NULL,
+  -- Spec 032: 'person', or 'team' for the home of a team space's agent.
+  kind        TEXT NOT NULL DEFAULT 'person'
 );
 CREATE TABLE IF NOT EXISTS session (
   hash        TEXT PRIMARY KEY,
@@ -78,9 +96,105 @@ CREATE TABLE IF NOT EXISTS memory_key (
   key_id      TEXT NOT NULL,
   created_at  REAL NOT NULL
 );
+-- Spec 026: an event for a tenant, kept here until the tenant's container has
+-- it. The UNIQUE key makes a redelivered message a no-op: Slack resends an
+-- event whose answer was slow, and a chat client resends after a dropped
+-- connection.
+CREATE TABLE IF NOT EXISTS tenant_events (
+  id           INTEGER PRIMARY KEY,
+  tenant_id    TEXT NOT NULL,
+  source       TEXT NOT NULL,
+  external_id  TEXT NOT NULL,
+  session_id   TEXT NOT NULL,
+  payload      TEXT NOT NULL,
+  status       TEXT NOT NULL DEFAULT 'pending',
+  received_at  REAL NOT NULL,
+  handed_at    REAL,
+  UNIQUE (tenant_id, source, external_id)
+);
+CREATE INDEX IF NOT EXISTS tenant_events_waiting ON tenant_events(status, tenant_id, id);
+-- Spec 026: when to start a stopped tenant's container, as its container
+-- reported before the gateway stopped it. One row per tenant.
+CREATE TABLE IF NOT EXISTS tenant_wakeups (
+  tenant_id   TEXT PRIMARY KEY,
+  due_at      REAL NOT NULL,
+  updated_at  REAL NOT NULL
+);
+-- Spec 026 C1: the workspace the public Waku Slack app was added to, and
+-- whose tenant it wakes. One workspace has one tenant and one tenant has one
+-- workspace. token_sealed is the bot token encrypted by SecretBox.
+CREATE TABLE IF NOT EXISTS slack_install (
+  team_id       TEXT PRIMARY KEY,
+  tenant_id     TEXT NOT NULL UNIQUE,
+  team_name     TEXT NOT NULL,
+  bot_user_id   TEXT NOT NULL,
+  token_sealed  BLOB NOT NULL,
+  installed_at  REAL NOT NULL,
+  -- 1 when the gateway's key does not open token_sealed (slack.check_tokens).
+  needs_reconnect INTEGER NOT NULL DEFAULT 0,
+  -- The Slack user who approved the install, or '' when it is not known: a
+  -- row written before 2026-11-20, or the home of a team space's agent. A
+  -- direct message is answered only for this person (spec 032, version A).
+  installer_user_id TEXT NOT NULL DEFAULT ''
+);
+-- Spec 029 A1: the gateway's registration with one vendor's sign-in server,
+-- made once with the one redirect address and used for every tenant.
+-- client_sealed is the client id, the client secret and the vendor's sign-in
+-- addresses, encrypted by SecretBox.
+CREATE TABLE IF NOT EXISTS connect_client (
+  server         TEXT PRIMARY KEY,
+  redirect_uri   TEXT NOT NULL,
+  client_sealed  BLOB NOT NULL,
+  registered_at  REAL NOT NULL
+);
+-- Spec 029 A3: one tenant's sign-in to one vendor. token_sealed is the access
+-- token, the refresh token and the access token's end, encrypted by SecretBox
+-- and bound to this tenant and this server.
+CREATE TABLE IF NOT EXISTS connect_token (
+  tenant_id     TEXT NOT NULL,
+  server        TEXT NOT NULL,
+  token_sealed  BLOB NOT NULL,
+  connected_at  REAL NOT NULL,
+  -- 1 when the token cannot be used any more (connect.Connect marks it).
+  needs_reconnect INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (tenant_id, server)
+);
+-- Spec 032 A1: the home of one team space's agent. One space has one home,
+-- and the home is the tenant tenant_id names, whose kind is 'team'.
+-- key_sealed is the agent's Waku Memory key, encrypted by SecretBox and
+-- bound to the space's id. It is never stored in memory_key.
+CREATE TABLE IF NOT EXISTS team_home (
+  space_id    TEXT PRIMARY KEY,
+  tenant_id   TEXT NOT NULL UNIQUE,
+  space_name  TEXT NOT NULL,
+  agent_id    TEXT NOT NULL,
+  agent_name  TEXT NOT NULL,
+  return_url  TEXT NOT NULL,
+  key_sealed  BLOB NOT NULL,
+  created_at  REAL NOT NULL,
+  updated_at  REAL NOT NULL
+);
 """
 
-_COLUMNS = "id, sub, email, timezone, status, project_id, created_at"
+# A column added to a table after its first release. CREATE TABLE IF NOT
+# EXISTS leaves a table that exists as it is, and upgrade.sh runs no
+# migration on control.db, so the gateway adds each missing column when it
+# opens the file: (table, column, the column's definition).
+ADDED_COLUMNS = (
+    ("tenant", "kind", "TEXT NOT NULL DEFAULT 'person'"),
+    ("slack_install", "installer_user_id", "TEXT NOT NULL DEFAULT ''"),
+)
+
+_COLUMNS = "id, sub, email, timezone, status, project_id, created_at, kind"
+_HOME_COLUMNS = ("space_id, tenant_id, space_name, agent_id, agent_name, return_url, "
+                 "key_sealed")
+# What a team tenant's `sub` starts with. A person's sub is the uuid their
+# sign-in carries, so no sign-in can name a team's row.
+TEAM_SUB_PREFIX = "team:"
+_SLACK_COLUMNS = ("team_id, tenant_id, team_name, bot_user_id, token_sealed, needs_reconnect, "
+                  "installer_user_id")
+_EVENT_COLUMNS = ("id, tenant_id, source, external_id, session_id, payload, status, "
+                  "received_at")
 
 
 class ControlDb:
@@ -123,6 +237,11 @@ class ControlDb:
             for pragma in PRAGMAS:
                 self._conn.execute(pragma)
             self._conn.executescript(SCHEMA)
+            for table, column, definition in ADDED_COLUMNS:
+                have = {row[1] for row in self._conn.execute(f"PRAGMA table_info({table})")}
+                if column not in have:
+                    self._conn.execute(
+                        f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
             self._conn.commit()
 
     def close(self) -> None:
@@ -177,18 +296,26 @@ class ControlDb:
         because the alternative is reuse and reuse is what this prevents.
         """
         with self._lock:
-            used = [r[0] for r in self._conn.execute(
-                "SELECT project_id FROM tenant "
-                "UNION ALL SELECT project_id FROM retired_project_id")]
-            record = Tenant(id=new_tenant_id(), sub=sub, email=email,
-                            timezone=normalise_timezone(timezone), status="active",
-                            project_id=next_project_id(used), created_at=self._now())
-            self._conn.execute(
-                f"INSERT INTO tenant ({_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (record.id, record.sub, record.email, record.timezone, record.status,
-                 record.project_id, record.created_at))
+            record = self._insert_tenant_locked(sub=sub, email=email, timezone=timezone)
             self._conn.commit()
             return record
+
+    def _insert_tenant_locked(self, *, sub: str, email: str, timezone: str,
+                              kind: str = "person") -> Tenant:
+        """The insert half of create_tenant, so set_team_home can make a
+        team's tenant and its team_home row in one transaction."""
+        used = [r[0] for r in self._conn.execute(
+            "SELECT project_id FROM tenant "
+            "UNION ALL SELECT project_id FROM retired_project_id")]
+        record = Tenant(id=new_tenant_id(), sub=sub, email=email,
+                        timezone=normalise_timezone(timezone), status="active",
+                        project_id=next_project_id(used), created_at=self._now(),
+                        kind=kind)
+        self._conn.execute(
+            f"INSERT INTO tenant ({_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (record.id, record.sub, record.email, record.timezone, record.status,
+             record.project_id, record.created_at, record.kind))
+        return record
 
     def tenant_by_sub(self, sub: str) -> Tenant | None:
         with self._lock:
@@ -342,6 +469,316 @@ class ControlDb:
                 "SELECT key FROM memory_key WHERE tenant_id = ?", (tenant_id,)).fetchone()
         return row[0] if row else ""
 
+    def add_event(self, tenant_id: str, *, source: str, external_id: str,
+                  session_id: str, payload: dict) -> bool:
+        """Keep one event for this tenant, `pending`. True when a row was
+        written, False when this source already delivered this external_id to
+        this tenant: the first row stays as it is, handed or not."""
+        self._require_tenant_id(tenant_id)
+        with self._lock:
+            cursor = self._conn.execute(
+                "INSERT OR IGNORE INTO tenant_events (tenant_id, source, external_id, "
+                "session_id, payload, received_at) VALUES (?, ?, ?, ?, ?, ?)",
+                (tenant_id, source, str(external_id), session_id, json.dumps(payload),
+                 self._now()))
+            self._conn.commit()
+            return cursor.rowcount == 1
+
+    def has_session(self, tenant_id: str, session_id: str) -> bool:
+        """Whether this tenant was ever given an event of this conversation.
+        A Slack thread the agent was mentioned in is one."""
+        with self._lock:
+            return self._conn.execute(
+                "SELECT 1 FROM tenant_events WHERE tenant_id = ? AND session_id = ? LIMIT 1",
+                (tenant_id, session_id)).fetchone() is not None
+
+    def has_slack_channel(self, tenant_id: str, channel: str) -> bool:
+        """Whether this tenant was ever given a Slack event from this channel:
+        the agent was mentioned there, in the channel or in one of its
+        threads. `channel` is matched exactly, as the middle part of the
+        conversation's id `slack:<channel>:<thread>`."""
+        prefix = f"slack:{channel}:"
+        with self._lock:
+            return self._conn.execute(
+                "SELECT 1 FROM tenant_events WHERE tenant_id = ? AND source = 'slack' "
+                "AND substr(session_id, 1, ?) = ? LIMIT 1",
+                (tenant_id, len(prefix), prefix)).fetchone() is not None
+
+    def pending_events(self, tenant_id: str) -> list[TenantEvent]:
+        """This tenant's events that its container does not have yet, in the
+        order they arrived."""
+        with self._lock:
+            rows = self._conn.execute(
+                f"SELECT {_EVENT_COLUMNS} FROM tenant_events "
+                "WHERE status = 'pending' AND tenant_id = ? ORDER BY id",
+                (tenant_id,)).fetchall()
+        return [TenantEvent(row["id"], row["tenant_id"], row["source"], row["external_id"],
+                            row["session_id"], json.loads(row["payload"]), row["status"],
+                            row["received_at"]) for row in rows]
+
+    def tenants_with_pending_events(self) -> list[str]:
+        """Every tenant with an event waiting, the longest wait first."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT tenant_id FROM tenant_events WHERE status = 'pending' "
+                "GROUP BY tenant_id ORDER BY MIN(id)").fetchall()
+        return [row[0] for row in rows]
+
+    def mark_events_handed(self, tenant_id: str, event_ids: list[int]) -> None:
+        """The container answered 200 for these rows. The tenant id is part of
+        the match, so a row id can only ever mark its own tenant's event."""
+        self._require_tenant_id(tenant_id)
+        with self._lock:
+            self._conn.executemany(
+                "UPDATE tenant_events SET status = 'handed', handed_at = ? "
+                "WHERE id = ? AND tenant_id = ? AND status = 'pending'",
+                [(self._now(), event_id, tenant_id) for event_id in event_ids])
+            self._conn.commit()
+
+    def set_wakeup(self, tenant_id: str, due_at: float) -> None:
+        """When to start this tenant's container next. A tenant has one
+        wakeup, its earliest timer, and a new report replaces it."""
+        self._require_tenant_id(tenant_id)
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO tenant_wakeups (tenant_id, due_at, updated_at) VALUES (?, ?, ?) "
+                "ON CONFLICT(tenant_id) DO UPDATE SET due_at = excluded.due_at, "
+                "updated_at = excluded.updated_at", (tenant_id, float(due_at), self._now()))
+            self._conn.commit()
+
+    def clear_wakeup(self, tenant_id: str) -> None:
+        self._require_tenant_id(tenant_id)
+        with self._lock:
+            self._conn.execute("DELETE FROM tenant_wakeups WHERE tenant_id = ?", (tenant_id,))
+            self._conn.commit()
+
+    def wakeup(self, tenant_id: str) -> float | None:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT due_at FROM tenant_wakeups WHERE tenant_id = ?",
+                (tenant_id,)).fetchone()
+        return row[0] if row else None
+
+    def due_wakeups(self, now: float) -> list[str]:
+        """Every tenant whose wakeup time has come, the earliest first."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT tenant_id FROM tenant_wakeups WHERE due_at <= ? "
+                "ORDER BY due_at, tenant_id", (now,)).fetchall()
+        return [row[0] for row in rows]
+
+    def set_slack_install(self, tenant_id: str, *, team_id: str, team_name: str,
+                          bot_user_id: str, token_sealed: bytes,
+                          installer_user_id: str = "") -> bool:
+        """Record that this tenant added the Slack app to this workspace.
+        `installer_user_id` is the Slack user who approved, as Slack named
+        them, or "" when Slack did not say. An install that does not say
+        keeps the person an earlier install of the same workspace recorded.
+
+        False, and nothing changes, when the workspace already belongs to
+        another tenant: the first tenant keeps it, so a second member of the
+        workspace cannot move its mentions to their own agent. A tenant has
+        one workspace, so its earlier row, for this workspace or another, is
+        replaced in the same transaction."""
+        self._require_tenant_id(tenant_id)
+        with self._lock:
+            owner = self._conn.execute(
+                "SELECT tenant_id FROM slack_install WHERE team_id = ?",
+                (team_id,)).fetchone()
+            if owner is not None and owner[0] != tenant_id:
+                return False
+            if not installer_user_id and owner is not None:
+                installer_user_id = self._conn.execute(
+                    "SELECT installer_user_id FROM slack_install WHERE team_id = ?",
+                    (team_id,)).fetchone()[0]
+            self._conn.execute("DELETE FROM slack_install WHERE tenant_id = ?",
+                               (tenant_id,))
+            self._conn.execute(
+                "INSERT INTO slack_install (team_id, tenant_id, team_name, bot_user_id, "
+                "token_sealed, installed_at, installer_user_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (team_id, tenant_id, team_name, bot_user_id, token_sealed, self._now(),
+                 installer_user_id))
+            self._conn.commit()
+            return True
+
+    def slack_tenant(self, team_id: str) -> str | None:
+        """The tenant a workspace's mentions go to, or None."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT tenant_id FROM slack_install WHERE team_id = ?",
+                (team_id,)).fetchone()
+        return row[0] if row else None
+
+    @staticmethod
+    def _install(row: sqlite3.Row) -> SlackInstall:
+        return SlackInstall(row[0], row[1], row[2], row[3], bytes(row[4]), bool(row[5]),
+                            row[6])
+
+    def slack_install(self, tenant_id: str) -> SlackInstall | None:
+        """The workspace this tenant connected, or None."""
+        with self._lock:
+            row = self._conn.execute(
+                f"SELECT {_SLACK_COLUMNS} FROM slack_install WHERE tenant_id = ?",
+                (tenant_id,)).fetchone()
+        return self._install(row) if row else None
+
+    def slack_installs(self) -> list[SlackInstall]:
+        """Every connected workspace, in team id order."""
+        with self._lock:
+            rows = self._conn.execute(
+                f"SELECT {_SLACK_COLUMNS} FROM slack_install ORDER BY team_id").fetchall()
+        return [self._install(row) for row in rows]
+
+    def set_slack_reconnect(self, team_id: str, needed: bool) -> None:
+        """Mark, or clear, that this workspace's stored token cannot be
+        opened. A new install replaces the row, which clears it too."""
+        with self._lock:
+            self._conn.execute("UPDATE slack_install SET needs_reconnect = ? "
+                               "WHERE team_id = ?", (int(needed), team_id))
+            self._conn.commit()
+
+    def delete_slack_install(self, team_id: str) -> None:
+        with self._lock:
+            self._conn.execute("DELETE FROM slack_install WHERE team_id = ?", (team_id,))
+            self._conn.commit()
+
+    # --- spec 029: connectors -------------------------------------------
+
+    def set_connect_client(self, server: str, *, redirect_uri: str,
+                           client_sealed: bytes) -> None:
+        """Keep the gateway's registration with one vendor, in place of the
+        one kept before."""
+        with self._lock:
+            self._conn.execute(
+                "INSERT OR REPLACE INTO connect_client (server, redirect_uri, "
+                "client_sealed, registered_at) VALUES (?, ?, ?, ?)",
+                (server, redirect_uri, client_sealed, self._now()))
+            self._conn.commit()
+
+    def connect_client(self, server: str) -> ConnectClient | None:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT server, redirect_uri, client_sealed FROM connect_client "
+                "WHERE server = ?", (server,)).fetchone()
+        return ConnectClient(row[0], row[1], bytes(row[2])) if row is not None else None
+
+    def set_connection(self, tenant_id: str, server: str, *, token_sealed: bytes) -> None:
+        """Keep this tenant's tokens for one vendor. A second sign-in, and
+        each renewal, replaces the row and clears its reconnect mark."""
+        self._require_tenant_id(tenant_id)
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO connect_token (tenant_id, server, token_sealed, connected_at) "
+                "VALUES (?, ?, ?, ?) ON CONFLICT (tenant_id, server) DO UPDATE SET "
+                "token_sealed = excluded.token_sealed, needs_reconnect = 0",
+                (tenant_id, server, token_sealed, self._now()))
+            self._conn.commit()
+
+    @staticmethod
+    def _connection(row: sqlite3.Row) -> Connection:
+        return Connection(row[0], row[1], bytes(row[2]), bool(row[3]))
+
+    def connection(self, tenant_id: str, server: str) -> Connection | None:
+        if not is_tenant_id(tenant_id):
+            return None
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT tenant_id, server, token_sealed, needs_reconnect FROM connect_token "
+                "WHERE tenant_id = ? AND server = ?", (tenant_id, server)).fetchone()
+        return self._connection(row) if row is not None else None
+
+    def connections(self, tenant_id: str) -> list[Connection]:
+        """Every vendor this tenant signed in to, by name."""
+        if not is_tenant_id(tenant_id):
+            return []
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT tenant_id, server, token_sealed, needs_reconnect FROM connect_token "
+                "WHERE tenant_id = ? ORDER BY server", (tenant_id,)).fetchall()
+        return [self._connection(row) for row in rows]
+
+    def set_connection_reconnect(self, tenant_id: str, server: str, needed: bool) -> None:
+        self._require_tenant_id(tenant_id)
+        with self._lock:
+            self._conn.execute(
+                "UPDATE connect_token SET needs_reconnect = ? "
+                "WHERE tenant_id = ? AND server = ?", (int(needed), tenant_id, server))
+            self._conn.commit()
+
+    def delete_connection(self, tenant_id: str, server: str) -> bool:
+        """Remove this tenant's tokens for one vendor. True when there were
+        any."""
+        self._require_tenant_id(tenant_id)
+        with self._lock:
+            removed = self._conn.execute(
+                "DELETE FROM connect_token WHERE tenant_id = ? AND server = ?",
+                (tenant_id, server)).rowcount
+            self._conn.commit()
+        return removed > 0
+
+    # --- spec 032: team homes --------------------------------------------
+
+    @staticmethod
+    def _home(row: sqlite3.Row | None) -> TeamHome | None:
+        if row is None:
+            return None
+        return TeamHome(row[0], row[1], row[2], row[3], row[4], row[5], bytes(row[6]))
+
+    def set_team_home(self, *, space_id: str, space_name: str, agent_id: str,
+                      agent_name: str, return_url: str,
+                      key_sealed: bytes) -> tuple[TeamHome, bool]:
+        """Make the home of this space's agent, or replace what a home that
+        exists holds. Returns (the home, whether this call made it).
+
+        A new home is a new tenant of kind `team` and one team_home row,
+        written in one transaction: a tenant with no home would be a
+        container nothing could give a key to. A space that has a home keeps
+        its tenant, so its disk and its waiting events stay, and gets the new
+        names, return address and sealed key."""
+        with self._lock:
+            found = self._home(self._conn.execute(
+                f"SELECT {_HOME_COLUMNS} FROM team_home WHERE space_id = ?",
+                (space_id,)).fetchone())
+            now = self._now()
+            if found is None:
+                try:
+                    tenant = self._insert_tenant_locked(
+                        sub=TEAM_SUB_PREFIX + space_id, email="", timezone="UTC",
+                        kind="team")
+                    self._conn.execute(
+                        f"INSERT INTO team_home ({_HOME_COLUMNS}, created_at, updated_at) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        (space_id, tenant.id, space_name, agent_id, agent_name,
+                         return_url, key_sealed, now, now))
+                except BaseException:
+                    self._conn.rollback()
+                    raise
+                tenant_id = tenant.id
+            else:
+                tenant_id = found.tenant_id
+                self._conn.execute(
+                    "UPDATE team_home SET space_name = ?, agent_id = ?, agent_name = ?, "
+                    "return_url = ?, key_sealed = ?, updated_at = ? WHERE space_id = ?",
+                    (space_name, agent_id, agent_name, return_url, key_sealed, now,
+                     space_id))
+            self._conn.commit()
+            return (TeamHome(space_id, tenant_id, space_name, agent_id, agent_name,
+                             return_url, key_sealed), found is None)
+
+    def team_home(self, space_id: str) -> TeamHome | None:
+        """The home of this space's agent, or None."""
+        with self._lock:
+            return self._home(self._conn.execute(
+                f"SELECT {_HOME_COLUMNS} FROM team_home WHERE space_id = ?",
+                (space_id,)).fetchone())
+
+    def team_home_for_tenant(self, tenant_id: str) -> TeamHome | None:
+        """The home this tenant is, or None for a person's tenant."""
+        with self._lock:
+            return self._home(self._conn.execute(
+                f"SELECT {_HOME_COLUMNS} FROM team_home WHERE tenant_id = ?",
+                (tenant_id,)).fetchone())
+
     def delete_tenant(self, tenant_id: str) -> None:
         """The row goes; the archive keeps the files for 30 days.
 
@@ -359,5 +796,10 @@ class ControlDb:
             self._conn.execute("DELETE FROM session WHERE tenant_id = ?", (tenant_id,))
             self._conn.execute("DELETE FROM proxy_token WHERE tenant_id = ?", (tenant_id,))
             self._conn.execute("DELETE FROM memory_key WHERE tenant_id = ?", (tenant_id,))
+            self._conn.execute("DELETE FROM tenant_events WHERE tenant_id = ?", (tenant_id,))
+            self._conn.execute("DELETE FROM tenant_wakeups WHERE tenant_id = ?", (tenant_id,))
+            self._conn.execute("DELETE FROM slack_install WHERE tenant_id = ?", (tenant_id,))
+            self._conn.execute("DELETE FROM connect_token WHERE tenant_id = ?", (tenant_id,))
+            self._conn.execute("DELETE FROM team_home WHERE tenant_id = ?", (tenant_id,))
             self._conn.execute("DELETE FROM tenant WHERE id = ?", (tenant_id,))
             self._conn.commit()

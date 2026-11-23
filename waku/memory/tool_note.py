@@ -33,6 +33,15 @@ OUTPUT_MAX = 300
 NOTE_MAX = 600
 
 _SPACE = re.compile(r"\s+")
+# The tool each call in a note names: `name(` after the prefix or after "; ".
+_NAMED = re.compile(r"(?:^\[tools used: |; )(\w+)\(")
+# What the model reads when its reply held the note of a call it did not make.
+NO_CALL_WAS_MADE = (
+    "[Nobody sent this message. Your last answer ended with a \"[tools used: ...]\" line "
+    "that you wrote yourself, and it names a tool you did not call in this turn. Waku "
+    "writes that line after a call, never you. Nothing was done. If the request needs "
+    "the tool, call it now. Then answer again, without that line, and say only what "
+    "the tools of this turn answered.]")
 
 
 def _short(text: object, limit: int) -> str:
@@ -66,3 +75,16 @@ def clip(record: str) -> str:
     if i < 0 or len(record) - i <= NOTE_MAX:
         return record
     return record[:i] + _short(record[i:], NOTE_MAX - 1) + "]"
+
+
+def claimed(reply: str) -> list[str]:
+    """The tools a note in a reply names, in order. [] without a note."""
+    i = (reply or "").find(PREFIX)
+    return [] if i < 0 else _NAMED.findall(reply[i:])
+
+
+def imitated(reply: str, tool_calls: list[dict]) -> bool:
+    """Whether a reply holds a note that names a call the turn did not make.
+    The model wrote that note itself: it copied the form from its history."""
+    made = {call["tool"] for call in tool_calls}
+    return any(name not in made for name in claimed(reply))

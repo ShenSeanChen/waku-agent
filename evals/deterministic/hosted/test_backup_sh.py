@@ -1100,3 +1100,25 @@ def test_the_example_teaches_a_shape_that_cannot_run_a_command(tmp_path):
         "a key written the way backup.env.example shows it ran a command as "
         "root when the file was sourced")
     assert done.stdout == f"[{hostile}]"
+
+
+# --- what a backup does not hold (spec 026 C) --------------------------------
+
+
+def test_a_backup_says_once_that_the_slack_token_key_is_not_in_it(tmp_path):
+    """control.db is in the snapshot and config/ is not, so the Slack tokens
+    in a backup open only with a key the backup does not hold. A restore onto
+    another VM without that key disconnects every workspace, and the only
+    time an operator can still copy the key is while the old VM exists. So
+    every full backup names the key and the file it is in, in one line."""
+    root, env = _root(tmp_path)
+    done = _run(tmp_path, ["--all"], env)
+    assert done.returncode == 0, done.stderr
+    lines = [line for line in done.stdout.splitlines() if "WAKU_SLACK_TOKEN_KEY" in line]
+    assert len(lines) == 1
+    assert f"{root}/config/gateway.env" in lines[0]
+    assert "not in this backup" in lines[0]
+    # One tenant's backup holds no control.db, so it says nothing about it.
+    one = _run(tmp_path, ["--tenant", TENANT], env)
+    assert one.returncode == 0, one.stderr
+    assert "WAKU_SLACK_TOKEN_KEY" not in one.stdout

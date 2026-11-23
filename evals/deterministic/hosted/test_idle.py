@@ -318,3 +318,70 @@ def test_a_reserved_slot_is_given_back_by_release_start():
     assert f.running() == ["bbbbbbbbbbbb"]     # RUNNING is not touched
     f.release_start("never-seen")              # and an unknown tenant is a no-op
     assert f.running() == ["bbbbbbbbbbbb"]
+
+
+# --- spec 026, task A4: a container's own report of the work it has left ----
+
+QUIET = {"next_timer_at": None, "events": 0, "outbox": 0, "running": 0}
+
+
+def test_a_pending_outbox_row_is_work_left():
+    """Acceptance 4's decision: a reply that has not been sent yet is work."""
+    left = idle.work_left({**QUIET, "outbox": 1})
+    assert left is not None and left.busy is True
+
+
+def test_an_empty_outbox_with_no_run_and_no_event_is_no_work_left():
+    left = idle.work_left(QUIET)
+    assert left is not None and left.busy is False
+
+
+def test_a_run_in_progress_or_an_unread_event_counts_like_an_outbox_row():
+    assert idle.work_left({**QUIET, "running": 1}).busy is True
+    assert idle.work_left({**QUIET, "events": 2}).busy is True
+
+
+def test_the_wakeup_is_the_reported_timer_as_seconds_since_the_epoch():
+    left = idle.work_left({**QUIET, "next_timer_at": "2026-11-20T09:00:00+00:00"})
+    assert left.busy is False
+    assert left.wakeup == 1_795_165_200.0
+    # The same instant written in another zone is the same wakeup.
+    other = idle.work_left({**QUIET, "next_timer_at": "2026-11-20T17:00:00+08:00"})
+    assert other.wakeup == 1_795_165_200.0
+
+
+def test_no_timer_is_no_wakeup():
+    assert idle.work_left(QUIET).wakeup is None
+
+
+def test_a_report_that_is_not_the_agreed_shape_has_no_outbox_answer_and_no_wakeup():
+    """A closed set: the four keys, three whole numbers and a time with a
+    zone. Anything else is no report at all, and the caller decides what a
+    missing report means. A container cannot keep itself awake, or move its
+    wakeup, by answering something this function has to guess at."""
+    for report in (
+        None, [], "busy", {},
+        {k: v for k, v in QUIET.items() if k != "outbox"},
+        {**QUIET, "outbox": "1"},
+        {**QUIET, "outbox": -1},
+        {**QUIET, "outbox": True},
+        {**QUIET, "running": 1.5},
+        {**QUIET, "next_timer_at": "Friday"},
+        {**QUIET, "next_timer_at": 1_795_165_200},
+        {**QUIET, "next_timer_at": "2026-11-20T09:00:00"},     # no zone
+    ):
+        assert idle.work_left(report) is None, report
+
+
+def test_a_container_with_outbox_work_is_kept_for_a_bounded_time_only():
+    """A container that reports work for ever is broken. It is kept for the
+    idle window plus WORK_LIMIT_SECONDS and then stopped like any other."""
+    clock, f = fleet()
+    assert f.admit("abcdefghijkl", background=False).action == "start"
+    f.set_status("abcdefghijkl", idle.RUNNING)
+    assert idle.WORK_LIMIT_SECONDS == 2 * 3600
+    clock["t"] += idle.IDLE_SECONDS + idle.WORK_LIMIT_SECONDS - 1
+    assert f.worked_too_long("abcdefghijkl") is False
+    clock["t"] += 1
+    assert f.worked_too_long("abcdefghijkl") is True
+    assert f.worked_too_long("nobodynobody") is False

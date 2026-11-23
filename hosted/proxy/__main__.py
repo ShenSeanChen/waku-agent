@@ -13,6 +13,17 @@ It asks run/gateway/gateway.sock who a token belongs to, through TokenCache's
 -- and, when config/proxy.env carries one, the platform's treg token, behind
 the /treg/mcp/ relay on the same site (spec 004 E; hosted/proxy/treg.py).
 
+POST /slack/send, on the same site, takes a container's outgoing Slack message
+and hands it to the gateway, which holds the Slack tokens (spec 026 C3;
+hosted/proxy/slack.py). No Slack token is ever in this process.
+POST /slack/history, beside it, takes a container's request for the recent
+messages of the channel its run is in, and the gateway reads them (spec 029 D).
+
+POST /connect/<name>/mcp takes a container's MCP message for a connector the
+tenant signed in to, and hands it to the gateway, which holds that sign-in's
+tokens (spec 029 B; hosted/proxy/connect.py). No vendor token is ever in this
+process either.
+
 BEFORE IT SERVES, it settles every reservation a previous run left behind at
 its full amount: the upstream call each was holding may already have been
 billed (spec 001, step 10).
@@ -32,9 +43,12 @@ from aiohttp import web
 from hosted import log
 from hosted.proxy.app import MeteringProxy
 from hosted.proxy.config import config_from_env
+from hosted.proxy.connect import ConnectCalls
 from hosted.proxy.gateway_client import TokenCache
 from hosted.proxy.internal import serve_spend
 from hosted.proxy.ledger import Ledger
+from hosted.proxy.mail import MailDoor
+from hosted.proxy.slack import SlackHistory, SlackSend
 from hosted.proxy.treg import TregRelay
 from hosted.proxy.turns import TurnCharges
 from hosted.proxy.upstream import AnthropicUpstream
@@ -60,11 +74,27 @@ async def main() -> None:
             treg = TregRelay(session=session, token=config.treg_token,
                              max_call_usd=config.treg_max_call_usd, resolve=tokens.resolve,
                              memory_key=tokens.memory_key, wallet=wallet, turns=turns)
+        # Spec 029 B: always on, for the Slack relay's reason. A gateway with
+        # connectors off answers connectors_not_configured.
+        connectors = ConnectCalls(resolve=tokens.resolve,
+                                  gateway_socket=config.gateway_socket)
         proxy = MeteringProxy(
             config=config, ledger=ledger, resolve=tokens.resolve,
             upstream=AnthropicUpstream(session, config.upstream_base_url, config.platform_key),
             memory_key=tokens.memory_key, wallet=wallet,
-            treg=treg.handle if treg is not None else None, turns=turns)
+            treg=treg.handle if treg is not None else None, turns=turns,
+            # Spec 026 C3: always on. A gateway with Slack off answers
+            # slack_not_configured, so this proxy has nothing to configure.
+            slack=SlackSend(resolve=tokens.resolve,
+                            gateway_socket=config.gateway_socket).handle,
+            # Spec 029 D: the same, for reading the channel a run is in.
+            slack_history=SlackHistory(resolve=tokens.resolve,
+                                       gateway_socket=config.gateway_socket).handle,
+            connect=connectors.handle, connect_link=connectors.link,
+            # Spec 031 A: the same, for the three mail tools. A gateway with
+            # no Google client answers that Gmail is not offered.
+            mail=MailDoor(resolve=tokens.resolve,
+                          gateway_socket=config.gateway_socket).handle)
         runner = web.AppRunner(proxy.build(), access_log=None)
         await runner.setup()
         await web.TCPSite(runner, config.bind_host, config.port).start()

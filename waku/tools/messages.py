@@ -1,36 +1,90 @@
-"""send_message — drafts a message into a local outbox.
+"""send_message: queue a message in the outbox (spec 023, decision 5).
 
-Local-first: nothing is actually sent. Each message becomes a file in
-.waku/outbox/ that you can read, edit, and send yourself. Wiring a real
-channel (email, Telegram, Slack) is a great community contribution.
+The tool writes one row into the `outbox` table of state.db and returns. It
+never calls Telegram, Slack or GitHub: the dispatcher in `waku serve` sends the
+row, and retries it when a delivery fails. Without `waku serve` running the row
+waits.
+
+Who it reaches without a yes: the owner (WAKU_OWNER), and the conversation
+the run came from. A message to anyone else needs the owner's yes. Under
+`waku serve` the call is stored and the owner is asked before this function
+runs (waku/alwayson/approvals.py); it runs when the owner answers yes. In the
+terminal and the dashboard nothing can ask, so the tool refuses and writes no
+row.
+
+What the tool answers names no process and no table, because the model
+repeats what it is given (spec 024, decision 3).
 """
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+import uuid
 from pathlib import Path
 
 from waku.tools.registry import Tool
 
+_FORMS = "telegram:<chat id>, slack:<channel id> or github:<owner>/<repo>#<number>"
+
 
 def make_tool(home: Path) -> Tool:
     def send_message(to: str, body: str) -> str:
-        stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S")
-        safe_to = "".join(c if c.isalnum() else "-" for c in to)[:40]
-        path = home / "outbox" / f"{stamp}-{safe_to}.txt"
-        path.write_text(f"To: {to}\n\n{body}\n", encoding="utf-8")
-        return f"Message to {to} placed in outbox ({path.name}). Nothing was sent — review it there."
+        from waku.alwayson import approvals, outbox
+        from waku.alwayson.worker import serving
+        from waku.db import connect
+
+        to, body = (to or "").strip(), (body or "").strip()
+        if not body:
+            return "Not sent: the message is empty."
+        owners = outbox.owner_addresses()
+        run = outbox.current_run(home)
+        if to.lower() in ("owner", "me"):
+            if not owners:
+                return ("Not sent: WAKU_OWNER is not set, so Waku does not know where the "
+                        f"owner is reached. Set it in .env to {_FORMS}.")
+            address = owners[0]
+        else:
+            address = outbox.parse_address(to)
+            if address is None:
+                return (f"Not sent: Waku has no address for '{to}'. A message can go to "
+                        f"'owner', or to {_FORMS}.")
+            approved = run is not None and run.approved_key is not None
+            asks = approvals.mode("send_message", {"to": to, "body": body},
+                                  run.address if run else None) == approvals.ASK
+            if asks and not approved:
+                return (f"Not sent: a message to {to} needs the owner's approval, and this "
+                        "chat cannot ask for it. Without a yes Waku messages the owner and "
+                        "the conversation this request came from.")
+        channel, target = address
+        key = run.next_key() if run else f"chat:{uuid.uuid4().hex}"
+        conn = connect(home)
+        try:
+            written = outbox.insert(conn, run_id=run.run_id if run else "chat", channel=channel,
+                                    target=target, body=body, idempotency_key=key)
+        finally:
+            conn.close()
+        # In the owner's own chat the message comes back to the person the
+        # model talks to, so the answer does not call them "the owner".
+        where = ("this chat" if run is not None and address == run.address
+                 else "the owner" if to.lower() in ("owner", "me")
+                 else outbox.format_address(channel, target))
+        if written is None:
+            return f"The message to {where} was already queued by an earlier attempt of this run."
+        if run is None and not serving(home):
+            return (f"The message to {where} is saved and not sent yet. Waku sends it when "
+                    "its always-on mode is running.")
+        return f"The message to {where} is on its way."
 
     return Tool(
         name="send_message",
         description=(
-            "Draft a message to someone and place it in the local outbox for the user to "
-            "review and send. Use when the user asks you to message, tell, or remind someone."
+            "Send a message to the owner or to an address. "
+            "`to` is 'owner', or an address: " + _FORMS + ". Use when the user asks you to "
+            "message, tell, or remind someone."
         ),
         input_schema={
             "type": "object",
             "properties": {
-                "to": {"type": "string", "description": "Recipient name or address"},
+                "to": {"type": "string", "description": "'owner', or an address"},
                 "body": {"type": "string", "description": "The message text"},
             },
             "required": ["to", "body"],

@@ -511,3 +511,25 @@ def test_the_card_never_says_kept_in_memory_for_facts_waku_memory_refused():
     assert "memory 4 used · 2 kept, 2 on this agent only" in got["refusedLine"]
     assert "memory 4 used · 2 kept, 1 on this agent only" in got["halfLine"]
     assert "2 on this agent only" in got["refusedRows"]
+
+
+def test_platform_model_calls_carry_the_token_as_x_api_key():
+    """hosted/proxy/ authenticates on `x-api-key`. anthropic 2.x sends an API
+    key as `Authorization: Bearer`, so a tagged call sets the header itself and
+    the proxy sees the same one from every SDK version (found when CI resolved
+    anthropic 2.8.0 while uv.lock pins 0.116.0)."""
+    from types import SimpleNamespace
+
+    from waku.loop.models import TurnTagged
+
+    seen: list[dict] = []
+    messages = SimpleNamespace(create=lambda **kw: seen.append(kw))
+    tagged = TurnTagged(SimpleNamespace(api_key="platform-token", messages=messages))
+    tagged.turn_id = "t_known"
+    tagged.messages.create(model="m", messages=[])
+    headers = seen[0]["extra_headers"]
+    assert headers["x-api-key"] == "platform-token"
+    assert headers["X-Waku-Turn"] == "t_known"
+    tagged.turn_id = ""
+    tagged.messages.create(model="m", messages=[], extra_headers={"X-Other": "1"})
+    assert seen[1]["extra_headers"] == {"X-Other": "1", "x-api-key": "platform-token"}
