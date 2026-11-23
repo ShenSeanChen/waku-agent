@@ -709,6 +709,9 @@ REPLY_CHARS = 4000
 OUTPUT_CHARS = 800
 OUTPUTS_CHARS = 6000
 
+# The number check before the scores (waku-agent#353): without it Haiku 4.5
+# scored "The research cost $0.00" grounded 9/10 on all five runs, while a
+# tool output showed `"cost_usd": 0.0089`. With it the same reply scores 2-4.
 JUDGE_RUBRIC = """You are a strict, fair judge grading one turn of an AI assistant.
 
 The person asked:
@@ -719,6 +722,10 @@ The assistant replied:
 
 The tool outputs the assistant saw this turn (each cut to {output_chars} characters):
 {outputs}
+
+Before you score, check every number the reply states: each count, price and cost. Find the
+tool output it comes from. A number no output supports is unsupported; a number an output
+contradicts is false.
 
 Score two things from 0 to 10:
 - addresses_question: does the reply answer what the person asked?
@@ -793,6 +800,41 @@ def judge_client(settings):
     return client, model, copy.provider
 
 
+def judge_sampling(provider: str) -> dict:
+    """`temperature=0` for an Anthropic judge, so one turn gets one score:
+    at the default temperature one reply scored 0.5 on some runs and 0.6 on
+    others (waku-agent#353). Nothing for an OpenAI-compatible
+    provider: its adapter takes no temperature, and some OpenAI models
+    refuse any value but the default.
+
+    `judge_turn` sends this once and, if the installed library refuses it,
+    sends the call again without it: see `_judge_call`."""
+    from waku.loop.models import PROVIDERS  # noqa: PLC0415
+
+    row = PROVIDERS.get(provider or "")
+    return {"temperature": 0} if row is not None and row.kind == "anthropic" else {}
+
+
+def _judge_call(client, model: str, prompt: str, sampling: dict):
+    """The judge's one model call. Version 1 of the `anthropic` library
+    removed `temperature` from `messages.create`, and passing it raises a
+    TypeError before anything is sent. `pyproject.toml` allows any version
+    from 0.40, so a fresh `pip install waku-agent` gets a library that
+    refuses it, and from 0.1.10 to 0.1.12 "Judge this turn" answered "The
+    judge could not be reached: TypeError" there. A library that refuses the
+    setting gets the same call without it, and the judge then samples at the
+    default temperature."""
+    request = {"model": model, "max_tokens": JUDGE_MAX_TOKENS,
+               "messages": [{"role": "user", "content": prompt}]}
+    if sampling:
+        try:
+            return client.messages.create(**request, **sampling)
+        except TypeError as exc:
+            if not any(name in str(exc) for name in sampling):
+                raise
+    return client.messages.create(**request)
+
+
 class JudgeRefused(Exception):
     """The judge route's answer for a turn it will not judge."""
 
@@ -845,8 +887,7 @@ def judge_turn(home: Path, turn_id: str, client, model: str, provider: str,
     if hasattr(client, "turn_id"):
         client.turn_id = call_id
     try:
-        resp = client.messages.create(model=model, max_tokens=JUDGE_MAX_TOKENS,
-                                      messages=[{"role": "user", "content": prompt}])
+        resp = _judge_call(client, model, prompt, judge_sampling(provider))
     except Exception as exc:
         with _RECENT_LOCK:
             _RECENT.pop(turn_id, None)   # a failed call may be retried at once

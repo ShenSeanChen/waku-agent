@@ -1,0 +1,33 @@
+# The Slack app that `waku serve` listens through (spec 025).
+#
+# At https://api.slack.com/apps choose "Create New App", then "From a
+# manifest", pick your workspace and paste this file. docs/integrations.md,
+# "Slack from a manifest", has the three steps that follow.
+#
+# The app asks for the least it needs:
+#   app_mentions:read   to hear a message that mentions the bot
+#   chat:write          to answer in the thread
+#   app_mention         the one event it is sent
+# Socket Mode means your machine calls Slack, so it needs no public address.
+
+display_information:
+  name: Waku Agent
+  description: Answers when it is mentioned, from an agent you run yourself.
+features:
+  bot_user:
+    display_name: waku
+    always_online: false
+oauth_config:
+  scopes:
+    bot:
+      - app_mentions:read
+      - chat:write
+settings:
+  event_subscriptions:
+    bot_events:
+      - app_mention
+  interactivity:
+    is_enabled: false
+  org_deploy_enabled: false
+  socket_mode_enabled: true
+  token_rotation_enabled: false

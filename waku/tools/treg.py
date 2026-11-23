@@ -109,10 +109,7 @@ def add_server(home: Path) -> tuple[str, dict]:
     somewhere else on purpose -- a hosted container's relay is one -- so it is
     left alone).
     """
-    config = home / "mcp.json"
-    data = json.loads(config.read_text(encoding="utf-8")) if config.exists() else {}
-    servers = data.setdefault("servers", [])
-
+    servers = _servers(home)
     for spec in servers:
         if _same_url(spec):
             return "present", spec
@@ -120,11 +117,10 @@ def add_server(home: Path) -> tuple[str, dict]:
         if spec.get("name") == NAME:
             return "conflict", spec
 
-    spec = {"name": NAME, "url": URL, "oauth": True}
-    servers.append(spec)
-    home.mkdir(parents=True, exist_ok=True)
-    config.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
-    return "added", spec
+    # One function writes mcp.json for every connector (spec 025).
+    from waku.tools import connectors
+
+    return "added", connectors.add(home, NAME, url=URL).spec
 
 
 def _spec(home: Path) -> dict | None:

@@ -24,12 +24,26 @@
 # line, which is the property that matters.
 
 # Reads: root domain max_running supabase_url supabase_audience
-#        supabase_publishable_key
+#        supabase_publishable_key slack_token_key
 #
-# The 17 names in hosted/gateway/config.REQUIRED_ENV_NAMES, in its order.
+# The names in hosted/gateway/config.REQUIRED_ENV_NAMES, in its order.
 # WAKU_EMBED_ORIGINS is written with the gateway's own default, so the file
 # says what the gateway is doing; a gateway.env from before spec 008 lacks it
 # and the gateway falls back to the same three (config.MAY_BE_ABSENT).
+#
+# THE FOUR SLACK NAMES (spec 026 C). The client id, the client secret and the
+# signing secret are WRITTEN EMPTY, like WAKU_TREG_TOKEN in proxy.env:
+# install.sh has no flag for them, and the operator copies them from the Slack
+# app's settings page into this file by hand (hosted/README.md, "Slack"). The
+# gateway starts without them and its Slack routes refuse, naming the empty
+# names. $slack_token_key is the one secret this function prints; install.sh
+# makes it with waku_new_key and pipes this into waku_write_config, which
+# creates the file 0600 before a byte of it is written.
+#
+# WAKU_AGENT_PLATFORM_SECRET (spec 032) IS WRITTEN EMPTY too. It is shared
+# with waku.one, so install.sh cannot make it: the operator enters the same
+# value in both places by hand (hosted/README.md, "Team homes"). Until then
+# the gateway's /v1/team-homes routes answer 503.
 waku_gateway_env() {
   cat <<EOF
 WAKU_APEX_HOST=$domain
@@ -50,6 +64,15 @@ WAKU_FREE_TURNS_PER_HOUR=30
 WAKU_BYOK_TURNS_PER_HOUR=120
 WAKU_EMBED_ORIGINS=https://www.waku.one https://waku.one https://dev.waku.one
 WAKU_IDLE_MINUTES=15
+WAKU_SLACK_CLIENT_ID=
+WAKU_SLACK_CLIENT_SECRET=
+WAKU_SLACK_SIGNING_SECRET=
+WAKU_SLACK_TOKEN_KEY=$slack_token_key
+WAKU_GITHUB_CLIENT_ID=
+WAKU_GITHUB_CLIENT_SECRET=
+WAKU_GOOGLE_CLIENT_ID=
+WAKU_GOOGLE_CLIENT_SECRET=
+WAKU_AGENT_PLATFORM_SECRET=
 EOF
 }
 

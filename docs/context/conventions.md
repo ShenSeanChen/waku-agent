@@ -43,6 +43,9 @@ the rung above cannot do the job:
    an extra and off by default.
 5. **A gateway**: one file in `waku/gateway/`. Gateways only move text: in
    through `waku.respond()` and out again, with no memory, tools or loop logic.
+   A source for `waku serve` is one file in `waku/alwayson/sources/`. Its
+   handler checks who sent the message, inserts one row into `events` and
+   returns; it never calls `waku.respond()`.
 6. **A new core tool, as a last resort.** It has to earn its place in every
    prompt.
 
@@ -145,8 +148,8 @@ surprising finding, and which board to film.
 
 ## 7. Dependencies and extras
 
-The default install is the stdlib plus the Anthropic and OpenAI clients. An
-optional feature goes behind an extra in `pyproject.toml`, and it fails with an
+The default install is the stdlib plus the Anthropic and OpenAI clients, and
+`mcp`, which connects Waku Memory. An optional feature goes behind an extra in `pyproject.toml`, and it fails with an
 install hint, not a crash, when the extra is missing. A new core dependency
 needs a discussion on an issue first.
 

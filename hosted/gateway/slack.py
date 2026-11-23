@@ -1,0 +1,1112 @@
+"""The public Waku Slack app (spec 026 group C, decision 5).
+
+One Slack app serves every workspace. Four things happen here:
+
+  install   "Add to Slack": GET /slack/install sends a signed-in person to
+            Slack, and GET /slack/oauth/callback exchanges the code Slack
+            sends back for that workspace's bot token. The token is stored
+            sealed (secretbox.py) beside the tenant, with the map from the
+            workspace's team id to the tenant.
+  events    POST /v1/triggers/slack: Slack posts every workspace's mentions
+            here. A signed request becomes one row in tenant_events for the
+            tenant its team id maps to: the person who added the app, or the
+            home of a team space's agent (spec 032), whose events start with
+            a line that names the space. A direct message to the bot becomes
+            a row only when the person who added the app wrote it (below).
+  relay     SlackRelay.send: a tenant's container asks for a message to be
+            posted, and the gateway posts it with that tenant's token. The
+            token never enters a container.
+  history   SlackHistory.read: a tenant's container asks for the recent
+            messages of the channel its run is in, and the gateway reads
+            them with that tenant's token (spec 029 D).
+
+A TEAM HOME HAS NO PERSON TO SIGN IN (spec 032, decision 2). An owner of a
+team space presses "Add Waku to Slack" on waku.one, and their browser arrives
+at GET /slack/install?home=<ticket> with no session here. The ticket stands in
+for the sign-in: waku.one got it from POST /v1/team-homes (team_homes.py), and
+it names one home, works once and ends after ten minutes. The install page
+then sets a cookie that lasts ten minutes, and the callback requires that
+cookie together with the `state`. That keeps the rule below for a browser
+with no session: the browser that finishes an install is the one that began
+it. After Slack's page the browser goes to the home's own return address on
+waku.one, whether the owner approved or cancelled.
+
+A DIRECT MESSAGE IS ANSWERED FOR ONE PERSON (spec 032, version A, decided by
+Sean on 2026-11-20). Anybody in a workspace can open a chat with the bot, and
+the agent behind it is one person's, with that person's memories and mail. So
+the callback keeps the Slack user who approved the install, and a direct
+message becomes an event only when Slack says that user wrote it. The event's
+`reply_to` then carries `private: true`, which is how the container knows the
+chat is its person's own and not a place several people read. Only `_direct`
+writes that mark, and a container cannot ask the gateway for an event. Anybody
+else gets one fixed line, at most once a day, and no run starts. A workspace
+whose installer is not known (added before this was stored, or a team home)
+has no such person: everybody gets the line, until the person presses "Update
+permissions" on /setup, which goes through the callback again and records them.
+
+THE STATE IS WHAT TIES AN INSTALL TO A PERSON. Slack returns whatever `state`
+it was given, so the gateway issues one per start: random, bound to the
+signed-in tenant, good for ten minutes and for one use. The callback also
+requires the browser's own session to name the same tenant. Without both, a
+person could approve the app in their workspace and finish the install in
+somebody else's browser, and that person's agent would answer a workspace
+they never chose.
+
+NOTHING HERE LOGS OR RETURNS A TOKEN, THE CLIENT SECRET OR THE SIGNING SECRET.
+A log line carries a tenant id, a team id and Slack's own error code.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import base64
+import datetime
+import gzip
+import hashlib
+import hmac
+import json
+import re
+import time
+import urllib.parse
+import zoneinfo
+from collections.abc import Callable
+
+import aiohttp
+from aiohttp import web
+
+from hosted import log
+from hosted.core.tenant import is_tenant_id, token_hash
+from hosted.gateway import answers, sessions
+from hosted.gateway.config import SlackSettings
+from hosted.gateway.secretbox import SecretBox, Unreadable
+from hosted.gateway.slack_thread import BUDGET_SECONDS, ThreadReader, with_team_space
+from hosted.ports.control import ControlStore, TeamHome
+
+_LOG = log.get(__name__)
+
+SLACK_API = "https://slack.com/api"
+AUTHORIZE_URL = "https://slack.com/oauth/v2/authorize"
+INSTALL_PATH = "/slack/install"
+CALLBACK_PATH = "/slack/oauth/callback"
+EVENTS_PATH = "/v1/triggers/slack"
+SETUP_PATH = "/setup"
+# What the bot may do: hear a mention of itself, and post a message.
+# The last three read the thread a mention is in, and the names in it
+# (slack_thread.py). A workspace that added the app before they were asked for
+# keeps working without them, and gets them when its person adds the app again.
+# `im:history` is what lets Slack send the bot its direct messages
+# (`message.im`). A workspace without it hears channels as before and is never
+# sent a direct message.
+SCOPES = ("app_mentions:read", "chat:write", "channels:history", "groups:history",
+          "users:read", "reactions:write", "channels:read", "groups:read", "im:history")
+# What the bot puts on a message the moment it is kept for the agent, so the
+# person sees it was heard before the answer is written. A container that was
+# stopped takes some seconds to start, and until 2026-11-19 nothing in Slack
+# said that anything was happening.
+SEEN_REACTION = "eyes"
+STATE_TTL_SECONDS = 600
+# What the install page of a team home sets before it sends the browser to
+# Slack, and what the callback asks for with the `state` (spec 032 A3). It
+# lasts as long as the state does. __Host-: Secure, Path=/ and no Domain, so
+# only this host ever receives it.
+HOME_COOKIE = "__Host-waku_slack_home"
+HOME_LINK_ENDED = ("This link to add Waku to Slack has ended or was already used. "
+                   "Go back to your team space on waku.one and press "
+                   '"Add Waku to Slack" again.')
+# One request to Slack. The person's browser, or Slack's own three-second
+# limit on an event, is waiting behind it.
+TIMEOUT_SECONDS = 10
+TEAM_ID = re.compile(r"T[A-Z0-9]{2,31}")
+# A person's id as Slack writes it. `W` is a person of an Enterprise Grid.
+USER_ID = re.compile(r"[UW][A-Z0-9]{2,31}")
+# A direct-message conversation's id.
+DIRECT_ID = re.compile(r"D[A-Z0-9]{2,31}")
+# The key in an event's `reply_to` that says the conversation is the tenant's
+# own person's direct message. waku/alwayson/approvals.py reads the same key.
+PRIVATE = "private"
+# What anybody but the installer reads in a direct message, once a day.
+OWNER_ONLY = ("In a private chat I only answer the person who added me to this workspace, "
+              "for now. Mention me in a channel and I will answer you there.")
+OWNER_ONLY_EVERY_SECONDS = 86400
+# How old, or how far ahead, a signed request's timestamp may be. Slack's own
+# number: past it, a recorded request is a replay.
+REPLAY_WINDOW_SECONDS = 300
+SIGNATURE_HEADER = "X-Slack-Signature"
+TIMESTAMP_HEADER = "X-Slack-Request-Timestamp"
+SIGNATURE_VERSION = "v0"
+# Unix seconds as Slack writes them: digits and nothing else.
+_TIMESTAMP = re.compile(r"[0-9]{1,12}")
+
+EVENTS_POST_ONLY = "Slack sends its events as a POST."
+BAD_SIGNATURE = "That request was not signed by Slack."
+NOT_AN_EVENT = "That is not a Slack event."
+
+NOT_CONFIGURED = "Slack is not set up on this server"
+
+# Where the callback sends the browser, as /setup?slack=<outcome>. A closed
+# set: the setup page shows a sentence for each and ignores anything else.
+CONNECTED, DENIED, EXPIRED, FAILED, TAKEN = "connected", "denied", "expired", "failed", "taken"
+
+
+def not_configured(problem: str) -> web.Response:
+    """What every Slack route answers when the four values are not all set.
+    `problem` names the missing names and never a value (config.slack_from)."""
+    return answers.json_error(503, f"{NOT_CONFIGURED}: {problem}.")
+
+
+def seal_binding(team_id: str) -> str:
+    """What a workspace's sealed token is bound to, so one row's value does
+    not open in another row."""
+    return f"slack:{team_id}"
+
+
+def signed_by_slack(secret: str, *, timestamp: str, signature: str, body: bytes,
+                    now: float) -> bool:
+    """Whether Slack signed exactly these bytes, within the last five minutes.
+
+    Slack signs `v0:<timestamp>:<raw body>` with the app's signing secret and
+    sends the HMAC-SHA256 as `v0=<hex>`. The timestamp is inside what is
+    signed, so it cannot be moved forward on a recorded request, and one
+    older than REPLAY_WINDOW_SECONDS is refused however good its signature.
+    The comparison takes the same time whatever the two strings share.
+    """
+    if not _TIMESTAMP.fullmatch(timestamp):
+        return False
+    if abs(now - int(timestamp)) > REPLAY_WINDOW_SECONDS:
+        return False
+    base = f"{SIGNATURE_VERSION}:{timestamp}:".encode("ascii") + body
+    expected = f"{SIGNATURE_VERSION}=" + hmac.new(
+        secret.encode("utf-8"), base, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(expected.encode("utf-8"), signature.encode("utf-8"))
+
+
+def event_row(envelope: dict) -> dict | None:
+    """What one Events API envelope becomes in tenant_events, or None when it
+    is not a person in this workspace mentioning the bot.
+
+    The same row the container's own Slack source writes under `waku serve`
+    (spec 023): Slack's event id is the external id, so a resent event is a
+    no-op, and each thread is its own conversation.
+    """
+    event = envelope.get("event")
+    if not isinstance(event, dict):
+        return None
+    event_id, team_id = envelope.get("event_id"), envelope.get("team_id")
+    channel, ts = event.get("channel"), event.get("ts")
+    if event.get("type") != "app_mention" or event.get("bot_id"):
+        return None
+    if not all(isinstance(value, str) and value for value in (event_id, channel, ts)):
+        return None
+    # A shared channel carries people from other workspaces, and `user_team`
+    # names the sender's. A stranger's mention would spend this tenant's
+    # credits, so it is dropped.
+    if event.get("user_team", team_id) != team_id:
+        return None
+    thread = event.get("thread_ts") if isinstance(event.get("thread_ts"), str) else ts
+    return {"source": "slack", "external_id": event_id,
+            "session_id": f"slack:{channel}:{thread}",
+            "payload": {"text": str(event.get("text") or ""),
+                        "sender": {"id": str(event.get("user") or "")},
+                        "reply_to": {"channel": channel, "thread_ts": thread}}}
+
+
+def follow_up_row(envelope: dict, bot_user_id: str) -> dict | None:
+    """What a plain message in a thread becomes, or None. `_route` keeps it
+    only for a thread the agent was mentioned in before.
+
+    On 2026-11-19 a person answered the agent in its own thread without
+    writing @Waku again, and nothing came back: Slack sends `app_mention` for
+    a mention only. With `message.channels` and `message.groups` it also sends
+    every message of a channel the bot is in. A message that mentions the bot
+    arrives both ways, so it is left to `event_row`. An edit, a deletion, a
+    join and a bot's own message are not a person writing.
+    """
+    event = envelope.get("event")
+    if not isinstance(event, dict) or event.get("type") != "message":
+        return None
+    if event.get("subtype") or event.get("bot_id"):
+        return None
+    event_id, team_id = envelope.get("event_id"), envelope.get("team_id")
+    channel, ts, thread = event.get("channel"), event.get("ts"), event.get("thread_ts")
+    if not all(isinstance(value, str) and value for value in (event_id, channel, ts, thread)):
+        return None
+    if thread == ts or event.get("user_team", team_id) != team_id:
+        return None
+    text = str(event.get("text") or "")
+    if bot_user_id and f"<@{bot_user_id}" in text:
+        return None
+    return {"source": "slack", "external_id": event_id,
+            "session_id": f"slack:{channel}:{thread}",
+            "payload": {"text": text, "sender": {"id": str(event.get("user") or "")},
+                        "reply_to": {"channel": channel, "thread_ts": thread}}}
+
+
+def in_direct_message(event: object) -> bool:
+    """Whether an event happened in a direct message, whatever its type."""
+    return isinstance(event, dict) and (
+        event.get("channel_type") == "im"
+        or (isinstance(event.get("channel"), str) and event["channel"].startswith("D")))
+
+
+def direct_row(envelope: dict, bot_user_id: str) -> dict | None:
+    """What a person's direct message to the bot becomes, or None. It needs
+    no mention: every message of that chat is for the agent.
+
+    `_direct` keeps the row only when the workspace's installer wrote it, and
+    adds the mark that says the chat is private. An edit, a deletion and any
+    other subtype are not a person writing, and neither is the bot's own
+    message, which Slack sends back here. The whole chat is one conversation,
+    and the answer goes into the chat itself. A message a person wrote in a
+    thread of the chat is that thread's conversation, answered there.
+    """
+    event = envelope.get("event")
+    if (not isinstance(event, dict) or event.get("type") != "message"
+            or event.get("channel_type") != "im"):
+        return None
+    if event.get("subtype") or event.get("bot_id"):
+        return None
+    event_id, team_id = envelope.get("event_id"), envelope.get("team_id")
+    channel, ts, user = event.get("channel"), event.get("ts"), event.get("user")
+    if not all(isinstance(value, str) and value for value in (event_id, channel, ts, user)):
+        return None
+    if not DIRECT_ID.fullmatch(channel) or not USER_ID.fullmatch(user):
+        return None
+    if user == bot_user_id or event.get("user_team", team_id) != team_id:
+        return None
+    thread = event.get("thread_ts")
+    target, session = {"channel": channel}, f"slack:{channel}"
+    if isinstance(thread, str) and thread and thread != ts:
+        target["thread_ts"] = thread
+        session = f"slack:{channel}:{thread}"
+    return {"source": "slack", "external_id": event_id, "session_id": session,
+            "payload": {"text": str(event.get("text") or ""), "sender": {"id": user},
+                        "reply_to": target}}
+
+
+class SlackUnreachable(RuntimeError):
+    """Slack did not answer with a JSON object. The message holds no token."""
+
+
+class OAuthStates:
+    """The `state` of each install under way, in memory.
+
+    A state is popped before it is checked, so it is used once whichever way
+    the check goes. A tenant has one state at a time: a new start ends the
+    earlier one, which also bounds this dict by the number of tenants. A
+    gateway restart forgets them all, and the person starts again.
+
+    A state issued for a team home also holds the hash of the cookie its
+    install page set (`browser`). A person's state holds "", and the callback
+    asks for that person's session instead.
+    """
+
+    def __init__(self, now: Callable[[], float],
+                 ttl: float = STATE_TTL_SECONDS) -> None:
+        self._now = now
+        self._ttl = ttl
+        self._states: dict[str, tuple[str, float, str]] = {}
+
+    def issue(self, tenant_id: str, browser: str = "") -> str:
+        now = self._now()
+        for state in [s for s, (owner, expires, _) in self._states.items()
+                      if owner == tenant_id or expires <= now]:
+            self._states.pop(state, None)
+        state = sessions.new_secret()
+        self._states[state] = (tenant_id, now + self._ttl, browser)
+        return state
+
+    def redeem(self, state: str) -> tuple[str, str] | None:
+        """(the tenant this state was issued to, the hash of its install
+        page's cookie or ""), once, or None."""
+        found = self._states.pop(state, None)
+        if found is None:
+            return None
+        tenant_id, expires, browser = found
+        return (tenant_id, browser) if self._now() < expires else None
+
+
+_GZIP_MAGIC = b"\x1f\x8b"
+
+
+class SlackApi:
+    """The Slack Web API methods the gateway calls."""
+
+    def __init__(self, session: aiohttp.ClientSession, base_url: str = SLACK_API) -> None:
+        self._session = session
+        self._base = base_url.rstrip("/")
+        self._timeout = aiohttp.ClientTimeout(total=TIMEOUT_SECONDS)
+
+    async def _post(self, method: str, **kwargs) -> dict:
+        try:
+            # The gateway's one session does not decompress (__main__.py: it
+            # passes a container's bytes through as they are), and Slack
+            # compresses its answers. So this asks for gzip or nothing, and
+            # opens gzip itself. On 2026-11-18 the first real install failed
+            # here: the compressed bytes were read as text.
+            headers = {**kwargs.pop("headers", {}), "Accept-Encoding": "gzip, identity"}
+            async with self._session.post(f"{self._base}/{method}", timeout=self._timeout,
+                                          headers=headers, **kwargs) as reply:
+                raw = await reply.read()
+            if raw[:2] == _GZIP_MAGIC:
+                raw = gzip.decompress(raw)
+            answer = json.loads(raw.decode("utf-8"))
+        except (aiohttp.ClientError, TimeoutError, OSError, ValueError, EOFError) as exc:
+            # The exception's own text is left out: aiohttp can quote a
+            # request's headers, and one of them is a token.
+            raise SlackUnreachable(f"{method} failed ({type(exc).__name__})") from None
+        if not isinstance(answer, dict):
+            raise SlackUnreachable(f"{method} answered something that is not an object")
+        return answer
+
+    async def oauth_access(self, *, code: str, redirect_uri: str, client_id: str,
+                           client_secret: str) -> dict:
+        """Exchange the code from the callback for the workspace's bot token.
+        Slack takes the client id and secret as HTTP Basic credentials."""
+        basic = base64.b64encode(f"{client_id}:{client_secret}".encode()).decode("ascii")
+        return await self._post(
+            "oauth.v2.access", data={"code": code, "redirect_uri": redirect_uri},
+            headers={"Authorization": f"Basic {basic}"})
+
+    async def post_message(self, token: str, payload: dict) -> dict:
+        return await self._post("chat.postMessage", json=payload,
+                                headers={"Authorization": f"Bearer {token}"})
+
+    async def thread_replies(self, token: str, channel: str, thread_ts: str,
+                             limit: int) -> dict:
+        """The messages of one thread, oldest first."""
+        return await self._post(
+            "conversations.replies",
+            data={"channel": channel, "ts": thread_ts, "limit": str(limit)},
+            headers={"Authorization": f"Bearer {token}"})
+
+    async def channel_history(self, token: str, channel: str, limit: int, *,
+                              oldest: str = "", cursor: str = "") -> dict:
+        """The last messages of one channel, newest first: one page of them.
+        `oldest` is the earliest time to go back to, and `cursor` is the
+        `next_cursor` of the page before."""
+        data = {"channel": channel, "limit": str(limit)}
+        if oldest:
+            data["oldest"] = oldest
+        if cursor:
+            data["cursor"] = cursor
+        return await self._post("conversations.history", data=data,
+                                headers={"Authorization": f"Bearer {token}"})
+
+    async def add_reaction(self, token: str, channel: str, ts: str, name: str) -> dict:
+        return await self._post("reactions.add",
+                                data={"channel": channel, "timestamp": ts, "name": name},
+                                headers={"Authorization": f"Bearer {token}"})
+
+    async def channel_info(self, token: str, channel: str) -> dict:
+        return await self._post("conversations.info", data={"channel": channel},
+                                headers={"Authorization": f"Bearer {token}"})
+
+    async def user_info(self, token: str, user_id: str) -> dict:
+        return await self._post("users.info", data={"user": user_id},
+                                headers={"Authorization": f"Bearer {token}"})
+
+
+def _install_from(answer: dict) -> tuple[str, str, str, str, str] | None:
+    """(token, team id, team name, bot user id, installer) from
+    oauth.v2.access, or None when the answer is not one workspace's bot
+    token. An install across a whole Enterprise Grid organisation has no
+    single team, and v1 maps one workspace to one tenant, so it is refused.
+    The installer is `authed_user.id`, the Slack user who pressed Allow, or
+    "" when Slack's answer does not name one."""
+    team = answer.get("team")
+    token = answer.get("access_token")
+    if (answer.get("ok") is not True or answer.get("token_type") != "bot"
+            or answer.get("is_enterprise_install") or not isinstance(team, dict)
+            or not isinstance(token, str) or not token):
+        return None
+    team_id = team.get("id")
+    if not isinstance(team_id, str) or not TEAM_ID.fullmatch(team_id):
+        return None
+    user = answer.get("authed_user")
+    installer = user.get("id") if isinstance(user, dict) else None
+    if not isinstance(installer, str) or not USER_ID.fullmatch(installer):
+        installer = ""
+    return (token, team_id, str(team.get("name") or team_id)[:200],
+            str(answer.get("bot_user_id") or "")[:64], installer)
+
+
+# A channel, group or direct-message id, and a message's timestamp, as Slack
+# writes them. The relay posts to nothing else: not a channel name, not a
+# user id, which Slack would open a new direct message for.
+CHANNEL_ID = re.compile(r"[CGD][A-Z0-9]{2,31}")
+THREAD_TS = re.compile(r"[0-9]{1,12}\.[0-9]{1,9}")
+# The errors with which Slack says the token will never work again.
+TOKEN_ENDED = frozenset({"token_revoked", "account_inactive", "invalid_auth"})
+
+
+class SlackRelay:
+    """Post one message for a tenant, with that tenant's workspace token.
+
+    WHICH WORKSPACE IS NOT THE CALLER'S CHOICE. The caller gives a tenant id,
+    which the proxy resolved from the container's own platform token, and the
+    relay uses the one token stored for that tenant. A Slack bot token posts
+    only inside the workspace it was issued for, so a tenant's container can
+    reach the workspace that tenant connected and no other.
+
+    WHAT GOES BACK is `ok`, or `ok: false` with a short error code. Slack's
+    answer is read here and never passed on.
+    """
+
+    def __init__(self, *, store: ControlStore, box: SecretBox, api: SlackApi) -> None:
+        self._store = store
+        self._box = box
+        self._api = api
+
+    async def send(self, tenant_id: str, channel: str, text: str,
+                   thread_ts: str = "") -> dict:
+        if (not is_tenant_id(tenant_id) or not isinstance(channel, str)
+                or not CHANNEL_ID.fullmatch(channel)
+                or not isinstance(text, str) or not text
+                or not isinstance(thread_ts, str)
+                or (thread_ts and not THREAD_TS.fullmatch(thread_ts))):
+            return _refused("bad_request")
+        install = self._store.slack_install(tenant_id)
+        if install is None:
+            return _refused("not_installed")
+        try:
+            token = self._box.open(install.token_sealed,
+                                   bound_to=seal_binding(install.team_id))
+        except Unreadable:
+            _LOG.error("tenant=%s: the stored token for Slack team=%s does not open "
+                       "with WAKU_SLACK_TOKEN_KEY", tenant_id, install.team_id)
+            # The setup page now tells the person to reconnect.
+            self._store.set_slack_reconnect(install.team_id, True)
+            return _refused("token_unreadable")
+        payload = {"channel": channel, "text": text}
+        if thread_ts:
+            payload["thread_ts"] = thread_ts
+        try:
+            answer = await self._api.post_message(token, payload)
+        except SlackUnreachable as exc:
+            _LOG.warning("tenant=%s: Slack send failed: %s", tenant_id, exc)
+            return _refused("slack_unreachable")
+        if answer.get("ok") is True:
+            return {"ok": True}
+        code = _error_code(answer) or "refused"
+        _LOG.info("tenant=%s: Slack refused a message: %s", tenant_id, code)
+        if code in TOKEN_ENDED:
+            # The workspace removed the app or revoked the token. The row is
+            # deleted, so the setup page stops saying the workspace is
+            # connected and the person can add the app again.
+            self._store.delete_slack_install(install.team_id)
+            _LOG.info("tenant=%s: disconnected Slack team=%s", tenant_id, install.team_id)
+        return _refused(code)
+
+
+def _refused(code: str) -> dict:
+    return {"ok": False, "error": code}
+
+
+# How many messages slack_history reads when it is not told, and at most.
+HISTORY_DEFAULT, HISTORY_MAX = 30, 100
+# One message's text, and the whole answer as JSON, at most. The answer goes
+# to the proxy as one line on gateway.sock, which holds 65,536 bytes.
+HISTORY_TEXT_CHARS = 2000
+HISTORY_ANSWER_BYTES = 40_000
+# Reading the messages and looking up their names, together.
+HISTORY_SECONDS = 8.0
+# With `days`, the channel is read back to that many days ago: 30 at most.
+HISTORY_MAX_DAYS = 30
+# Slack gives a channel's history a page at a time. One call reads at most
+# this many pages of this many messages, and starts no page after
+# HISTORY_PAGING_SECONDS. The container's tool waits 15 seconds for its
+# answer, so the whole call gets 12.
+HISTORY_PAGES, HISTORY_PAGE_SIZE = 10, 200
+HISTORY_PAGING_SECONDS = 7.0
+HISTORY_WINDOW_SECONDS = 12.0
+# The most messages one answer holds, before the cut to HISTORY_ANSWER_BYTES.
+HISTORY_WINDOW_MESSAGES = 400
+HISTORY_PERSON_CHARS = 80
+HISTORY_AMBIGUOUS_NAMES = 5
+
+
+class SlackHistory:
+    """Read recent messages of one channel for a tenant, with that tenant's
+    workspace token (spec 029, decision 5 and task D1).
+
+    WHICH CHANNEL IS NOT A FREE CHOICE. The container names the channel of
+    the run that asks, and a container runs model-chosen tools, so the
+    gateway checks the name against what it knows itself: the channel has to
+    be one where this tenant's agent was mentioned, which is a row the
+    gateway wrote in tenant_events when Slack sent the mention. Any other
+    channel is refused, including one the bot is a member of. The people in
+    a channel the agent answers in already read what it reads there.
+
+    A TIME WINDOW AND A PERSON. With `days` the channel is read from now back
+    to that many days ago, in pages, and with `person` only the messages one
+    author wrote are kept. The author is matched on the name people see, as
+    a whole name or a first name. Two authors who both match are named, and
+    no message is returned.
+
+    AN ANSWER THAT WAS CUT SAYS SO. `cut` is true when the window held more
+    than was read or more than fits, and the newest part is what is kept.
+
+    WHAT GOES BACK is names and text: `ok`, the channel's name and each
+    message's ts, its time in the tenant's time zone, author, text and count
+    of replies, or `ok: false` with a short error code. No token, no user id and nothing else of Slack's
+    answer is passed on.
+    """
+
+    def __init__(self, *, store: ControlStore, box: SecretBox, api: SlackApi,
+                 threads: ThreadReader, now: Callable[[], float] = time.time) -> None:
+        self._store = store
+        self._box = box
+        self._api = api
+        self._threads = threads
+        self._now = now
+
+    async def read(self, tenant_id: str, channel: str, thread_ts: str = "",
+                   limit: int = HISTORY_DEFAULT, days: int = 0, person: str = "") -> dict:
+        if (not is_tenant_id(tenant_id) or not isinstance(channel, str)
+                or not CHANNEL_ID.fullmatch(channel) or not isinstance(thread_ts, str)
+                or (thread_ts and not THREAD_TS.fullmatch(thread_ts))
+                or not isinstance(limit, int) or isinstance(limit, bool)
+                or not 1 <= limit <= HISTORY_MAX
+                or not isinstance(days, int) or isinstance(days, bool)
+                or not 0 <= days <= HISTORY_MAX_DAYS or (days and thread_ts)
+                or not isinstance(person, str) or len(person) > HISTORY_PERSON_CHARS):
+            return _refused("bad_request")
+        install = self._store.slack_install(tenant_id)
+        if install is None:
+            return _refused("not_installed")
+        if not self._store.has_slack_channel(tenant_id, channel):
+            _LOG.info("tenant=%s: refused the history of a channel its agent was "
+                      "never mentioned in", tenant_id)
+            return _refused("other_channel")
+        try:
+            token = self._box.open(install.token_sealed,
+                                   bound_to=seal_binding(install.team_id))
+        except Unreadable:
+            self._store.set_slack_reconnect(install.team_id, True)
+            return _refused("token_unreadable")
+        budget = HISTORY_WINDOW_SECONDS if days else HISTORY_SECONDS
+        try:
+            return await asyncio.wait_for(
+                self._read(token, install, channel, thread_ts, limit, days,
+                           " ".join(person.split())), budget)
+        except SlackUnreachable as exc:
+            _LOG.warning("tenant=%s: Slack history failed: %s", tenant_id, exc)
+        except TimeoutError:
+            _LOG.warning("tenant=%s: Slack history took longer than %ss", tenant_id, budget)
+        return _refused("slack_unreachable")
+
+    async def _window(self, token: str, channel: str, days: int) -> tuple[list | dict, bool]:
+        """(the channel's messages from now back to `days` days ago, newest
+        first, whether older ones in the window were left unread). A refusal
+        from Slack comes back in place of the list.
+
+        Slack hands a channel's history out a page at a time. At most
+        HISTORY_PAGES pages are read, and no page is started after
+        HISTORY_PAGING_SECONDS, so one call costs Slack a bounded number of
+        requests however busy the channel was."""
+        oldest = f"{self._now() - days * 86400:.6f}"
+        started, found, cursor = time.monotonic(), [], ""
+        for _ in range(HISTORY_PAGES):
+            answer = await self._api.channel_history(
+                token, channel, HISTORY_PAGE_SIZE, oldest=oldest, cursor=cursor)
+            page = answer.get("messages")
+            if answer.get("ok") is not True or not isinstance(page, list):
+                return answer, False
+            found.extend(page)
+            meta = answer.get("response_metadata")
+            cursor = meta.get("next_cursor") if isinstance(meta, dict) else ""
+            if not isinstance(cursor, str) or not cursor:
+                return found, False
+            if time.monotonic() - started > HISTORY_PAGING_SECONDS:
+                break
+        return found, True
+
+    async def _read(self, token: str, install, channel: str, thread_ts: str,
+                    limit: int, days: int, person: str) -> dict:
+        cut = False
+        if days:
+            found, cut = await self._window(token, channel, days)
+            answer = found if isinstance(found, dict) else {"ok": True, "messages": found}
+        elif thread_ts:
+            answer = await self._api.thread_replies(token, channel, thread_ts, limit)
+        else:
+            answer = await self._api.channel_history(token, channel, limit)
+        found = answer.get("messages")
+        if answer.get("ok") is not True or not isinstance(found, list):
+            code = _error_code(answer) or "refused"
+            _LOG.info("tenant=%s: Slack refused a history read: %s", install.tenant_id, code)
+            return _refused(code)
+        if not thread_ts:
+            # The channel's own messages. A reply that was also sent to the
+            # channel is left to its thread, which `replies` counts.
+            found = [m for m in found if isinstance(m, dict)
+                     and m.get("thread_ts") in (None, m.get("ts"))]
+            # A channel's history arrives newest first, and a thread oldest first.
+            found = list(reversed(found if days else found[:limit]))
+        else:
+            found = found[:limit]
+        read = await self._threads.messages(
+            token=token, team_id=install.team_id, bot_user_id=install.bot_user_id,
+            messages=found)
+        channel_name = await self._threads.channel_name(token, install.team_id, channel)
+        tenant = self._store.tenant_by_id(install.tenant_id)
+        zone = _zone(tenant.timezone if tenant is not None else "UTC")
+        base = {"ok": True, "channel": channel_name, "zone": zone.key}
+        if person:
+            names = sorted({m["who"] for m in read if _is_person(m["who"], person)})
+            if len(names) > 1:
+                # Two people answer to that name. Guessing one would put one
+                # person's words in another's mouth.
+                return {**base, "messages": [], "cut": False,
+                        "ambiguous": names[:HISTORY_AMBIGUOUS_NAMES]}
+            read = [m for m in read if m["who"] in names]
+        if len(read) > HISTORY_WINDOW_MESSAGES:
+            read, cut = read[-HISTORY_WINDOW_MESSAGES:], True
+        for message in read:
+            message["text"] = message["text"][:HISTORY_TEXT_CHARS]
+            message["when"] = _when(message["ts"], zone)
+        # The oldest go first when the answer would not fit on the socket,
+        # and the answer says that it was cut.
+        kept, size = [], 2
+        for message in reversed(read):
+            size += len(json.dumps(message)) + 2
+            if size > HISTORY_ANSWER_BYTES:
+                cut = True
+                break
+            kept.append(message)
+        read = kept[::-1]
+        return {**base, "messages": read, "cut": cut}
+
+
+def _zone(name: str) -> zoneinfo.ZoneInfo:
+    try:
+        return zoneinfo.ZoneInfo(name)
+    except (zoneinfo.ZoneInfoNotFoundError, ValueError):
+        return zoneinfo.ZoneInfo("UTC")
+
+
+def _when(ts: str, zone: zoneinfo.ZoneInfo) -> str:
+    """A message's time as its reader's clock shows it: `2026-11-12 Thu 14:05`."""
+    try:
+        moment = datetime.datetime.fromtimestamp(float(ts), zone)
+    except (ValueError, OverflowError, OSError):
+        return ""
+    return moment.strftime("%Y-%m-%d %a %H:%M")
+
+
+def _is_person(who: str, asked: str) -> bool:
+    """Whether `asked` names this author: the whole name people see, or its
+    first word, whatever the capitals."""
+    name, asked = " ".join(who.casefold().split()), asked.casefold()
+    return bool(name) and (name == asked or name.split(" ")[0] == asked)
+
+
+class SlackRoutes:
+    def __init__(self, *, settings: SlackSettings, apex_host: str, store: ControlStore,
+                 api: SlackApi, now: Callable[[], float] = time.time,
+                 wake: Callable[[], None] = lambda: None) -> None:
+        self._settings = settings
+        self._apex = apex_host
+        self._store = store
+        self._api = api
+        self._now = now
+        self._wake = wake
+        self._box = SecretBox(settings.token_key)
+        self._states = OAuthStates(now)
+        self._threads = ThreadReader(api)
+        # When each person who is not a workspace's installer was last told
+        # that a direct message is not answered for them: (team, user) to a
+        # time. In memory, so a gateway restart can repeat the line once.
+        self._told: dict[tuple[str, str], float] = {}
+        # Signed events for a workspace no tenant connected. Slack is answered
+        # 200 for them, so this number is the only trace they leave.
+        self.unknown_teams = 0
+
+    @property
+    def relay(self) -> SlackRelay:
+        """The relay that posts with the tokens these routes stored."""
+        return SlackRelay(store=self._store, box=self._box, api=self._api)
+
+    @property
+    def history(self) -> SlackHistory:
+        """The reader that uses the tokens these routes stored, and the names
+        these routes already looked up."""
+        return SlackHistory(store=self._store, box=self._box, api=self._api,
+                            threads=self._threads, now=self._now)
+
+    def check_tokens(self) -> list[str]:
+        """Find the workspaces whose stored token this gateway's key does not
+        open, mark each one, and return their team ids. Called once at start.
+
+        The key is in config/gateway.env and in no backup, so a control.db
+        restored onto another VM, or a gateway.env whose key line changed,
+        leaves tokens nothing can open. That must not be silent, and it must
+        not stop the gateway: Slack is one feature, and the gateway serves
+        every tenant. So this logs one line for the operator, each marked
+        workspace's person sees "Reconnect Slack" on the setup page, and no
+        failure in here is raised. A workspace whose token opens is unmarked,
+        so putting the old key back needs nothing from anybody.
+        """
+        try:
+            installs = self._store.slack_installs()
+            unreadable = []
+            for install in installs:
+                try:
+                    self._box.open(install.token_sealed,
+                                   bound_to=seal_binding(install.team_id))
+                    needed = False
+                except Unreadable:
+                    needed = True
+                    unreadable.append(install.team_id)
+                if needed != install.needs_reconnect:
+                    self._store.set_slack_reconnect(install.team_id, needed)
+        except Exception:  # noqa: BLE001 -- see the docstring: never raised
+            _LOG.exception("could not check the stored Slack tokens")
+            return []
+        if unreadable:
+            _LOG.error(
+                "WAKU_SLACK_TOKEN_KEY in config/gateway.env does not open the stored "
+                "Slack token of %s of %s workspaces (%s). Each of their people sees "
+                '"Reconnect Slack" on /setup. If control.db came from another VM, copy '
+                "that VM's WAKU_SLACK_TOKEN_KEY line into config/gateway.env and "
+                "recreate the gateway: nobody then has to reconnect.",
+                len(unreadable), len(installs), ", ".join(unreadable))
+        else:
+            _LOG.info("Slack: the key opens all %s stored tokens", len(installs))
+        return unreadable
+
+    @property
+    def redirect_uri(self) -> str:
+        """The one address Slack may send a browser back to. It is entered in
+        the Slack app's settings, and Slack refuses any other."""
+        return f"https://{self._apex}{CALLBACK_PATH}"
+
+    # --- install --------------------------------------------------------
+
+    def start(self, tenant_id: str) -> web.Response:
+        """Send a signed-in person's browser to Slack's approval page."""
+        query = urllib.parse.urlencode({
+            "client_id": self._settings.client_id, "scope": ",".join(SCOPES),
+            "state": self._states.issue(tenant_id), "redirect_uri": self.redirect_uri})
+        return answers.redirect(f"{AUTHORIZE_URL}?{query}")
+
+    def start_home(self, home: TeamHome) -> web.Response:
+        """Send the browser of a team space's owner to Slack's approval page
+        (spec 032 A3). The caller redeemed the ticket that names `home`.
+
+        The cookie is what the callback will ask this browser for. Only its
+        hash is kept, beside the state, so the gateway's memory holds no
+        value a browser could present."""
+        browser = sessions.new_secret()
+        query = urllib.parse.urlencode({
+            "client_id": self._settings.client_id, "scope": ",".join(SCOPES),
+            "state": self._states.issue(home.tenant_id, token_hash(browser)),
+            "redirect_uri": self.redirect_uri})
+        response = answers.redirect(f"{AUTHORIZE_URL}?{query}")
+        sessions.set_session_cookie(response, HOME_COOKIE, browser,
+                                    max_age=STATE_TTL_SECONDS)
+        return response
+
+    async def callback(self, request: web.Request,
+                       session_tenant: str | None) -> web.Response:
+        """Slack sent the browser back. `session_tenant` is the active tenant
+        the browser's own apex session names, or None.
+
+        Like /auth/enter, this route's query holds a code, so it must never
+        reach an access log.
+        """
+        found = self._states.redeem(request.query.get("state", ""))
+        owner, browser = found if found is not None else (None, "")
+        home = self._store.team_home_for_tenant(owner) if owner and browser else None
+        if owner is not None and browser:
+            # A state made for a team home. It is finished here or not at
+            # all: a session never stands in for the install page's cookie.
+            return await self._home_callback(request, home, browser)
+        if request.query.get("error"):
+            # The person pressed Cancel. The state went with it, above.
+            return self._back(DENIED)
+        if owner is None or owner != session_tenant:
+            _LOG.info("Slack callback refused: no state for this browser's session")
+            return self._back(EXPIRED)
+        try:
+            answer = await self._api.oauth_access(
+                code=request.query.get("code", ""), redirect_uri=self.redirect_uri,
+                client_id=self._settings.client_id,
+                client_secret=self._settings.client_secret)
+        except SlackUnreachable as exc:
+            _LOG.warning("tenant=%s: Slack install failed: %s", owner, exc)
+            return self._back(FAILED)
+        found = _install_from(answer)
+        if found is None:
+            _LOG.info("tenant=%s: Slack install refused: %s", owner,
+                      _error_code(answer) or "not one workspace's bot token")
+            return self._back(FAILED)
+        token, team_id, team_name, bot_user_id, installer = found
+        # The browser's session names `owner`, so the Slack user who pressed
+        # Allow in it is that tenant's person. Their direct messages are the
+        # ones answered.
+        stored = self._store.set_slack_install(
+            owner, team_id=team_id, team_name=team_name, bot_user_id=bot_user_id,
+            token_sealed=self._box.seal(token, bound_to=seal_binding(team_id)),
+            installer_user_id=installer)
+        if not stored:
+            # The token is dropped and NOT revoked: Slack gives one workspace
+            # one bot token for this app, so revoking it would disconnect the
+            # tenant that connected the workspace first.
+            _LOG.info("tenant=%s: Slack team=%s already belongs to another tenant",
+                      owner, team_id)
+            return self._back(TAKEN)
+        _LOG.info("tenant=%s: connected Slack team=%s", owner, team_id)
+        return self._back(CONNECTED)
+
+    @staticmethod
+    def _back(outcome: str) -> web.Response:
+        return answers.redirect(f"{SETUP_PATH}?slack={outcome}")
+
+    async def _home_callback(self, request: web.Request, home: TeamHome | None,
+                             browser: str) -> web.Response:
+        """The callback of an install a team home's ticket began.
+
+        The browser goes to the home's return address whatever happened, and
+        waku.one reads the result with GET /v1/team-homes/{space_id}. Nothing
+        is installed unless this browser holds the cookie the install page
+        set, Slack answered one workspace's bot token, and no other tenant
+        holds that workspace."""
+        if home is None:
+            # The home was removed while its owner was on Slack's page.
+            return self._home_done(None)
+        sent = request.cookies.get(HOME_COOKIE, "")
+        if not sent or not hmac.compare_digest(token_hash(sent), browser):
+            _LOG.info("space=%s: Slack callback refused: this browser did not open "
+                      "the install page", home.space_id)
+            return self._home_done(home)
+        if request.query.get("error"):
+            _LOG.info("space=%s: the Slack install was cancelled", home.space_id)
+            return self._home_done(home)
+        try:
+            answer = await self._api.oauth_access(
+                code=request.query.get("code", ""), redirect_uri=self.redirect_uri,
+                client_id=self._settings.client_id,
+                client_secret=self._settings.client_secret)
+        except SlackUnreachable as exc:
+            _LOG.warning("space=%s: Slack install failed: %s", home.space_id, exc)
+            return self._home_done(home)
+        found = _install_from(answer)
+        if found is None:
+            _LOG.info("space=%s: Slack install refused: %s", home.space_id,
+                      _error_code(answer) or "not one workspace's bot token")
+            return self._home_done(home)
+        # No installer is kept for a home: a team's agent answers channels,
+        # and nobody talks to it in private (spec 032, decision 5).
+        token, team_id, team_name, bot_user_id, _ = found
+        stored = self._store.set_slack_install(
+            home.tenant_id, team_id=team_id, team_name=team_name,
+            bot_user_id=bot_user_id,
+            token_sealed=self._box.seal(token, bound_to=seal_binding(team_id)))
+        if not stored:
+            # Another tenant holds this workspace: a person's own install, or
+            # another space's home. It is left exactly as it is, and the
+            # token is dropped and not revoked, for the reason in callback().
+            # Moving a person's workspace to a home is spec 032 group E.
+            _LOG.info("space=%s: Slack team=%s already belongs to another tenant; "
+                      "nothing was changed", home.space_id, team_id)
+            return self._home_done(home)
+        _LOG.info("space=%s: tenant=%s connected Slack team=%s", home.space_id,
+                  home.tenant_id, team_id)
+        return self._home_done(home)
+
+    @staticmethod
+    def _home_done(home: TeamHome | None) -> web.Response:
+        """Back to the space's page on waku.one, with the install page's
+        cookie deleted. A home that is gone has no page to go back to."""
+        response = (answers.redirect(home.return_url) if home is not None
+                    else answers.html_error(410, HOME_LINK_ENDED, retry=False))
+        sessions.clear_session_cookie(response, HOME_COOKIE)
+        return response
+
+    # --- events ---------------------------------------------------------
+
+    async def events(self, request: web.Request) -> web.Response:
+        """POST /v1/triggers/slack: every workspace's events arrive here.
+
+        The signature is checked first, over the bytes as they arrived, and
+        nothing is read from a body that fails it. A signed event is stored
+        and answered: no container is started and no model is called here
+        (spec 026, decision 1). Slack waits three seconds and then resends,
+        and the event id makes that second delivery a no-op.
+
+        NO ORIGIN CHECK, for /v1/chat's reason: the credential is the
+        signature, which a browser cannot produce, and Slack sends no Origin.
+        """
+        if request.method != "POST":
+            return answers.json_error(405, EVENTS_POST_ONLY)
+        body = await request.read()
+        if not signed_by_slack(
+                self._settings.signing_secret, body=body, now=self._now(),
+                timestamp=request.headers.get(TIMESTAMP_HEADER, ""),
+                signature=request.headers.get(SIGNATURE_HEADER, "")):
+            _LOG.info("Slack event refused: bad signature or timestamp")
+            return answers.json_error(403, BAD_SIGNATURE)
+        try:
+            envelope = json.loads(body)
+        except ValueError:
+            envelope = None
+        if not isinstance(envelope, dict):
+            return answers.json_error(400, NOT_AN_EVENT)
+        if envelope.get("type") == "url_verification":
+            # Slack checks the address once, when it is entered in the app's
+            # settings, and expects its own challenge back.
+            return answers.json_ok({"challenge": str(envelope.get("challenge") or "")})
+        if envelope.get("type") == "event_callback":
+            await self._route(envelope)
+        return answers.json_ok({"ok": True})
+
+    async def _route(self, envelope: dict) -> None:
+        team_id = envelope.get("team_id")
+        tenant_id = self._store.slack_tenant(team_id) if isinstance(team_id, str) else None
+        if tenant_id is None:
+            self.unknown_teams += 1
+            _LOG.info("Slack event for a team no tenant connected (%s so far)",
+                      self.unknown_teams)
+            return
+        event = envelope.get("event")
+        if isinstance(event, dict) and event.get("type") == "app_uninstalled":
+            self._store.delete_slack_install(team_id)
+            _LOG.info("tenant=%s: Slack team=%s removed the app", tenant_id, team_id)
+            return
+        if in_direct_message(event):
+            # Before anything a channel does: a direct message never becomes
+            # a mention or a follow-up, whoever wrote it.
+            await self._direct(envelope, tenant_id)
+            return
+        row, mentioned = event_row(envelope), True
+        if row is None:
+            # A message with no mention, in a thread the agent is already in.
+            install = self._store.slack_install(tenant_id)
+            row = follow_up_row(envelope, install.bot_user_id if install else "")
+            mentioned = False
+            if row is not None and not self._store.has_session(tenant_id, row["session_id"]):
+                row = None
+        tenant = self._store.tenant_by_id(tenant_id)
+        if row is None or tenant is None or tenant.status != "active":
+            return
+        text = await self._with_thread(tenant_id, event, mentioned)
+        home = self._store.team_home_for_tenant(tenant_id)
+        if home is not None:
+            # Spec 032 A6: this workspace's channels are answered by a team
+            # space's agent. Added here and not in _with_thread, so the line
+            # is there whichever way the thread was or was not read.
+            text = with_team_space(text, space_name=home.space_name,
+                                   agent_name=home.agent_name)
+        row["payload"]["text"] = text
+        if self._store.add_event(tenant_id, **row):
+            # A tick now, so the mention does not wait for the next one.
+            self._wake()
+
+
+    async def _direct(self, envelope: dict, tenant_id: str) -> None:
+        """A direct message to the bot. The installer's becomes one event
+        marked private. Anybody else's gets OWNER_ONLY and starts nothing."""
+        install = self._store.slack_install(tenant_id)
+        tenant = self._store.tenant_by_id(tenant_id)
+        row = direct_row(envelope, install.bot_user_id if install else "")
+        if row is None or install is None or tenant is None or tenant.status != "active":
+            return
+        event, sender = envelope["event"], row["payload"]["sender"]["id"]
+        target = row["payload"]["reply_to"]
+        if (not install.installer_user_id or sender != install.installer_user_id
+                or self._store.team_home_for_tenant(tenant_id) is not None):
+            await self._owner_only(install, sender, target)
+            return
+        # The one place this mark is written. The container reads it as "this
+        # chat is my person's own" (approvals.is_private).
+        target[PRIVATE] = True
+        row["payload"]["text"] = await self._direct_text(install, event)
+        if self._store.add_event(tenant_id, **row):
+            self._wake()
+
+    async def _owner_only(self, install, sender: str, target: dict) -> None:
+        """Tell a person who is not the installer, at most once a day, that
+        a direct message is not answered for them. No event is stored, so no
+        container starts and no model is called. Nothing waits on whether
+        the line arrived."""
+        now = self._now()
+        self._told = {key: at for key, at in self._told.items()
+                      if now - at < OWNER_ONLY_EVERY_SECONDS}
+        key = (install.team_id, sender)
+        if key in self._told:
+            return
+        # Marked before the send: Slack resends an event whose answer was
+        # slow, and the second delivery must not send a second line.
+        self._told[key] = now
+        try:
+            token = self._box.open(install.token_sealed,
+                                   bound_to=seal_binding(install.team_id))
+            answer = await asyncio.wait_for(
+                self._api.post_message(token, {**target, "text": OWNER_ONLY}),
+                BUDGET_SECONDS)
+        except Exception as exc:  # noqa: BLE001 -- a line nobody is owed
+            _LOG.info("Slack direct message not answered for team=%s: %s",
+                      install.team_id, type(exc).__name__)
+            return
+        if answer.get("ok") is not True:
+            _LOG.info("Slack direct message not answered for team=%s: %s",
+                      install.team_id, _error_code(answer) or "refused")
+
+    async def _direct_text(self, install, event: dict) -> str:
+        """The direct message as the agent reads it, with the eyes reaction
+        put on it meanwhile. The message's own text when the stored token
+        does not open."""
+        try:
+            token = self._box.open(install.token_sealed,
+                                   bound_to=seal_binding(install.team_id))
+        except Unreadable:
+            return str(event.get("text") or "")
+        text, _ = await asyncio.gather(
+            self._threads.compose_direct(token=token, team_id=install.team_id,
+                                         bot_user_id=install.bot_user_id, event=event),
+            self._seen(token, install.team_id, event))
+        return text
+
+    async def _with_thread(self, tenant_id: str, event: dict, mentioned: bool = True) -> str:
+        """The mention as the agent reads it: the thread above it and the
+        names in it (slack_thread.py). The mention's own text when the stored
+        token does not open."""
+        install = self._store.slack_install(tenant_id)
+        try:
+            token = self._box.open(install.token_sealed,
+                                   bound_to=seal_binding(install.team_id))
+        except (Unreadable, AttributeError):
+            return str(event.get("text") or "")
+        text, _ = await asyncio.gather(
+            self._threads.compose(token=token, team_id=install.team_id,
+                                  bot_user_id=install.bot_user_id, event=event,
+                                  mentioned=mentioned),
+            self._seen(token, install.team_id, event))
+        return text
+
+    async def _seen(self, token: str, team_id: str, event: dict) -> None:
+        """Mark the message as heard. It runs beside the reading of the
+        thread and inside the same two seconds, and nothing waits on whether
+        it worked: a workspace without `reactions:write` gets no mark and
+        every answer."""
+        try:
+            answer = await asyncio.wait_for(self._api.add_reaction(
+                token, str(event.get("channel") or ""), str(event.get("ts") or ""),
+                SEEN_REACTION), BUDGET_SECONDS)
+        except Exception as exc:  # noqa: BLE001 -- a mark is never worth a mention
+            _LOG.info("Slack message not marked for team=%s: %s", team_id, type(exc).__name__)
+            return
+        if answer.get("ok") is not True:
+            _LOG.info("Slack message not marked for team=%s: %s", team_id,
+                      _error_code(answer) or "refused")
+
+
+_ERROR_CODE = re.compile(r"[a-z0-9_]{1,64}")
+
+
+def _error_code(answer: dict) -> str:
+    """Slack's own error code, or "" when the answer carries none that looks
+    like one. Only this shape is ever logged or returned."""
+    code = answer.get("error")
+    return code if isinstance(code, str) and _ERROR_CODE.fullmatch(code) else ""
