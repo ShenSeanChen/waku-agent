@@ -13,6 +13,7 @@ Slack app configured.
 
 Under the steps the page lists the connectors a person can sign in to (spec
 029): Notion, Linear and, when this server holds its GitHub App, GitHub.
+Gmail is listed when this server holds its Google client (spec 031).
 Each has "Connect", or "Connected" once the gateway holds that person's
 tokens. The Connections page (spec 030) replaces this list.
 
@@ -34,6 +35,24 @@ from hosted.ports.control import SlackInstall
 
 TEMPLATE = Path(__file__).resolve().parent.parent / "templates" / "setup.html"
 
+# The way in from waku.one (waku.one's Integrations page links here). waku.one's
+# server asks the bearer route for a one-time URL with the person's Supabase
+# token, the same way it asks /v1/embed for the chat, and the browser opens it:
+#
+#     POST https://<apex>/v1/setup-link        (bearer, server to server)
+#         -> {"url": "https://<apex>/auth/setup?code=<code>",
+#             "expires_at": <unix seconds>}
+#     GET  https://<apex>/auth/setup?code=<code>   (a new tab, same-site)
+#         -> Set-Cookie: __Host-waku_session=...   (the apex's own session)
+#         -> 302 /setup
+#
+# Without it a person already signed in to waku.one met "Sign in" here and a
+# second email link. The code is sixty seconds and single use, from its own
+# HandoffCodes, so a sign-in code or an embed code cannot be spent here.
+LINK_API_PATH = "/v1/setup-link"
+AUTH_PATH = "/auth/setup"
+LINK_POST_ONLY = "Ask for a setup link with a POST."
+
 # How an install ended, as the callback reports it in /setup?slack=<outcome>.
 OUTCOMES = {
     slack.CONNECTED: "Slack is connected.",
@@ -52,6 +71,10 @@ CONNECT_OUTCOMES = {
 }
 CONNECTORS_HEAD = "Connect your tools"
 CONNECTOR_WORDS = {"connected": "Connected", "reconnect": "To do", "todo": "To do"}
+DIRECT_READY = ("You can also write to Waku in a private chat in Slack. It answers only "
+                "you there.")
+DIRECT_NEEDS_UPDATE = ("To write to Waku in a private chat in Slack, press Update "
+                       "permissions once.")
 SLACK_OFF = "Slack is not available on this server yet."
 STATE_WORDS = {"done": "Done", "todo": "To do", "off": "Not available"}
 
@@ -86,6 +109,10 @@ def _connectors(signed_in: bool, connectors: list[tuple[str, str, str]]) -> str:
         start = f"{connect.START_PATH}?server={name}"
         if not signed_in:
             detail, action = "Sign in first.", ""
+        elif state == "connected" and name in VENDORS and not VENDORS[name].mcp:
+            # Gmail: what the agent can do there is the vendor's own note.
+            detail = f"{title} is connected."
+            action = _button(start, f"Sign in to {title} again", secondary=True)
         elif state == "connected":
             detail = (f"Your agent can read {title}. It cannot change anything there "
                       "yet: a change needs your yes, and that is not built here.")
@@ -147,9 +174,14 @@ def render(*, signed_in: bool, slack_on: bool, install: SlackInstall | None,
             "Choose your workspace and approve Waku. No token is copied."
             if signed_in else "Sign in first.",
             _button(slack.INSTALL_PATH, "Add to Slack") if signed_in else "")
+    # A direct message is answered for the person who added the app, and a
+    # workspace added before 2026-11-20 has no record of who that was. Slack's
+    # approval page records it, so that person is told to go through it once.
+    direct = (DIRECT_READY if connected and install.installer_user_id
+              else DIRECT_NEEDS_UPDATE)
     steps += _step(
         3, "mention", "done" if connected else "todo", "Mention @Waku",
-        "Invite @Waku to a channel and mention it. It answers in the thread."
+        f"Invite @Waku to a channel and mention it. It answers in the thread. {direct}"
         if connected else "After Slack is connected, mention @Waku in a channel.",
         _button(dashboard_url, "Open your agent", secondary=True) if connected else "")
     sentence = OUTCOMES.get(outcome, "") if signed_in else ""

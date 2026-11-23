@@ -8,8 +8,8 @@ network: the gateway listens on 127.0.0.1 and no container can reach it.
 
 PER REQUEST, IN ORDER:
 
-  1. Which. <name> is a connector on the list (hosted/core/connectors.py), or
-     the answer is 404.
+  1. Which. <name> is a connector on the list (hosted/core/connectors.py)
+     that is an MCP server, or the answer is 404. Gmail is not one.
   2. Who. The bearer token resolves to a tenant through the gateway, exactly
      as a model call's x-api-key does. Unknown or disabled is a 401. Nothing
      in a request names a tenant, a vendor's address or a token.
@@ -44,7 +44,7 @@ from pathlib import Path
 from aiohttp import web
 
 from hosted import jsonsock, log
-from hosted.core.connectors import is_connector_name
+from hosted.core.connectors import is_mcp_connector
 from hosted.proxy.app import CONNECT_LINK_PATH, Resolve
 
 _LOG = log.get(__name__)
@@ -117,7 +117,7 @@ class ConnectCalls:
     async def handle(self, request: web.Request) -> web.Response:
         """POST /connect/<name>/mcp: one MCP message for one connector."""
         name = request.match_info.get("name", "")
-        if not is_connector_name(name):
+        if not is_mcp_connector(name):
             return _refusal(404, "not_a_connector")
         if request.method != "POST":
             # A GET would open a stream for the server's own messages, and a

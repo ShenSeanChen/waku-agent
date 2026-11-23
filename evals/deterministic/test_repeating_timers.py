@@ -499,6 +499,25 @@ def test_tool_sets_one_daily_timer_in_the_persons_zone(home):
     assert "do not set it again" in said
 
 
+def test_tool_says_a_timer_set_in_a_shared_place_answers_there_and_not_privately(home):
+    """On 2026-11-20 the hosted agent set a brief in a Slack channel and told
+    its person it would arrive privately. Nothing can send that: the woken run
+    answers in the thread the timer was set in."""
+    with outbox.running(home, "e8", THREAD):
+        said = _tool(home).fn(when="2026-11-20T09:00", note=NOTE, repeat="daily")
+
+    assert "answers here, in this same conversation" in said
+    assert "cannot send a private message" in said
+
+
+def test_tool_says_nothing_about_a_shared_place_for_a_private_chat(home):
+    one_person = ("telegram", {"chat_id": 4242})
+    with outbox.running(home, "e9", one_person):
+        said = _tool(home).fn(when="2026-11-20T09:00", note=NOTE, repeat="daily")
+
+    assert "several people" not in said and "private message" not in said
+
+
 def test_tool_without_repeat_sets_a_timer_that_fires_once(home):
     said = _tool(home).fn(when="2026-11-20T09:00", note=NOTE)
 

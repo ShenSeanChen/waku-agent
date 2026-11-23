@@ -282,6 +282,9 @@ class Gateway:
         # Spec 008 C: the embedded chat's one-time codes, a separate set so a
         # sign-in code cannot be redeemed as an embed code or the other way.
         self._embed_codes = sessions.HandoffCodes(now, ttl=embed.EMBED_CODE_SECONDS)
+        # The setup page's way in from waku.one (setup_page.LINK_API_PATH): a
+        # third set, for the same reason as the embed codes.
+        self._setup_codes = sessions.HandoffCodes(now)
         # ONE TurnWindow per process, shared with E3's forwarder, which is
         # built BEFORE the Gateway because the Gateway requires a forwarder.
         # Two windows would mean the forwarder counts turns and `disable`
@@ -318,6 +321,10 @@ class Gateway:
         return self._embed_codes
 
     @property
+    def setup_codes(self) -> sessions.HandoffCodes:
+        return self._setup_codes
+
+    @property
     def turns(self) -> quota.TurnWindow:
         return self._turns
 
@@ -343,6 +350,7 @@ class Gateway:
         self._sessions.forget_tenant(tenant_id)
         self._handoffs.forget_tenant(tenant_id)
         self._embed_codes.forget_tenant(tenant_id)
+        self._setup_codes.forget_tenant(tenant_id)
 
     def build(self) -> web.Application:
         """One catch-all route, one explicit body cap, and the five security
@@ -403,6 +411,8 @@ class Gateway:
                 return await self._chat_api(request)
             if path == embed.EMBED_API_PATH:
                 return await self._embed_api(request)
+            if path == setup_page.LINK_API_PATH:
+                return await self._setup_link_api(request)
             if path == slack.EVENTS_PATH:
                 # Before the CSRF pair, like the bearer routes: its credential
                 # is Slack's signature (slack.SlackRoutes.events).
@@ -444,6 +454,8 @@ class Gateway:
             return self._sign_out(request)
         if request.method == "GET" and path == slack.SETUP_PATH:
             return self._setup_page(request)
+        if request.method == "GET" and path == setup_page.AUTH_PATH:
+            return self._setup_enter(request)
         if request.method == "GET" and path == slack.INSTALL_PATH:
             return self._slack_install(request)
         if request.method == "GET" and path == slack.CALLBACK_PATH:
@@ -473,6 +485,58 @@ class Gateway:
                         for vendor, state in self._connector_states(tenant)],
             connect_outcome=request.query.get("connect", ""),
             connect_server=request.query.get("server", ""))
+
+    async def _setup_link_api(self, request: web.Request) -> web.Response:
+        """`POST /v1/setup-link`: a one-time way onto /setup, signed in, for
+        waku.one's Integrations page (setup_page.LINK_API_PATH).
+
+            -> {"url": "https://<apex>/auth/setup?code=<code>",
+                "expires_at": <unix seconds>}
+
+        Bearer-checked exactly like /v1/embed, through the same two helpers, so
+        the tenant is found or created and its Waku Memory key minted here too.
+        The Supabase token never goes into the URL.
+        """
+        if request.method != "POST":
+            return answers.json_error(405, setup_page.LINK_POST_ONLY)
+        if request.content_type != guards.JSON_CONTENT_TYPE:
+            return answers.json_error(guards.UNSUPPORTED_MEDIA, answers.NOT_JSON)
+        signed_in = await self._bearer(request)
+        if isinstance(signed_in, web.Response):
+            return signed_in
+        tenant = await self._bearer_tenant(*signed_in)
+        if isinstance(tenant, web.Response):
+            return tenant
+        code = self._setup_codes.issue(tenant.id)
+        url = f"https://{self._config.apex_host}{setup_page.AUTH_PATH}?code={code}"
+        return answers.json_ok({"url": url,
+                                "expires_at": int(self._now() + sessions.HANDOFF_TTL_SECONDS)})
+
+    def _setup_enter(self, request: web.Request) -> web.Response:
+        """GET /auth/setup?code=: the code becomes this browser's apex
+        session, then /setup.
+
+        THE SAME THREE CHECKS AS /auth/enter, with the same answer for all
+        three: a navigation that is same-site and a document
+        (guards.handoff_refusal), a code that is spent here and names a
+        tenant, and a tenant that is still active. waku.one and the apex share
+        the registrable domain, so the real link from waku.one is same-site,
+        and a link from any other site bounces to /login.
+
+        Like /auth/enter, `?code=` must never reach an access log.
+        """
+        if guards.handoff_refusal(request):
+            return answers.redirect(f"https://{self._config.apex_host}/login")
+        tenant_id = self._setup_codes.take(request.query.get("code", ""))
+        tenant = self._store.tenant_by_id(tenant_id) if tenant_id else None
+        if tenant is None or tenant.status != "active":
+            return answers.redirect(f"https://{self._config.apex_host}/login")
+        value = sessions.new_secret()
+        self._remember(sessions.apex_key(value), tenant.id)
+        response = answers.redirect(slack.SETUP_PATH)
+        sessions.set_session_cookie(response, sessions.APEX_COOKIE, value,
+                                    max_age=int(SESSION_TTL_SECONDS))
+        return response
 
     # --- "Connect Notion" (spec 029 A2) ---------------------------------
 

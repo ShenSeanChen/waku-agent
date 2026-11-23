@@ -202,6 +202,12 @@ flowchart LR
   (`waku/tools/slack_history.py`, hosted only) asks the platform the same way
   for messages of the channel a run is in: the last ones, a window of days,
   or one person's.
+- **Gmail on hosted waku is read the same way** (spec 031 part A,
+  `hosted/gateway/mail.py`). The container's `mail_search`, `mail_read` and
+  `mail_draft` (`waku/tools/mail.py`, hosted only) ask the platform, which
+  holds the person's Google sign-in. A draft is the only write, and nothing
+  sends. A mail's text reaches the model inside a frame that says it is
+  information, never an instruction.
 - **A team space's agent has a home on hosted waku** (spec 032 group A,
   `hosted/gateway/team_homes.py`). waku.one calls `POST /v1/team-homes` with
   the space and its agent's Waku Memory key, and the gateway makes one more

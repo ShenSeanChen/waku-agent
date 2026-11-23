@@ -506,7 +506,7 @@ container --POST /slack/history--> proxy --gateway.sock--> gateway --conversatio
 | `GET /hosted/slack` | a tenant's own host | tells the dashboard's Slack card what the gateway knows: whether this server has a Slack app, whether the person connected a workspace, its name, and the addresses of `/slack/install` and `/setup`. It reads one row, changes nothing, holds no token, and does not start the container |
 | `GET /slack/install` | the apex | sends a signed-in person to Slack's approval page, with a `state` bound to their tenant that works once, for 10 minutes |
 | `GET /slack/oauth/callback` | the apex | checks the `state` and the browser's own session, exchanges Slack's code for the workspace's bot token, and stores it |
-| `POST /v1/triggers/slack` | the apex | takes every workspace's events. It checks Slack's signature over the raw body, refuses a timestamp more than 5 minutes from now, and stores a mention as one row in `tenant_events` under Slack's event id |
+| `POST /v1/triggers/slack` | the apex | takes every workspace's events. It checks Slack's signature over the raw body, refuses a timestamp more than 5 minutes from now, and stores a mention, or a direct message from the person who added the app, as one row in `tenant_events` under Slack's event id |
 | `POST /slack/send` | the proxy, on the tenant network | takes a container's outgoing message with the container's platform token, and has the gateway post it. A tenant may send 30 a minute; one more answers 429, and the container tries it again after 10 seconds and then a minute |
 | `POST /slack/history` | the proxy, on the tenant network | takes a container's request for the messages of one channel (the last ones, a window of days, or one person's), with the container's platform token, and has the gateway read them. The gateway reads a channel only when this tenant's agent was mentioned there. A tenant may read 20 times a minute |
 
@@ -531,10 +531,33 @@ the workspace that will own it. In the app's settings:
 | Page | Field | Value |
 |---|---|---|
 | OAuth & Permissions | Redirect URLs | `https://agent.waku.one/slack/oauth/callback` |
-| OAuth & Permissions | Bot Token Scopes | `app_mentions:read`, `chat:write`, `channels:history`, `groups:history`, `users:read`, `reactions:write`, `channels:read`, `groups:read` |
+| OAuth & Permissions | Bot Token Scopes | `app_mentions:read`, `chat:write`, `channels:history`, `groups:history`, `users:read`, `reactions:write`, `channels:read`, `groups:read`, `im:history` |
 | Event Subscriptions | Request URL | `https://agent.waku.one/v1/triggers/slack` |
-| Event Subscriptions | Subscribe to bot events | `app_mention`, `app_uninstalled`, `message.channels`, `message.groups` |
+| Event Subscriptions | Subscribe to bot events | `app_mention`, `app_uninstalled`, `message.channels`, `message.groups`, `message.im` |
+| App Home | Show Tabs | Messages Tab on, and "Allow users to send Slash commands and messages from the messages tab" ticked |
 | Manage Distribution | Activate Public Distribution | on, so another workspace can add the app |
+
+The last scope, the last event and the App Home row are what a direct
+message needs. For an app created before 2026-11-20, add them in this order,
+then have each workspace's person approve again:
+
+1. **OAuth & Permissions**, "Scopes", "Bot Token Scopes": press "Add an OAuth
+   Scope" and choose `im:history`.
+2. **Event Subscriptions**, "Subscribe to bot events": press "Add Bot User
+   Event", choose `message.im`, and press "Save Changes" at the bottom.
+3. **App Home**, "Show Tabs": switch "Messages Tab" on and tick "Allow users to
+   send Slash commands and messages from the messages tab".
+4. If Slack's settings page asks you to reinstall the app, that reinstalls it
+   in the app's own workspace only, and not through this gateway, so it
+   records nobody. Do step 5 for that workspace too.
+5. In each connected workspace, the person who added Waku opens
+   `https://agent.waku.one/setup`, signed in, and presses "Update
+   permissions", then "Allow" on Slack's page. That gives the workspace the
+   new scope and records that person as the one whose direct messages are
+   answered.
+
+A workspace that skips step 5 keeps working in channels exactly as before:
+Slack sends it no direct message at all.
 
 Leave Socket Mode off. Slack checks the Request URL when you save it, so the
 gateway has to be running with the four values below first.
@@ -612,6 +635,32 @@ with the same names.
   (`reactions:write`), so the person sees it was heard while a stopped
   container starts. A follow-up the agent then answers with silence keeps the
   reaction and gets no reply.
+- **A direct message is answered for one person: the one who added the app**
+  (spec 032, version A). The callback keeps the Slack user who pressed Allow
+  (`authed_user.id` in Slack's answer), and a `message.im` event becomes a row
+  only when Slack names that user as its sender. It needs no mention, the
+  answer goes into the chat itself (into a thread only when the person wrote
+  in one), and the message gets the eyes reaction. It is the same tenant, the
+  same container and the same key as a mention in a channel. The row's
+  `reply_to` carries `private: true`, written by the gateway and by nothing
+  else, and the container reads it as its person's own chat: the sentence
+  about a place several people read is not added, and a timer or a daily
+  brief set there is delivered there. A direct-message id alone never means
+  private.
+- **Anybody else who writes to the bot directly gets one fixed line**, that it
+  answers only the person who added it in a private chat for now and that
+  they can mention it in a channel. At most once a day for each person, kept
+  in the gateway's memory, so a restart can repeat it once. No row is stored,
+  so no container starts and no model is called. An edit, a deletion, any
+  other subtype and the bot's own messages are dropped.
+- **A workspace added before 2026-11-20 has no recorded installer**, and
+  neither has a team home. Nobody is treated as the owner there: everybody
+  gets the fixed line. The person who added Waku presses "Update permissions"
+  on `/setup` once, and the callback records them. Without that the workspace
+  also lacks `im:history`, so Slack sends it no direct message in the first
+  place.
+- **`slack_history` does not read a direct message.** In a private chat the
+  tool says that what was said there is already in the conversation.
 - **Every channel the bot is invited to is heard.** The hosted app has no
   channel allowlist. A mention by a person from another workspace, in a
   shared channel, is dropped.
@@ -709,8 +758,11 @@ variable.
   what keeps a browser from being sent somewhere else.
 - **A home has no page and no sign-in.** Nobody opens its dashboard, and
   `tenant.sh` names it by its tenant id: its email is empty.
-- **Direct messages to the bot are not heard yet** (group C), and a reply
-  carries no link to the memory it saved (group F).
+- **A home answers no direct message.** Whoever writes to the bot directly in
+  a home's workspace gets the fixed line of a direct message
+  ([Slack](#slack-the-public-waku-app), "Limits"). A person's own agent in a direct message, from
+  a link to their Waku account, is group C. A reply carries no link to the
+  memory it saved (group F).
 - **The model's own `memory.remember` tool call carries no `space`** unless
   the model writes one. Only the three sends named above add it.
 - **A restore onto a new VM needs `WAKU_SLACK_TOKEN_KEY` carried over by
@@ -719,7 +771,7 @@ variable.
 - **None of this has run against waku.one, Slack or Waku Memory.** The evals
   use a fake Slack and a fake spawner on loopback.
 
-## Connectors: Notion, Linear and GitHub
+## Connectors: Notion, Linear, GitHub and Gmail
 
 A person on hosted waku signs in to Notion, Linear or GitHub from
 `https://agent.waku.one/setup` (spec 029). Ana presses "Connect Notion",
@@ -841,6 +893,91 @@ GitHub's token lasts eight hours and its refresh token six months. The
 gateway renews the token in its last minute and keeps the new refresh token,
 because GitHub ends the old one when it is used.
 
+### Gmail
+
+A person connects one Gmail mailbox, and their agent can search it, read a
+thread and write a draft reply in it (spec 031, part A). **It cannot send.**
+Google has no MCP server a client can sign in to, so Gmail is not relayed as
+one: the gateway calls Gmail's own API.
+
+```
+container --POST /mail/read--> proxy --gateway.sock--> gateway --> gmail.googleapis.com
+```
+
+| Tool in the container | Route on the proxy | What the gateway asks Gmail |
+|---|---|---|
+| `mail_search` | `POST /mail/search` `{"query", "limit"}` | `messages.list` with Gmail's own search, then each message's headers. 10 by default, 20 at most |
+| `mail_read` | `POST /mail/read` `{"thread_id"}` | `threads.get`. The last 10 mails of the thread, 4,000 characters of each, without the lines a reply quotes |
+| `mail_draft` | `POST /mail/draft` `{"thread_id", "body"}` | `threads.get`, then `drafts.create` in that thread |
+
+**Nothing sends.** The proxy's route is `/mail/search`, `/mail/read` or
+`/mail/draft`, and `/mail/send` is a 404. The gateway's socket takes those
+three actions and no other. `hosted/gateway/mail.py` holds five Gmail
+addresses, four that read and `drafts.create`, and an eval reads the file to
+keep a sending address out of it. Google's `gmail.compose` scope would let a
+client send a draft; what stops it is that no code here asks. The person
+opens Drafts in Gmail and presses Send.
+
+**The gateway addresses the draft.** The agent gives a thread and a text. The
+reply goes to the last mail in the thread that the person did not write, at
+its `Reply-To` or else its `From`, so a mail that says "send this to
+somebody" cannot put an address on a draft. There is no draft outside a
+thread yet.
+
+**A mail is other people's text.** The tool puts everything read from Gmail
+between two lines that carry a mark made for that one call, under a sentence
+that says it is information and never an instruction. A mail cannot know the
+mark, so it cannot close the frame itself.
+
+**One mailbox per person, for now.** The spec wants several. `control.db`
+keeps one sign-in per tenant and connector, so a second sign-in replaces the
+first.
+
+The operator sets it up once, in the Google Cloud console
+(`console.cloud.google.com`), project `waku-agent`:
+
+1. **APIs & Services**, **Enabled APIs & services**: "Gmail API" is listed.
+   If it is not, **Enable APIs and services**, search "Gmail API", **Enable**.
+2. **Google Auth Platform**, **Audience** (in the older console, **OAuth
+   consent screen**): publishing status is "Testing". Under **Test users**,
+   **Add users**, and enter every Google address that will connect a mailbox.
+   Only these addresses can sign in, up to 100.
+3. **Google Auth Platform**, **Data Access**, **Add or remove scopes**: tick
+   `https://www.googleapis.com/auth/gmail.readonly` and
+   `https://www.googleapis.com/auth/gmail.compose`, **Update**, **Save**.
+   Not `gmail.send` and not `gmail.modify`.
+4. **Google Auth Platform**, **Clients** (in the older console, **APIs &
+   Services**, **Credentials**), the client "Waku hosted agent", type "Web
+   application". Under **Authorized redirect URIs** it has exactly
+   `https://agent.waku.one/connect/callback`.
+5. On that client's page, copy the **Client ID**. Under **Client secrets**,
+   **Add secret**, and copy it then: Google shows a secret once.
+
+Put both into `/srv/waku/config/gateway.env`, as root, and recreate the
+gateway with the command under "Slack: the public Waku app", "Turning it on":
+
+```
+WAKU_GOOGLE_CLIENT_ID=<Client ID, ending in .apps.googleusercontent.com>
+WAKU_GOOGLE_CLIENT_SECRET=<the client secret>
+```
+
+The gateway's log then says `connectors: on (notion, linear, github, gmail)`.
+Without both values it says why Gmail is not offered, `/setup` has no Gmail
+card, an agent has no mail tools, and one asked to connect Gmail answers that
+it cannot be connected here yet. A container builds its tools when it
+starts, so an agent that was running before the values were added gets the
+three tools at its next start.
+
+A person presses "Connect Gmail" on `/setup`, or says "connect Gmail" to
+their agent and opens the link. Google shows "Google hasn't verified this
+app" while the app is in testing: **Continue**, then leave both permissions
+ticked, then **Continue**.
+
+**In testing mode Google ends a sign-in after 7 days.** The gateway's renewal
+is then refused, `/setup` says "Reconnect Gmail", and the mail tools answer
+with the link to sign in again. This ends when the app passes Google's
+review, which is not started (spec 031, open question 1).
+
 ### Turning it on
 
 Connectors are on when `config/gateway.env` has a usable
@@ -874,6 +1011,12 @@ or `connectors: off` with the reason, and the three routes then answer 503.
 - **Removing the two GitHub values takes GitHub off the list** and leaves
   each person's sealed tokens in `control.db`. Their `github` tools answer an
   error until the values are back.
+- **Removing the two Google values takes Gmail off the list** the same way.
+- **Gmail has run against a fake Google only.** Not verified against Google:
+  that its sign-in accepts the PKCE challenge beside the client secret, the
+  `iss` it sends back, and how Gmail fills a draft's `From`. A mail's
+  attachments are not read, a mailbox's new mail does not wake the agent
+  (spec 031, decision 3), and a mail call is not charged credits.
 - **None of this has run against Notion, Linear or GitHub.** The evals use a
   fake vendor on loopback. Whether each vendor's registration accepts
   `https://agent.waku.one/connect/callback` as a redirect address is not

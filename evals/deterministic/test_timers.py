@@ -166,7 +166,8 @@ def test_tool_inside_a_run_sends_the_woken_runs_reply_to_that_conversation(home)
     (timer,) = _timers(home)
     assert timer.address == THREAD
     assert timer.session_id == "slack:C1:1700.0001"
-    assert said == "Timer 1 is set for Thursday 09:00."
+    assert said.startswith("Timer 1 is set for Thursday 09:00.")
+    assert "answers here, in this same conversation" in said, "a thread is a shared place"
 
 
 def test_tool_outside_a_run_sends_the_woken_runs_reply_to_the_owner(home, monkeypatch):

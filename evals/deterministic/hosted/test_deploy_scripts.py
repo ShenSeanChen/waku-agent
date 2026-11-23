@@ -917,6 +917,8 @@ def test_no_env_file_install_writes_holds_a_value_compose_would_misread(tmp_path
     may_be_empty = {"WAKU_DNS_MODULE_VERSION", "WAKU_TREG_TOKEN", "WAKU_SLACK_CLIENT_ID",
                     "WAKU_SLACK_CLIENT_SECRET", "WAKU_SLACK_SIGNING_SECRET",
                     "WAKU_GITHUB_CLIENT_ID", "WAKU_GITHUB_CLIENT_SECRET",
+                    # The Google client's two (spec 031 A), on the same terms.
+                    "WAKU_GOOGLE_CLIENT_ID", "WAKU_GOOGLE_CLIENT_SECRET",
                     "WAKU_AGENT_PLATFORM_SECRET"}
     for function in ("waku_install_env", "waku_gateway_env",
                      "waku_spawner_env", "waku_proxy_env"):

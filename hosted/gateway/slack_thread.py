@@ -16,6 +16,9 @@ that added the app before those scopes were asked for has none of them.
 Nothing here fails for it: Slack answers `missing_scope`, and the mention goes
 to the agent as it would have, with the bot's own id replaced by its name.
 
+A direct message from the person the agent belongs to has no channel and no
+mention. It reads under one line that says whose chat it is (compose_direct).
+
 A workspace that belongs to a team space's home gets one more line, first:
 "You are Waku, the agent of the team space Acme. What you save here is read by
 every member of Acme." (spec 032, with_team_space).
@@ -53,6 +56,12 @@ FOLLOW_UP_HEAD = ("[{who} wrote this in a thread you are part of, without mentio
 # the channel's id: nothing had told it which channel it was in.
 WHERE = ("[This is the Slack channel {name}. Its address is slack:{channel}: a message "
          "sent there appears in the channel itself, outside this thread.]")
+# A direct message from the person the agent belongs to (spec 032, version
+# A). The gateway checked who wrote it, so the agent is told that nobody else
+# reads the chat: what it may not say in a channel it may say here.
+DIRECT_HEAD = ("[{who} writes to you in a private Slack chat. {who} is the person this "
+               "assistant belongs to, and nobody else reads this chat.]")
+YOUR_PERSON = "Your person"
 # The first line of every channel event of a team home (spec 032, decision
 # 2). The agent of a team space answers everybody in the channel and saves
 # into the space, so it is told whose agent it is before anything else.
@@ -88,8 +97,28 @@ class ThreadReader:
             raw = _own_name(raw, bot_user_id)
             return raw if mentioned else f"{FOLLOW_UP_HEAD.format(who=SOMEONE)}\n{raw}"
 
-    async def _compose(self, token: str, team_id: str, bot_user_id: str, event: dict,
-                       mentioned: bool) -> str:
+    async def compose_direct(self, *, token: str, team_id: str, bot_user_id: str,
+                             event: dict) -> str:
+        """A direct message's text under the line that says whose chat it
+        is, with the thread above it when the person wrote in a thread.
+        Never raises: on any failure it returns the line and the text."""
+        try:
+            return await asyncio.wait_for(
+                self._compose_direct(token, team_id, bot_user_id, event), BUDGET_SECONDS)
+        except Exception as exc:  # noqa: BLE001 -- a message is never lost to a name
+            _LOG.info("Slack direct message read without its name for team=%s: %s",
+                      team_id, type(exc).__name__)
+            return f"{DIRECT_HEAD.format(who=YOUR_PERSON)}\n{event.get('text') or ''}"
+
+    async def _compose_direct(self, token: str, team_id: str, bot_user_id: str,
+                              event: dict) -> str:
+        who, asked, thread = await self._parts(token, team_id, bot_user_id, event)
+        head = DIRECT_HEAD.format(who=YOUR_PERSON if who == SOMEONE else who)
+        return f"{head}\n{THREAD_HEAD}\n{thread}\n\n{asked}" if thread else f"{head}\n{asked}"
+
+    async def _parts(self, token: str, team_id: str, bot_user_id: str,
+                     event: dict) -> tuple[str, str, str]:
+        """(who wrote the message, what it says, the thread above it or "")."""
         channel, ts = str(event.get("channel") or ""), str(event.get("ts") or "")
         thread_ts = event.get("thread_ts")
         above: list[dict] = []
@@ -111,7 +140,12 @@ class ThreadReader:
             said = await words(str(message.get("text") or ""))
             if said:
                 lines.append(f"{author}: {said}")
-        thread = "\n".join(lines)[-MAX_CHARS:]
+        return who, asked, "\n".join(lines)[-MAX_CHARS:]
+
+    async def _compose(self, token: str, team_id: str, bot_user_id: str, event: dict,
+                       mentioned: bool) -> str:
+        channel = str(event.get("channel") or "")
+        who, asked, thread = await self._parts(token, team_id, bot_user_id, event)
         if not mentioned:
             head = FOLLOW_UP_HEAD.format(who=who)
         else:

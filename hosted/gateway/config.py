@@ -79,6 +79,11 @@ REQUIRED_ENV_NAMES = (
     # not a connector on this server.
     "WAKU_GITHUB_CLIENT_ID",
     "WAKU_GITHUB_CLIENT_SECRET",
+    # Spec 031 A: the Google client a person signs in to Gmail through.
+    # GOOGLE_ENV_NAMES below, and in MAY_BE_ABSENT: without both, Gmail is
+    # not a connector on this server and its agents have no mail tools.
+    "WAKU_GOOGLE_CLIENT_ID",
+    "WAKU_GOOGLE_CLIENT_SECRET",
     # Spec 032: the secret waku.one sends with each call to /v1/team-homes.
     # In MAY_BE_ABSENT: without it the gateway starts and those routes
     # answer 503.
@@ -99,6 +104,7 @@ SLACK_ENV_NAMES = ("WAKU_SLACK_CLIENT_ID", "WAKU_SLACK_CLIENT_SECRET",
 # Absent or empty, the allowlist is DEFAULT_EMBED_ORIGINS.
 MAY_BE_ABSENT = frozenset({"WAKU_EMBED_ORIGINS", "WAKU_IDLE_MINUTES", *SLACK_ENV_NAMES,
                            "WAKU_GITHUB_CLIENT_ID", "WAKU_GITHUB_CLIENT_SECRET",
+                           "WAKU_GOOGLE_CLIENT_ID", "WAKU_GOOGLE_CLIENT_SECRET",
                            "WAKU_AGENT_PLATFORM_SECRET"})
 
 # waku.one's three hosts. http://localhost:3000, for developing waku.one's own
@@ -252,6 +258,33 @@ def connect_clients_from(env: Mapping[str, str]) -> tuple[dict[str, tuple[str, s
                        values["WAKU_GITHUB_CLIENT_SECRET"])}, ""
 
 
+# The client id and client secret of the Google OAuth client, which the
+# operator copies from the Google Cloud console (hosted/README.md, "Gmail").
+GOOGLE_ENV_NAMES = ("WAKU_GOOGLE_CLIENT_ID", "WAKU_GOOGLE_CLIENT_SECRET")
+
+
+def google_client_from(env: Mapping[str, str]) -> tuple[dict[str, tuple[str, str]], str]:
+    """({"gmail": (client id, client secret)}, "") or ({}, why Gmail is not
+    offered) (spec 031 A). A Google client id ends in
+    .apps.googleusercontent.com and a secret is letters, digits and dashes,
+    so both fit the shape a GitHub value has.
+
+    The reason names a name and quotes no value. It never raises, for
+    slack_from's reason: a typo here must cost Gmail and nothing else."""
+    values = {name: (env.get(name) or "").strip() for name in GOOGLE_ENV_NAMES}
+    missing = [name for name, value in values.items() if not value]
+    if missing:
+        return {}, f"config/gateway.env is missing {', '.join(missing)}"
+    bad = [name for name, value in values.items() if not _CLIENT_VALUE.fullmatch(value)]
+    if bad:
+        return {}, f"{', '.join(bad)} in config/gateway.env is not a value Google issues"
+    return {"gmail": (values["WAKU_GOOGLE_CLIENT_ID"],
+                      values["WAKU_GOOGLE_CLIENT_SECRET"])}, ""
+
+
+# What a GatewayConfig built by hand says about Gmail: off, both missing.
+GOOGLE_NOT_CONFIGURED = f"config/gateway.env is missing {', '.join(GOOGLE_ENV_NAMES)}"
+
 # What a GatewayConfig built by hand says about GitHub: off, both missing.
 GITHUB_NOT_CONFIGURED = f"config/gateway.env is missing {', '.join(GITHUB_ENV_NAMES)}"
 
@@ -292,9 +325,11 @@ class GatewayConfig:
     connect_problem: str = CONNECT_NOT_CONFIGURED
     # Spec 029 F. The client each connector that needs one signs in with, by
     # connector name: {"github": (client id, client secret)}, or empty, and
-    # `github_problem` then says why GitHub is not offered.
+    # `github_problem` then says why GitHub is not offered. Spec 031 A adds
+    # "gmail" to the same mapping, and `google_problem`.
     connect_clients: Mapping[str, tuple[str, str]] = field(default_factory=dict, repr=False)
     github_problem: str = GITHUB_NOT_CONFIGURED
+    google_problem: str = GOOGLE_NOT_CONFIGURED
     # Spec 032. `platform_secret` is "" when the team-home routes are off,
     # and `platform_problem` then says why.
     platform_secret: str = field(default="", repr=False)
@@ -311,6 +346,7 @@ def config_from_env(env: Mapping[str, str]) -> GatewayConfig:
     slack, slack_problem = slack_from(env)
     connect_key, connect_problem = connect_key_from(env)
     connect_clients, github_problem = connect_clients_from(env)
+    google_client, google_problem = google_client_from(env)
     platform_secret, platform_problem = platform_secret_from(env)
     return GatewayConfig(
         apex_host=env["WAKU_APEX_HOST"].strip().lower(),
@@ -333,8 +369,9 @@ def config_from_env(env: Mapping[str, str]) -> GatewayConfig:
         slack_problem=slack_problem,
         connect_key=connect_key,
         connect_problem=connect_problem,
-        connect_clients=connect_clients,
+        connect_clients={**connect_clients, **google_client},
         github_problem=github_problem,
+        google_problem=google_problem,
         platform_secret=platform_secret,
         platform_problem=platform_problem,
     )

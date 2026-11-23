@@ -1,7 +1,7 @@
 """run/gateway/gateway.sock -- what the proxy may ask the gateway.
 
 The proxy is the one service tenant code can reach directly, so it gets no
-access to control.db. It asks five things here, and nothing else:
+access to control.db. It asks six things here, and nothing else:
 
   token       it sends a SHA-256 hash and gets back a tenant id and a status,
               and the tenant's Waku Memory key so it can charge that person's
@@ -23,6 +23,12 @@ access to control.db. It asks five things here, and nothing else:
                 this process.
   connect_link  it sends a tenant id and a connector's name, and gets back
                 the address where that person starts the sign-in (B3).
+
+  mail          it sends a tenant id it resolved itself, one of three
+                actions (search, read, draft) and that action's arguments,
+                and the gateway calls Gmail with that tenant's sign-in (spec
+                031 A). It gets back the answer. The Google token stays in
+                this process, and no action sends a mail.
 
 It cannot enumerate tenants, read a session, read a Slack token or a
 connector's token, or issue anything.
@@ -49,6 +55,7 @@ SLACK_HISTORY_FIELDS = frozenset({"op", "tenant", "channel", "thread_ts", "limit
                                   "days", "person"})
 CONNECT_MCP_FIELDS = frozenset({"op", "tenant", "server", "message"})
 CONNECT_LINK_FIELDS = frozenset({"op", "tenant", "server"})
+MAIL_FIELDS = frozenset({"op", "tenant", "action", "args"})
 
 # (tenant id, channel, text, thread_ts) -> {"ok": True} or {"ok": False,
 # "error": code}. hosted/gateway/slack.SlackRelay.send.
@@ -57,18 +64,23 @@ SlackSend = Callable[[str, str, str, str], Awaitable[dict]]
 # "channel": name, "messages": [...], "cut": bool} or {"ok": False, "error":
 # code}. hosted/gateway/slack.SlackHistory.read.
 SlackHistory = Callable[[str, str, str, int, int, str], Awaitable[dict]]
+# (tenant id, action, arguments) -> {"ok": True, ...} or {"ok": False,
+# "error": code}. hosted/gateway/mail.Mail.handle.
+MailCall = Callable[[object, object, object], Awaitable[dict]]
 
 
 async def serve_token_lookup(path: Path, store: ControlStore, *,
                              slack_send: SlackSend | None = None,
                              slack_history: SlackHistory | None = None,
                              connect: McpRelay | None = None,
+                             mail: MailCall | None = None,
                              memory_key: Callable[[str], str] | None = None,
                              ) -> asyncio.Server:
     """`slack_send` is the relay, or None when Slack is not configured: the
     operation then answers that, and the socket is otherwise the same.
     `slack_history` is the reader and `connect` is the connectors' relay, or
-    None on the same terms. `memory_key` answers the key a tenant's model
+    None on the same terms, and so is `mail`, which makes a container's mail
+    calls. `memory_key` answers the key a tenant's model
     calls are charged with (team_homes.HomeKeys.memory_key, which knows a
     team home from a person). Left out, every tenant is a person and the
     key is the one in memory_key."""
@@ -94,6 +106,16 @@ async def serve_token_lookup(path: Path, store: ControlStore, *,
             return {"ok": False, "error": "connectors_not_configured"}
         return connect.link(request.get("tenant", ""), request.get("server"))
 
+    async def mail_call(request: dict) -> dict:
+        unknown = sorted(set(request) - MAIL_FIELDS)
+        if unknown:
+            return {"error": f"mail does not take {unknown}"}
+        if mail is None:
+            return {"ok": False, "error": "not_offered"}
+        # Mail.handle checks every value's shape itself.
+        return await mail(request.get("tenant", ""), request.get("action"),
+                          request.get("args"))
+
     async def send(request: dict) -> dict:
         unknown = sorted(set(request) - SLACK_SEND_FIELDS)
         if unknown:
@@ -116,7 +138,7 @@ async def serve_token_lookup(path: Path, store: ControlStore, *,
                                    request.get("days", 0), request.get("person", ""))
 
     async def handler(request: dict) -> dict:
-        # Five allowed questions, named here; everything else refused. A list
+        # Six allowed questions, named here; everything else refused. A list
         # of forbidden ops would need editing every time the store grows a
         # method.
         if request.get("op") == "slack_send":
@@ -127,9 +149,12 @@ async def serve_token_lookup(path: Path, store: ControlStore, *,
             return await connect_mcp(request)
         if request.get("op") == "connect_link":
             return await connect_link(request)
+        if request.get("op") == "mail":
+            return await mail_call(request)
         if request.get("op") != "token":
-            return {"error": "this socket answers five questions: op=token, op=slack_send, "
-                             "op=slack_history, op=connect_mcp and op=connect_link"}
+            return {"error": "this socket answers six questions: op=token, op=slack_send, "
+                             "op=slack_history, op=connect_mcp, op=connect_link and "
+                             "op=mail"}
         unknown = sorted(set(request) - TOKEN_FIELDS)
         if unknown:
             return {"error": f"token does not take {unknown}"}

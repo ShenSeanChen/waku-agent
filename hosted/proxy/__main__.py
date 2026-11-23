@@ -47,6 +47,7 @@ from hosted.proxy.connect import ConnectCalls
 from hosted.proxy.gateway_client import TokenCache
 from hosted.proxy.internal import serve_spend
 from hosted.proxy.ledger import Ledger
+from hosted.proxy.mail import MailDoor
 from hosted.proxy.slack import SlackHistory, SlackSend
 from hosted.proxy.treg import TregRelay
 from hosted.proxy.turns import TurnCharges
@@ -89,7 +90,11 @@ async def main() -> None:
             # Spec 029 D: the same, for reading the channel a run is in.
             slack_history=SlackHistory(resolve=tokens.resolve,
                                        gateway_socket=config.gateway_socket).handle,
-            connect=connectors.handle, connect_link=connectors.link)
+            connect=connectors.handle, connect_link=connectors.link,
+            # Spec 031 A: the same, for the three mail tools. A gateway with
+            # no Google client answers that Gmail is not offered.
+            mail=MailDoor(resolve=tokens.resolve,
+                          gateway_socket=config.gateway_socket).handle)
         runner = web.AppRunner(proxy.build(), access_log=None)
         await runner.setup()
         await web.TCPSite(runner, config.bind_host, config.port).start()

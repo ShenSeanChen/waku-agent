@@ -61,6 +61,16 @@ def build_registry(conn: sqlite3.Connection, settings: Settings, memory=None,
         from waku.tools import slack_history
 
         registry.register(slack_history.make_tool(settings.home, base_url, platform_token))
+        # Hosted Waku only (spec 031 A): search and read the person's Gmail
+        # and write a draft there, through the platform, which holds the
+        # sign-in. Left out on a server that says it has no Gmail. A platform
+        # that did not answer leaves them in, and each then says why.
+        offered = connectors.hosted_offered()
+        if offered is None or "Gmail" in offered:
+            from waku.tools import mail
+
+            for tool in mail.make_tools(base_url, platform_token):
+                registry.register(tool)
     # Web search — pairs with create_event for the multi-tool loop demo
     # ("find the World Cup games left and add them to my calendar").
     registry.register(search.make_tool())
