@@ -43,6 +43,18 @@ skill, never `gh pr checkout`. Frontend and TUI diffs are **Sean's to test**:
 stand them up on port 7778 so the live 7777 is untouched, hand him the URL,
 and never merge on my own screenshots.
 
+## Keep small tasks open for contributors
+
+A contributor who finds no small task open leaves. Right after the community
+queue, count the open `good first issue` issues that nobody has claimed. With
+fewer than five, add one line to the queue report and draft new ones with the
+`seed-issues` skill in `.claude/skills/seed-issues/`. Draft them from work that
+already happened: a lasting fix a review named and did not build, a declined
+pull request that came with an invitation, a "Known broken" row in
+`docs/status.md` with no fix in flight. Then stop: Sean approves each issue
+before it is filed. Do the same after any batch of pull requests is merged or
+closed, because reviews are where these tasks turn up.
+
 ## Merging
 
 - **`main` is protected, and `git push origin main` is rejected for everyone.**
