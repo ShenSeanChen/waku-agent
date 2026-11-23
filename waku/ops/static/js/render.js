@@ -76,7 +76,7 @@ function histItem(m){
                       graph:m.meta.graph, report:m.meta.report, used:m.meta.used,
                       tools:m.meta.tools, iterations:m.meta.iterations,
                       latency_ms:m.meta.latency_ms, model:m.meta.model,
-                      receipt:m.meta.receipt};
+                      receipt:m.meta.receipt, notices:m.meta.notices};
   return {role:"waku", reply, historical:true};
 }
 
@@ -335,7 +335,8 @@ const chatTurnCard = t => uiCard(`
   ${usedList(t.used)}
   ${keptList(t.consolidation)}
   ${teleFooter(t)}
-  ${receiptBlock(t.receipt)}`, {cls: "reply"});
+  ${receiptBlock(t.receipt)}
+  ${(t.notices || []).map(n => `<div class="meta plugin-notice">${esc(n)}</div>`).join("")}`, {cls: "reply"});
 
 // While a turn runs we stream it live: stages light up as the harness reaches
 // them, and the reply text appears token by token (with a blinking caret).

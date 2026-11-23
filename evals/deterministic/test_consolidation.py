@@ -572,3 +572,33 @@ def test_a_real_fact_in_the_same_turn_is_still_kept(memory):
 def test_the_summariser_is_told_to_extract_only_what_the_person_said():
     assert "Extract only what the person said" in SUMMARIZER_PROMPT
     assert "what the assistant's memory holds or lacks" in SUMMARIZER_PROMPT
+
+
+@pytest.mark.parametrize("mode, sends", [("plugin", False), ("agent", True)])
+def test_under_plugin_mode_consolidation_keeps_its_facts_here_and_retries_only_failed_sends(tmp_path, mode, sends):
+    """Spec 021 D1: with the Waku plugin installed, the server extracts from
+    the Stop hook. Consolidation keeps this batch's facts on this machine and
+    sends none of them. The amendment (E2) sends again a fact an earlier send
+    failed on, whatever the batch: it was meant for Waku Memory and never got
+    there."""
+    from waku.config import Settings
+    from waku.memory import Memory
+
+    memory = Memory(connect(tmp_path), Settings(home=tmp_path, memory_mode=mode, consolidate_every=3),
+                    CountingClient([response([text_block(DISTILLED)])]))
+    memory.conn.execute("INSERT INTO facts (subject, content, source, synced, scope) "
+                        "VALUES ('raj', 'Raj plays tennis.', 'consolidation', 0, 'global')")
+    memory.conn.commit()
+    remember = FakeRemember()
+    memory.remember = remember
+    add_exchanges(memory.conn, 3)
+    memory.maybe_consolidate()
+    stored = [r[0] for r in memory.conn.execute("SELECT content FROM facts ORDER BY id")]
+    assert stored == ["Raj plays tennis.", "Alex prefers morning meetings.", "The Acme demo is on Friday."]
+    assert bool(remember.sent) is True
+    if not sends:
+        # only the fact that failed earlier; none of this batch's two
+        assert remember.sent == [("Raj plays tennis.", "global")]
+        assert memory.remember is remember   # save_note keeps its send
+    else:
+        assert len(remember.sent) == 3

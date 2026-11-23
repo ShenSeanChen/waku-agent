@@ -517,8 +517,22 @@ def test_a_gateway_env_from_before_spec_008_still_starts():
     env = _example_env()
     # Spec 001 E4 added the second optional name, WAKU_IDLE_MINUTES, for the
     # same reason; test_idle_loop.py pins its own default.
-    assert set(env) == set(REQUIRED_ENV_NAMES) - {"WAKU_EMBED_ORIGINS", "WAKU_IDLE_MINUTES"}
-    assert MAY_BE_ABSENT == {"WAKU_EMBED_ORIGINS", "WAKU_IDLE_MINUTES"}
+    # Spec 026 C added the four Slack names on the same terms;
+    # test_slack_install.py pins what their absence does.
+    slack = {"WAKU_SLACK_CLIENT_ID", "WAKU_SLACK_CLIENT_SECRET",
+             "WAKU_SLACK_SIGNING_SECRET", "WAKU_SLACK_TOKEN_KEY"}
+    # Spec 029 F added the GitHub App's two; test_connect_github.py pins
+    # what their absence does.
+    github = {"WAKU_GITHUB_CLIENT_ID", "WAKU_GITHUB_CLIENT_SECRET"}
+    # Spec 032 added the platform secret; test_team_home_routes.py pins what
+    # its absence does.
+    # Spec 031 A added the Google client's two; test_mail_gmail.py pins what
+    # their absence does.
+    google = {"WAKU_GOOGLE_CLIENT_ID", "WAKU_GOOGLE_CLIENT_SECRET"}
+    absent = {"WAKU_EMBED_ORIGINS", "WAKU_IDLE_MINUTES",
+              "WAKU_AGENT_PLATFORM_SECRET"} | slack | github | google
+    assert set(env) == set(REQUIRED_ENV_NAMES) - absent
+    assert MAY_BE_ABSENT == absent
     assert config_from_env(env).embed_origins == DEFAULT_EMBED_ORIGINS
     assert config_from_env(env | {"WAKU_EMBED_ORIGINS": ""}).embed_origins == DEFAULT_EMBED_ORIGINS
     with pytest.raises(ValueError, match="WAKU_SUPABASE_URL"):

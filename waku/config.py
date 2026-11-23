@@ -159,6 +159,23 @@ def env_write_path() -> Path:
     return path
 
 
+MEMORY_MODES = ("agent", "plugin", "off")
+
+
+def _memory_mode(raw: str) -> str:
+    """A WAKU_MEMORY_MODE value, or "" for unset and for anything else. An
+    unknown value counts as no choice, so a typo shows the prompt again
+    instead of silently turning Waku Memory off.
+
+    `hook` was reserved for hosted and never called session.hook (spec 021).
+    It reads as `agent`, which is what it always did, so a .env or a tenant
+    that holds it is not asked the first-run question again."""
+    value = raw.strip().lower()
+    if value == "hook":
+        return "agent"
+    return value if value in MEMORY_MODES else ""
+
+
 def find_env_upward(start: Path) -> str:
     """The nearest .env in `start` or a folder above it, or "". This is the
     walk find_dotenv(usecwd=True) makes from the working directory, with the
@@ -222,6 +239,20 @@ class Settings:
     # --- Memory
     # Consolidate (distill chats into durable facts) only after N new exchanges.
     consolidate_every: int = field(default_factory=lambda: int(os.getenv("WAKU_CONSOLIDATE_EVERY", "6")))
+    # Where the person's memory lives (spec 020). "agent": this agent sends each
+    # kept fact to Waku Memory. "plugin" (spec 021): the Waku plugin is
+    # installed, its Stop hook sends each turn, and Waku Memory's server
+    # extracts from it, so consolidation keeps facts here and sends none of a
+    # captured turn's facts; a paused turn's facts it sends itself (spec 021
+    # amendment E2).
+    # "off": Waku Memory is never connected. "" means the person has not
+    # chosen yet, and Waku behaves as it did before the choice existed: it
+    # connects Waku Memory only if mcp.json names it. "hook" reads as "agent".
+    memory_mode: str = field(default_factory=lambda: _memory_mode(os.getenv("WAKU_MEMORY_MODE", "")))
+    # Whether building the agent may open a browser to sign in to an MCP
+    # server that has no token yet. `waku serve` turns it off (spec 025): the
+    # server is left out until the owner has signed in through the link.
+    mcp_sign_in: bool = True
     retrieval_top_k: int = field(default_factory=lambda: int(os.getenv("WAKU_RETRIEVAL_TOP_K", "4")))
     # 'sqlite' (default, zero setup) or 'supabase' (pgvector upgrade path — see launch-rag).
     semantic_store: str = field(default_factory=lambda: os.getenv("WAKU_SEMANTIC_STORE", "sqlite"))
@@ -289,6 +320,16 @@ class Settings:
         (self.home / "traces").mkdir(exist_ok=True)
         (self.home / "outbox").mkdir(exist_ok=True)
         return self.home
+
+
+def approval_overrides() -> tuple[frozenset[str], frozenset[str]]:
+    """(WAKU_APPROVE_ALLOW, WAKU_APPROVE_ASK): tool names, comma-separated, whose
+    approval mode under `waku serve` is set here instead of by the built-in
+    table in waku/alwayson/approvals.py. Read at each call, as WAKU_OWNER is."""
+    def names(variable: str) -> frozenset[str]:
+        return frozenset(n.strip() for n in os.getenv(variable, "").split(",") if n.strip())
+
+    return names("WAKU_APPROVE_ALLOW"), names("WAKU_APPROVE_ASK")
 
 
 def load_settings() -> Settings:

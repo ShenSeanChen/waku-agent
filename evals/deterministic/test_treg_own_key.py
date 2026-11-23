@@ -141,9 +141,23 @@ def test_a_laptop_oauth_card_is_unchanged(tmp_path, no_key):
 
 
 def test_the_page_offers_configure_and_draws_treg_once():
-    views = (Path(treg.__file__).parents[1] / "ops" / "static" / "js" / "views.js").read_text(encoding="utf-8")
-    assert "item.configurable" in views and "openConnectionModal('${esc(item.key)}')" in views
-    assert "drawnAsMcp" in views
+    """Spec 030 composes the page in waku/ops/connections_page.py: a treg card
+    that can take a key opens the registry row's dialog, and that row gets no
+    second card."""
+    from waku.ops import connections_page
+
+    row = {"key": "treg", "group": "Search & Observability", "name": "treg", "what": "The key.",
+           "status": {"state": "not_configured", "message": ""}}
+    card = {"key": "treg", "name": "treg", "group": "Search & Observability", "what": "Live data.",
+            "state": "connected", "detail": "", "configurable": True}
+    page = connections_page.page([row], [card], {"available": False}, {"connected": False})
+    # "Manage", not "Configure": the card is connected, and the dialog changes its key.
+
+    cards = [c for group in page["groups"] for c in group["cards"] if c["id"] == "treg"]
+    assert len(cards) == 1 and cards[0]["what"] == "Live data."
+    assert cards[0]["action"] == {"kind": "dialog", "label": "Manage", "target": "treg"}
+    card["configurable"] = False
+    assert connections_page.treg_card(card)["action"] is None, "connected, and no key to set"
 
 
 # --- the unavailable tools -----------------------------------------------------

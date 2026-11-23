@@ -223,9 +223,9 @@ def _belongs_elsewhere(model: str, provider_name: str) -> bool:
     that produces a 400 rather than a surprise.
 
     A row with claims_families = false (the hosted free tier) is left out of
-    the OWNER map below, because it fronts a live catalog behind a single
+    the owners below, because it fronts a live catalog behind a single
     placeholder id and its own family tells you nothing about what is valid
-    there. It is still JUDGED by the map, and that is deliberate
+    there. It is still checked against those owners, and that is deliberate
     (spec 001, "The free tier is a provider"): a real anthropic owns
     "claude", so a leftover
     claude-* WAKU_MODEL under the hosted row is replaced by the row's own
@@ -234,10 +234,12 @@ def _belongs_elsewhere(model: str, provider_name: str) -> bool:
     family = model.split("-")[0].lower()
     if "/" in model or not family:
         return False
-    owner = {f: name for name, p in PROVIDERS.items()
-             if p.claims_families and "/" not in (p.model or "x")
-             for f in _families(p)}.get(family)
-    return bool(owner) and owner != provider_name
+    # DeepSeek and OpenCode both serve deepseek-* models. Keep every owner:
+    # choosing the last row silently reset valid DeepSeek overrides to Pro.
+    owners = {name for name, p in PROVIDERS.items()
+              if p.claims_families and "/" not in (p.model or "x")
+              and family in _families(p)}
+    return bool(owners) and provider_name not in owners
 
 
 def models_for(provider_name: str, model: str = "", small_model: str = "") -> tuple[str, str]:
@@ -346,9 +348,13 @@ class _TaggedMessages:
         self._owner = owner
 
     def _tag(self, kwargs: dict) -> dict:
+        # The proxy reads the platform token from `x-api-key`. anthropic 2.x
+        # sends an API key as `Authorization: Bearer` instead, so the header
+        # is set here and the proxy gets the same one from every SDK version.
+        headers = {**(kwargs.get("extra_headers") or {}), **self._owner.auth_headers()}
         if self._owner.turn_id:
-            kwargs["extra_headers"] = {**(kwargs.get("extra_headers") or {}),
-                                       "X-Waku-Turn": self._owner.turn_id}
+            headers["X-Waku-Turn"] = self._owner.turn_id
+        kwargs["extra_headers"] = headers
         return kwargs
 
     def create(self, **kwargs):
@@ -378,13 +384,20 @@ class TurnTagged:
     def __getattr__(self, name: str):
         return getattr(self.client, name)
 
+    def auth_headers(self) -> dict:
+        """The platform token as `x-api-key`, which hosted/proxy/ authenticates
+        on, whatever header the installed anthropic SDK sends by default."""
+        key = getattr(self.client, "api_key", None)
+        return {"x-api-key": key} if key else {}
+
     def charges(self, turn_id: str) -> dict | None:
         """The proxy's answer for one turn, or None: an older proxy, a turn
         it never saw (404) and an unreachable proxy all leave the receipt's
         estimate in place, and never fail the turn."""
         try:
             answer = self.client.get(f"/v1/turns/{turn_id}/charges", cast_to=object,
-                                     options={"timeout": 10.0, "max_retries": 0})
+                                     options={"timeout": 10.0, "max_retries": 0,
+                                              "headers": self.auth_headers()})
         except Exception:
             return None
         return answer if isinstance(answer, dict) else None
@@ -557,7 +570,7 @@ class _OpenAIStream:
         self._kwargs = kwargs
         self._text: list[str] = []
         self._reasoning: list[str] = []
-        self._tools: dict[int, dict] = {}   # index → {id, name, args}
+        self._tools: dict[int, dict] = {}   # index → {id, name, args, extra?}
         self._usage = None
 
     def __enter__(self):
@@ -591,6 +604,10 @@ class _OpenAIStream:
                     slot["name"] = tc.function.name
                 if tc.function and tc.function.arguments:
                     slot["args"] += tc.function.arguments
+                # Gemini requires this metadata on the follow-up request.
+                # Later argument chunks may omit it; keep what we received.
+                if getattr(tc, "extra_content", None):
+                    slot["extra"] = tc.extra_content
 
     def get_final_message(self):
         blocks = []
@@ -602,7 +619,7 @@ class _OpenAIStream:
         for slot in self._tools.values():
             blocks.append(SimpleNamespace(
                 type="tool_use", id=slot["id"], name=slot["name"],
-                input=json.loads(slot["args"] or "{}")))
+                input=json.loads(slot["args"] or "{}"), extra=slot.get("extra")))
         usage = self._usage
         return SimpleNamespace(
             stop_reason="tool_use" if self._tools else "end_turn",

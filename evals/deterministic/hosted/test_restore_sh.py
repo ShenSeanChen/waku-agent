@@ -1098,3 +1098,27 @@ def test_a_symlink_left_at_the_temporary_name_is_removed_not_followed(
     assert elsewhere.read_text(encoding="utf-8") == "not a database"
     calls = shelllib.calls(tmp_path)
     assert _at(calls, f"rm -f {temporary}") < _at(calls, f"install -o {owner}")
+
+
+# --- what a restore cannot bring back (spec 026 C) ----------------------------
+
+
+def test_a_full_restore_says_once_where_the_slack_token_key_has_to_come_from(tmp_path):
+    """restore.sh --all installs a control.db whose Slack tokens open only
+    with the key of the VM that was backed up, and no backup holds that key.
+    The line names the key and this VM's file, and what a person sees when
+    the two do not match."""
+    root, env = _env(tmp_path)
+    done = _run(tmp_path, ["--all"], env)
+    assert done.returncode == 0, done.stderr
+    lines = [line for line in done.stdout.splitlines() if "WAKU_SLACK_TOKEN_KEY" in line]
+    assert len(lines) == 1
+    assert f"{root}/config/gateway.env" in lines[0]
+    assert "Reconnect Slack" in lines[0]
+
+
+def test_one_tenants_restore_says_nothing_about_the_slack_token_key(tmp_path):
+    _, env = _env(tmp_path)
+    done = _run(tmp_path, ["--tenant", TENANT], env)
+    assert done.returncode == 0, done.stderr
+    assert "WAKU_SLACK_TOKEN_KEY" not in done.stdout

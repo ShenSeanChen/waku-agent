@@ -1,0 +1,419 @@
+"""The Connections page, composed (spec 030).
+
+Connections is the one place a person connects anything. This module decides
+which card is in which group, what each card is called, what state it shows
+and what its one button does. The dashboard's script draws what it is handed
+and decides nothing, because the script has no test runner and this file has
+evals (`evals/deterministic/test_connections_page.py`).
+
+A card is: a name, a state, one line of what it gives, and at most one button.
+
+Pure functions over what `/api/data` already holds. Nothing here reads a
+file, a key or the network.
+"""
+
+from __future__ import annotations
+
+# The three groups, in reading order, named by what a person does.
+GROUPS = (
+    ("talk", "Where you talk to Waku"),
+    ("apps", "Apps Waku can use"),
+    ("memory", "Where memory is kept"),
+)
+# The memory arena's stores, under their own heading inside the third group.
+COMPARE_TITLE = "Memory stores to compare"
+COMPARE_STORES = ("mem0", "zep", "langmem", "supabase")
+
+# The closed section at the foot of the page: settings a developer uses, and
+# adding a server by its address. OpenTelemetry sends traces somewhere; it
+# gives the agent nothing to do, so it is not an app.
+DEVELOPERS_TITLE = "For developers"
+DEVELOPER_CARDS = ("otel",)
+
+# Where a registry group's cards go (waku/integrations.py names the groups).
+REGISTRY_GROUP = {
+    "Channels": "talk",
+    "Calendar & Productivity": "apps",
+    "Search & Observability": "apps",
+    "Memory & Storage": "memory",
+}
+
+# A state's class in style.css, and the words a person reads. One label per
+# state: "not connected" is the same on every card.
+STATES = {
+    "connected": "connected",
+    "needs-setup": "needs setup",
+    "configured": "configured · not tested",
+    "not-configured": "not connected",
+    "error": "error",
+}
+NEEDS_SIGN_IN = "needs sign-in"
+NOT_HERE = "not available here"
+# Every (class, words) pair a card may show. "needs sign-in" shares the class
+# of "needs setup": both wait for the person.
+PAIRS = frozenset(STATES.items()) | {("needs-setup", NEEDS_SIGN_IN), ("not-configured", NOT_HERE)}
+
+# Hosted Waku (decision 3). A hosted container is a Linux server that the
+# person's browser reaches through the platform's gateway.
+#
+# The connections a hosted person can save. The gateway refuses every other
+# one (hosted/core/policy.py, ALLOWED_CONNECTIONS). waku/ never imports
+# hosted/, so the list is written twice, and
+# evals/deterministic/hosted/test_connections_allowlist.py keeps the two equal.
+HOSTED_CONNECTIONS = frozenset({"notion", "tavily", "treg"})
+# The cards that can never work in a container. They are left off the page,
+# and one closed line says why.
+MAC_ONLY = ("apple_calendar", "apple_tools")
+# The registry's Slack row is a person's own Slack app. Hosted Waku has one
+# app for everybody, and its card comes from the gateway.
+HOSTED_SLACK = "slack"
+HIDDEN_WHY = "{names} need a Mac, and hosted Waku runs on a Linux server."
+WAKU_MEMORY_HOSTED = "Hosted Waku sets this up when you sign in."
+
+# What a card's one button does:
+#   dialog   opens the registry row `target` in the connection dialog
+#   chat     sends `/connect <target>` through the chat dock
+#   add      adds the starter connector `target`
+#   manage   opens the server `target`: its account, its tools, Remove
+#   href     opens the address `target` in a new tab
+ACTIONS = ("dialog", "chat", "add", "manage", "href")
+
+WAKU_MEMORY_ID = "waku-memory"
+WAKU_MEMORY_PAGE = "https://www.waku.one/memories"
+WAKU_MEMORY_WHAT = "One memory that every agent of yours reads and writes."
+
+# One line per starter connector. An entry without a line here gets the
+# sentence in `_starter_what`.
+STARTER_WHAT = {
+    "notion": "Lets Waku read and write your Notion pages.",
+    "linear": "Lets Waku read and update your Linear issues.",
+    "github": "Lets Waku read your GitHub repositories, issues and pull requests.",
+}
+
+_REGISTRY_STATE = {
+    "connected": "connected",
+    "error": "error",
+    "configured": "configured",
+    "installed_but_unconfigured": "needs-setup",
+    "not_configured": "not-configured",
+}
+_TREG_STATE = {
+    "connected": ("connected", STATES["connected"]),
+    "not_signed_in": ("needs-setup", NEEDS_SIGN_IN),
+    "not_added": ("not-configured", STATES["not-configured"]),
+}
+
+
+# The cards that have a drawing under waku/ops/static/. A card without one
+# shows the first letter of its name.
+_REGISTRY_LOGO = "logos/connections/{key}.svg"
+_STARTER_LOGOS = {"notion": "logos/connections/notion.svg",
+                  "github": "logos/connections/github.svg",
+                  "linear": "logos/connections/linear.svg"}
+_WAKU_LOGO = "waku-mark.svg"
+
+
+def _card(card_id: str, name: str, state: str, what: str, *, label: str = "", logo: str = "",
+          why: str = "", action: dict | None = None) -> dict:
+    return {"id": card_id, "name": name, "logo": logo, "state": state,
+            "label": label or STATES[state], "what": what, "why": why, "action": action}
+
+
+def _action(kind: str, label: str, target: str) -> dict:
+    return {"kind": kind, "label": label, "target": target}
+
+
+def starter_id(name: str) -> str:
+    return f"app-{name}"
+
+
+def server_id(name: str) -> str:
+    return f"server-{name}"
+
+
+def verb(state: str) -> str:
+    """One verb for one act: "Connect" on a card that is not connected, and
+    "Manage" once it is. A card that is half set up is not connected."""
+    return "Manage" if state in ("connected", "configured", "error") else "Connect"
+
+
+def registry_card(view: dict) -> dict:
+    """A card for one row of the integrations registry. Its button opens the
+    row's own dialog."""
+    status = view.get("status") or {}
+    state = _REGISTRY_STATE.get(str(status.get("state") or ""), "not-configured")
+    # The reason is on the card where it adds something: a missing value, a
+    # missing package or a failed test. For the other states it repeats the label.
+    why = str(status.get("message") or "") if state in ("needs-setup", "error") else ""
+    return _card(view["key"], view["name"], state, view["what"],
+                 logo=_REGISTRY_LOGO.format(key=view["key"]), why=why,
+                 action=_action("dialog", verb(state), view["key"]))
+
+
+def treg_card(card: dict) -> dict:
+    """treg signs in on its own page, so its button sends `/connect treg`
+    through the chat. Where a key of the person's own can be set, the button
+    opens that key's dialog instead (spec 014)."""
+    state, label = _TREG_STATE.get(card.get("state"), _TREG_STATE["not_added"])
+    if card.get("configurable"):
+        action = _action("dialog", verb(state), card["key"])
+    elif state == "connected":
+        action = None
+    else:
+        action = _action("chat", "Connect", card["key"])
+    return _card(card["key"], card["name"], state, card["what"], label=label,
+                 logo=_REGISTRY_LOGO.format(key=card["key"]),
+                 why=str(card.get("detail") or ""), action=action)
+
+
+def _server_state(row: dict, waiting: dict | None) -> tuple[str, str]:
+    account = str(row.get("account") or "")
+    if (waiting or {}).get("name") == row["name"] or account.startswith(("not signed in",
+                                                                         "unreadable")):
+        return "needs-setup", NEEDS_SIGN_IN
+    if row.get("connected") is False:
+        return "not-configured", STATES["not-configured"]
+    if row.get("connected") or account:
+        return "connected", STATES["connected"]
+    # Added, and no agent has started it yet: nothing has tried the server.
+    return "configured", STATES["configured"]
+
+
+def _server_why(row: dict, state: str) -> str:
+    parts = []
+    account = str(row.get("account") or "")
+    if account and state == "connected":
+        parts.append(account)
+    if row.get("tools") is not None:
+        count = f"{row['tools']} tool{'' if row['tools'] == 1 else 's'}"
+        if row.get("asks"):
+            count += f", {row['asks']} ask first"
+        parts.append(count)
+    if state == "not-configured":
+        parts.append("It did not connect when the agent started.")
+    return " · ".join(parts)
+
+
+def _starter_what(entry: dict) -> str:
+    return STARTER_WHAT.get(entry["name"], f"Lets Waku use {entry['title']}.")
+
+
+def starter_card(entry: dict, row: dict | None, waiting: dict | None) -> dict:
+    """A card for one connector of the starter list (spec 025). `row` is the
+    server in mcp.json at the connector's address, or None when nobody added
+    it."""
+    logo = _STARTER_LOGOS.get(entry["name"], "")
+    if row is None:
+        return _card(starter_id(entry["name"]), entry["title"], "not-configured",
+                     _starter_what(entry), logo=logo,
+                     action=_action("add", "Connect", entry["name"]))
+    state, label = _server_state(row, waiting)
+    return _card(starter_id(entry["name"]), entry["title"], state, _starter_what(entry),
+                 label=label, logo=logo, why=_server_why(row, state),
+                 action=_action("manage", "Manage", row["name"]))
+
+
+def server_card(row: dict, waiting: dict | None) -> dict:
+    """A card for a server a person added by its address, or one a plugin
+    brought. It is called what the person called it."""
+    state, label = _server_state(row, waiting)
+    what = f"From the {row['plugin']} plugin." if row.get("plugin") else row["address"]
+    return _card(server_id(row["name"]), row["name"], state, what, label=label,
+                 why=_server_why(row, state), action=_action("manage", "Manage", row["name"]))
+
+
+def not_here(card: dict) -> dict:
+    """The same card where it cannot be connected: it says so and has no
+    button."""
+    return {**card, "state": "not-configured", "label": NOT_HERE, "why": "", "action": None}
+
+
+def _hidden(names: list[str]) -> dict | None:
+    if not names:
+        return None
+    listed = names[0] if len(names) == 1 else f"{', '.join(names[:-1])} and {names[-1]}"
+    count = f"{len(names)} card{'' if len(names) == 1 else 's'}"
+    verb = "is" if len(names) == 1 else "are"
+    why = HIDDEN_WHY.format(names=listed)
+    return {"title": f"{count} {verb} not shown on hosted Waku",
+            "why": why if len(names) > 1 else why.replace(" need ", " needs ", 1)}
+
+
+def waku_memory_card(info: dict, *, connectable: bool = True) -> dict:
+    """Waku Memory's card. `connectable` is False where the platform sets it
+    up, so the card offers nothing to press."""
+    if not connectable:
+        state = "connected" if info.get("connected") else "not-configured"
+        return _card(WAKU_MEMORY_ID, "Waku Memory", state, WAKU_MEMORY_WHAT, logo=_WAKU_LOGO,
+                     why=WAKU_MEMORY_HOSTED)
+    if info.get("connected"):
+        return _card(WAKU_MEMORY_ID, "Waku Memory", "connected", WAKU_MEMORY_WHAT,
+                     logo=_WAKU_LOGO, why=str(info.get("account") or ""),
+                     action=_action("href", "Open waku.one", WAKU_MEMORY_PAGE))
+    return _card(WAKU_MEMORY_ID, "Waku Memory", "not-configured", WAKU_MEMORY_WHAT,
+                 logo=_WAKU_LOGO,
+                 action=_action("chat", "Connect", WAKU_MEMORY_ID) if connectable else None)
+
+
+def _unique_names(cards: list[dict], fixed: set[str]) -> None:
+    """No two cards share a name (acceptance 1). Only a server's name is
+    chosen by a person, so only a server's card is renamed."""
+    taken = set(fixed)
+    for card in cards:
+        if card["name"].casefold() in taken:
+            card["name"] = f"{card['name']} (added by address)"
+        taken.add(card["name"].casefold())
+
+
+def page(connections: list[dict], mcp_cards: list[dict], connectors: dict,
+         waku_memory: dict, *, hosted: bool = False) -> dict:
+    """The whole page: three groups of cards, the sign-in link while one
+    waits, and whether a server can be added by its address here.
+
+    On hosted Waku a card that can never work in a container is left off and
+    named in `hidden`, and a card the gateway would refuse to save reads "not
+    available here" and has no button."""
+    grouped: dict[str, list[dict]] = {group_id: [] for group_id, _ in GROUPS}
+    compare: list[dict] = []
+    hidden: list[str] = []
+    developers: list[dict] = []
+    # A registry row that a sign-in card stands for (treg's key) is drawn
+    # once, as that card. Its dialog is still the registry row's.
+    drawn = {card["key"] for card in mcp_cards}
+    for view in connections:
+        if view["key"] in drawn:
+            continue
+        if hosted and view["key"] in MAC_ONLY:
+            hidden.append(view["name"])
+            continue
+        if hosted and view["key"] == HOSTED_SLACK:
+            # The gateway knows about Slack on hosted Waku, and the page
+            # draws its card from the gateway's answer (static/js/hosted.js).
+            continue
+        card = registry_card(view)
+        if hosted and view["key"] not in HOSTED_CONNECTIONS:
+            card = not_here(card)
+        if view["key"] in DEVELOPER_CARDS:
+            developers.append(card)
+        elif view["key"] in COMPARE_STORES:
+            compare.append(card)
+        else:
+            grouped[REGISTRY_GROUP.get(view["group"], "apps")].append(card)
+    for card in mcp_cards:
+        grouped[REGISTRY_GROUP.get(card.get("group"), "apps")].append(treg_card(card))
+
+    waiting = connectors.get("sign_in")
+    rows = {row["name"]: row for row in connectors.get("servers", [])}
+    apps_first: list[dict] = []
+    own: list[dict] = []
+    if connectors.get("available"):
+        claimed = set()
+        for entry in connectors.get("starter", []):
+            row = rows.get(entry.get("server") or "")
+            if row is not None:
+                claimed.add(row["name"])
+            apps_first.append(starter_card(entry, row, waiting))
+        # Waku Memory and treg have a card of their own, so their server
+        # is not drawn a second time.
+        own = [server_card(row, waiting) for row in rows.values()
+               if row["name"] not in claimed and not row.get("own_card")]
+    elif hosted:
+        # Signing in to one of these on hosted Waku is spec 029. Until it
+        # lands the cards say that they are not available here.
+        apps_first = [not_here(starter_card(entry, None, None))
+                      for entry in connectors.get("starter", [])]
+    fixed = {card["name"].casefold()
+             for card in apps_first + compare + developers
+             + [c for cards in grouped.values() for c in cards]}
+    fixed.add("waku memory")
+    _unique_names(own, fixed)
+    grouped["apps"] = apps_first + own + grouped["apps"]
+    grouped["memory"].insert(0, waku_memory_card(waku_memory, connectable=not hosted))
+
+    return {
+        "groups": [{"id": group_id, "title": title, "cards": grouped[group_id],
+                    "more": ({"title": COMPARE_TITLE, "cards": compare}
+                             if group_id == "memory" and compare else None)}
+                   for group_id, title in GROUPS],
+        "sign_in": waiting,
+        "developers": {"title": DEVELOPERS_TITLE, "cards": developers,
+                       "add_by_address": bool(connectors.get("available"))},
+        "hidden": _hidden(hidden),
+    }
+
+
+# ---- the Tools page: where each ability comes from (decision 2) -------------
+
+# The tools Waku ships that a card on Connections turns on or improves.
+APPLE_TOOLS = frozenset({"read_apple_calendar", "read_apple_mail", "create_reminder",
+                         "create_note"})
+WEB_SEARCH = "search_web"
+
+
+def _cards(composed: dict) -> list[dict]:
+    out: list[dict] = []
+    for group in composed["groups"]:
+        out += group["cards"]
+        if group["more"]:
+            out += group["more"]["cards"]
+    return out + composed["developers"]["cards"]
+
+
+def connected(composed: dict) -> list[dict]:
+    """The connections that are set up right now, in the page's order, each
+    with its logo: the first row of the Tools page. A card that is set up and
+    not yet tested counts. One that failed its test, waits for a sign-in or
+    is half set up does not."""
+    return [{"id": card["id"], "name": card["name"], "logo": card["logo"]}
+            for card in _cards(composed) if card["state"] in ("connected", "configured")]
+
+
+def _server_cards(composed: dict, connectors: dict) -> dict[str, dict]:
+    """Server name -> the card that controls it."""
+    cards = _cards(composed)
+    found = {card["action"]["target"]: card for card in cards
+             if card["action"] and card["action"]["kind"] == "manage"}
+    by_id = {card["id"]: card for card in cards}
+    for row in connectors.get("servers", []):
+        if row.get("own_card"):
+            card = by_id.get(WAKU_MEMORY_ID if row.get("memory") else row["name"])
+            if card is not None:
+                found[row["name"]] = card
+    return found
+
+
+def tool_sources(names: list[str], composed: dict, connectors: dict) -> dict[str, dict | None]:
+    """For each tool, the card on the Connections page that controls it, as
+    {id, name}, or None for a tool that is built in. A server's tools are
+    named `<server>_<tool>`, and the longest server name that fits wins. A
+    server with no card on the page (a hosted container's) is named and has
+    no id, so the Tools page links nowhere for it."""
+    by_id = {card["id"]: card for card in _cards(composed)}
+    servers = _server_cards(composed, connectors)
+    every = sorted((row["name"] for row in connectors.get("servers", [])), key=len, reverse=True)
+
+    def source(name: str) -> dict | None:
+        server = next((s for s in every if name.startswith(f"{s}_")), None)
+        if server is not None:
+            card = servers.get(server)
+            return ({"id": card["id"], "name": card["name"]} if card
+                    else {"id": "", "name": server})
+        if name in APPLE_TOOLS:
+            card = by_id.get("apple_tools")
+        elif name == WEB_SEARCH:
+            # Waku searches the web without a key. Tavily's key makes that
+            # search Tavily's.
+            card = by_id.get("tavily")
+            card = card if card and card["state"] != "not-configured" else None
+        else:
+            card = None
+        return {"id": card["id"], "name": card["name"]} if card else None
+
+    return {name: source(name) for name in names}
+
+
+def not_connected(composed: dict) -> list[dict]:
+    """The starter connectors nobody connected: the cards whose button adds
+    one. The Tools page lists them once, with a link."""
+    return [{"id": card["id"], "name": card["name"]} for card in _cards(composed)
+            if card["action"] and card["action"]["kind"] == "add"]
