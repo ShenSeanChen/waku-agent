@@ -13,7 +13,7 @@ import anthropic
 import pytest
 
 from waku.config import Settings
-from waku.loop.models import PROVIDERS, OpenAICompatClient, get_client
+from waku.loop.models import PLATFORM, PROVIDERS, OpenAICompatClient, TurnTagged, get_client
 
 
 @pytest.fixture(autouse=True)
@@ -23,6 +23,16 @@ def fake_keys(monkeypatch):
     # a stray custom-endpoint override must not leak into these checks
     monkeypatch.delenv("WAKU_API_KEY", raising=False)
     monkeypatch.delenv("WAKU_BASE_URL", raising=False)
+    # waku-platform is hidden_unless_env — give it an endpoint so the
+    # per-provider parametrized cases below can build it like any other row.
+    # (Its own visibility/scoping contract is covered in
+    # test_platform_provider.py.) Also clear its model overrides: on a machine
+    # where WAKU_PLATFORM_MODEL happens to be set, test_get_client_builds_the_
+    # right_wire's `settings.model == provider.model` would fail for exactly
+    # the reason models_now() exists — the override IS meant to win there.
+    monkeypatch.setenv("WAKU_PLATFORM_BASE_URL", "http://platform.test")
+    monkeypatch.delenv("WAKU_PLATFORM_MODEL", raising=False)
+    monkeypatch.delenv("WAKU_PLATFORM_SMALL_MODEL", raising=False)
 
 
 @pytest.mark.parametrize("name", list(PROVIDERS))
@@ -31,6 +41,10 @@ def test_get_client_builds_the_right_wire(name):
     settings = Settings(provider=name, model="", small_model="", api_key="", base_url=None)
     client = get_client(settings)
     expected = anthropic.Anthropic if provider.kind == "anthropic" else OpenAICompatClient
+    if name == PLATFORM:
+        # spec 011 B1: the free tier's client tags each call with its turn
+        assert isinstance(client, TurnTagged)
+        client = client.client
     assert isinstance(client, expected)
     # defaults must be filled in so the loop never sends model=""
     assert settings.model == provider.model
@@ -61,10 +75,13 @@ def test_dashboard_pricing_covers_every_provider(name):
 
 @pytest.mark.parametrize("name", [n for n, p in PROVIDERS.items()
                                   if p.catalog_url is None
+                                  and not p.catalog_from_base_url
                                   and (p.kind == "anthropic" or not p.base_url)])
 def test_model_listing_falls_back_without_a_catalog(name, monkeypatch):
     """Providers with no listable catalog still give the picker their defaults
-    (and never make a network call to get them)."""
+    (and never make a network call to get them). waku-platform is excluded:
+    catalog_from_base_url means it DOES have a listing endpoint (the proxy),
+    covered instead by test_platform_provider.py's own listing test."""
     from waku.ops import catalog
 
     monkeypatch.setenv("WAKU_PROVIDER", name)
@@ -188,6 +205,28 @@ def test_every_priced_model_has_a_knowledge_cutoff():
 # gate fails open on error BY DESIGN, so this did not surface as a failure — it
 # surfaced as "retrieve", on every turn, for every non-anthropic model in the
 # arena. These pin the rule that stops it.
+
+@pytest.mark.parametrize("provider", ["deepseek", "opencode_zen", "opencode_go"])
+@pytest.mark.parametrize("reverse_registry", [False, True])
+def test_shared_model_family_keeps_saved_selection(monkeypatch, provider, reverse_registry):
+    """Saving Flash must survive both dashboard readback and client creation."""
+    from waku.loop import models
+    from waku.ops.settings_api import settings_info
+
+    if reverse_registry:
+        monkeypatch.setattr(models, "PROVIDERS", dict(reversed(list(PROVIDERS.items()))))
+    monkeypatch.setenv("WAKU_PROVIDER", provider)
+    monkeypatch.setenv("WAKU_MODEL", "deepseek-v4-flash")
+    monkeypatch.setenv("WAKU_SMALL_MODEL", "deepseek-v4-flash")
+
+    info = settings_info()
+    assert info["model"] == "deepseek-v4-flash"
+    assert info["small_model"] == "deepseek-v4-flash"
+    settings = Settings(provider=provider)
+    get_client(settings)
+    assert settings.model == "deepseek-v4-flash"
+    assert settings.small_model == "deepseek-v4-flash"
+
 
 def test_env_model_names_do_not_leak_into_another_provider(monkeypatch):
     from waku.config import Settings

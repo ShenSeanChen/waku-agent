@@ -14,12 +14,17 @@ import re
 from pathlib import Path
 
 from waku.integrations import INTEGRATIONS
+from waku.tools import treg
 
 STATIC = Path(__file__).resolve().parents[2] / "waku" / "ops" / "static"
 INDEX = (STATIC / "index.html").read_text()
 JS_FILES = sorted((STATIC / "js").glob("*.js"))
 JS_SRC = "\n".join(f.read_text() for f in JS_FILES)
-CONNECTION_LOGOS = {f"{integration.key}.svg" for integration in INTEGRATIONS}
+# The registry's cards, plus the MCP sign-in cards (spec 007 E), which are not
+# .env integrations and so are not in the registry.
+# GitHub and Linear are starter connectors (waku/connectors.toml), not registry rows.
+CONNECTION_LOGOS = ({f"{integration.key}.svg" for integration in INTEGRATIONS}
+                    | {f"{treg.NAME}.svg", "github.svg", "linear.svg"})
 
 # JS keywords / builtins / DOM globals an inline handler may call without a js/
 # definition. Kept small on purpose — anything else must be a real app function.
@@ -52,29 +57,13 @@ def test_connection_card_logos_are_local_and_complete():
         assert "<title>" in svg, f"{name} needs an accessible title"
 
 
-def test_connection_display_groups_stay_in_product_order():
-    """The order is the reading order of the page, so it is pinned deliberately
-    rather than left to whatever the object literal happens to say.
-
-    "Memory", not "Storage": the registry group is called "Memory & Storage" and
-    the display map used to keep the wrong half. Notion is the episodic store,
-    Supabase the semantic one, and every hosted memory service that joins them
-    is semantic too — none of it is generic storage."""
-    assert 'const CONNECTION_GROUPS = ["Channels", "Productivity", "Memory", "Tools"]' in JS_SRC
-
-
-def test_every_registry_group_has_a_display_name():
-    """connectionDisplayGroup falls back to "Tools" for anything unmapped, so a
-    new registry group would not error — it would quietly file itself under the
-    wrong heading and nobody would notice. Pin the mapping instead of trusting
-    the fallback."""
-    from waku import integrations
-
-    mapped = set(re.findall(r'^\s*"([^"]+)":\s*"[^"]+",\s*$', JS_SRC, re.MULTILINE))
-    # AI Providers has its own page (Models), so it is deliberately not here.
-    groups = {i.group for i in integrations.registry()} - {"AI Providers"}
-    missing = groups - mapped
-    assert not missing, f"registry groups with no display name, they'd land in Tools: {missing}"
+def test_connection_groups_are_decided_in_python_not_in_the_script():
+    """Spec 030: the page's groups, their order and each card's place are
+    composed in waku/ops/connections_page.py, where an eval can read them
+    (test_connections_page.py pins the order and that every registry group
+    has a place). The script keeps no group table of its own to drift."""
+    assert "CONNECTION_GROUPS" not in JS_SRC and "CONNECTION_GROUP_MAP" not in JS_SRC
+    assert "connections_page" in JS_SRC
 
 
 def _defined_names() -> set[str]:
@@ -101,6 +90,36 @@ def test_inline_handlers_are_defined():
     called = _handler_calls(INDEX) | _handler_calls(JS_SRC)
     missing = {n for n in called if n not in defined and n not in ALLOWED}
     assert not missing, f"inline handlers call undefined functions: {sorted(missing)}"
+
+
+# Browser functions with a camelCase name that the scripts call.
+BROWSER_FUNCTIONS = {
+    "setTimeout", "setInterval", "clearTimeout", "clearInterval", "encodeURIComponent",
+    "decodeURIComponent", "parseFloat", "parseInt", "isNaN", "getComputedStyle",
+    "requestAnimationFrame", "structuredClone",
+}
+
+
+def test_every_app_function_a_script_calls_is_defined():
+    """A function that one script calls and no script defines is a button
+    that throws when it is pressed. `test_inline_handlers_are_defined` reads
+    the handlers; this reads the calls made from inside functions.
+
+    It caught nothing until 2026-11-19: spec 030 removed
+    `connectionStatusDisplay` with the block around it, `openConnectionModal`
+    still called it, and every card's dialog failed to open with every eval
+    green. The dashboard's functions are camelCase, so a camelCase name that
+    is called and is neither defined here nor a browser function is one."""
+    code = re.sub(r"//[^\n]*", "", JS_SRC)
+    called = {name for name in re.findall(r"(?<![.\w$])([a-z][a-z0-9]*[A-Z][\w$]*)\s*\(", code)}
+    defined = set(re.findall(r"function\s+([A-Za-z_$][\w$]*)", code))
+    defined |= set(re.findall(r"(?:const|let|var)\s+([A-Za-z_$][\w$]*)", code))
+    for params in (re.findall(r"function\s*[\w$]*\s*\(([^)]*)\)", code)
+                   + re.findall(r"\(([^()]*)\)\s*=>", code)):
+        defined |= {part.split("=")[0].strip(" {}[].") for part in params.split(",")}
+    defined |= set(re.findall(r"([A-Za-z_$][\w$]*)\s*=>", code))
+    missing = called - defined - BROWSER_FUNCTIONS
+    assert not missing, f"called and never defined: {sorted(missing)}"
 
 
 def test_app_js_is_gone():

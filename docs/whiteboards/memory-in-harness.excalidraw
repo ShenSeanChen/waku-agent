@@ -2694,13 +2694,13 @@
       "updated": 1,
       "link": null,
       "locked": false,
-      "text": "and here it is, runnable \u2014 examples/memory-native/",
+      "text": "and here it is, runnable \u2014 lab/memory-native/",
       "fontSize": 20,
       "fontFamily": 5,
       "textAlign": "left",
       "verticalAlign": "top",
       "containerId": null,
-      "originalText": "and here it is, runnable \u2014 examples/memory-native/",
+      "originalText": "and here it is, runnable \u2014 lab/memory-native/",
       "lineHeight": 1.25
     },
     {

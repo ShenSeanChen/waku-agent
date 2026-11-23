@@ -19,7 +19,9 @@ from __future__ import annotations
 
 import json
 import os
+import tomllib
 from dataclasses import dataclass
+from pathlib import Path
 from types import SimpleNamespace
 
 from waku.config import Settings
@@ -58,10 +60,49 @@ class Provider:
     # override for backwards compatibility, but must not leak across providers.
     base_url_env: str = ""
     endpoints: tuple[ProviderEndpoint, ...] = ()
+    # Seven opt-in fields, used only by the hosted free-tier row. Each
+    # defaults to the behaviour every other row already has.
+    label: str = ""
+    hidden_unless_env: bool = False
+    claims_families: bool = True
+    catalog_from_base_url: bool = False
+    model_env: str = ""
+    small_model_env: str = ""
+    scoped_credentials: bool = False
+
+    def label_text(self, name: str) -> str:
+        """What the UI calls this row."""
+        return self.label or name.replace("_", " ").title()
+
+    def models_now(self) -> tuple[str, str]:
+        """(model, small_model) with the environment overrides applied.
+
+        Read at call time, never at import: PROVIDERS is built once when the
+        module loads, and a tenant container sets these after that. Every
+        reader of a row's models goes through here so none can miss it.
+        """
+        model = os.getenv(self.model_env, "").strip() if self.model_env else ""
+        small = os.getenv(self.small_model_env, "").strip() if self.small_model_env else ""
+        return (model or self.model, small or self.small_model)
+
+    def is_visible(self) -> bool:
+        """False while a hidden row's endpoint is unset -- a local user must
+        never see the hosted row in a page, a list or an error message."""
+        if not self.hidden_unless_env:
+            return True
+        return bool(os.getenv(self.base_url_env, "").strip()) if self.base_url_env else False
 
     def default_pair(self) -> list[str]:
-        """[flagship, fast], deduped — the switcher's default picks."""
-        pair = [self.flagship or self.model, self.fast or self.small_model]
+        """[flagship, fast], deduped — the switcher's default picks.
+
+        Falls back to models_now(), not the raw model/small_model fields, so
+        a row with a model_env/small_model_env override (the hosted free
+        tier) never hands out its TOML placeholder here — every reader of
+        this pair (default_pinned_specs, _known_default_ids) would otherwise
+        pin an id the container will never actually call.
+        """
+        model, small_model = self.models_now()
+        pair = [self.flagship or model, self.fast or small_model]
         return list(dict.fromkeys(m for m in pair if m))
 
     def configured_base_url(self) -> str | None:
@@ -78,103 +119,55 @@ class Provider:
         return self.catalog_url
 
 
-PROVIDERS: dict[str, Provider] = {
-    "anthropic": Provider("anthropic", "ANTHROPIC_API_KEY", None,
-                          "claude-sonnet-5", "claude-haiku-4-5-20251001",
-                          catalog_url="https://api.anthropic.com/v1/models",
-                          flagship="claude-opus-4-8", fast="claude-sonnet-5"),
-    # GPT-5.6 sol/terra/luna default to reasoning.effort=medium, which 400s on
-    # function tools on /v1/chat/completions. Do not make them the default —
-    # gpt-5.5 is the newest plain model that returns a tool_call with no extra
-    # flags. Opt-in (WAKU_MODEL=gpt-5.6-*) is handled in OpenAICompatClient:
-    # tool turns send reasoning_effort=none, the Completions escape hatch.
-    # Responses would keep reasoning; this loop does not speak it. The old
-    # `-chat-latest` line is 404, so we do not pin a moving alias — see
-    # test_openai_default_is_tool_capable. gpt-4.1-mini is the cheap gate.
-    "openai":    Provider("openai", "OPENAI_API_KEY", None,
-                          "gpt-5.5", "gpt-4.1-mini",
-                          catalog_url="https://api.openai.com/v1/models"),
-    # one key, every lab's models, and a $0 tier: the default models below are
-    # free ids (":free" suffix). Rate-limited (~50 req/day without credits).
-    "openrouter": Provider("openai", "OPENROUTER_API_KEY", "https://openrouter.ai/api/v1",
-                           "nvidia/nemotron-3-super-120b-a12b:free",
-                           "google/gemma-4-26b-a4b-it:free"),
-    "gemini":    Provider("openai", "GEMINI_API_KEY",
-                          "https://generativelanguage.googleapis.com/v1beta/openai/",
-                          "gemini-3.5-flash", "gemini-3.1-flash-lite",
-                          # Google's Pro tier isn't "gemini-3.5-pro" (that id
-                          # 404s); the current Pro is gemini-3.1-pro-preview.
-                          flagship="gemini-3.1-pro-preview", fast="gemini-3.5-flash"),
-    "deepseek":  Provider("openai", "DEEPSEEK_API_KEY", "https://api.deepseek.com",
-                          "deepseek-v4-pro", "deepseek-v4-pro"),
-    "minimax":   Provider("anthropic", "MINIMAX_API_KEY", "https://api.minimaxi.com/anthropic",
-                          "MiniMax-M3", "MiniMax-M2",
-                          catalog_url="https://api.minimaxi.com/anthropic/v1/models",
-                          base_url_env="MINIMAX_BASE_URL",
-                          endpoints=(
-                              ProviderEndpoint("China", "https://api.minimaxi.com/anthropic",
-                                               "https://api.minimaxi.com/anthropic/v1/models"),
-                              ProviderEndpoint("Global", "https://api.minimax.io/anthropic",
-                                               "https://api.minimax.io/anthropic/v1/models"),
-                          )),
-    # K3 is the flagship default; the gate/summarizer stays on cheap K2.6
-    # (the live catalog has no plain "kimi-k2.7" — only -code variants; we
-    # checked). Override with WAKU_SMALL_MODEL=kimi-k3 if your key is K3-only.
-    "kimi":      Provider("anthropic", "MOONSHOT_API_KEY", "https://api.moonshot.ai/anthropic",
-                          "kimi-k3", "kimi-k2.6",
-                          catalog_url="https://api.moonshot.ai/v1/models",
-                          flagship="kimi-k3", fast="kimi-k2.7-code-highspeed",
-                          base_url_env="MOONSHOT_BASE_URL",
-                          endpoints=(
-                              ProviderEndpoint("Global", "https://api.moonshot.ai/anthropic",
-                                               "https://api.moonshot.ai/v1/models"),
-                              ProviderEndpoint("China", "https://api.moonshot.cn/anthropic",
-                                               "https://api.moonshot.cn/v1/models"),
-                          )),
-    "glm":       Provider("anthropic", "ZHIPU_API_KEY", "https://api.z.ai/api/anthropic",
-                          "glm-5.2", "glm-5-turbo",
-                          base_url_env="ZHIPU_BASE_URL",
-                          endpoints=(
-                              ProviderEndpoint("Global", "https://api.z.ai/api/anthropic"),
-                              ProviderEndpoint("China", "https://open.bigmodel.cn/api/anthropic"),
-                          )),
-    # xAI Grok on its OpenAI-compatible endpoint. The model ids below are
-    # starting points — add XAI_API_KEY and the picker lists the live catalog
-    # (the authoritative source); pin whatever the current flagship/fast are.
-    "xai":       Provider("openai", "XAI_API_KEY", "https://api.x.ai/v1",
-                          "grok-4", "grok-4-fast",
-                          catalog_url="https://api.x.ai/v1/models"),
-    # OpenCode — OpenAI-compatible platform. Two endpoints: "zen" and "go"
-    # share the same platform key. zen offers free models (default:
-    # deepseek-v4-flash-free); go uses the standard deepseek-v4-flash.
-    # The live catalog (GET /models) lists whatever the endpoint serves,
-    # and the picker is the authoritative menu.
-    "opencode_zen": Provider("openai", "OPENCODE_ZEN_API_KEY",
-                               "https://opencode.ai/zen/v1",
-                               "deepseek-v4-flash-free", "deepseek-v4-flash-free"),
-    "opencode_go":  Provider("openai", "OPENCODE_GO_API_KEY",
-                               "https://opencode.ai/zen/go/v1",
-                               "deepseek-v4-flash", "deepseek-v4-flash"),
-}
+def _registry() -> dict:
+    """Read waku/providers.toml -- the whole provider list, as data.
 
+    A provider used to be a row here plus a pricing row, a key-url row, an
+    .env.example block and two to four separate eval files: seven to nine files
+    for what the rulebook calls a one-line change. It is now one table in that
+    file and a logo, and everything below is built from it, so a provider pull
+    request is a diff a maintainer can read at a glance.
+    """
+    path = Path(__file__).resolve().parents[1] / "providers.toml"
+    with path.open("rb") as fh:
+        return tomllib.load(fh)
+
+
+def _provider(row: dict) -> Provider:
+    return Provider(
+        kind=row["kind"], key_env=row["key_env"], base_url=row.get("base_url"),
+        model=row["model"], small_model=row["small_model"],
+        catalog_url=row.get("catalog_url"),
+        flagship=row.get("flagship", ""), fast=row.get("fast", ""),
+        base_url_env=row.get("base_url_env", ""),
+        endpoints=tuple(ProviderEndpoint(e["label"], e["base_url"], e.get("catalog_url"))
+                        for e in row.get("endpoints", ())),
+        label=row.get("label", ""),
+        hidden_unless_env=row.get("hidden_unless_env", False),
+        claims_families=row.get("claims_families", True),
+        catalog_from_base_url=row.get("catalog_from_base_url", False),
+        model_env=row.get("model_env", ""),
+        small_model_env=row.get("small_model_env", ""),
+        scoped_credentials=row.get("scoped_credentials", False),
+    )
+
+
+REGISTRY: dict[str, dict] = _registry()
+PROVIDERS: dict[str, Provider] = {name: _provider(row) for name, row in REGISTRY.items()}
 
 # Where each provider's key actually comes from. Pointing at ".env.example"
 # was useless advice for anyone who installed from PyPI — that file only exists
 # in a git checkout, so the one instruction the message gave could not be
 # followed by the people most likely to need it.
-KEY_URLS = {
-    "anthropic": "https://console.anthropic.com/settings/keys",
-    "openai": "https://platform.openai.com/api-keys",
-    "gemini": "https://aistudio.google.com/apikey",
-    "deepseek": "https://platform.deepseek.com/api_keys",
-    "openrouter": "https://openrouter.ai/keys",
-    "kimi": "https://platform.moonshot.ai/console/api-keys",
-    "glm": "https://z.ai/manage-apikey/apikey-list",
-    "minimax": "https://platform.minimaxi.com/user-center/basic-information",
-    "xai": "https://console.x.ai",
-    "opencode_zen": "https://opencode.ai/zen",
-    "opencode_go": "https://opencode.ai/zen",
-}
+KEY_URLS: dict[str, str] = {name: row["key_url"] for name, row in REGISTRY.items()}
+
+
+def _visible_names() -> list[str]:
+    """Provider names a local user is allowed to see: every row, minus a
+    hidden_unless_env row whose endpoint isn't set. Read at call time (never
+    cached) because is_visible() depends on the environment, which a tenant
+    container sets after PROVIDERS is built."""
+    return sorted(name for name, provider in PROVIDERS.items() if provider.is_visible())
 
 
 def _no_key_message(name: str, key_env: str) -> str:
@@ -185,22 +178,25 @@ def _no_key_message(name: str, key_env: str) -> str:
     the URL to get a key, the absolute path of the .env actually in play, and
     the fact that Waku speaks to eleven providers, not one.
     """
-    from waku.config import DOTENV_PATH
+    from waku import config
 
-    # Name the variable in BOTH branches. "add the line there" without saying
+    # Name the variable in every branch. "add the line there" without saying
     # which line is the same dead end as pointing at .env.example was.
-    where = (f"Add it to {DOTENV_PATH}:\n"
+    read = config.DOTENV_PATH or config.HOME_DOTENV_PATH
+    home_env = config.resolve_home().path / ".env"
+    where = (f"Add it to {read}:\n"
              f"    {key_env}=your-key-here"
-             if DOTENV_PATH else
-             f"No .env found from {os.getcwd()} upward — create one here:\n"
-             f"    echo '{key_env}=your-key-here' >> .env")
+             if read else
+             f"No .env found from {os.getcwd()} upward or in {home_env.parent}.\n"
+             f"    Create {home_env} so Waku finds the key from any folder:\n"
+             f"    mkdir -p {home_env.parent} && echo '{key_env}=your-key-here' >> {home_env}")
     url = KEY_URLS.get(name)
     return (
         f"No API key for provider '{name}'.\n\n"
         f"  1. Get a key: {url}\n" if url else f"No API key for provider '{name}'.\n\n"
     ) + (
         f"  2. {where}\n\n"
-        f"Other providers: {', '.join(sorted(PROVIDERS))}\n"
+        f"Other providers: {', '.join(_visible_names())}\n"
         f"Switch with WAKU_PROVIDER=<name> and that provider's key."
     )
 
@@ -225,13 +221,61 @@ def _belongs_elsewhere(model: str, provider_name: str) -> bool:
     added since — and silently downgrade a deliberate choice. This only fires
     when the family is one some OTHER provider actually owns, which is the case
     that produces a 400 rather than a surprise.
+
+    A row with claims_families = false (the hosted free tier) is left out of
+    the owners below, because it fronts a live catalog behind a single
+    placeholder id and its own family tells you nothing about what is valid
+    there. It is still checked against those owners, and that is deliberate
+    (spec 001, "The free tier is a provider"): a real anthropic owns
+    "claude", so a leftover
+    claude-* WAKU_MODEL under the hosted row is replaced by the row's own
+    model rather than reaching the proxy, where it would meet the allowlist.
     """
     family = model.split("-")[0].lower()
     if "/" in model or not family:
         return False
-    owner = {f: name for name, p in PROVIDERS.items() if "/" not in (p.model or "x")
-             for f in _families(p)}.get(family)
-    return bool(owner) and owner != provider_name
+    # DeepSeek and OpenCode both serve deepseek-* models. Keep every owner:
+    # choosing the last row silently reset valid DeepSeek overrides to Pro.
+    owners = {name for name, p in PROVIDERS.items()
+              if p.claims_families and "/" not in (p.model or "x")
+              and family in _families(p)}
+    return bool(owners) and provider_name not in owners
+
+
+def models_for(provider_name: str, model: str = "", small_model: str = "") -> tuple[str, str]:
+    """The model ids a turn against `provider_name` will ACTUALLY run.
+
+    One answer from one place. get_client builds its client with these, and
+    settings_info/list_models report them, so the Models page can never name a
+    model the next turn will not use — which is what spec 001 asks of the two
+    readers ("report the model get_client will actually use, not the one in
+    .env"). They drifted apart once already: the hosted row resolved a leftover
+    claude-* to the deploy-time override in get_client while both readers still
+    showed the leftover.
+
+    A model name belongs to the provider it was configured FOR. WAKU_MODEL and
+    WAKU_SMALL_MODEL are global, so code that switches provider — the arena
+    races ten of them — carried anthropic's gate model to xAI, which answers
+    `400 Model not found: claude-haiku-4-5-20251001`. The retrieval gate then
+    FAILS OPEN by design, so it retrieved on every single turn for every
+    non-anthropic model instead of deciding, and reported that as a normal
+    "retrieve". A silent permanent failure wearing the costume of a healthy
+    decision.
+
+    So: a value INHERITED from the env for a different provider is dropped and
+    the provider's own default fills in; a value the caller passed explicitly
+    is kept, because that is a choice, not a leak. The two are distinguishable
+    exactly when the value still equals the env string.
+    """
+    provider = PROVIDERS.get(provider_name)
+    resolved: list[str] = []
+    for attr, value in (("model", model), ("small_model", small_model)):
+        inherited = os.getenv(f"WAKU_{attr.upper()}", "").strip()
+        if inherited and value == inherited and _belongs_elsewhere(inherited, provider_name):
+            value = ""
+        resolved.append(value)
+    default_model, default_small_model = provider.models_now() if provider else ("", "")
+    return resolved[0] or default_model, resolved[1] or default_small_model
 
 
 def get_client(settings: Settings):
@@ -240,11 +284,24 @@ def get_client(settings: Settings):
     provider = PROVIDERS.get(settings.provider)
     if provider is None:
         raise SystemExit(f"Unknown WAKU_PROVIDER '{settings.provider}'. "
-                         f"Pick one of: {', '.join(PROVIDERS)}")
+                         f"Pick one of: {', '.join(_visible_names())}")
+
+    # A hidden row that isn't configured yet must never build a client — it has
+    # no endpoint to talk to, and the message needs to name the variable that
+    # would turn it on, not "no API key", which would be misleading here.
+    if not provider.is_visible():
+        raise SystemExit(
+            f"'{settings.provider}' is not configured: set {provider.base_url_env} "
+            f"to enable it."
+        )
 
     # .strip() so a trailing newline/space from a copy-paste doesn't corrupt the
     # auth header (headers are latin-1; a stray non-ASCII char errors cryptically).
-    api_key = (settings.api_key or os.getenv(provider.key_env, "")).strip()
+    # A scoped_credentials row (the hosted free tier) never falls back to
+    # WAKU_API_KEY: that global override exists for BYOK and must not outrank
+    # the platform token a tenant container was actually given.
+    api_key = (os.getenv(provider.key_env, "") if provider.scoped_credentials
+              else (settings.api_key or os.getenv(provider.key_env, ""))).strip()
     if not api_key:
         raise SystemExit(_no_key_message(settings.provider, provider.key_env))
     try:
@@ -255,28 +312,15 @@ def get_client(settings: Settings):
             f"or arrow from a bad paste). Re-paste the key with no spaces or line breaks."
         )
 
-    # A model name belongs to the provider it was configured FOR. WAKU_MODEL and
-    # WAKU_SMALL_MODEL are global, so code that switches provider — the arena
-    # races ten of them — carried anthropic's gate model to xAI, which answers
-    # `400 Model not found: claude-haiku-4-5-20251001`. The retrieval gate then
-    # FAILS OPEN by design, so it retrieved on every single turn for every
-    # non-anthropic model instead of deciding, and reported that as a normal
-    # "retrieve". A silent permanent failure wearing the costume of a healthy
-    # decision.
-    #
-    # So: a value INHERITED from the env for a different provider is dropped
-    # (the provider's own default fills in below); a value the caller passed
-    # explicitly is kept, because that is a choice, not a leak. The two are
-    # distinguishable exactly when the setting still equals the env string.
-    for attr in ("model", "small_model"):
-        inherited = os.getenv(f"WAKU_{attr.upper()}", "").strip()
-        if inherited and getattr(settings, attr) == inherited \
-                and _belongs_elsewhere(inherited, settings.provider):
-            setattr(settings, attr, "")
-
-    settings.model = settings.model or provider.model
-    settings.small_model = settings.small_model or provider.small_model
-    base_url = settings.base_url or provider.configured_base_url()
+    # The ids the turn will run — resolved by models_for() above, which
+    # settings_info and list_models call too, so the page and the turn cannot
+    # name different models.
+    settings.model, settings.small_model = models_for(
+        settings.provider, settings.model, settings.small_model)
+    # Same scoping as the key above: WAKU_BASE_URL is a global BYOK override
+    # and must not leak into a scoped_credentials row's own endpoint.
+    base_url = (provider.configured_base_url() if provider.scoped_credentials
+               else settings.base_url or provider.configured_base_url())
 
     # a hung network call must never freeze a turn silently
     timeout = float(os.getenv("WAKU_LLM_TIMEOUT", "120"))
@@ -287,14 +331,82 @@ def get_client(settings: Settings):
         kwargs: dict = {"api_key": api_key, "timeout": timeout}
         if base_url:
             kwargs["base_url"] = base_url
-        return anthropic.Anthropic(**kwargs)
+        client = anthropic.Anthropic(**kwargs)
+        # Spec 011 B1: the hosted free tier's proxy is told which turn each
+        # call belongs to, and answers what the turn was charged.
+        return TurnTagged(client) if settings.provider == PLATFORM else client
     return OpenAICompatClient(api_key=api_key, base_url=base_url, timeout=timeout)
+
+
+# The hosted free tier's provider row (providers.toml), whose endpoint is the
+# metering proxy in hosted/proxy/.
+PLATFORM = "waku-platform"
+
+
+class _TaggedMessages:
+    def __init__(self, owner: TurnTagged) -> None:
+        self._owner = owner
+
+    def _tag(self, kwargs: dict) -> dict:
+        # The proxy reads the platform token from `x-api-key`. anthropic 2.x
+        # sends an API key as `Authorization: Bearer` instead, so the header
+        # is set here and the proxy gets the same one from every SDK version.
+        headers = {**(kwargs.get("extra_headers") or {}), **self._owner.auth_headers()}
+        if self._owner.turn_id:
+            headers["X-Waku-Turn"] = self._owner.turn_id
+        kwargs["extra_headers"] = headers
+        return kwargs
+
+    def create(self, **kwargs):
+        return self._owner.client.messages.create(**self._tag(kwargs))
+
+    def stream(self, **kwargs):
+        return self._owner.client.messages.stream(**self._tag(kwargs))
+
+    def __getattr__(self, name: str):
+        return getattr(self._owner.client.messages, name)
+
+
+class TurnTagged:
+    """The `waku-platform` client (spec 011 B1). Every model call carries
+    `X-Waku-Turn: <turn_id>`, which the metering proxy reads and never
+    forwards to Anthropic, and `charges()` asks the proxy what the turn was
+    charged: `GET /v1/turns/<turn_id>/charges` answers
+    `{"model_usd", "calls", "credits"}`. It goes to the same proxy, with the
+    same platform token, as every model call; no other provider sends either.
+    """
+
+    def __init__(self, client) -> None:
+        self.client = client
+        self.turn_id = ""
+        self.messages = _TaggedMessages(self)
+
+    def __getattr__(self, name: str):
+        return getattr(self.client, name)
+
+    def auth_headers(self) -> dict:
+        """The platform token as `x-api-key`, which hosted/proxy/ authenticates
+        on, whatever header the installed anthropic SDK sends by default."""
+        key = getattr(self.client, "api_key", None)
+        return {"x-api-key": key} if key else {}
+
+    def charges(self, turn_id: str) -> dict | None:
+        """The proxy's answer for one turn, or None: an older proxy, a turn
+        it never saw (404) and an unreachable proxy all leave the receipt's
+        estimate in place, and never fail the turn."""
+        try:
+            answer = self.client.get(f"/v1/turns/{turn_id}/charges", cast_to=object,
+                                     options={"timeout": 10.0, "max_retries": 0,
+                                              "headers": self.auth_headers()})
+        except Exception:
+            return None
+        return answer if isinstance(answer, dict) else None
 
 
 class OpenAICompatClient:
     """Speaks the Anthropic Messages shape the loop expects, backed by an
-    OpenAI-style chat.completions API. ~60 lines is the entire difference
-    between the two wire formats — worth reading once.
+    OpenAI-style chat.completions API. The adapter preserves reasoning and
+    provider metadata that subsequent tool requests need to echo back.
     """
 
     def __init__(self, api_key: str, base_url: str | None = None, timeout: float = 120.0):
@@ -303,7 +415,22 @@ class OpenAICompatClient:
         self._client = openai.OpenAI(api_key=api_key, base_url=base_url, timeout=timeout)
         self.messages = SimpleNamespace(create=self._create, stream=self._stream)
 
-    def _to_openai(self, *, model, messages, max_tokens, system=None, tools=None) -> dict:
+    def _remember_reasoning(self, model: str) -> None:
+        # One endpoint can serve several models (for example OpenRouter).
+        # Learn this requirement per model, never for every model on the client.
+        if not hasattr(self, "_reasoning_models"):
+            self._reasoning_models: set[str] = set()
+        self._reasoning_models.add(model)
+
+    @staticmethod
+    def _with_reasoning(kwargs: dict) -> dict:
+        """Old text-only history has no reasoning to recover. Fill only gaps."""
+        return {**kwargs, "messages": [
+            {"reasoning_content": "", **m} if m["role"] == "assistant" else m
+            for m in kwargs["messages"]]}
+
+    def _to_openai(self, *, model, messages, max_tokens, system=None, tools=None,
+                   tool_choice=None) -> dict:
         oai_messages = []
         if system:
             oai_messages.append({"role": "system", "content": system})
@@ -325,6 +452,9 @@ class OpenAICompatClient:
                         call["extra_content"] = extra
                     calls.append(call)
                 entry: dict = {"role": "assistant", "content": text or None}
+                thinking = [b.thinking for b in content if getattr(b, "type", "") == "thinking"]
+                if thinking:
+                    entry["reasoning_content"] = "".join(thinking)
                 if calls:
                     entry["tool_calls"] = calls
                 oai_messages.append(entry)
@@ -347,6 +477,10 @@ class OpenAICompatClient:
                               "parameters": t["input_schema"]}}
                 for t in tools
             ]
+            # Anthropic's {"type": "none"} is OpenAI's "none": the tools are
+            # described but may not be called (the loop's final answer).
+            if tool_choice and tool_choice.get("type") == "none":
+                kwargs["tool_choice"] = "none"
             # GPT-5.6 (sol/terra/luna) defaults to reasoning.effort=medium.
             # Chat Completions rejects function tools unless effort is none
             # (otherwise: use /v1/responses). Waku's loop is chat.completions,
@@ -355,12 +489,15 @@ class OpenAICompatClient:
             # Default stays gpt-5.5 (#136); this only unlocks WAKU_MODEL=gpt-5.6-*.
             if (model or "").lower().startswith("gpt-5.6"):
                 kwargs["reasoning_effort"] = "none"
+        if tools and model in getattr(self, "_reasoning_models", set()):
+            kwargs = self._with_reasoning(kwargs)
         return kwargs
 
     def _call(self, kwargs: dict, **extra):
-        """Run chat.completions.create with the max_tokens key-name fallback
-        (older OpenAI-compatible endpoints only know max_tokens, not the newer
-        max_completion_tokens). Only retry when the error is ABOUT that param —
+        """Run chat.completions.create with bounded compatibility fallbacks.
+
+        Older OpenAI-compatible endpoints only know max_tokens, not the newer
+        max_completion_tokens. Only retry when the error is ABOUT that param —
         retrying on any error masked the real failure (e.g. a gpt-5.x call would
         fail for some other reason, then the max_tokens retry buried it under a
         confusing 'use max_completion_tokens' message)."""
@@ -368,15 +505,26 @@ class OpenAICompatClient:
             return self._client.chat.completions.create(**kwargs, **extra)
         except Exception as exc:
             m = str(exc).lower()
-            if "max_completion_tokens" not in m and "max_tokens" not in m:
-                raise
-            k = dict(kwargs)
-            k["max_tokens"] = k.pop("max_completion_tokens", None)
-            return self._client.chat.completions.create(**k, **extra)
+            # A fresh client may first see restored text-only history. Repair
+            # only a 400 naming this field, once: filled messages cannot match
+            # again. Preserve existing reasoning and all streaming options.
+            if (getattr(exc, "status_code", None) == 400 and "reasoning_content" in m
+                    and kwargs.get("tools") and any(
+                        msg["role"] == "assistant" and "reasoning_content" not in msg
+                        for msg in kwargs["messages"])):
+                self._remember_reasoning(kwargs["model"])
+                return self._call(self._with_reasoning(kwargs), **extra)
+            if ("max_completion_tokens" in kwargs
+                    and ("max_completion_tokens" in m or "max_tokens" in m)):
+                k = dict(kwargs)
+                k["max_tokens"] = k.pop("max_completion_tokens")
+                return self._call(k, **extra)
+            raise
 
-    def _create(self, *, model, messages, max_tokens, system=None, tools=None):
+    def _create(self, *, model, messages, max_tokens, system=None, tools=None, tool_choice=None):
         response = self._call(self._to_openai(
-            model=model, messages=messages, max_tokens=max_tokens, system=system, tools=tools))
+            model=model, messages=messages, max_tokens=max_tokens, system=system, tools=tools,
+            tool_choice=tool_choice))
         if not getattr(response, "choices", None):
             # some OpenAI-compatible endpoints (e.g. OpenRouter on a rate
             # limit) return 200 with an error body and no choices: surface
@@ -385,6 +533,10 @@ class OpenAICompatClient:
             raise RuntimeError(f"{model}: {err}")
         choice = response.choices[0].message
         blocks = []
+        reasoning = getattr(choice, "reasoning_content", None)
+        if isinstance(reasoning, str):
+            self._remember_reasoning(model)
+            blocks.append(SimpleNamespace(type="thinking", thinking=reasoning))
         if choice.content:
             blocks.append(SimpleNamespace(type="text", text=choice.content))
         for call in choice.tool_calls or []:
@@ -425,7 +577,8 @@ class _OpenAIStream:
         self._client = client
         self._kwargs = kwargs
         self._text: list[str] = []
-        self._tools: dict[int, dict] = {}   # index → {id, name, args}
+        self._reasoning: list[str] = []
+        self._tools: dict[int, dict] = {}   # index → {id, name, args, extra?}
         self._usage = None
 
     def __enter__(self):
@@ -444,6 +597,10 @@ class _OpenAIStream:
             if not chunk.choices:
                 continue
             delta = chunk.choices[0].delta
+            reasoning = getattr(delta, "reasoning_content", None)
+            if isinstance(reasoning, str):
+                self._client._remember_reasoning(self._kwargs["model"])
+                self._reasoning.append(reasoning)
             if getattr(delta, "content", None):
                 self._text.append(delta.content)
                 yield delta.content
@@ -455,16 +612,22 @@ class _OpenAIStream:
                     slot["name"] = tc.function.name
                 if tc.function and tc.function.arguments:
                     slot["args"] += tc.function.arguments
+                # Gemini requires this metadata on the follow-up request.
+                # Later argument chunks may omit it; keep what we received.
+                if getattr(tc, "extra_content", None):
+                    slot["extra"] = tc.extra_content
 
     def get_final_message(self):
         blocks = []
+        if self._reasoning:
+            blocks.append(SimpleNamespace(type="thinking", thinking="".join(self._reasoning)))
         text = "".join(self._text)
         if text:
             blocks.append(SimpleNamespace(type="text", text=text))
         for slot in self._tools.values():
             blocks.append(SimpleNamespace(
                 type="tool_use", id=slot["id"], name=slot["name"],
-                input=json.loads(slot["args"] or "{}")))
+                input=json.loads(slot["args"] or "{}"), extra=slot.get("extra")))
         usage = self._usage
         return SimpleNamespace(
             stop_reason="tool_use" if self._tools else "end_turn",

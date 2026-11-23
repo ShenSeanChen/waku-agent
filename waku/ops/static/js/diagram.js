@@ -1,4 +1,4 @@
-// waku dashboard — the architecture SVG (archSVG, byte-frozen) + its live animation.
+// waku dashboard — the architecture SVG (archSVG, byte-frozen except the LLM Ops panel, spec 016) + its live animation.
 // Split out of app.js: classic <script>, shared global scope (no build
 // step, no modules). Load order + rules: static/README.md.
 
@@ -20,14 +20,15 @@ function archSVG(d){
   const flow = (d2,cls="",eid="") => `<path class="flow ${cls}" ${eid?`data-edge="${eid}"`:""} d="${d2}"/>`;
   const flowLbl = (x,y,t,anchor="start") => `<text class="fl" x="${x}" y="${y}" text-anchor="${anchor}">${t}</text>`;
 
-  return `<div style="overflow-x:auto"><svg viewBox="0 -10 1044 674" class="arch" role="img">
+  return `<div style="overflow-x:auto"><svg viewBox="0 -16 1044 680" class="arch" role="img">
     <defs><marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
       <path d="M0 0 L10 5 L0 10 z" class="head"/></marker></defs>
 
     <!-- HARNESS container: everything runs on your laptop, including the
          offline LLM Ops loop (tinted sub-panel) -->
-    <rect class="container" x="12" y="20" width="1020" height="628" rx="16"/>
-    ${lbl(16,4,"HARNESS — runs on your laptop · the turn inside is ephemeral")}
+    <!-- border at y=10 so the arc's label at y=28 sits clear of the dashes -->
+    <rect class="container" x="12" y="10" width="1020" height="638" rx="16"/>
+    ${lbl(16,-2,"HARNESS — runs on your laptop · the turn inside is ephemeral")}
 
     <!-- the turn: gateway → working memory → loop → reply -->
     ${box(32,72,128,56,"Gateway","cli · voice · web","chat","","gateway")}
@@ -74,26 +75,51 @@ function archSVG(d){
     ${box(44,576,384,52,"Consolidation · every "+d.consolidate_every+" exchanges",d.chat_pending+"/"+d.consolidate_every*2+" queued → distilled into facts","memory/consolidation","","consolidation")}
     ${flow("M340 576 L340 528","","e-consol-sem")}${flowLbl(350,560,"distill")}
 
-    <!-- LLM OPS: the offline improvement loop — inside the harness (it all
-         runs on the laptop) but a distinct tinted sub-panel -->
+    <!-- LLM OPS (spec 016): watch, judge, ship. Four boxes in the loop's
+         order, matching the sidebar's pages: Trace, Observability, Evals
+         (whose second line is the release gate's verdict) and Release, whose
+         arrow ends on the LOOP box, so the loop visibly closes. This panel
+         is the one part of the chart spec 016 allowed to change. -->
     <rect class="container ops" x="736" y="40" width="280" height="372" rx="14"/>
-    ${lbl(752,64,"LLM OPS — offline improvement loop")}
+    ${lbl(752,64,"LLM OPS — watch, judge, ship")}
     ${flowLbl(752,80,"observes each run · improves the agent",'start')}
     <!-- every turn crosses the gap to feed the trace -->
     <path class="flow" data-edge="e-reply-trace" d="M660 104 C700 100 726 100 752 106" marker-end="url(#arr)"/>
     ${flowLbl(688,96,"each turn")}
-    ${box(752,92,250,50,"Trace",s.trace_files+" file(s) · always on","ops","","trace")}
-    ${flow("M878 142 L878 156")}
-    ${box(752,156,250,50,"Eval","deterministic + judge","ops")}
-    ${flow("M878 206 L878 220")}
-    ${box(752,220,250,50,"Release gate",d.eval_report?"det "+d.eval_report.deterministic+" · judge "+d.eval_report.judge:"run make gate","ops")}
-    ${flow("M878 270 L878 284")}
-    ${box(752,284,250,50,"Release","new prompt · model · config","ops")}
-    <!-- feedback: Release improves the Harness — a short arrow across the gap,
-         so the outer loop closes without a long wrap crowding the margins -->
-    <path class="flow dash" d="M752 312 C712 324 698 352 676 358" marker-end="url(#arr)"/>
-    ${flowLbl(596,346,"improved prompt + config",'end')}
+    ${box(752,92,250,50,"Trace",s.trace_files+" file(s) · always on","observability/turns","","trace")}
+    <path class="flow" data-edge="e-trace-observe" d="M878 142 L878 156" marker-end="url(#arr)"/>
+    ${box(752,156,250,50,"Observability",archObserveTabs(),"observability","","observe")}
+    <path class="flow" data-edge="e-observe-evals" d="M878 206 L878 220" marker-end="url(#arr)"/>
+    ${box(752,220,250,50,"Evals",archEvalsLine(d),"evals","","evals")}
+    <path class="flow" data-edge="e-evals-release" d="M878 270 L878 284" marker-end="url(#arr)"/>
+    ${box(752,284,250,50,"Release","new prompt · model · config","evals/release","","release")}
+    <!-- the return: Release ends on the LOOP box's right edge beside the
+         LLM agent, crossing the "save chats" lane once -->
+    <path class="flow dash" data-edge="e-release-loop" d="M752 309 L600 309 C572 309 560 296 560 270 L560 214 C560 198 552 190 538 190" marker-end="url(#arr)"/>
+    ${flowLbl(568,248,"new prompt",'start')}${flowLbl(568,261,"model · config",'start')}
   </svg></div>`;
+}
+
+// The Observability box's second line: each word opens its own tab. A click
+// on a word stops there, so the box's own click (#observability) does not
+// run after it.
+function archObserveTabs(){
+  return [["turns","Turns"],["tools","Tools"],["memory","Memory"],["spend","Spend"]].map(([k, label]) =>
+    `<tspan class="nlink" data-tab="${k}" onclick="archGo(event,'observability/${k}')">${label}</tspan>`).join(" · ");
+}
+function archGo(e, view){ e.stopPropagation(); location.hash = view; }
+// The Evals box's second line: the last release gate's verdict, led by
+// "your turns n/m" (spec 015) once the Observability data has loaded: n of
+// the last 7 days' graded turns passed every turn check.
+function archEvalsLine(d){
+  const r = d.eval_report;
+  const yt = typeof OBS !== "undefined" && OBS.data && ((OBS.data.evals || {}).your_turns || {})["7d"];
+  if (typeof OBS !== "undefined" && !OBS.data && !OBS.loading) deferBg(loadObservability);
+  if (yt && yt.turns_scored){
+    const gate = r ? `det ${esc(String(r.deterministic))} · judge ${esc(String(r.judge))}` : "run make gate";
+    return `your turns ${yt.turns_passed}/${yt.turns_scored} · ${gate}`;
+  }
+  return r ? `release gate: det ${esc(String(r.deterministic))} · judge ${esc(String(r.judge))}` : "release gate: run make gate";
 }
 
 // ---- Live harness animation: light up the diagram as a turn flows through,
@@ -137,9 +163,10 @@ function playNext(){
   animateStage(evQueue.shift());
   setTimeout(playNext, 620);   // stagger so stages light up in sequence
 }
-async function pollEvents(){
+async function pollEvents(background = false){
   try{
-    const r = await (await fetch("/api/events" + (evCursor==null?"":"?cursor="+evCursor))).json();
+    const r = await (await fetch("/api/events" + (evCursor==null?"":"?cursor="+evCursor),
+      background ? {headers: BG} : undefined)).json();
     if (evCursor != null && r.events.length){
       evQueue.push(...r.events);
       if (!playing) playNext();

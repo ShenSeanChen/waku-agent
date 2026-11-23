@@ -1,0 +1,5 @@
+# This build needs no context: it compiles Caddy from the upstream builder
+# image. Excluding everything keeps a stray .env in the checkout from being
+# sent to the daemon, the same reason tenant.Dockerfile.dockerignore and
+# services.Dockerfile.dockerignore exist.
+*

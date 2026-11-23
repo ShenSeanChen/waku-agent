@@ -205,7 +205,7 @@ because the nodes shared a start.
 - no `agent_node`, no `run_loop`, no `ToolRegistry` anywhere in it
 - its one model call passes **no `tools` parameter**, so the model is never
   handed a schema it could use to send, merge or create anything
-- the only write is a markdown file in `.waku/outbox/` for a human to read
+- the only write is a markdown file in `~/.waku/outbox/` for a human to read
 
 A source-level test fails CI if any of that changes, because the day someone
 adds a tool-using node "to make the digest smarter", nothing else would notice.

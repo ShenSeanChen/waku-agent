@@ -97,3 +97,14 @@ def test_dashboard_edited_skill_is_written_as_utf8(
 
     assert result == {"ok": True}
     assert_utf8_skill(path, "dashboard-report")
+
+
+def test_dashboard_soul_is_written_as_utf8(tmp_path, monkeypatch, require_explicit_text_encoding):
+    home = tmp_path / "home"
+    monkeypatch.setenv("WAKU_HOME", str(home))
+    soul = "用户偏好中文回复 🚀"
+
+    result = memory_action({"action": "save_soul", "content": soul})
+
+    assert result == {"ok": True}
+    assert (home / "SOUL.md").read_bytes().decode("utf-8").replace("\r\n", "\n") == soul + "\n"
