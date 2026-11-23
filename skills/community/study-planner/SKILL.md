@@ -1,6 +1,6 @@
 ---
 name: study-planner
-description: Create a realistic study plan for exams, subjects, topics, or deadlines. Use for "make me a study plan", "plan my studying", "help me prepare for an exam", "create a revision schedule", "what should I study today", or "help me prepare for a test".
+description: Study plan ahead of an exam, with topics spread across the remaining days. Use when someone says "make me a study plan", "plan my studying", "prepare me to pass an exam", "my finals are coming".
 ---
 
 ## How to plan
