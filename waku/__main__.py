@@ -2,12 +2,18 @@
 
   waku                       chat in the terminal (default)
   waku dashboard             the browser cockpit → localhost:7777 (+ Telegram if configured)
+  waku serve                 always-on: store every incoming message, then answer it
+  waku waiting               timers, calls that wait for your yes, and queued messages
+  waku waiting cancel <id>   cancel one of them
   waku connections           list configured integrations and their health
   waku connect google        sign in to Google Calendar (opens your browser)
   waku connect waku-memory   one memory shared with your other agents (opens your browser)
   waku connect treg          live data for research, on your own treg account (opens your browser)
   waku mcp                   MCP servers, and which account each knows you as
   waku mcp login <name>      sign in again — as someone else, or after expiry
+  waku mcp add <name> <url>  connect an MCP server of your own (waku mcp add for the forms)
+  waku mcp remove <name>     disconnect one, and forget its sign-in
+  waku plugin ...            install, list and manage plugins (waku plugin for the commands)
   waku voice                 talk to it (needs the [voice] extra)
   waku telegram              phone → laptop (needs TELEGRAM_BOT_TOKEN)
   waku discord               Discord → laptop (needs DISCORD_BOT_TOKEN)
@@ -48,6 +54,14 @@ def main() -> None:
         from waku.ops.dashboard import main as dash_main
 
         dash_main()
+    elif args[0] == "serve":
+        from waku.alwayson.serve import main as serve_main
+
+        sys.exit(serve_main(args[1:]))
+    elif args[0] == "waiting":
+        from waku.alwayson.waiting import main as waiting_main
+
+        sys.exit(waiting_main(args[1:]))
     elif args[0] == "connections":
         from waku.integrations import cli_main
 
@@ -84,6 +98,10 @@ def main() -> None:
         from waku.tools.mcp_cli import cli_main as mcp_main
 
         sys.exit(mcp_main())
+    elif args[0] == "plugin":
+        from waku.plugins.cli import cli_main as plugin_main
+
+        sys.exit(plugin_main(args[1:]))
     elif args[0] == "skill" and len(args) >= 2 and args[1] == "export":
         from waku.memory.procedural.exporter import cli_main as export_main
 

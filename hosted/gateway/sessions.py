@@ -168,6 +168,17 @@ class HandoffCodes:
         owner, expires = found
         return owner == tenant_id and self._now() < expires
 
+    def take(self, code: str) -> str | None:
+        """The tenant a code was issued for, or None, spending the code
+        either way. For a route that learns the tenant FROM the code: the
+        apex's /auth/setup has no tenant in its host name to check against,
+        so the code is the only thing that names one."""
+        found = self._codes.pop(code, None)
+        if found is None:
+            return None
+        owner, expires = found
+        return owner if self._now() < expires else None
+
     def forget_tenant(self, tenant_id: str) -> None:
         for code in [c for c, (t, _) in self._codes.items() if t == tenant_id]:
             self._codes.pop(code, None)

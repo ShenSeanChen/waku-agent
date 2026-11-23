@@ -1,16 +1,22 @@
 #!/usr/bin/env bash
 # Pull, rebuild, restart the services. Tenant containers pick up the new image
-# on their next start, or at once with --now.
+# on their next start. A running one is restarted between two turns, about a
+# minute after its last request, or at once with --now.
 #
-# WHY TENANTS DO NOT NEED RESTARTING BY DEFAULT: a container's environment
+# WHY THIS SCRIPT RESTARTS NO TENANT BY DEFAULT: a container's environment
 # cannot change and each start carries a new proxy token, so every start creates
 # a new container from the current image tag. A tenant whose container has
 # stopped is therefore upgraded the moment they come back, for free. A RUNNING
-# container keeps the old image until the gateway's idle loop stops it, after
-# 15 minutes with nothing in flight (WAKU_IDLE_MINUTES), or the cap evicts it,
-# or --now restarts it. --now is for the case where the upgrade fixes something
-# a running tenant is suffering from, and it costs every open dashboard an
-# interrupted turn.
+# container keeps the old image, and the gateway replaces it: once a minute its
+# idle loop asks the spawner which containers were created from an older build
+# of the tenant image, and it stops each one that has nothing in flight, has
+# had no request for 60 seconds and reports no run, event or outgoing message
+# (Launcher.stop_stale in hosted/gateway/launch.py). The tenant's next message,
+# or their next timer, starts a new container. A container that never reaches
+# such a gap keeps the old image until the idle stop (15 minutes,
+# WAKU_IDLE_MINUTES), an eviction at the cap, or --now. --now is for the case
+# where the upgrade fixes something a running tenant is suffering from, and it
+# costs every open dashboard an interrupted turn.
 #
 # NOTHING HERE TOUCHES config/ OR tenants/. An upgrade that rewrote config would
 # be an install; an upgrade that touched tenants/ would be a restore.

@@ -22,9 +22,13 @@ pytestmark = pytest.mark.skipif(not HAS_KEY, reason="the turn judge needs the ac
 
 FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "turns" / "2026-10-05-rehearsal-zero-claim.jsonl"
 TID = "t_5e1f0c2a9b7d4e36"
-GROUNDED = ("LeadsForge's free preview returned six lookalike companies: Supermemory, Cognee, Letta, "
-            "Memori, Vectorize and Agno. Tomba returned no lookalikes for mem0.ai, and that call cost "
-            "$0.0089 of treg spend.")
+# A reply the tool outputs support that answers both halves of the question.
+# The first version covered mem0 only: the judge rightly scored it 5 or 6 for
+# addresses_question, and the score is the lower of the two marks
+# (waku-agent#353).
+GROUNDED = ("LeadsForge's free preview returned six lookalike companies for mem0 and waku.one: "
+            "Supermemory, Cognee, Letta, Memori, Vectorize and Agno. Tomba found no lookalikes for "
+            "mem0.ai. The research cost $0.0089, all of it the Tomba call; LeadsForge was free.")
 
 
 def _judge(tmp_path, reply: str | None = None) -> float:

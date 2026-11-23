@@ -68,6 +68,9 @@ class _ListEngine:
     async def containers(self, *, label=None, all_states=False):
         return self._entries
 
+    async def image_id(self, name):
+        return ""
+
 
 def _entry(tenant_id: str, address: str) -> dict:
     return {
