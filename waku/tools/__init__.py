@@ -4,14 +4,28 @@ Apple ecosystem (WAKU_APPLE_TOOLS=1) and MCP servers (.waku/mcp.json)."""
 
 from __future__ import annotations
 
+import os
 import sqlite3
+from collections.abc import Callable
 
 from waku.config import Settings
-from waku.tools import calendar, memory_admin, messages, notes, search
+from waku.tools import (
+    calendar,
+    connectors,
+    memory_admin,
+    messages,
+    notes,
+    schedule,
+    search,
+    waiting,
+)
 from waku.tools.registry import ToolRegistry
 
 
-def build_registry(conn: sqlite3.Connection, settings: Settings, memory=None) -> ToolRegistry:
+def build_registry(conn: sqlite3.Connection, settings: Settings, memory=None,
+                   session_id: Callable[[], str] | None = None) -> ToolRegistry:
+    """`session_id` says which conversation the turn in flight belongs to.
+    schedule_task stores it, so a timer wakes the agent in that conversation."""
     registry = ToolRegistry()
     registry.register(
         calendar.make_tool(
@@ -28,6 +42,35 @@ def build_registry(conn: sqlite3.Connection, settings: Settings, memory=None) ->
     registry.register(calendar.make_list_tool(conn, settings.home))
     registry.register(notes.make_tool(conn, memory))
     registry.register(messages.make_tool(settings.home))
+    # A follow-up the agent sets for itself (spec 023): a row in `timers`
+    # that `waku serve` turns into an event when its time comes.
+    registry.register(schedule.make_tool(settings.home, session_id=session_id))
+    # What waits, and cancelling one of them (spec 024): "what reminders do I
+    # have?" and "cancel the Thursday one" work from chat.
+    for tool in waiting.make_tools(settings.home, session_id=session_id):
+        registry.register(tool)
+    # Connecting a server of the person's own from chat (spec 025). Both
+    # take the owner's yes first, whatever the environment allows.
+    for tool in connectors.make_tools(settings.home):
+        registry.register(tool)
+    # Hosted Waku only (spec 029 D): read the Slack channel a run was started
+    # from, through the platform, which holds the workspace's token.
+    base_url, platform_token = (os.getenv("WAKU_PLATFORM_BASE_URL", ""),
+                                os.getenv("WAKU_PLATFORM_TOKEN", ""))
+    if os.getenv("WAKU_HOSTED", "") == "1" and base_url and platform_token:
+        from waku.tools import slack_history
+
+        registry.register(slack_history.make_tool(settings.home, base_url, platform_token))
+        # Hosted Waku only (spec 031 A): search and read the person's Gmail
+        # and write a draft there, through the platform, which holds the
+        # sign-in. Left out on a server that says it has no Gmail. A platform
+        # that did not answer leaves them in, and each then says why.
+        offered = connectors.hosted_offered()
+        if offered is None or "Gmail" in offered:
+            from waku.tools import mail
+
+            for tool in mail.make_tools(base_url, platform_token):
+                registry.register(tool)
     # Web search — pairs with create_event for the multi-tool loop demo
     # ("find the World Cup games left and add them to my calendar").
     registry.register(search.make_tool())
@@ -40,7 +83,7 @@ def build_registry(conn: sqlite3.Connection, settings: Settings, memory=None) ->
         registry.register(memory_admin.make_create_skill_tool(settings, memory))
 
     # Experimental tools — off by default; opt in with WAKU_EXPERIMENTAL=1.
-    # delegate_task (sub-agents via pi) is live; terminal/browser/cron are
+    # delegate_task (sub-agents via pi) is live; terminal and browser are
     # still skeletons that report "coming soon".
     #
     # Trust settings.experimental ALONE. load_settings() already defaults it from
@@ -67,13 +110,33 @@ def build_registry(conn: sqlite3.Connection, settings: Settings, memory=None) ->
 
         registry.register(github.make_tool(default_repo=getattr(settings, "gh_repo", "")))
 
-    # MCP servers (opt-in via .waku/mcp.json).
+    # MCP servers (opt-in via .waku/mcp.json, or an installed plugin's own,
+    # spec 021). Either one is enough to start the bridge.
+    from waku.plugins import store
+
     mcp_config = settings.home / "mcp.json"
-    if mcp_config.exists():
+    plugin_servers = store.servers(settings.home)
+    if mcp_config.exists() or plugin_servers:
         try:
             from waku.tools.mcp_client import MCPBridge
+            from waku.tools.waku_memory import is_waku_memory
 
-            bridge = MCPBridge(mcp_config)
+            # Spec 020: "Keep local only" leaves Waku Memory unconnected even
+            # when mcp.json or a plugin names it, and touches no other server.
+            memory_off = getattr(settings, "memory_mode", "") == "off"
+            # Spec 025: the always-on agent runs where nobody may be looking,
+            # so a server that still needs its sign-in is left out there and
+            # no browser opens. The owner signs in through the link.
+            wait_for_sign_in = getattr(settings, "mcp_sign_in", True)
+
+            def left_out(spec: dict) -> bool:
+                return ((memory_off and is_waku_memory(spec))
+                        or (not wait_for_sign_in
+                            and connectors.needs_sign_in(settings.home, spec)))
+
+            # None when neither rule applies: every server is connected.
+            skip = left_out if memory_off or not wait_for_sign_in else None
+            bridge = MCPBridge(mcp_config, skip=skip, extra_servers=plugin_servers)
             for t in bridge.start():
                 registry.register(t)
             registry.mcp_bridge = bridge  # so Waku.close() can stop the servers

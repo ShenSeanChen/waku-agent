@@ -176,7 +176,8 @@ loop brain + pi can take minutes; film 2-3 models.)
 temp dir — `delegate_task` saves it to a dated, self-documenting workspace
 (`./waku_workspace/<date>/<time>-<model>-<slug>/`, git-ignored) with a
 `MANIFEST.md` (date, model, task, files, run result), the files pi wrote, the pi
-transcript, and `run.log`. After pi finishes, the harness **auto-runs** the entry
+transcript, and `run.log`. If another run already owns that directory, Waku adds
+a numeric suffix and creates a separate directory. After pi finishes, the harness **auto-runs** the entry
 script (headless, captured, 30s timeout) and feeds the result back into the loop,
 so the model sees whether its own code actually ran. Config:
 `WAKU_WORKSPACE` (root), `WAKU_DELEGATE_AUTORUN=0` (disable), `WAKU_AUTORUN_TIMEOUT`.
@@ -218,9 +219,9 @@ and is **off by default** — set `WAKU_EXPERIMENTAL=1` to register it.
 - **This is the substrate for Battery B** — each coding case is a `delegate_task`
   scored by whether pi's output passes tests.
 
-Three sibling boxes are still honest skeletons (return "coming soon"):
-`run_command` (Terminal), `browse_web` (Browser), `schedule_task` (Cron) — each
-needs a real sandbox + safety surface before it goes live.
+Two sibling boxes are still honest skeletons (return "coming soon"):
+`run_command` (Terminal) and `browse_web` (Browser). Each needs a real sandbox
+and a safety surface before it goes live.
 
 *v2 idea already noted in the source:* run `pi --mode json` and stream its
 per-turn events into the dashboard's Loop tab, so a delegated coding run animates

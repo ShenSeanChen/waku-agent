@@ -18,7 +18,7 @@ caps it at 100 lines, so the detail lives in the files it points to.
 | decide how much process a change needs | [conventions §2](docs/context/conventions.md#2-how-much-process-a-change-needs) |
 | add capability (tool, gateway, provider, store) | [conventions §3](docs/context/conventions.md#3-where-new-capability-goes-the-footprint-ladder), the footprint ladder |
 | add a skill | [CONTRIBUTING.md](CONTRIBUTING.md): no Python needed |
-| connect Waku Memory, or carry skills to another agent | [docs/integrations.md](docs/integrations.md#share-one-memory-with-your-other-agents-waku-memory) |
+| connect Waku Memory (the Waku plugin), or carry skills to another agent | [docs/integrations.md](docs/integrations.md#share-one-memory-with-your-other-agents-waku-memory) |
 | add a tool | the `new-tool` skill in `.claude/skills/new-tool/` |
 | run waku for other people on a server | [hosted/README.md](hosted/README.md) |
 | touch the loop, memory, graph engine or a tool contract | [docs/architecture.md](docs/architecture.md), then conventions §2: it may need a proposal |
@@ -38,8 +38,9 @@ caps it at 100 lines, so the detail lives in the files it points to.
    machine: no hidden network calls, nothing reads or sends `.env` or keys, and
    nothing runs at install time. `hosted/` is the platform's own deployment and
    reads the platform's own configuration by design; it ships to nobody.
-3. **No new default dependency.** The core is stdlib plus the Anthropic and
-   OpenAI clients. Anything else goes behind an extra (`[voice]`, `[telegram]`).
+3. **No new default dependency, with one exception.** The core is stdlib plus
+   the Anthropic and OpenAI clients. `mcp` is the exception, because Waku Memory
+   connects over it. Anything else goes behind an extra (`[voice]`, `[telegram]`).
 4. **Every behaviour change gets a deterministic eval** in `evals/deterministic/`
    (0/1, offline). A bug fix adds the case that would have caught it.
 5. **Nothing under `waku/` or `evals/` imports from `examples/` or `lab/`,** and

@@ -85,6 +85,10 @@
   /* long tables scroll within their own box, header pinned */
   .scrolly{max-height:62vh;overflow:auto;border:1px solid var(--rule);border-radius:var(--radius);background:var(--surface-paper)}
   .scrolly table{border:none}
+  /* the raw SQLite rows behind a page, closed until asked for */
+  .raw{margin-top:var(--space-4)}
+  .raw>summary{cursor:pointer;font-family:var(--face-mono);font-size:var(--text-xs);letter-spacing:var(--tracking-label);text-transform:uppercase;color:var(--text-muted)}
+  .raw>summary code{text-transform:none;letter-spacing:0}
   .scrolly th{position:sticky;top:0;background:var(--surface-paper);z-index:1}
   /* aligned schema: the column header IS the indigo chip, so labels line up
      over their data (no separate, misaligned chip row). */
@@ -342,6 +346,21 @@
   .toolcard-soon .card-body{color:var(--text-faint)}
   .toolcard .tn{font-family:var(--face-mono);font-size:var(--text-xs);font-weight:var(--font-weight-medium);color:var(--text-ink)}
   .toolcard .td{color:var(--text-muted);font-size:var(--text-xs);margin-top:var(--spacing)}
+  /* The link under a connection's tools, and the line that lists the
+     starter connections nobody connected (spec 030). */
+  /* The first row of Tools: what is connected, then the way to Connections. */
+  .toolconn{display:flex;flex-wrap:wrap;align-items:center;gap:var(--space-2) var(--space-4);
+    padding-bottom:var(--space-3);margin-bottom:var(--space-3);border-bottom:1px solid var(--rule)}
+  .toolconn-label{font-family:var(--face-mono);font-size:var(--text-xs);letter-spacing:var(--tracking-label);
+    text-transform:uppercase;color:var(--text-muted)}
+  .toolconn-item{display:inline-flex;align-items:center;gap:var(--space-2);color:var(--text-ink);
+    font-size:var(--text-sm);text-decoration:none}
+  .toolconn-item:hover{color:var(--accent-fg)}
+  .toolconn .provlogo{width:24px;height:24px}
+  .toolconn .connmark{font-size:var(--text-xs)}
+  .toolconn-go{margin-left:auto}
+  .toolmanage{margin:var(--space-2) 0 var(--space-4)}
+  .toolmissing{margin-top:var(--space-6);padding-top:var(--space-3);border-top:1px solid var(--rule)}
   .srcpill{font-family:var(--face-mono);font-size:var(--text-xs);font-weight:var(--font-weight-medium);text-transform:uppercase;letter-spacing:var(--tracking-label);
            padding:calc(var(--spacing) * 0.5) calc(var(--spacing) * 1.5);border-radius:var(--shape-chip);background:var(--surface-raised);color:var(--accent-fg);margin-left:var(--space-2);vertical-align:middle}
   .srcpill.mcp{background:var(--surface-raised);color:var(--ok)}
@@ -680,8 +699,9 @@ details.subterm > summary.subterm-h::-webkit-details-marker{ display:none; }
 .model-picker-toggle{ border-radius:0 var(--radius) var(--radius) 0; }
 .model-picker-list{ display:none; position:absolute; top:100%; left:0; right:0; margin-top:var(--spacing); background:var(--surface-paper); border:1px solid var(--rule-hard); border-radius:var(--radius); z-index:10; max-height:240px; overflow:auto; }
 .model-picker-list.open{ display:block; }
-.model-picker-search{ position:sticky; top:0; padding:var(--space-2) var(--space-2); border:none; border-bottom:1px solid var(--rule-hard); background:var(--surface-paper); width:100%; outline:none; }
-.model-picker-search:focus{ border-bottom-color:var(--accent); }
+/* Override .fld input so the sticky filter stays opaque over scrolling models. */
+.fld .model-picker-search{ position:sticky; top:0; z-index:var(--z-inside); padding:var(--space-2) var(--space-2); border:none; border-bottom:1px solid var(--rule-hard); background:var(--surface-paper); width:100%; outline:none; }
+.fld .model-picker-search:focus{ border-bottom-color:var(--accent); }
 .model-picker-items{ padding:var(--spacing) 0; }
 .model-picker-item{ padding:calc(var(--spacing) * 1.5) var(--space-3); cursor:pointer; font-size:var(--text-xs); }
 .model-picker-item:hover,.model-picker-item.active{ background:var(--surface-raised); color:var(--text-ink); }
@@ -695,6 +715,29 @@ details.subterm > summary.subterm-h::-webkit-details-marker{ display:none; }
 .conncard{min-height:190px;transition:border-color var(--motion-fast) var(--motion-ease)}
 .conncard:hover{border-color:var(--rule-hard)}
 .connlogo{object-fit:contain}
+/* A card sits in a cell that carries its id, so a link such as
+   #connections/app-notion can open the page at that card and mark it. */
+.conncell{display:grid;min-width:0}
+.conncell.conn-target .conncard{border-color:var(--accent)}
+/* A card with no drawing of its own shows the first letter of its name. */
+.connmark{display:flex;align-items:center;justify-content:center;border:1px solid var(--rule);
+  background:var(--surface-sunk);color:var(--text-muted);font-family:var(--face-display);font-size:var(--text-lg)}
+/* A heading inside a group: "Memory stores to compare". */
+.connsub{font-family:var(--face-mono);font-size:var(--text-xs);font-weight:var(--font-weight-normal);text-transform:uppercase;
+  letter-spacing:var(--tracking-label);color:var(--text-faint);margin:var(--space-6) 0 var(--space-3)}
+/* A section that is closed until asked for: "Add a server by address". */
+.connmore{margin-top:var(--space-4)}
+.connmore>summary{cursor:pointer;font-family:var(--face-mono);font-size:var(--text-xs);letter-spacing:var(--tracking-label);
+  text-transform:uppercase;color:var(--text-muted)}
+.connmore-body{margin-top:var(--space-3);max-width:640px}
+.connhidden{margin-top:var(--space-4)}
+/* "For developers": closed at the foot of the page. */
+.conndev{margin-top:var(--space-8)}
+.conndev-body{margin-top:var(--space-3)}
+/* The hosted Slack card has a second, quieter button whose label is longer
+   than a narrow card: let it break onto two lines inside the card. */
+.connactions{flex-wrap:wrap;max-width:100%}
+.connactions .btn-tertiary{white-space:normal;height:auto;text-align:left;max-width:100%}
 .connstatus{display:inline-flex;align-items:center;gap:var(--space-2);font-size:var(--text-xs);color:var(--text-muted)}
 .conndot{width:9px;height:9px;border-radius:var(--shape-circle);background:var(--text-faint);flex-shrink:0}
 .connstatus.connected{color:var(--ok)}
@@ -741,16 +784,14 @@ details.subterm > summary.subterm-h::-webkit-details-marker{ display:none; }
   color:var(--text-faint);cursor:pointer;font-size:var(--text-xs)}
 
 
-.connmodal-message{flex:1;min-width:160px;color:var(--text-faint);font-size:var(--text-xs)}
+/* Its own line above the buttons, so a long error wraps instead of spilling off
+   the dialog's left edge (#223). Empty, it sits beside them at zero width. */
+.connmodal-message{flex:1 1 100%;min-width:0;overflow-wrap:anywhere;color:var(--text-faint);font-size:var(--text-xs)}
+.connmodal-message:empty{flex-basis:0}
 .conn-force{margin-left:var(--space-2)}
 
 @media (max-width:720px){
   .conngrid{grid-template-columns:1fr}
-  
-  
-  
-  
-  .connmodal-message{flex-basis:100%}
 }
 
 /* --- Memory arena: the fixture, readable before any of it has been run --- */
@@ -893,7 +934,7 @@ dialog.dialog{margin:auto;background:var(--surface-raised);color:var(--text-ink)
 dialog.dialog.dialog-wide{width:min(var(--dialog-wide), 92vw)}
 .dialog-in{padding:var(--space-8)}
 dialog.dialog::backdrop{background:var(--scrim);backdrop-filter:blur(var(--scrim-blur))}
-.dialog-foot{display:flex;justify-content:flex-end;gap:var(--space-2);border-top:var(--rule-width) solid var(--rule);
+.dialog-foot{display:flex;flex-wrap:wrap;justify-content:flex-end;align-items:center;gap:var(--space-2);border-top:var(--rule-width) solid var(--rule);
              margin-top:var(--space-4);padding-top:var(--space-4)}
 /* The retrieval gate (render.js gateSplit): two figures over a thin bar in
    the chart ramp — the same figure style as the stat band. */
