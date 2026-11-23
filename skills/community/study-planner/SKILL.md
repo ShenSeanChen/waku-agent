@@ -1,6 +1,6 @@
 ---
 name: study-planner
-description: Study plan ahead of an exam, with topics spread across the remaining days. Use when someone says "make me a study plan", "plan my studying", "prepare me to pass an exam", "my finals are coming".
+description: Study plan ahead of an exam, topics spread across remaining days. Use when someone says "make me a study plan", "plan my studying", "prepare me to pass an exam", "my finals are coming".
 ---
 
 ## How to plan
