@@ -57,9 +57,11 @@ fast = "claude-sonnet-5"
 key_url = "https://console.anthropic.com/settings/keys"
 price = [3.0, 15.0]
 
-# The gpt-5.6 REASONING models (luna/sol/terra) cannot use function tools on
-# /v1/chat/completions -- they need /v1/responses -- so every Waku turn 400s
-# on them. The whole `-chat-latest` line is 404 deprecated, so falling back
+# The gpt-5.6 REASONING models (luna/sol/terra) default to
+# reasoning.effort=medium, which rejects function tools on
+# /v1/chat/completions. They stay off the default; choosing one with
+# WAKU_MODEL=gpt-5.6-* works because OpenAICompatClient sends
+# reasoning_effort=none on a request that carries tools. The whole `-chat-latest` line is 404 deprecated, so falling back
 # to it is not an option either. gpt-5.5 is the newest plain model that
 # returns a tool_call on chat/completions; gpt-4.1-mini is a cheap
 # tool-capable gate. A `-latest` alias is deliberately NOT used: it changes

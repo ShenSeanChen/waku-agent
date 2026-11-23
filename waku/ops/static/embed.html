@@ -20,9 +20,11 @@
   <div class="sesshead" style="padding:8px 2px 0">
     <button class="btn btn-secondary btn-sm sessbtn" onclick="newChat()">+ New chat</button>
     <button class="btn btn-secondary btn-sm sessbtn" onclick="toggleSessMenu(event)">History &#9662;</button>
-    <button class="btn btn-secondary btn-sm sessbtn teletoggle" id="teletoggle" onclick="toggleTele()" title="Show/hide per-turn stats: gate decision, seconds, iterations, tools">stats</button>
-    <button class="btn btn-secondary btn-sm sessbtn" id="opendash" onclick="openDashboard()" title="Open the full dashboard in a new tab, signed in">Dashboard</button>
     <button class="modelchip" id="modelchip" onclick="toggleModelMenu(event)" title="Switch the model for this chat">&hellip;</button>
+    <!-- The two controls that were buttons here, "stats" and "Dashboard", are
+         this menu's items, so the toolbar is one row at any dock width: the
+         model chip is the only part that shrinks (spec-free change, 2026-10-11). -->
+    <button class="btn btn-secondary btn-sm moremenu" id="moremenu" onclick="toggleMoreMenu(event)" aria-haspopup="menu" aria-label="More: show how it answered, open the full dashboard" title="More">&hellip;</button>
   </div>
   <div class="chatlog" id="docklog"></div>
   <div class="chatbar">

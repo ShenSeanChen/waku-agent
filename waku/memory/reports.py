@@ -142,6 +142,17 @@ def guard_remember(fn: Callable[..., str]) -> Callable[..., str]:
     return guarded
 
 
+def leading_json(output) -> dict | None:
+    """The JSON object a tool's output starts with, or None. A plugin's
+    PreToolUse hook may append its context after the tool's own output
+    (waku/loop/agent.py), so the whole output is not always one JSON value."""
+    try:
+        value, _end = json.JSONDecoder().raw_decode(str(output or "").lstrip())
+    except ValueError:
+        return None
+    return value if isinstance(value, dict) else None
+
+
 def saved_by_model(tool_calls) -> dict | None:
     """The report the model saved itself this turn with Waku Memory's
     remember tool, as {memory_id, scope, body}, or None. A call Waku Memory
@@ -154,8 +165,8 @@ def saved_by_model(tool_calls) -> dict | None:
         if not isinstance(body, str) or not holds_report(body):
             continue
         try:
-            memory_id = json.loads(call.get("output") or "")["memory"]["id"]
-        except (ValueError, KeyError, TypeError):
+            memory_id = (leading_json(call.get("output")) or {})["memory"]["id"]
+        except (KeyError, TypeError):
             continue
         return {"memory_id": memory_id, "scope": str(args.get("scope") or "global"),
                 "body": body}

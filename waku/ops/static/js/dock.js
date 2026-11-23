@@ -122,6 +122,26 @@ function toggleTele(){
   localStorage.setItem("waku_tele", off ? "1" : "0");   // flip
   applyTele();
 }
+// --- the embedded chat's "..." menu: the two controls that used to be buttons
+// in the toolbar. They are rarely used and their old labels ("stats",
+// "Dashboard") did not say what they did, so each is a sentence here, with the
+// per-turn stats' on/off shown beside it. Choosing either closes the menu.
+function toggleMoreMenu(ev){
+  ev.stopPropagation();
+  if (document.getElementById("ui-menu") && _menuTrigger === ev.currentTarget){ closeMenu(); return; }
+  const on = localStorage.getItem("waku_tele") !== "0";
+  openMenu(ev.currentTarget,
+    uiMenuItem("Show how it answered",
+      {sub: on ? "on" : "off", on,
+       title: "Under each reply: the memory check, seconds, steps and tools used",
+       onclick: "closeMenu();toggleTele()"})
+    + uiMenuSep()
+    + uiMenuItem("Open full dashboard",
+      {sub: "new tab",
+       title: "Your agent's models, memory and settings, signed in",
+       onclick: "closeMenu();openDashboard()"}),
+    {width: "min(300px, 92vw)"});
+}
 function toggleModelMenu(ev){
   ev.stopPropagation();
   if (document.getElementById("ui-menu") && _menuTrigger === ev.currentTarget){ closeMenu(); return; }

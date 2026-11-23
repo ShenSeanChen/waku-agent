@@ -112,8 +112,16 @@ async def serve(path: Path,
     return server
 
 
-async def ask(path: Path, request: dict, *, timeout: float = 2.0) -> dict:
+async def ask(path: Path, request: dict, *, timeout: float = 2.0,
+              limit: int | None = None) -> dict:
     """Ask one question and return the answer object.
+
+    `limit` is the longest ANSWER this caller will buffer. It is MAX_LINE for
+    every question but one: a connector's answer (spec 029) is a vendor's
+    page or search result, and the proxy asks for it with a larger limit. The
+    longest REQUEST is the server's to bound, and that stays MAX_LINE.
+    Read here and not as the parameter's default, so MAX_LINE can move and
+    this side follows.
 
     EVERY failure is Unreachable, including an answer that will not parse. A
     peer killed between its write and its newline leaves a truncated line, and
@@ -122,13 +130,14 @@ async def ask(path: Path, request: dict, *, timeout: float = 2.0) -> dict:
     for, since "during an upgrade the gateway is briefly gone" is how a process
     dies mid-write.
     """
+    limit = MAX_LINE if limit is None else limit
     try:
         # limit=MAX_LINE on this side too. The server's bound was made explicit
         # and the client's was left riding asyncio's default, which merely
         # happens to be the same number -- the same implicit coupling, half
         # fixed. With both pinned, MAX_LINE can move and both sides follow.
         reader, writer = await asyncio.wait_for(
-            asyncio.open_unix_connection(str(path), limit=MAX_LINE), timeout)
+            asyncio.open_unix_connection(str(path), limit=limit), timeout)
     except (TimeoutError, OSError) as exc:
         raise Unreachable(f"{path} did not answer") from exc
     try:
@@ -138,7 +147,7 @@ async def ask(path: Path, request: dict, *, timeout: float = 2.0) -> dict:
     except (TimeoutError, OSError) as exc:
         raise Unreachable(f"{path} did not answer") from exc
     except ValueError as exc:
-        raise Unreachable(f"{path} answered with more than {MAX_LINE} bytes") from exc
+        raise Unreachable(f"{path} answered with more than {limit} bytes") from exc
     finally:
         writer.close()
     if not line:

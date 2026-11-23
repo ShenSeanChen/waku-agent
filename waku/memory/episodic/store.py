@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import sqlite3
 
-from waku.memory.semantic.store import _fts_query
+from waku.memory.semantic.store import _cjk_contains, _fts_query
 
 
 class SqliteEpisodeStore:
@@ -29,12 +29,22 @@ class SqliteEpisodeStore:
         fts = _fts_query(query)
         if not fts:
             return self.recent(top_k)
-        rows = self.conn.execute(
-            "SELECT e.happened_at, e.summary FROM episodes_fts JOIN episodes e "
-            "ON e.id = episodes_fts.rowid WHERE episodes_fts MATCH ? "
-            "ORDER BY rank, e.happened_at DESC LIMIT ?",
-            (fts, top_k),
-        ).fetchall()
+        contains, params = _cjk_contains(query, ("e.summary",))
+        if contains:
+            rows = self.conn.execute(
+                "WITH matches AS (SELECT rowid, rank FROM episodes_fts WHERE episodes_fts MATCH ?) "
+                "SELECT e.happened_at, e.summary FROM episodes e LEFT JOIN matches m ON m.rowid = e.id "
+                f"WHERE m.rowid IS NOT NULL OR ({contains}) "
+                "ORDER BY m.rowid IS NULL, m.rank, e.happened_at DESC LIMIT ?",
+                (fts, *params, top_k),
+            ).fetchall()
+        else:
+            rows = self.conn.execute(
+                "SELECT e.happened_at, e.summary FROM episodes_fts JOIN episodes e "
+                "ON e.id = episodes_fts.rowid WHERE episodes_fts MATCH ? "
+                "ORDER BY rank, e.happened_at DESC LIMIT ?",
+                (fts, top_k),
+            ).fetchall()
         return [f"({r['happened_at']}) {r['summary']}" for r in rows]
 
     def recent(self, top_k: int = 3) -> list[str]:
