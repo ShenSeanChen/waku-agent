@@ -295,7 +295,7 @@ function openJevKey(){
   markEditing();   // keep the 5s refresh loop from wiping this modal
   const set = !!(D && D.settings && D.settings.typesafe_key_set);
   openDialog(`
-      <div class="u" style="display:flex;justify-content:space-between;align-items:center">
+      <div class="u dialog-head" style="display:flex;justify-content:space-between;align-items:center">
         <b>TypeSafe (Jev)</b>${uiButton("\u2715", {level: "tertiary", size: "sm",
           onclick: "closeDialog()", attrs: 'aria-label="close"'})}</div>
       <label class="fld"><span>API key <span class="meta">(TYPESAFE_API_KEY)</span>
@@ -369,7 +369,7 @@ function openProviderModal(provider){
       <label class="fld"><span>Server address <span class="meta">(Ollama: localhost:11434/v1 · LM Studio: localhost:1234/v1)</span></span>
         <input type="text" id="pm-base-url" value="${escAttr(selectedBaseUrl)}" onfocus="markEditing()"></label>` : "";
   const d = openDialog(`
-      <div class="u" style="display:flex;justify-content:space-between;align-items:center">
+      <div class="u dialog-head" style="display:flex;justify-content:space-between;align-items:center">
         <b>${esc(p.name)}</b>${uiButton("✕", {level: "tertiary", size: "sm", onclick: "closeProviderModal()", attrs: 'aria-label="close"'})}</div>
       ${serverField}
       ${keyLabel}
