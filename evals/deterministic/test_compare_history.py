@@ -38,7 +38,7 @@ def test_clear_wipes_only_the_history(tmp_path):
     ch.clear(tmp_path)
     assert ch.load_runs(tmp_path) == []
     assert not (tmp_path / "compare" / "history.jsonl").exists()
-    assert (tmp_path / "state.db").read_text() == "real data"   # untouched
+    assert (tmp_path / "state.db").read_text(encoding="utf-8") == "real data"   # untouched
 
 
 def test_history_is_capped(tmp_path, monkeypatch):

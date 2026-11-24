@@ -84,5 +84,5 @@ def test_trace_lines_written_from_two_threads_stay_whole(tmp_path, monkeypatch):
     for t in threads:
         t.join()
     monkeypatch.undo()
-    lines = tracer.path.read_text().splitlines()
+    lines = tracer.path.read_text(encoding="utf-8").splitlines()
     assert len(lines) == 20 and all(json.loads(line)["type"] == "hook" for line in lines)

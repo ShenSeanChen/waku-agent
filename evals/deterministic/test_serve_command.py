@@ -319,7 +319,7 @@ def test_sigterm_stops_the_process_cleanly(tmp_path):
                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     try:
         assert _until(lambda: (home / "serve.lock").exists()
-                      and (home / "serve.lock").read_text().strip() == str(process.pid), 30), (
+                      and (home / "serve.lock").read_text(encoding="utf-8").strip() == str(process.pid), 30), (
             "waku serve never took its lock")
         with pytest.raises(AlreadyRunning):
             ServeLock(home).acquire()

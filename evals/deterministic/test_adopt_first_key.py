@@ -100,15 +100,21 @@ def test_a_key_already_on_file_does_not_adopt_on_its_own(env):
     assert integrations._adoptable(integrations.PROVIDERS["anthropic"], None) is False
 
 
-def test_the_gate_and_the_server_agree_on_what_configured_means(env):
-    """`_provider_can_serve` uses bool(env[key_env]), which is the same test
-    the Models grid colours a card with (integrations.py line ~272). Two
-    definitions of "configured" is how a setup screen and a settings page come
-    to disagree in front of a user."""
+def test_the_gate_and_the_server_agree_on_what_configured_means(env, monkeypatch):
+    """`_provider_can_serve` and the Connections card must give the same
+    answer for every provider. Two definitions of "configured" is how a setup
+    screen and a settings page come to disagree in front of a user. Since spec
+    034 a row may need no key (`local`), so "configured" is no longer just
+    bool(env[key_env]); both readers go through Provider.has_credentials."""
     text = pathlib.Path(integrations.__file__).read_text(encoding="utf-8")
     body = text[text.index("def _provider_can_serve"):]
     body = body[:body.index("\ndef ")]
-    assert "os.environ.get(selected.key_env" in body
+    assert "has_credentials(" in body
+    for chosen in ("", "local", "anthropic"):
+        monkeypatch.setenv("WAKU_PROVIDER", chosen)
+        for name, provider in integrations.PROVIDERS.items():
+            card = integrations._provider_ready(dict(integrations.os.environ), name, provider)
+            assert card == integrations._provider_can_serve(name), (name, chosen)
 
 
 # --- the wiring, which the helpers above do not prove ----------------------

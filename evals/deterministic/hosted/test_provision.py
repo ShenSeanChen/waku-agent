@@ -207,7 +207,7 @@ from hosted.core.provision import WAKU_MEMORY_SERVER  # noqa: E402
 
 
 def _servers(dirs):
-    return json.loads((dirs.home / "mcp.json").read_text())["servers"]
+    return json.loads((dirs.home / "mcp.json").read_text(encoding="utf-8"))["servers"]
 
 
 def test_a_new_tenant_gets_an_mcp_json_with_waku_memory(dirs, template):
@@ -239,7 +239,7 @@ def test_an_mcp_json_that_is_not_json_is_left_alone(dirs, template):
     dirs.home.mkdir(parents=True)
     (dirs.home / "mcp.json").write_text("{not json")
     provision(dirs, template)
-    assert (dirs.home / "mcp.json").read_text() == "{not json"
+    assert (dirs.home / "mcp.json").read_text(encoding="utf-8") == "{not json"
 
 
 def test_a_symlinked_mcp_json_is_never_followed(dirs, template, tmp_path):
@@ -248,7 +248,7 @@ def test_a_symlinked_mcp_json_is_never_followed(dirs, template, tmp_path):
     target.write_text(json.dumps({"servers": []}))
     (dirs.home / "mcp.json").symlink_to(target)
     provision(dirs, template)
-    assert json.loads(target.read_text()) == {"servers": []}
+    assert json.loads(target.read_text(encoding="utf-8")) == {"servers": []}
 
 
 def test_provisioning_twice_adds_waku_memory_once(dirs, template):
@@ -303,7 +303,7 @@ def test_treg_never_follows_a_symlinked_mcp_json(dirs, template, tmp_path):
     target.write_text(json.dumps({"servers": []}))
     (dirs.home / "mcp.json").symlink_to(target)
     assert ensure_treg(dirs.home, PROXY) is False
-    assert json.loads(target.read_text()) == {"servers": []}
+    assert json.loads(target.read_text(encoding="utf-8")) == {"servers": []}
 
 
 # --- spec 014: a tenant's own treg key --------------------------------------------

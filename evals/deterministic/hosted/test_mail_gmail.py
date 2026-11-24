@@ -842,7 +842,7 @@ def test_gmail_is_never_written_into_mcp_json_or_relayed_as_mcp(tmp_path, sock_d
     assert sync_connectors(home, "http://10.88.0.1:8788", ["gmail"]) is False
     assert not (home / "mcp.json").exists()
     assert sync_connectors(home, "http://10.88.0.1:8788", ["gmail", "notion"]) is True
-    assert [s["name"] for s in json.loads((home / "mcp.json").read_text())["servers"]] == [
+    assert [s["name"] for s in json.loads((home / "mcp.json").read_text(encoding="utf-8"))["servers"]] == [
         "notion"]
 
     async def body(rig):

@@ -284,7 +284,7 @@ def test_hosted_carries_the_elastic_licence_and_its_limitation():
     "Elastic License 2.0" with that paragraph edited out would pass a title
     check and grant everything.
     """
-    licence = (ROOT / "hosted" / "LICENSE").read_text()
+    licence = (ROOT / "hosted" / "LICENSE").read_text(encoding="utf-8")
     assert ELV2_LIMITATION in " ".join(licence.split()), (
         "hosted/LICENSE must carry the Elastic License 2.0 limitation clause "
         "verbatim; that clause is the entire reason hosted/ is not MIT.")
@@ -317,7 +317,7 @@ def test_no_doc_claims_hosted_is_mit():
             continue
         inside_hosted = "hosted" in path.relative_to(ROOT).parts
         number, block = 1, []
-        for index, line in enumerate(path.read_text(errors="ignore").splitlines() + [""], 1):
+        for index, line in enumerate(path.read_text(encoding="utf-8", errors="ignore").splitlines() + [""], 1):
             if line.strip():
                 if not block:
                     number = index

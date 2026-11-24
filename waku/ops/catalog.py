@@ -202,7 +202,7 @@ def default_pinned_specs() -> list[str]:
 
     specs = []
     for name, prov in PROVIDERS.items():
-        if prov.is_visible() and os.getenv(prov.key_env):
+        if prov.is_visible() and prov.has_credentials(name):
             specs += [f"{name}:{m}" for m in prov.default_pair()]
     return specs
 

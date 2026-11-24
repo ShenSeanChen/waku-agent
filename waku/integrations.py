@@ -21,7 +21,7 @@ from enum import StrEnum
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from waku.loop.models import PROVIDERS, Provider
+from waku.loop.models import PROVIDERS, REGISTRY, Provider
 from waku.memory.episodic.notion_store import normalize_database_id
 
 
@@ -119,6 +119,10 @@ class IntegrationView:
     fields: tuple[FieldView, ...]
     install_command: str
     setup_url: str
+    # For an AI provider: who runs the model. "maker" (the model maker's own
+    # API), "platform" (another company runs open models on its hardware) or
+    # "local" (a server on this computer). The Models page groups cards by it.
+    tier: str = ""
 
 
 @dataclass(frozen=True)
@@ -298,7 +302,13 @@ INTEGRATIONS: tuple[Integration, ...] = (
 
 
 def _integration_from_provider(name: str, provider: Provider) -> Integration:
-    fields = (EnvField(provider.key_env, "API Key", secret=True),)
+    if provider.key_optional:
+        # A model server on this computer: the address is what matters, and a
+        # key is only for a server someone put behind one.
+        fields = (EnvField(provider.base_url_env, "Server address", default=provider.base_url or ""),
+                  EnvField(provider.key_env, "API Key (optional)", secret=True))
+    else:
+        fields = (EnvField(provider.key_env, "API Key", secret=True),)
     if provider.base_url_env and provider.endpoints:
         fields += (EnvField(provider.base_url_env, "Base URL", FieldKind.CHOICE,
                             default=provider.base_url or "",
@@ -307,10 +317,24 @@ def _integration_from_provider(name: str, provider: Provider) -> Integration:
     # label_text() falls back to the title-cased row name, so this changes
     # nothing for a row that never sets `label` -- only waku-platform does.
     label = provider.label_text(name)
+    about = ("A model server on this computer, such as Ollama or LM Studio."
+             if provider.key_optional else f"Uses {label} models.")
     return Integration(name, "AI Providers", label,
-                       f"Uses {label} models.",
+                       about,
                        fields, None, None, "",
-                       ReloadMode.AGENT, lambda env, key=provider.key_env: bool(env.get(key)), _provider_probe)
+                       ReloadMode.AGENT, lambda env, p=provider, n=name: _provider_ready(env, n, p),
+                       _provider_probe)
+
+
+def _provider_ready(env: Mapping[str, str], name: str, provider: Provider) -> bool:
+    """The Connections card's "configured": a key, or for a key_optional row
+    an address or being the chosen provider. Same rule as
+    Provider.has_credentials, read from the env the page passes in."""
+    if env.get(provider.key_env):
+        return True
+    if not provider.key_optional:
+        return False
+    return env.get("WAKU_PROVIDER") == name or bool(provider.base_url_env and env.get(provider.base_url_env))
 
 
 def provider_integrations() -> tuple[Integration, ...]:
@@ -453,7 +477,9 @@ def list_integrations() -> tuple[IntegrationView, ...]:
         views.append(IntegrationView(integration.key, integration.group, integration.name, integration.what,
                                      _status(integration, env), fields,
                                      f"pip install -e '.[{integration.extra}]'" if integration.extra else "",
-                                     integration.setup_url))
+                                     integration.setup_url,
+                                     REGISTRY.get(integration.key, {}).get("tier", "")
+                                     if integration.group == "AI Providers" else ""))
     return tuple(views)
 
 
@@ -720,7 +746,9 @@ def _provider_probe(values: Mapping[str, str]) -> None:
     # is deliberately the same non-writing check used by the existing UI.
     from waku.ops import catalog
 
-    provider = next((name for name, item in PROVIDERS.items() if item.key_env in values), "")
+    provider = next((name for name, item in PROVIDERS.items()
+                     if item.key_env in values
+                     or (item.key_optional and item.base_url_env and item.base_url_env in values)), "")
     if not provider:
         return
     # A Save must validate the candidate key/endpoint, never a cached result
@@ -877,14 +905,14 @@ def test_integration(key: str) -> IntegrationView:
         )
         status = IntegrationStatus(state, "integration is disabled", view.status.checked_at)
         return IntegrationView(view.key, view.group, view.name, view.what, status, view.fields,
-                               view.install_command, view.setup_url)
+                               view.install_command, view.setup_url, view.tier)
     effective = _probed(integration)
     if effective.probe is None:
         view = _current_view(key)
         assert view is not None
         status = IntegrationStatus(view.status.state, "no test available", view.status.checked_at)
         return IntegrationView(view.key, view.group, view.name, view.what, status, view.fields,
-                               view.install_command, view.setup_url)
+                               view.install_command, view.setup_url, view.tier)
     try:
         effective.probe(values)
     except Exception as exc:
@@ -906,7 +934,7 @@ def _provider_can_serve(name: str) -> bool:
         # the code that gave it meaning: a row removed from a release leaves
         # every user who had selected it pointing at nothing.
         return False
-    return bool(os.environ.get(selected.key_env, ""))
+    return selected.has_credentials(name)
 
 
 def _adoptable(selected: Provider, key: str | None) -> bool:
