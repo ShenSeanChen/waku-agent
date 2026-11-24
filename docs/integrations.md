@@ -45,8 +45,9 @@ dates such as `03/04/2026` are left alone rather than guessed.
 
 **A local speech model.** [TADA](https://github.com/HumeAI/tada), from Hume, is a
 third choice. It runs on your machine and needs no API key. Its text and audio
-tokens are aligned one-to-one, so it cannot skip or invent words the way
-codec-based TTS can. It is opt-in:
+tokens are aligned one-to-one, which is designed to avoid skipped words; Hume
+reports zero hallucinations on LibriTTS-R. That is not a guarantee for every
+voice or sentence — measure it on your own replies before relying on it. It is opt-in:
 
 ```bash
 uv pip install '.[voice-tada]'       # pulls torch (~2GB)

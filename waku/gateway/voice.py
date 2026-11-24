@@ -12,9 +12,9 @@ only moves words in and out (that's the whole point of the gateway box).
          neural Kokoro voice if installed (pip install kokoro soundfile;
          WAKU_TTS=kokoro, WAKU_VOICE=bm_george / bm_fable / ...), or Hume's
          open-source TADA model (pip install -e '.[voice-tada]'; WAKU_TTS=tada).
-         TADA runs locally with no API key, and its 1:1 text/audio alignment
-         makes skipped words impossible by construction. Its weights are
-         gated by Meta's Llama 3.2 license.
+         TADA runs locally with no API key and aligns text and audio one-to-one;
+         it is designed to avoid skipped words, but the guarantee is empirical.
+         Its weights are gated by Meta's Llama 3.2 license.
 
 Wake-word mode ("hey <name>, ...") is deliberately v2 — see docs/roadmap:
 openWakeWord can train a custom wake word for whatever we name this thing.
