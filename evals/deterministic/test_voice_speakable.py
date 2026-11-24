@@ -28,6 +28,12 @@ SPOKEN = [
     ("Meeting 09:00 → 10:00", "Meeting nine a.m. to ten a.m."),
     ("Meeting at 9:00.", "Meeting at nine a.m."),
     ("Start 9:00, end 10:00.", "Start nine a.m., end ten a.m."),
+    ("2024-02-29", "February twenty-ninth, twenty twenty-four"),
+    ("Feb 29, 2024", "February twenty-ninth, twenty twenty-four"),
+    (
+        "Meet https://x.test/2026-07-14 on 2026-07-14",
+        "Meet https://x.test/2026-07-14 on July fourteenth, twenty twenty-six",
+    ),
 ]
 
 
@@ -38,7 +44,11 @@ def test_dates_and_times_are_spoken(raw, spoken):
 
 UNCHANGED = [
     "03/04/2026",        # ambiguous date order — never guess
-    "2026-13-45",        # impossible date
+    "2026-13-45",        # impossible month and day
+    "2026-02-31",        # impossible calendar date
+    "2026-02-29",        # not a leap year
+    "https://example.com/2026-07-14/report",
+    "See docs at https://x.test/2026-07-14T09:00",
     "9:00-ish",          # approximation, not a clock time
     "3 tools and 10 iterations",
     "Step 3.7 Flash",

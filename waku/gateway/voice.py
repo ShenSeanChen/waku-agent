@@ -243,7 +243,13 @@ class _TadaEngine:
             if self.config.prompt_wav:
                 wav_path = self.config.prompt_wav
             else:
-                wav_path = str(files("tada").joinpath("samples/ljspeech.wav"))
+                sample = files("tada").joinpath("samples/ljspeech.wav")
+                if not sample.is_file():
+                    raise SystemExit(
+                        "hume-tada's English sample is missing; set WAKU_TADA_PROMPT_WAV "
+                        "and WAKU_TADA_PROMPT_TEXT to your own clip and its transcript"
+                    )
+                wav_path = str(sample)
             audio, sample_rate = soundfile.read(wav_path, dtype="float32")
             if audio.ndim == 2:  # soundfile gives (frames, channels)
                 audio = audio.mean(axis=1) if audio.shape[1] > 1 else audio[:, 0]

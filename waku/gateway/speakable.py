@@ -13,6 +13,9 @@ a pronunciation bug into a wrong date.
 from __future__ import annotations
 
 import re
+from datetime import date
+
+_URL = re.compile(r"(https?://\S+|www\.\S+)", re.IGNORECASE)
 
 _MONTHS = {
     1: "January", 2: "February", 3: "March", 4: "April", 5: "May", 6: "June",
@@ -115,6 +118,15 @@ def _date(year: int, month: int, day: int) -> str:
     return f"{_MONTHS[month]} {_ordinal(day)}, {_year(year)}"
 
 
+def _valid_date(year: int, month: int, day: int) -> bool:
+    """Reject impossible dates instead of speaking a hallucination as fact."""
+    try:
+        date(year, month, day)
+    except ValueError:
+        return False
+    return True
+
+
 def _no_double_stop(match: re.Match, spoken: str) -> str:
     """Keep the sentence's own period; the spoken a.m./p.m. already has one."""
     if spoken.endswith(".") and match.string[match.end() : match.end() + 1] == ".":
@@ -122,36 +134,42 @@ def _no_double_stop(match: re.Match, spoken: str) -> str:
     return spoken
 
 
-def speakable_dates(text: str) -> str:
-    """Expand unambiguous dates and times; leave everything else untouched."""
+def _normalize_dates(text: str) -> str:
+    """Expand unambiguous dates and times inside one non-URL segment."""
     if not text:
         return text
 
     def iso_datetime(match: re.Match) -> str:
         year, month, day, hour, minute = (int(match.group(i)) for i in range(1, 6))
-        if not (1 <= month <= 12 and 1 <= day <= 31 and hour <= 23 and minute <= 59):
+        if not (
+            1 <= month <= 12
+            and 1 <= day <= 31
+            and hour <= 23
+            and minute <= 59
+            and _valid_date(year, month, day)
+        ):
             return match.group(0)
         return f"{_date(year, month, day)} at {_clock(hour, minute)}"
 
     def iso_date(match: re.Match) -> str:
         year, month, day = (int(g) for g in match.groups())
-        if not (1 <= month <= 12 and 1 <= day <= 31):
+        if not (1 <= month <= 12 and 1 <= day <= 31 and _valid_date(year, month, day)):
             return match.group(0)
         return _date(year, month, day)
 
     def month_day(match: re.Match) -> str:
         month = _MONTH_LOOKUP.get(match.group(1).lower())
         day = int(match.group(2))
-        year = match.group(3)
-        if month is None or not 1 <= day <= 31:
+        year = int(match.group(3)) if match.group(3) else 2000  # leap year validates Feb 29
+        if month is None or not _valid_date(year, month, day):
             return match.group(0)
         spoken = f"{_MONTHS[month]} {_ordinal(day)}"
-        return f"{spoken}, {_year(int(year))}" if year else spoken
+        return f"{spoken}, {_year(year)}" if match.group(3) else spoken
 
     def weekday_day(match: re.Match) -> str:
         weekday = _WEEKDAYS.get(match.group(1).lower()[:3])
         day = int(match.group(2))
-        if weekday is None or not 1 <= day <= 31:
+        if weekday is None or not _valid_date(2000, 1, day):  # January has 31 days
             return match.group(0)
         return f"{weekday} the {_ordinal(day)}"
 
@@ -225,3 +243,12 @@ def speakable_dates(text: str) -> str:
     text = re.sub(r"\b(\d{1,2})\s*([ap])\.?\s*m\.?(?!\w)", bare_hour, text, flags=re.IGNORECASE)
     text = re.sub(r"\b(\d{1,2})(?:st|nd|rd|th)\b", ordinal, text, flags=re.IGNORECASE)
     return text
+
+
+def speakable_dates(text: str) -> str:
+    """Expand dates and times for speech, leaving URLs byte-for-byte intact."""
+    if not text:
+        return text
+    parts = _URL.split(text)
+    # split() with a capturing group keeps URLs at odd indices.
+    return "".join(part if index % 2 else _normalize_dates(part) for index, part in enumerate(parts))

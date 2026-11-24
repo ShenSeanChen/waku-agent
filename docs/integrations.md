@@ -58,8 +58,9 @@ English sample shipped with `hume-tada` unless you set `WAKU_TADA_PROMPT_WAV`
 and `WAKU_TADA_PROMPT_TEXT` to your own. `WAKU_TADA_MODEL` selects the 1B
 English or 3B multilingual checkpoint; `WAKU_TADA_DEVICE` picks the device.
 The weights are gated: accept Meta's Llama 3.2 license on Hugging Face and run
-`hf auth login` before the first run. The model loads on the first reply, so
-that reply is slower than the ones after it.
+`hf auth login` before the first run. Waku does not ship those weights; they
+remain under the Llama 3.2 Community License. The model loads on the first
+reply, so that reply is slower than the ones after it.
 
 ## Phone to laptop
 
