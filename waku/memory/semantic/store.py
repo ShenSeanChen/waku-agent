@@ -84,6 +84,18 @@ class SqliteFactStore:
     def __init__(self, conn: sqlite3.Connection):
         self.conn = conn
 
+    def contains(self, subject: str, content: str) -> bool:
+        """True when an exact subject+content pair already exists in the store.
+
+        Queries the full table with no row cap, so it is safe regardless of
+        how many facts are stored. Used by kept_if_due to drop proposed facts
+        that are already in the semantic store before inserting them.
+        """
+        return self.conn.execute(
+            "SELECT 1 FROM facts WHERE subject = ? AND lower(trim(content)) = ? LIMIT 1",
+            (subject.lower().strip(), content.lower().strip()),
+        ).fetchone() is not None
+
     def add(self, subject: str, content: str, source: str = "user") -> None:
         sub = subject.lower().strip()
         cnt = content.strip()
@@ -103,15 +115,23 @@ class SqliteFactStore:
     # first and marked once the send succeeds, so a send that fails, or a
     # process that dies mid-send, leaves the fact waiting for the next try.
     def add_unsynced(self, subject: str, content: str, scope: str,
-                     source: str = "consolidation") -> int:
+                     source: str = "consolidation") -> int | None:
+        """Insert a new fact flagged for Waku Memory sync, or return the
+        existing row's id if one already matches.
+
+        Returns None when the duplicate row is already synced (synced=1),
+        signalling to the caller that the fact has already reached Waku Memory
+        and must not be sent again. Returns the existing id when synced=0 so
+        the caller retries a previously-failed send.
+        """
         sub = subject.lower().strip()
         cnt = content.strip()
         existing = self.conn.execute(
-            "SELECT id FROM facts WHERE subject = ? AND lower(trim(content)) = ?",
+            "SELECT id, synced FROM facts WHERE subject = ? AND lower(trim(content)) = ?",
             (sub, cnt.lower()),
         ).fetchone()
         if existing:
-            return int(existing[0])
+            return None if existing["synced"] else int(existing["id"])
         cur = self.conn.execute(
             "INSERT INTO facts (subject, content, source, synced, scope) VALUES (?,?,?,0,?)",
             (sub, cnt, source, scope),

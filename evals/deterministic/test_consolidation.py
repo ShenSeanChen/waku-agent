@@ -600,14 +600,20 @@ def test_consolidation_drops_facts_already_in_semantic_memory(memory):
 
 
 def test_sqlite_fact_store_does_not_insert_duplicate_fact(memory):
-    """SqliteFactStore add and add_unsynced must be idempotent for identical content."""
+    """add and add_unsynced are idempotent: a second identical fact is never inserted.
+
+    add() inserts with synced=1 (the schema default). add_unsynced() finding that
+    row returns None — the fact is treated as already delivered and no retry send
+    is needed. The row count stays at one.
+    """
     memory.facts.add("Vedansh", "Prefers working late nights.", source="user")
     memory.facts.add("vedansh", "prefers working late nights.", source="consolidation")
+    # Row inserted by add() has synced=1 (default), so add_unsynced signals no send needed.
     second_id = memory.facts.add_unsynced("vedansh", "  Prefers working late nights.  ", "global")
+    assert second_id is None  # already synced; caller must not send again
 
     rows = memory.conn.execute("SELECT id, content FROM facts WHERE subject = 'vedansh'").fetchall()
     assert len(rows) == 1
-    assert rows[0]["id"] == second_id
 
 
 def test_the_prompt_instructs_empty_list_and_negative_guidance():
@@ -647,3 +653,100 @@ def test_under_plugin_mode_consolidation_keeps_its_facts_here_and_retries_only_f
         assert memory.remember is remember   # save_note keeps its send
     else:
         assert len(remember.sent) == 3
+
+
+# ---------- Bug fixes from #427: dedup limit and double-send
+
+
+def test_contains_finds_a_fact_beyond_the_first_200_rows(memory):
+    """SqliteFactStore.contains must search the full table, not just recent rows.
+
+    Regression for the bug where the dedup check in kept_if_due used
+    facts.list(limit=200) and missed duplicates of facts older than position 200.
+    Insert 201 rows, then call contains() on the oldest one: it must be found.
+    """
+    # Insert 201 distinct facts so the first one sits beyond any 200-row cap.
+    for i in range(201):
+        memory.conn.execute(
+            "INSERT INTO facts (subject, content, source) VALUES (?, ?, 'user')",
+            (f"person-{i}", f"Person {i} likes hiking."),
+        )
+    memory.conn.commit()
+
+    # The very first fact (oldest, lowest id) must still be found.
+    assert memory.facts.contains("person-0", "Person 0 likes hiking.") is True
+    # A fact that was never stored must not be found.
+    assert memory.facts.contains("person-0", "Person 0 likes swimming.") is False
+
+
+def test_consolidation_drops_duplicate_of_old_fact_beyond_200(memory):
+    """kept_if_due must drop a proposed fact that already exists as an older row,
+    even when the store holds more than 200 entries.
+
+    Regression for the bug where the dedup set was built from list(limit=200)
+    and facts beyond position 200 were silently re-inserted.
+    """
+    # Seed 201 facts so the first one is beyond any 200-row cap.
+    for i in range(200):
+        memory.conn.execute(
+            "INSERT INTO facts (subject, content, source) VALUES (?, ?, 'user')",
+            (f"person-{i}", f"Person {i} likes hiking."),
+        )
+    # This is the 201st row — the target duplicate.
+    memory.facts.add("Alex", "Alex prefers morning meetings.", source="user")
+    memory.conn.commit()
+
+    remember = FakeRemember()
+    add_exchanges(memory.conn, 3)
+    # DISTILLED proposes both Alex and Acme; Alex is already stored.
+    kept = run_with(memory, [response([text_block(DISTILLED)])], remember)
+
+    # Only the genuinely new Acme fact should be kept.
+    assert len(kept) == 1
+    assert kept[0]["content"] == "The Acme demo is on Friday."
+    # Alex must NOT have been sent to Waku Memory again.
+    assert all("morning meetings" not in s for s, _ in remember.sent)
+
+
+def test_add_unsynced_returns_none_for_already_synced_duplicate(memory):
+    """add_unsynced returns None when the duplicate row already has synced=1.
+
+    None signals to kept_if_due that the fact already reached Waku Memory and
+    must not be sent again. It returns the existing id when synced=0 so a
+    previously-failed send is retried.
+    """
+    # Rows from add() carry synced=1 (the schema default).
+    memory.facts.add("Sean", "Sean founded the company in 2024.", source="user")
+    result_synced = memory.facts.add_unsynced("Sean", "Sean founded the company in 2024.", "global")
+    assert result_synced is None  # already synced; no second send
+
+    # A row stored with synced=0 (failed send) must expose its id for retry.
+    memory.conn.execute(
+        "INSERT INTO facts (subject, content, source, synced, scope) VALUES (?, ?, 'consolidation', 0, 'global')",
+        ("raj", "Raj plays tennis."),
+    )
+    memory.conn.commit()
+    result_unsynced = memory.facts.add_unsynced("raj", "Raj plays tennis.", "global")
+    assert isinstance(result_unsynced, int)  # id returned; caller will retry send
+
+
+def test_already_synced_duplicate_is_not_sent_to_waku_memory(memory):
+    """When add_unsynced signals an already-synced duplicate (returns None),
+    kept_if_due must not call remember() for that fact.
+
+    Regression for the bug where the caller sent to Waku Memory regardless of
+    whether the row was already synced, creating a duplicate on the remote side.
+    """
+    # Store the Alex fact as already synced (default via add()).
+    memory.facts.add("Alex", "Alex prefers morning meetings.", source="user")
+
+    remember = FakeRemember()
+    add_exchanges(memory.conn, 3)
+    # Summarizer proposes Alex again alongside the new Acme fact.
+    run_with(memory, [response([text_block(DISTILLED)])], remember)
+
+    # Alex must not appear in what was sent to Waku Memory.
+    sent_contents = [body for body, _ in remember.sent]
+    assert "Alex prefers morning meetings." not in sent_contents
+    # The new Acme fact must still go through normally.
+    assert "The Acme demo is on Friday." in sent_contents
