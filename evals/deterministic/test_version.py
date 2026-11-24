@@ -17,7 +17,7 @@ from pathlib import Path
 import waku
 
 ROOT = Path(__file__).resolve().parents[2]
-PYPROJECT = tomllib.loads((ROOT / "pyproject.toml").read_text())
+PYPROJECT = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
 
 
 def test_pyproject_does_not_hardcode_a_second_version():

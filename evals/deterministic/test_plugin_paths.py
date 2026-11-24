@@ -31,7 +31,7 @@ def test_a_manifest_name_with_dots_cannot_delete_a_folder_beside_home(tmp_path):
     (store.folder(home) / "evil-market").mkdir(parents=True)
     reply = cli.run(["install", "p@evil-market"], home, lambda s: True)
     assert "Installed p from evil-market" in reply
-    assert (victim / "precious.txt").read_text() == "x"
+    assert (victim / "precious.txt").read_text(encoding="utf-8") == "x"
     assert (store.folder(home) / "evil-market" / "p" / ".waku-plugin").is_dir()
     assert store.read(home)["p@evil-market"]["path"] == "evil-market/p"
 

@@ -103,7 +103,7 @@ def test_the_dashboard_no_longer_says_you_never_pick_a_mode():
     import pathlib
 
     js = pathlib.Path(__file__).resolve().parents[2] / "waku/ops/static/js/views.js"
-    assert "never pick a mode" not in js.read_text()
+    assert "never pick a mode" not in js.read_text(encoding="utf-8")
 
 
 def test_a_runner_without_a_message_parameter_is_not_given_one():

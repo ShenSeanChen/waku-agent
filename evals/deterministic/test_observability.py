@@ -114,7 +114,7 @@ def test_secrets_never_reach_the_trace_file_or_the_page(tmp_path):
     with tracer.turn("t"):
         tracer.event("tool", {"tool": "treg_call", "args": args, "output": "{}"})
     tracer.end_turn("", 1)
-    raw = "".join(p.read_text() for p in (tmp_path / "traces").glob("*.jsonl"))
+    raw = "".join(p.read_text(encoding="utf-8") for p in (tmp_path / "traces").glob("*.jsonl"))
     for secret in ("abcdefghijklmnop", "k-12345678", "plain-secret-value", SECRET):
         assert secret not in raw
     line = next(e for e in _lines(tmp_path) if e["type"] == "tool")

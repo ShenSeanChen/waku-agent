@@ -189,7 +189,7 @@ def test_a_plugin_that_cannot_send_turns_is_not_recorded_as_plugin(tmp_path, mon
 
     market = marketplace(tmp_path / "market")
     hooks = market / "plugins" / "waku" / "hooks" / "waku-agent.json"
-    data = json.loads(hooks.read_text())
+    data = json.loads(hooks.read_text(encoding="utf-8"))
     del data["hooks"]["Stop"]                                        # no hook sends the turn
     hooks.write_text(json.dumps(data))
     official(monkeypatch, market)
@@ -203,7 +203,7 @@ def test_a_plugin_that_cannot_send_turns_is_not_recorded_as_plugin(tmp_path, mon
     reply = memory_choice.apply("plugin", home)
     os.environ.pop("WAKU_MEMORY_MODE", None)
     assert reply.startswith("The Waku plugin could not be installed (the Waku plugin in the marketplace")
-    saved = (home / ".env").read_text()
+    saved = (home / ".env").read_text(encoding="utf-8")
     assert "WAKU_MEMORY_MODE" in saved and "agent" in saved and "plugin" not in saved
 
 
@@ -219,7 +219,7 @@ def test_the_first_run_installs_only_a_plugin_its_sentence_describes(tmp_path, m
 
     market = marketplace(tmp_path / "market")
     path = market / "plugins" / "waku" / ".waku-plugin" / "plugin.json"
-    data = json.loads(path.read_text())
+    data = json.loads(path.read_text(encoding="utf-8"))
     change(data)
     path.write_text(json.dumps(data))
     official(monkeypatch, market)

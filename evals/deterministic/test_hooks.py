@@ -401,7 +401,7 @@ def test_a_plugins_line_for_the_person_is_kept_and_not_hidden_with_telemetry(tmp
     assert result.notices == ["Waku Memory: 1 memory"]
     row = waku.conn.execute("SELECT meta FROM chat_log WHERE role = 'assistant'").fetchone()
     assert _json.loads(row[0])["notices"] == ["Waku Memory: 1 memory"]
-    render = (Path(__file__).resolve().parents[2] / "waku/ops/static/js/render.js").read_text()
+    render = (Path(__file__).resolve().parents[2] / "waku/ops/static/js/render.js").read_text(encoding="utf-8")
     line = next(x for x in render.splitlines() if "t.notices" in x)
     assert "tele" not in line and "notices:m.meta.notices" in render
 
