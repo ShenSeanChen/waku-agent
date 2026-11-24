@@ -257,8 +257,21 @@ function modelsGrid(d){
     : providerCardStatus(p, st) === "configured" ? 2 : 3;
   const providers = (d.providers || []).slice()
     .sort((a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name));
-  return `<div class="provgrid">` + providers.map(p => providerCard(p, st)).join("")
-       + jevCard(d) + `</div>`;
+  // Three places a model can run: its maker's own API, a platform that runs
+  // open models on its own hardware, or a server on this computer.
+  const tiers = [
+    ["maker", "Model makers", "The company that trained the model runs it for you."],
+    ["platform", "Inference platforms", "Another company runs open models on its own hardware, often faster or cheaper."],
+    ["local", "On this computer", "A model server on your own machine, such as Ollama. What you type stays here."],
+  ];
+  const known = new Set(tiers.map(([key]) => key));
+  const section = (title, about, cards) => `<div style="margin-bottom:var(--space-6)">
+      <h2>${esc(title)}</h2>${about ? `<p class="meta" style="margin:0 0 var(--space-3)">${esc(about)}</p>` : ""}
+      <div class="provgrid">${cards}</div></div>`;
+  return tiers.map(([key, title, about]) => {
+    const rows = providers.filter(p => (known.has(p.tier) ? p.tier : "maker") === key);
+    return rows.length ? section(title, about, rows.map(p => providerCard(p, st)).join("")) : "";
+  }).join("") + section("Other keys", "", jevCard(d));
 }
 
 // Jev is not a chat provider -- it cannot hold a conversation -- so it is not in

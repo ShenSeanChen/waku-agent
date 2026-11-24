@@ -97,3 +97,20 @@ def test_no_two_providers_share_a_key_variable():
         # if that ever changes, this is the test that should be argued with.
         assert key not in seen, f"{name} and {seen[key]} both use {key}"
         seen[key] = name
+
+
+@pytest.mark.parametrize("name", sorted(REGISTRY))
+def test_every_row_says_who_runs_the_model(name):
+    """The Models page groups rows by who runs the model: the model maker,
+    a platform that runs open models on its own hardware, or this computer.
+    A row without a tier would land in the wrong group without anyone noticing."""
+    assert REGISTRY[name].get("tier") in ("maker", "platform", "local"), \
+        f"{name}: set tier to maker, platform or local in waku/providers.toml"
+
+
+def test_the_models_page_gets_each_providers_tier():
+    from waku.integrations import list_providers
+    tiers = {view.key: view.tier for view in list_providers()}
+    assert tiers.get("local") == "local"
+    assert tiers.get("groq") == "platform"
+    assert tiers.get("anthropic") == "maker"

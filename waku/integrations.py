@@ -21,7 +21,7 @@ from enum import StrEnum
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from waku.loop.models import PROVIDERS, Provider
+from waku.loop.models import PROVIDERS, REGISTRY, Provider
 from waku.memory.episodic.notion_store import normalize_database_id
 
 
@@ -119,6 +119,10 @@ class IntegrationView:
     fields: tuple[FieldView, ...]
     install_command: str
     setup_url: str
+    # For an AI provider: who runs the model. "maker" (the model maker's own
+    # API), "platform" (another company runs open models on its hardware) or
+    # "local" (a server on this computer). The Models page groups cards by it.
+    tier: str = ""
 
 
 @dataclass(frozen=True)
@@ -473,7 +477,9 @@ def list_integrations() -> tuple[IntegrationView, ...]:
         views.append(IntegrationView(integration.key, integration.group, integration.name, integration.what,
                                      _status(integration, env), fields,
                                      f"pip install -e '.[{integration.extra}]'" if integration.extra else "",
-                                     integration.setup_url))
+                                     integration.setup_url,
+                                     REGISTRY.get(integration.key, {}).get("tier", "")
+                                     if integration.group == "AI Providers" else ""))
     return tuple(views)
 
 
@@ -899,14 +905,14 @@ def test_integration(key: str) -> IntegrationView:
         )
         status = IntegrationStatus(state, "integration is disabled", view.status.checked_at)
         return IntegrationView(view.key, view.group, view.name, view.what, status, view.fields,
-                               view.install_command, view.setup_url)
+                               view.install_command, view.setup_url, view.tier)
     effective = _probed(integration)
     if effective.probe is None:
         view = _current_view(key)
         assert view is not None
         status = IntegrationStatus(view.status.state, "no test available", view.status.checked_at)
         return IntegrationView(view.key, view.group, view.name, view.what, status, view.fields,
-                               view.install_command, view.setup_url)
+                               view.install_command, view.setup_url, view.tier)
     try:
         effective.probe(values)
     except Exception as exc:
