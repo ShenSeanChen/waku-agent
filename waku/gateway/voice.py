@@ -95,10 +95,16 @@ def _tada_config(env: Mapping[str, str]) -> TadaConfig:
 
 
 def _tada_waveform(output) -> Any:
-    """First generated waveform — GenerationOutput.audio is a list."""
+    """First generated waveform — GenerationOutput.audio is a list.
+
+    TADA appends None when its decoder fails on a sample, so a non-empty list
+    is not enough to guarantee there is audio to play.
+    """
     audio = getattr(output, "audio", None)
     if not audio:
         raise ValueError("TADA produced no audio")
+    if audio[0] is None:
+        raise ValueError("TADA could not decode the generated audio")
     return audio[0]
 
 
@@ -226,7 +232,7 @@ class _TadaEngine:
             dtype = torch.bfloat16 if device.startswith("cuda") else torch.float32
             try:
                 encoder = Encoder.from_pretrained("HumeAI/tada-codec", subfolder="encoder").to(device)
-                model = TadaForCausalLM.from_pretrained(self.config.model, torch_dtype=dtype).to(device)
+                model = TadaForCausalLM.from_pretrained(self.config.model, dtype=dtype).to(device)
             except Exception as exc:
                 raise SystemExit(
                     f"Could not load TADA model {self.config.model!r}: {exc}. "

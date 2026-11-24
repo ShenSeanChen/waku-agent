@@ -110,6 +110,12 @@ def test_empty_generation_is_rejected():
     assert str(exc.value) == "TADA produced no audio"
 
 
+def test_failed_decode_is_rejected():
+    with pytest.raises(ValueError) as exc:
+        _tada_waveform(_Output([None]))
+    assert str(exc.value) == "TADA could not decode the generated audio"
+
+
 def test_mouth_speaks_speakable_text_with_tada(monkeypatch):
     """The engine is wired into the existing gateway path, emoji stripping included."""
     from waku.gateway import voice
