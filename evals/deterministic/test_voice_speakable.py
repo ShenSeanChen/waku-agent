@@ -6,11 +6,11 @@ from waku.gateway.speakable import _number, _ordinal, speakable_dates
 from waku.gateway.voice import _speakable
 
 SPOKEN = [
-    ("2026-07-14", "July fourteenth, twenty twenty-six"),
-    ("2026-07-14T09:00", "July fourteenth, twenty twenty-six at nine a.m."),
+    ("2026-07-14", "July fourteenth, twenty twenty six"),
+    ("2026-07-14T09:00", "July fourteenth, twenty twenty six at nine a.m."),
     # seconds and a UTC offset are dropped; the wall-clock time is what is said
-    ("2026-07-14 17:05:30+02:00", "July fourteenth, twenty twenty-six at five oh five p.m."),
-    ("2026-07-14T09:00:00.123456", "July fourteenth, twenty twenty-six at nine a.m."),
+    ("2026-07-14 17:05:30+02:00", "July fourteenth, twenty twenty six at five oh five p.m."),
+    ("2026-07-14T09:00:00.123456", "July fourteenth, twenty twenty six at nine a.m."),
     ("Sat 11 5:00 p.m.", "Saturday the eleventh five p.m."),
     (
         "Norway versus England Sat 11 10:00 a.m. - 12:00 p.m.",
@@ -19,9 +19,9 @@ SPOKEN = [
     ("14:05", "two oh five p.m."),
     ("12:00 a.m.", "midnight"),
     ("12:00 p.m.", "noon"),
-    ("July 14, 2026", "July fourteenth, twenty twenty-six"),
+    ("July 14, 2026", "July fourteenth, twenty twenty six"),
     ("Jul 14th", "July fourteenth"),
-    ("July 2026", "July twenty twenty-six"),
+    ("July 2026", "July twenty twenty six"),
     ("21st", "twenty-first"),
     ("5pm", "five p.m."),
     ("Call me at 5 p.m. tomorrow", "Call me at five p.m. tomorrow"),
@@ -29,14 +29,14 @@ SPOKEN = [
     ("Meeting at 9:00.", "Meeting at nine a.m."),
     (
         "The meeting moved to 2026-12-02T14:30.",
-        "The meeting moved to December second, twenty twenty-six at two thirty p.m.",
+        "The meeting moved to December second, twenty twenty six at two thirty p.m.",
     ),
     ("Start 9:00, end 10:00.", "Start nine a.m., end ten a.m."),
-    ("2024-02-29", "February twenty-ninth, twenty twenty-four"),
-    ("Feb 29, 2024", "February twenty-ninth, twenty twenty-four"),
+    ("2024-02-29", "February twenty-ninth, twenty twenty four"),
+    ("Feb 29, 2024", "February twenty-ninth, twenty twenty four"),
     (
         "Meet https://x.test/2026-07-14 on 2026-07-14",
-        "Meet https://x.test/2026-07-14 on July fourteenth, twenty twenty-six",
+        "Meet https://x.test/2026-07-14 on July fourteenth, twenty twenty six",
     ),
 ]
 
@@ -107,8 +107,8 @@ REPLIES = [
     (
         "Created event 2026-07-14T09:00 → 2026-07-14T10:00",
         (
-            "Created event July fourteenth, twenty twenty-six at nine a.m. "
-            "to July fourteenth, twenty twenty-six at ten a.m."
+            "Created event July fourteenth, twenty twenty six at nine a.m. "
+            "to July fourteenth, twenty twenty six at ten a.m."
         ),
     ),
 ]

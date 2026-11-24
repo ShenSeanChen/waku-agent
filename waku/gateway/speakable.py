@@ -84,10 +84,10 @@ def _ordinal(value: int) -> str:
 
 
 def _year(value: int) -> str:
-    # "twenty twenty-six" is how a year is read aloud; other lengths fall back
-    # to the plain number rather than guessing a convention.
+    # "twenty twenty six" is how a year is read aloud. The hyphenated form
+    # ("twenty twenty-six") is spoken by TADA as "twenty twenty ... six".
     if 2000 <= value <= 2099:
-        return f"{_number(value // 100)} {_number(value % 100)}"
+        return f"{_number(value // 100)} {_number(value % 100).replace('-', ' ')}"
     return _number(value)
 
 
