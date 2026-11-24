@@ -262,16 +262,21 @@ def kept_if_due(
         proposed = [f for f in proposed if not _about_report(f, report)]
     if recalled:
         proposed = [f for f in proposed if not restates(f, recalled)]
-    if hasattr(facts, "list"):
-        existing_facts = {
+    # Drop proposed facts that are already in the store. `contains` queries
+    # the full table with no row cap, so duplicates of older facts are caught
+    # even when the store holds more than 200 entries.
+    if hasattr(facts, "contains"):
+        proposed = [f for f in proposed if not facts.contains(f["subject"], f["content"])]
+    elif hasattr(facts, "list"):
+        # Mem0, Supabase, LangMem and Zep have no `contains`: compare against
+        # the newest 200, as before, rather than not checking at all.
+        existing = {
             (f.get("subject", "").lower().strip(), f.get("content", "").lower().strip())
             for f in facts.list(limit=200)
             if isinstance(f, dict)
         }
-        proposed = [
-            f for f in proposed
-            if (f["subject"].lower().strip(), f["content"].lower().strip()) not in existing_facts
-        ]
+        proposed = [f for f in proposed
+                    if (f["subject"].lower().strip(), f["content"].lower().strip()) not in existing]
     kept = slot_gate.keep(proposed)
     # A model may answer the flag as "true"; anything else, or no flag, is personal.
     research = str(distilled.get("company_research")).lower() == "true"
@@ -286,6 +291,13 @@ def kept_if_due(
                   "project": project, "memory_id": None, "sent": None}
         if tracked:
             fact_id = facts.add_unsynced(fact["subject"], fact["content"], scope)
+            if fact_id is None:
+                # add_unsynced returns None when the row already exists and
+                # synced=1: the fact reached Waku Memory in a previous run.
+                # Sending it again would create a duplicate on the remote side.
+                record["sent"] = True
+                out.append(record)
+                continue
         else:
             fact_id = None
             facts.add(fact["subject"], fact["content"], source="consolidation")
