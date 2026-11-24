@@ -87,6 +87,26 @@
      size asks for. */
   --text-muted: color-mix(in srgb, var(--text-ink) 82%, var(--surface-bg));
   --text-faint: color-mix(in srgb, var(--text-ink) 62%, var(--surface-bg));
+  /* A group's heading: Team and Setup in the rail, and the heading over a
+     column of Memories. Lighter than --text-faint, so the heading reads as a
+     divider and the rows under it read first. Emily picked 40% of ink on
+     2026-10-19. It is under the 4.5:1 text floor, and check-contrast waives
+     it by name. Nothing but a group heading wears it. */
+  --text-quiet: color-mix(in srgb, var(--text-ink) 40%, var(--surface-bg));
+
+  /* The grain on the page ground. body paints it over --surface-bg, and
+     nothing else wears it: a card, a field or a button has its own ground
+     and stays clean. Chosen as option B, the fine grain, on 2026-09-30.
+
+     It is a 220px tile of SVG fractal noise, turned into greys CENTRED on
+     the ground's own lightness (0.88 here, 0.125 in dark) and laid at 20%.
+     Half the grains are lighter than the ground and half are darker, so
+     the ground's average does not move. A first version used dark grains
+     only, and it took --text-faint from 4.58:1 to 4.27:1, under AA.
+     color-interpolation-filters is sRGB because the filter otherwise works
+     in linear light, and 0.125 linear paints as 0.39, a mid grey. Move
+     --surface-bg and the centre in the matrix moves with it. */
+  --grain: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='220' height='220'%3E%3Cfilter id='n' color-interpolation-filters='sRGB'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix values='1 0 0 0 0.38  1 0 0 0 0.38  1 0 0 0 0.38  0 0 0 0 0.2'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
 
   /* Accent — two tokens, not one value with derived shades. The amber is a
      surface you put ink on; as a foreground on bone it measures 1.56:1 and
@@ -94,6 +114,112 @@
      [data-accent="deep"] already held in the landing page's own stylesheet. */
   --accent: #E1AE05;      /* fill, focus border               */
   --accent-fg: #735903;   /* accent as text — 5.06:1 on bone  */
+  /* Accent as an icon stroke, 2026-10-19 (Emily). The download icon on the
+     landing page's Get the app, Google Play and App Store buttons. --accent is 1.44:1
+     on the button fill in light and could not be seen; --accent-fg is 4.68:1
+     and did not read as amber. Emily picked this middle amber from three
+     (docs/proposals, M1). It measures 2.24:1 on the button fill, under the
+     3:1 a non-text mark needs. Emily took that knowingly: the label beside
+     the icon carries the meaning. Dark themes use --accent itself. */
+  --accent-icon: #B58A00;
+
+  /* Selection, 2026-11-02 (Emily, D2 of the indicator language): the one
+     thing on a screen that is chosen now is grey, the raised ground with the
+     hard rule. It was an amber tint from 2026-10-13, and amber is now kept for
+     the one thing on a screen that needs attention and for the Primary
+     button, so a picked row no longer looks like either. The edge is 55% of
+     ink, a little darker than the hard rule's 42%, because 42% measured
+     2.2:1 against the grey fill and a control edge needs 3:1. In light the
+     edge mixes into the bone, not the card: since the card went lighter on
+     2026-11-05, 55% of ink over the card measured 2.76:1 against the fill.
+     Over the bone it keeps the value it had. */
+  --select-fill: var(--surface-raised);
+  --select-edge: color-mix(in srgb, var(--text-ink) 55%, var(--surface-bg));
+
+  /* Attention, 2026-11-02 (Emily, the indicator language): the one thing on
+     a screen a person should look at first, such as a proposed memory. A
+     pale amber ground inside an amber edge, the same pair the Primary button
+     wears in its own tokens. Amber means nothing else on a screen. */
+  --attention-fill: color-mix(in srgb, var(--accent) 30%, var(--surface-bg));
+  --attention-edge: color-mix(in srgb, var(--accent) 60%, var(--text-ink));
+
+  /* The four kinds of match. Since 2026-11-02 (Emily, the indicator
+     language, set C) each is a dot before the kind's word on a grey badge:
+     Injected amber, Searched blue, Recalled violet, Brief grey. Each dot
+     keeps its colour from the chip to the row's dot on Matches. */
+  /* On the light ground each dot is its set C colour darkened until it
+     clears 3:1 on the grey badge (Emily, 2026-11-02: "淺色背景也過標準").
+     The dark blocks restate the bright set C, which clears 3:1 there. */
+  --kind-inject: #906F03;
+  --kind-search: #3D75B4;
+  --kind-recall: #7F65B8;
+  --kind-brief: #75746E;
+  /* Triggered, spec 071's act channel: grey until Ian designs it (Emily,
+     2026-10-16). It is lighter than Brief's grey, so the two dots differ. */
+  --kind-act: var(--text-faint);
+
+  /* A memory's type, 2026-10-16. Emily chose a colour per type (usage rules
+     O9), a hue no other meaning uses (O7), and the retro Teenage Engineering
+     form: a grey badge with a small painted square before the word (option C
+     of docs/proposals/type-colours.html). Each value is the same on both
+     grounds, the way paint on a machine is, so the dark block does not
+     restate it. Each clears 3:1 on bone (3.0:1) and on #202020 (4.1:1).
+     Knowledge is teal, Skill magenta and Activity olive. */
+  --type-knowledge: #368B8E;
+  --type-skill: #C15C97;
+  --type-activity: #728733;
+
+  /* Chip tints, 2026-10-22, from spec 067's drawing. Ian asked for 067's
+     small chips on Memories, and Emily agreed through him to review them on
+     dev. A status chip is its colour on a tint of itself, with a dot of the
+     same colour: Confirmed is green. A category chip on Memories is the same
+     tint without the dot: Profile violet, Rules amber, Status green,
+     Knowledge blue, Episodes grey. A value chip is muted text on the neutral
+     tint. check-contrast measures every word on its tint.
+
+     On bone a tint darkens the ground, so a chip's word is its colour mixed
+     a little toward ink (the *-on-tint tokens): plain --ok measured 3.40:1 on
+     its tint, and the mix clears 4.5:1. The dark blocks use the plain
+     colours, which clear it there. */
+  /* Two categories on Memories keep the blue and violet the match kinds
+     wore until 2026-11-02, so the category chips did not change when the
+     match dots got brighter (Emily, the indicator language). */
+  --category-knowledge: #2F5E8C;
+  --category-profile: #6A4C9C;
+  --ok-tint: color-mix(in srgb, var(--ok) 16%, var(--surface-card));
+  --warn-tint: color-mix(in srgb, var(--warn) 16%, var(--surface-card));
+  --bad-tint: color-mix(in srgb, var(--bad) 16%, var(--surface-card));
+  --accent-tint: color-mix(in srgb, var(--accent) 17%, var(--surface-card));
+  --neutral-tint: color-mix(in srgb, var(--text-ink) 7%, var(--surface-card));
+  --category-knowledge-tint: color-mix(in srgb, var(--category-knowledge) 16%, var(--surface-card));
+  --category-profile-tint: color-mix(in srgb, var(--category-profile) 16%, var(--surface-card));
+  --ok-on-tint: color-mix(in srgb, var(--ok) 70%, var(--text-ink));
+  --warn-on-tint: color-mix(in srgb, var(--warn) 75%, var(--text-ink));
+  --bad-on-tint: color-mix(in srgb, var(--bad) 80%, var(--text-ink));
+  --category-knowledge-on-tint: color-mix(in srgb, var(--category-knowledge) 85%, var(--text-ink));
+  --category-profile-on-tint: color-mix(in srgb, var(--category-profile) 80%, var(--text-ink));
+
+  /* A kind of match and a memory's type as chips, spec 067, adopted
+     2026-11-05 (Ian: every open 067 look ships; Emily had seen them). Each
+     chip is its own colour on a tint of that colour: the kind's set C colour
+     (Emily, 2026-11-02) and the type's paint (2026-10-16), so a chip and the
+     row's dot or square keep one colour. A kind of match has a dot of its
+     colour before the word. A type has no mark. On the light card a tint
+     darkens the ground, so each word is its colour mixed toward ink. */
+  --kind-inject-tint: color-mix(in srgb, var(--kind-inject) 16%, var(--surface-card));
+  --kind-search-tint: color-mix(in srgb, var(--kind-search) 16%, var(--surface-card));
+  --kind-recall-tint: color-mix(in srgb, var(--kind-recall) 16%, var(--surface-card));
+  --kind-brief-tint: color-mix(in srgb, var(--kind-brief) 16%, var(--surface-card));
+  --type-knowledge-tint: color-mix(in srgb, var(--type-knowledge) 16%, var(--surface-card));
+  --type-skill-tint: color-mix(in srgb, var(--type-skill) 16%, var(--surface-card));
+  --type-activity-tint: color-mix(in srgb, var(--type-activity) 16%, var(--surface-card));
+  --kind-inject-on-tint: color-mix(in srgb, var(--kind-inject) 70%, var(--text-ink));
+  --kind-search-on-tint: color-mix(in srgb, var(--kind-search) 70%, var(--text-ink));
+  --kind-recall-on-tint: color-mix(in srgb, var(--kind-recall) 70%, var(--text-ink));
+  --kind-brief-on-tint: color-mix(in srgb, var(--kind-brief) 70%, var(--text-ink));
+  --type-knowledge-on-tint: color-mix(in srgb, var(--type-knowledge) 70%, var(--text-ink));
+  --type-skill-on-tint: color-mix(in srgb, var(--type-skill) 70%, var(--text-ink));
+  --type-activity-on-tint: color-mix(in srgb, var(--type-activity) 70%, var(--text-ink));
 
   /* Theme-INVARIANT: the amber surface is the same in both palettes, so what
      sits on it must be too. #161614 on #E1AE05 is 8.85:1 in either mode.
@@ -131,15 +257,21 @@
      palette of five picked colours that identify, and the ramp won for the
      reasons above.
 
-     Which fixes what a chart is allowed to be here: the ramp ORDERS, it does
-     not IDENTIFY. Filled areas a reader compares by size, every series
-     labelled in place, the value printed beside it. Never a legend the eye has
-     to carry back to the chart, never a line or a dot told apart by colour
-     alone, never colour as the only carrier of meaning. Same rule as §18's six
-     statuses in two colours, and the same reason: colour ranks, words name.
-
-     A chart that genuinely needs five things identified is a chart that needs
-     five labels, not a sixth token. */
+     What a chart may do with it changed on 2026-11-17 (Emily, from
+     docs/proposals/chart-rule-clash.html). The ramp still ORDERS: the largest
+     part takes the strongest step. It may now also IDENTIFY, on four
+     conditions, because the shade is never left to do it alone:
+       1. Every part told apart by shade carries its name and its number in
+          text right beside its swatch: a legend row (Dot, name, number) or
+          the name and value at the end of its line.
+       2. At most five parts. A sixth and more fold into one "N more" part.
+       3. Every mark's number is printed beside it or shown in a hover card.
+       4. At most three lines on one plot; their end names are pushed apart.
+     The measured cost above stands: on bone, steps 3 to 5 are hard to tell
+     apart, so on a light ground the words beside each swatch are what
+     identify a part, and the shade only helps. A report or a view (the house
+     Chart, spec 040) keeps the stricter form: one series, labelled in place,
+     no legend. */
   --chart-1: var(--accent);
   --chart-2: color-mix(in srgb, var(--accent) 78%, var(--surface-bg));
   --chart-3: color-mix(in srgb, var(--accent) 58%, var(--surface-bg));
@@ -197,10 +329,46 @@
      size rather than to a rule anyone would reuse. */
   --tracking-label: 0.16em;
 
-  /* The type scale, the line-heights and the one letter-spacing moved out of
-     this block on 2026-08-26 — see the plain @theme below. They have to be
-     declared where Tailwind can see them, or clearing its default namespaces
-     takes text-sm and leading-snug away with them. */
+  /* The type scale, the line-heights and the two weights live here from
+     2026-10-16. Until then they lived in globals.css's @theme, and the phone
+     app copied them by hand. The copy drifted: the phone still set body at
+     1.72 two days after Emily set it to 1.6. The phone's sync script reads
+     this file, so a value here reaches the phone.
+
+     globals.css names each one in `@theme inline reference`. That block makes
+     text-sm and leading-snug read these variables, and it declares no value
+     of its own.
+
+     Generous scale, ratio 1.333, anchored at the measured 15px body. Below the
+     body it stops at one step, 12, because 1.333 downward reaches 8px and no
+     label is legible there.
+
+     Five sizes, not six, from 2026-09-15. --text-sm was 13. It is 12 now, the
+     same as xs. The name stays until work in progress stops writing text-sm:
+     a text-sm left behind would compile to nothing and inherit the 15px body. */
+  /* A group's heading, and nothing else (Emily, 2026-10-19): the one step
+     under 12. It pairs with --text-quiet. */
+  --text-2xs: 10px;
+  --text-xs: 12px;
+  --text-sm: 12px;
+  --text-base: 15px;
+  --text-lg: 20px;
+  /* The title of a console page, and nothing else. Emily found 20px too small
+     and 27px too large on 2026-09-30. PageHeader is its only reader. */
+  --text-title: 23px;
+  --text-xl: 27px;
+  --text-2xl: 36px;
+
+  /* Body is 1.6 since 2026-10-14. It was 1.72, the value measured off the
+     landing page. Emily set 1.6 with the usage rules. */
+  --leading-tight: 1.12;    /* display                  */
+  --leading-snug: 1.3;      /* headings                 */
+  --leading-normal: 1.6;    /* body                     */
+  --leading-label: 1.4;     /* uppercase micro-labels   */
+
+  /* Two weights, §31. The lint allows only font-normal and font-medium. */
+  --font-weight-normal: 400;
+  --font-weight-medium: 500;
 
   /* ── line and ring ─────────────────────────────────────────────────────────
      With no shadow in the system, a hairline is how everything is separated —
@@ -216,7 +384,13 @@
   --focus-ring-offset: 2px;
 
   /* ── radius ────────────────────────────────────────────────────────────────
-     2px. The measurement said 0 — border-radius does not appear once in the
+     4px, on every page, since 2026-10-16. Emily chose one corner for
+     everything when she merged Ian's spec 067: a field, a button, a card, a
+     dialog, a menu and a toast, in the console and on the landing page.
+     Ian's branch had three corners (6, 10 and 14px). Emily first took 6px
+     for all of them and set 4px the same day.
+
+     History, kept for why it was 2px. The measurement said 0 — border-radius does not appear once in the
      landing page's 1,124 lines, and its own comment says why: "the only round
      thing on the page is still nothing." The design owner reviewed 0 against
      2, 6 and 12 on /visual-design and took 2, which is the decision that counts: a
@@ -227,7 +401,20 @@
      together. This is the one value that would have cost sixteen restyles if
      it had been settled after T3 instead of before it.
      ──────────────────────────────────────────────────────────────────────── */
-  --radius: 2px;
+  --radius: 4px;
+
+  /* The button, on every page: the console, sign-in and the landing page
+     (Emily, 2026-10-13). Since 2026-11-02 (Emily, D2 of the indicator
+     language) a Primary button is a pale amber ground inside an amber edge,
+     and a screen has at most one. A Secondary or destructive button is the
+     paper ground inside the hard rule, which is what Primary looked like
+     before. Tertiary keeps its underline. Change a button here and every
+     page changes with it. Its corner is --radius since 2026-10-16. */
+  --button-radius: var(--radius);
+  --button-fill: var(--surface-paper);
+  --button-edge: var(--rule-hard);
+  --button-primary-fill: color-mix(in srgb, var(--accent) 26%, var(--surface-bg));
+  --button-primary-edge: color-mix(in srgb, var(--accent) 60%, var(--text-ink));
 
   /* Two shapes are exempt, and the exemption is a token so that nobody
      "fixes" them later and nobody writes a raw length to get around it.
@@ -259,6 +446,28 @@
 
      To take chips back to a softened rectangle, this is the one line: 6px. */
   --shape-chip: 999px;     /* badge, in every variant */
+
+  /* A chip whose words can wrap: a starter sentence the person taps (Emily,
+     2026-11-08). Its corner is half the height of a one-line chip, so one
+     line still has round ends. Two lines get rounded corners instead, and the
+     round end no longer cuts into the first and last letters. `lh` is the
+     chip's own line height, so the corner follows the type size on a phone
+     and on a computer. The phone app's Chip draws the same corner. */
+  --shape-chip-wrap: calc(0.5lh + var(--space-2));
+
+  /* ── picked ──────────────────────────────────────────────────────────────
+     One look for "this one is chosen" (Emily, 2026-11-08): the sunk ground,
+     ink text at weight 500, and the hard rule where the control has an edge.
+     A picked survey answer, a picked Chip, a ChoiceList row, and the row
+     under the pointer or the checked row in a dropdown or a select all wear
+     it. The accent fill read louder than the screen's main button, so no
+     picked thing is amber. */
+  --picked-fill: var(--surface-sunk);
+  --picked-edge: var(--rule-hard);
+
+  /* A card's corner. It was 4px on Matches from 2026-10-13, and every card
+     takes --radius since 2026-10-16. */
+  --shape-card: var(--radius);
 
   /* ── spacing ───────────────────────────────────────────────────────────────
      Comfortable: a 4px base unit. ONE base — read the next paragraph before
@@ -298,11 +507,20 @@
      eighty-six exceptions on the day it is written is not a rule. That is what
      happened to line length before §20, and it is why the lint below exists.
 
-       tight    2   inside one thing: an icon and its label, a value and its unit
-       inside   3   parts of one block: a label above the thing it names
-       between  4   two blocks that belong together: two fields, two rows
-       group    6   two groups on one screen
+       tight    2   inside one thing: an icon and its label, a value and its
+                    unit, a label above the thing it names
+       inside   3   parts of one block that are not a label and its thing
+       between  4   two rows in one list
+       group    6   two fields, two labelled blocks, two groups on one screen
        section  8   two sections, and a screen's own outer padding
+
+     The ratio, decided 2026-09-15: the gap between two labelled blocks is at
+     least three times the gap inside one. A label sits 8 above its field and
+     the next label sits 24 below it, so the ratio is 1:3. The table used to
+     say 12 and 16, a ratio of 1:1.33. At that ratio a label floats halfway
+     between two inputs, and the reader cannot see which input it names.
+     Field already drew 8 inside, so the code was right and the table was
+     wrong.
 
      1, 5 and 7 are not merely unnamed, they are DELETED. A retired step left
      declared is a step someone reaches for, and check-tokens-wired caught them
@@ -331,6 +549,12 @@
   --z-inside: 10;
 
   --z-header: 10;
+  /* Added 2026-10-02, spec 040 B1: the Waku Agent bird at the bottom right
+     of every console page and the panel it opens. Above the sticky header
+     (a page's own chrome), under the scrim, so a dialog opened from the page
+     still covers the chat. The design board for spec 040 asked for this rung
+     and Sean waived the design sign-off for the demo. */
+  --z-float: 20;
   --z-scrim: 30;
   --z-dialog: 40;
   --z-menu: 50;
@@ -385,29 +609,61 @@
   --icon-size: calc(var(--spacing) * 4);
   --icon-stroke: 1.5;
 
-  /* ── measure and page width ────────────────────────────────────────────
-     How wide a line of text is allowed to get, and how wide a column of
-     content is. Decided on /visual-design §20–22, 2026-08-24, by putting a
-     real memory at four widths side by side and reading them.
+  /* ── panel and page width ──────────────────────────────────────────────
+     Text has no line-length cap. A line of text is as wide as the box it
+     sits in. Emily removed --measure (58ch) and --measure-narrow (40ch)
+     on 2026-10-13.
 
-     Before that there were five line widths in the product and none had been
-     chosen: 40, 46, 48, 58 and 62. Two of them, 46 and 48, were the same kind
-     of text — which is what having no rule looks like from the outside.
+     Emily confirmed the removal on 2026-10-14, after the trunk had brought
+     the 58ch cap back to 104 elements.
 
-     --measure-narrow is a separate number rather than a smaller multiple of
-     the same one. Centred text needs a shorter line than left-aligned text,
-     because every line starts in a different place and the eye has to find
-     the start again on each return.
+     --panel is the width of a small box: a tooltip, a popover, the sign-in
+     column, and the agent dock at its narrowest. It is 400px, the width
+     --measure-narrow painted before.
 
-     ch is the advance width of "0" in the current face, so 58ch is not 58
-     characters. The px beside each is what the browser actually painted at
-     the body size, measured on the page rather than worked out here. */
-  --measure: 58ch;         /* body, left-aligned — 579px */
-  --measure-narrow: 40ch;  /* centred, or a short aside — 400px */
+     --dialog is the width of a dialog. It is 580px, the width --measure
+     painted when 640b799 gave it to the dialog. */
+  --panel: 400px;
+  --dialog: 580px;
 
   /* One reading column. The memory list is a table and takes the full width
      on purpose; this is for content read one item at a time. */
   --page: 880px;
+
+  /* ── the page gutter ───────────────────────────────────────────────────
+     What a screen keeps clear at its left and right edge. Decided
+     2026-09-16, off the console's mobile proposal.
+
+     Every console screen wrote --space-8 for this. There were 57 of them.
+     On a 390px phone --space-8 is 64px of 390, a sixth of the width.
+
+     The memory list was worse. Its rows used --space-4, so a phone drew the
+     heading 32px from the edge and the rows under it 16px from the edge.
+     That is two left edges on one screen.
+
+     This token is --space-4 below the tablet line and --space-6 from it up.
+     It was --space-8 from the tablet line up until 2026-11-03, when Emily
+     asked for a slightly smaller margin on every page.
+     The media query below writes 768 as a plain number. A media query cannot
+     read a custom property, so 768 and --breakpoint-tablet have to be
+     changed together. This comment is the only record of that.
+
+     components/ui/dialog.tsx uses this token for its padding. That padding
+     was --space-8, under a comment that called it the page gutter. It is the
+     page gutter now. */
+  --gutter: var(--space-4);
+
+  /* The height of a console page's header band and of the Waku Agent
+     dock's header, rule included (spec 040 Q5, 2026-10-03). With the dock
+     open the two headers sit side by side, and their bottom rules form one
+     line across the screen only if both bands are the same height. They
+     were 77px and 67px, and Sean saw two rules a step apart.
+
+     One row a control tall (44px, a touch target), --space-4 above and
+     below, and the rule: 77px. It is a minimum. A band whose controls wrap
+     onto a second line on a narrow screen grows, and from the wide line up,
+     where the dock sits beside the page, they fit on one. */
+  --header-height: calc(var(--space-4) * 2 + var(--spacing) * 11 + var(--rule-width));
 
   /* A dialog you WORK in, as opposed to one you answer. Two numbers rather
      than a width and a ratio: the height is the point. An editor whose box
@@ -442,13 +698,50 @@
   --control-gap: 10px;
 
   /* ── shadow ────────────────────────────────────────────────────────────────
-     None. box-shadow does not appear once either. Separation is done with
-     rules: a card gets a border, a dialog gets a scrim. These exist as tokens
-     so a primitive that ships with elevation has somewhere to point.
+     Since 2026-10-16 a card casts a shadow and has no border, and anything
+     over the page casts a larger one. Emily took this from Ian's spec 067.
+     See --shadow-card below. What follows is the history.
+
+     Almost none. Separation is done with rules: a card gets a border, a
+     dialog gets a scrim. One thing casts a shadow. The onboarding tour's card
+     (spec 019) floats over a scrim and over the rail, where a border alone
+     did not lift it off the page; the design owner asked for it on
+     2026-09-17. --shadow-md held a soft shadow under the Waku Agent bird
+     from 2026-10-03 to 2026-10-05 (spec 040 N1). The design owner took it
+     off: black cannot darken the #202020 ground, so the bird had a shadow in
+     light mode and none in dark. Its hard rule separates it in both. Button's
+     `shape="float"` still reads --shadow-md, so a shadow under the bird is
+     one value away. --shadow-sm stays none until something else needs it.
      ──────────────────────────────────────────────────────────────────────── */
   --shadow-sm: none;
   --shadow-md: none;
-  --shadow-lg: none;
+  --shadow-lg: 0 12px 32px rgb(0 0 0 / 0.35);
+
+  /* Depth, 2026-10-16, from spec 067. A card at rest casts --shadow-card. A
+     dialog, a menu, a popover or a toast is over the page and casts
+     --shadow-over. On bone these are soft real shadows. On #202020 black
+     darkens nothing, so the dark blocks replace them with a faint ring, and
+     a card there is a lighter grey. The ring has no 1px top highlight since
+     2026-10-27 (Emily): the highlight drew a bright line along the top edge
+     of every tooltip, menu and dialog, and it made them look like raised
+     buttons. A card at rest keeps its own fainter highlight. */
+  --shadow-card: 0 1px 1px rgb(22 22 20 / 0.04), 0 1px 3px rgb(22 22 20 / 0.06);
+  --shadow-over: 0 4px 10px rgb(22 22 20 / 0.08), 0 18px 48px rgb(22 22 20 / 0.16);
+  /* A card that opens something casts --shadow-lift under the pointer and
+     rises 1px (spec 067, adopted 2026-11-05). */
+  --shadow-lift: 0 1px 2px rgb(22 22 20 / 0.05), 0 6px 18px rgb(22 22 20 / 0.09);
+
+  /* Two layers. The bone is the ground, and every page sits straight on
+     it, in the console and on the phone; a card sits on the ground. Spec
+     067's sheet between them (2026-11-05) was dropped on 2026-11-18 (Emily):
+     in the console it read as a frame round every page. Light takes the same
+     step as dark (Emily, 2026-11-17): in dark a card is 6% ink, about 5 L*
+     above #202020; in light a card is 45% white, about 4.8 L* above the bone.
+     A card is a little lighter than the ground, and still reads as bone, not
+     white. History: a card in light was the bone itself from 2026-10-12, then
+     70% white (spec 067, 2026-11-05), which was too white; and with a bone
+     card on a 35% sheet the card sat darker than the sheet under it. */
+  --surface-card: color-mix(in srgb, #FFFFFF 45%, var(--surface-bg));
 
   /* ── motion ────────────────────────────────────────────────────────────────
      Tone is minimal, and the landing page has exactly one duration and one
@@ -457,6 +750,36 @@
      ──────────────────────────────────────────────────────────────────────── */
   --motion-fast: 0.18s;
   --motion-ease: ease;
+
+  /* The console's motion, from Ian's motion catalogue, approved by Emily on
+     2026-10-13 without its button press. The two values above stay for the
+     landing page. Every motion answers something the person did: a pick, a
+     decision, a memory arriving, a Forget. Only the skeleton's light plays
+     on its own. A button never moves; only its colour changes.
+
+       quick   140ms   a selected row's ground changing
+       base    220ms   something arriving or leaving
+       slow    360ms   the space a leaving card held, closing
+       roll    600ms   a number counting to its new value, and no longer
+       glow   1200ms   the amber on a memory that just arrived, fading out
+       shimmer 1400ms  one pass of light over a skeleton, on a loop
+       step     34ms   the gap between two rows of a list that arrives one
+                       row after another (spec 067, 2026-10-22)
+
+     --motion-spring overshoots a little and settles, for arrivals.
+     --motion-out is a plain ease-out for colour and for closing a space.
+     --motion-in accelerates away, for things that leave. Reduced motion sets
+     every duration to zero, below the dark block. */
+  --motion-quick: 140ms;
+  --motion-base: 220ms;
+  --motion-slow: 360ms;
+  --motion-roll: 600ms;
+  --motion-glow: 1200ms;
+  --motion-shimmer: 1400ms;
+  --motion-step: 34ms;
+  --motion-spring: cubic-bezier(0.3, 1.32, 0.5, 1);
+  --motion-out: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --motion-in: cubic-bezier(0.4, 0, 1, 1);
 
   /* ── color-scheme, and why it is not "light dark" ──────────────────────
      This said `light dark` until 2026-08-24, which means "I support both,
@@ -502,6 +825,21 @@
 }
 
 
+@media (min-width: 768px) {
+  :root, [data-theme] { --gutter: var(--space-6); }
+}
+
+/* ── type · phone ────────────────────────────────────────────────────────────
+   Emily, 2026-11-08: text read too small on a phone, at the computer's 15 and
+   12. Below 768px the three running sizes each grow: body 15 → 17, small
+   12 → 14, smallest 12 → 13. Headings and titles keep their sizes.
+   The phone app reads this block too (scripts/sync-tokens.mjs there), so the
+   app and the web pages at phone width use one scale.
+   ──────────────────────────────────────────────────────────────────────────── */
+@media (max-width: 767px) {
+  :root, [data-theme] { --text-xs: 13px; --text-sm: 14px; --text-base: 17px; }
+}
+
 /* ── colour · dark ───────────────────────────────────────────────────────────
    Decided at the same time as light, so no row is carrying a dark half that is
    still outstanding. Only the picked values are restated — the six derived
@@ -510,6 +848,11 @@
 
    The accent needs no split here: #E1AE05 on #202020 is 7.96:1, so one value
    carries both fill and text.
+
+   Two values moved on 2026-10-16 with the cards from spec 067. A card on
+   #202020 is lighter than the ground, so text on it has less room.
+   --text-faint went from 62% to 66% of ink, and --bad from #EC6242 to
+   #F07656. Each clears 4.5:1 on --surface-card.
    ──────────────────────────────────────────────────────────────────────────── */
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
@@ -519,18 +862,70 @@
     --surface-bg: #202020;
     --text-ink: #C9CDD1;
     --accent-fg: #E1AE05;
+    --accent-icon: #E1AE05;
     --ok: #4FBF8B;   /* 7.11:1 on #202020 */
     --warn: #E78B23; /* 6.30:1 on #202020 */
-    --bad: #EC6242;  /* 4.96:1 on #202020 */
+    --bad: #F07656;  /* 5.77:1 on #202020, 5.07:1 on a card */
 
     /* Restated, not inherited. See the note above the light block. */
     --surface-paper: color-mix(in srgb, var(--text-ink) 4%, var(--surface-bg));
+    --surface-card: color-mix(in srgb, var(--text-ink) 6%, var(--surface-bg));
+    --kind-act: var(--text-faint);
+    --ok-tint: color-mix(in srgb, var(--ok) 13%, var(--surface-card));
+    --warn-tint: color-mix(in srgb, var(--warn) 8%, var(--surface-card));
+    --bad-tint: color-mix(in srgb, var(--bad) 6%, var(--surface-card));
+    --accent-tint: color-mix(in srgb, var(--accent) 12%, var(--surface-card));
+    --neutral-tint: color-mix(in srgb, var(--text-ink) 7%, var(--surface-card));
+    --category-knowledge: #8DB8E8;
+    --category-profile: #BCA6F0;
+    --category-knowledge-tint: color-mix(in srgb, var(--category-knowledge) 16%, var(--surface-card));
+    --category-profile-tint: color-mix(in srgb, var(--category-profile) 16%, var(--surface-card));
+    --ok-on-tint: var(--ok);
+    --warn-on-tint: var(--warn);
+    --bad-on-tint: var(--bad);
+    --category-knowledge-on-tint: var(--category-knowledge);
+    --category-profile-on-tint: var(--category-profile);
+    /* The chips' tints over the dark card. On #202020 a dot colour measures
+       about 3.5:1 on its own tint, so each word is its colour mixed toward the
+       light ink, except Injected's amber, which clears 4.5:1 as it is. */
+    --kind-inject-tint: color-mix(in srgb, var(--kind-inject) 16%, var(--surface-card));
+    --kind-search-tint: color-mix(in srgb, var(--kind-search) 16%, var(--surface-card));
+    --kind-recall-tint: color-mix(in srgb, var(--kind-recall) 16%, var(--surface-card));
+    --kind-brief-tint: color-mix(in srgb, var(--kind-brief) 16%, var(--surface-card));
+    --type-knowledge-tint: color-mix(in srgb, var(--type-knowledge) 16%, var(--surface-card));
+    --type-skill-tint: color-mix(in srgb, var(--type-skill) 16%, var(--surface-card));
+    --type-activity-tint: color-mix(in srgb, var(--type-activity) 16%, var(--surface-card));
+    --kind-inject-on-tint: var(--kind-inject);
+    --kind-search-on-tint: color-mix(in srgb, var(--kind-search) 60%, var(--text-ink));
+    --kind-recall-on-tint: color-mix(in srgb, var(--kind-recall) 60%, var(--text-ink));
+    --kind-brief-on-tint: color-mix(in srgb, var(--kind-brief) 55%, var(--text-ink));
+    --type-knowledge-on-tint: color-mix(in srgb, var(--type-knowledge) 50%, var(--text-ink));
+    --type-skill-on-tint: color-mix(in srgb, var(--type-skill) 50%, var(--text-ink));
+    --type-activity-on-tint: color-mix(in srgb, var(--type-activity) 50%, var(--text-ink));
+    --shadow-card: inset 0 1px 0 rgb(255 255 255 / 0.04);
+    --shadow-over: 0 0 0 1px rgb(255 255 255 / 0.07), 0 18px 48px rgb(0 0 0 / 0.5);
+    --shadow-lift: inset 0 1px 0 rgb(255 255 255 / 0.06), 0 0 0 1px rgb(255 255 255 / 0.05);
+    /* Re-read here: a token that reads another is resolved where it is declared. */
+    --button-fill: var(--surface-paper);
+    --button-edge: var(--rule-hard);
+    --kind-inject: #E1AE05;
+    --kind-search: #4A8FDB;
+    --kind-recall: #9B7BE0;
+    --kind-brief: #888780;
+    --button-primary-fill: color-mix(in srgb, var(--accent) 26%, var(--surface-bg));
+    --button-primary-edge: color-mix(in srgb, var(--accent) 60%, var(--text-ink));
+    --select-fill: var(--surface-raised);
+    --select-edge: color-mix(in srgb, var(--text-ink) 55%, var(--surface-card));
+    --attention-fill: color-mix(in srgb, var(--accent) 20%, var(--surface-bg));
+    --attention-edge: var(--accent);
     --surface-raised: color-mix(in srgb, var(--text-ink) 8%, var(--surface-bg));
     --surface-sunk: color-mix(in srgb, var(--text-ink) 12%, var(--surface-bg));
     --rule: color-mix(in srgb, var(--text-ink) 19%, transparent);
     --rule-hard: color-mix(in srgb, var(--text-ink) 42%, transparent);
     --text-muted: color-mix(in srgb, var(--text-ink) 82%, var(--surface-bg));
-    --text-faint: color-mix(in srgb, var(--text-ink) 62%, var(--surface-bg));
+    --text-faint: color-mix(in srgb, var(--text-ink) 66%, var(--surface-bg));
+    --text-quiet: color-mix(in srgb, var(--text-ink) 40%, var(--surface-bg));
+    --grain: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='220' height='220'%3E%3Cfilter id='n' color-interpolation-filters='sRGB'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0.5 0 0 0 -0.125  0.5 0 0 0 -0.125  0.5 0 0 0 -0.125  0 0 0 0 0.2'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
   }
 }
 [data-theme="dark"] {
@@ -540,16 +935,128 @@
   --surface-bg: #202020;
   --text-ink: #C9CDD1;
   --accent-fg: #E1AE05;
+  --accent-icon: #E1AE05;
+  --ok: #4FBF8B;
+  --warn: #E78B23;
+  --bad: #F07656;
+
+  /* Restated, not inherited. See the note above the light block. */
+  --surface-paper: color-mix(in srgb, var(--text-ink) 4%, var(--surface-bg));
+  --surface-card: color-mix(in srgb, var(--text-ink) 6%, var(--surface-bg));
+  --kind-act: var(--text-faint);
+  --ok-tint: color-mix(in srgb, var(--ok) 13%, var(--surface-card));
+  --warn-tint: color-mix(in srgb, var(--warn) 8%, var(--surface-card));
+  --bad-tint: color-mix(in srgb, var(--bad) 6%, var(--surface-card));
+  --accent-tint: color-mix(in srgb, var(--accent) 12%, var(--surface-card));
+  --neutral-tint: color-mix(in srgb, var(--text-ink) 7%, var(--surface-card));
+  --category-knowledge: #8DB8E8;
+  --category-profile: #BCA6F0;
+  --category-knowledge-tint: color-mix(in srgb, var(--category-knowledge) 16%, var(--surface-card));
+  --category-profile-tint: color-mix(in srgb, var(--category-profile) 16%, var(--surface-card));
+  --ok-on-tint: var(--ok);
+  --warn-on-tint: var(--warn);
+  --bad-on-tint: var(--bad);
+  --category-knowledge-on-tint: var(--category-knowledge);
+  --category-profile-on-tint: var(--category-profile);
+  /* The chips' tints over the dark card. On #202020 a dot colour measures
+     about 3.5:1 on its own tint, so each word is its colour mixed toward the
+     light ink, except Injected's amber, which clears 4.5:1 as it is. */
+  --kind-inject-tint: color-mix(in srgb, var(--kind-inject) 16%, var(--surface-card));
+  --kind-search-tint: color-mix(in srgb, var(--kind-search) 16%, var(--surface-card));
+  --kind-recall-tint: color-mix(in srgb, var(--kind-recall) 16%, var(--surface-card));
+  --kind-brief-tint: color-mix(in srgb, var(--kind-brief) 16%, var(--surface-card));
+  --type-knowledge-tint: color-mix(in srgb, var(--type-knowledge) 16%, var(--surface-card));
+  --type-skill-tint: color-mix(in srgb, var(--type-skill) 16%, var(--surface-card));
+  --type-activity-tint: color-mix(in srgb, var(--type-activity) 16%, var(--surface-card));
+  --kind-inject-on-tint: var(--kind-inject);
+  --kind-search-on-tint: color-mix(in srgb, var(--kind-search) 60%, var(--text-ink));
+  --kind-recall-on-tint: color-mix(in srgb, var(--kind-recall) 60%, var(--text-ink));
+  --kind-brief-on-tint: color-mix(in srgb, var(--kind-brief) 55%, var(--text-ink));
+  --type-knowledge-on-tint: color-mix(in srgb, var(--type-knowledge) 50%, var(--text-ink));
+  --type-skill-on-tint: color-mix(in srgb, var(--type-skill) 50%, var(--text-ink));
+  --type-activity-on-tint: color-mix(in srgb, var(--type-activity) 50%, var(--text-ink));
+  --shadow-card: inset 0 1px 0 rgb(255 255 255 / 0.04);
+  --shadow-over: 0 0 0 1px rgb(255 255 255 / 0.07), 0 18px 48px rgb(0 0 0 / 0.5);
+  --shadow-lift: inset 0 1px 0 rgb(255 255 255 / 0.06), 0 0 0 1px rgb(255 255 255 / 0.05);
+  /* Re-read here: a token that reads another is resolved where it is declared. */
+  --button-fill: var(--surface-paper);
+  --button-edge: var(--rule-hard);
+  --kind-inject: #E1AE05;
+  --kind-search: #4A8FDB;
+  --kind-recall: #9B7BE0;
+  --kind-brief: #888780;
+  --button-primary-fill: color-mix(in srgb, var(--accent) 26%, var(--surface-bg));
+  --button-primary-edge: color-mix(in srgb, var(--accent) 60%, var(--text-ink));
+  --select-fill: var(--surface-raised);
+  --select-edge: color-mix(in srgb, var(--text-ink) 55%, var(--surface-card));
+  --attention-fill: color-mix(in srgb, var(--accent) 20%, var(--surface-bg));
+  --attention-edge: var(--accent);
+  --surface-raised: color-mix(in srgb, var(--text-ink) 8%, var(--surface-bg));
+  --surface-sunk: color-mix(in srgb, var(--text-ink) 12%, var(--surface-bg));
+  --rule: color-mix(in srgb, var(--text-ink) 19%, transparent);
+  --rule-hard: color-mix(in srgb, var(--text-ink) 42%, transparent);
+  --text-muted: color-mix(in srgb, var(--text-ink) 82%, var(--surface-bg));
+  --text-faint: color-mix(in srgb, var(--text-ink) 66%, var(--surface-bg));
+  --text-quiet: color-mix(in srgb, var(--text-ink) 40%, var(--surface-bg));
+  --grain: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='220' height='220'%3E%3Cfilter id='n' color-interpolation-filters='sRGB'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0.5 0 0 0 -0.125  0.5 0 0 0 -0.125  0.5 0 0 0 -0.125  0 0 0 0 0.2'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+/* ── colour · watch · 2026-10-12 ────────────────────────────────────────────
+   The Apple Watch app (spec 069): bone ink on true black, chosen by Ian on
+   2026-10-12 from four drawn directions. The watch ground is the display's own
+   black, and its ink is the light ground's bone, so the two grounds the
+   product already has turn inside out rather than adding a third palette.
+   Everything else follows from those two by the same formulas as the other
+   grounds. The phone's generator (waku-mobile-frontend scripts/sync-tokens.mjs)
+   writes this block into the watch's Swift tokens; nothing in the console
+   draws it but /visual-design §46.
+   ──────────────────────────────────────────────────────────────────────────── */
+[data-theme="watch"] {
+  color-scheme: dark;
+  --surface-bg: #000000;
+  --text-ink: #E1E1D9;
+  --accent-fg: #E1AE05;
+  --accent-icon: #E1AE05;
   --ok: #4FBF8B;
   --warn: #E78B23;
   --bad: #EC6242;
 
   /* Restated, not inherited. See the note above the light block. */
   --surface-paper: color-mix(in srgb, var(--text-ink) 4%, var(--surface-bg));
+  /* Re-read here: a token that reads another is resolved where it is declared. */
+  --button-fill: var(--surface-paper);
+  --button-edge: var(--rule-hard);
+  --kind-inject: #E1AE05;
+  --kind-search: #4A8FDB;
+  --kind-recall: #9B7BE0;
+  --kind-brief: #888780;
+  --button-primary-fill: color-mix(in srgb, var(--accent) 26%, var(--surface-bg));
+  --button-primary-edge: color-mix(in srgb, var(--accent) 60%, var(--text-ink));
+  --select-fill: var(--surface-raised);
+  --select-edge: color-mix(in srgb, var(--text-ink) 55%, var(--surface-card));
+  --attention-fill: color-mix(in srgb, var(--accent) 20%, var(--surface-bg));
+  --attention-edge: var(--accent);
   --surface-raised: color-mix(in srgb, var(--text-ink) 8%, var(--surface-bg));
   --surface-sunk: color-mix(in srgb, var(--text-ink) 12%, var(--surface-bg));
   --rule: color-mix(in srgb, var(--text-ink) 19%, transparent);
   --rule-hard: color-mix(in srgb, var(--text-ink) 42%, transparent);
   --text-muted: color-mix(in srgb, var(--text-ink) 82%, var(--surface-bg));
   --text-faint: color-mix(in srgb, var(--text-ink) 62%, var(--surface-bg));
+  --text-quiet: color-mix(in srgb, var(--text-ink) 40%, var(--surface-bg));
+}
+
+/* ── reduced motion · 2026-10-13 ────────────────────────────────────────────
+   One switch for the console's motion. A person who asked their system for
+   less motion gets every duration at zero: nothing slides, glows or rolls.
+   app/globals.css also clamps every transition and animation. */
+@media (prefers-reduced-motion: reduce) {
+  :root, [data-theme] {
+    --motion-quick: 0ms;
+    --motion-base: 0ms;
+    --motion-slow: 0ms;
+    --motion-roll: 0ms;
+    --motion-glow: 0ms;
+    --motion-shimmer: 0ms;
+    --motion-step: 0ms;
+  }
 }
