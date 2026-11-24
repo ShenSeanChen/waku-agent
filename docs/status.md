@@ -6,7 +6,7 @@
 Read this before opening a PR or filing an issue: most of what is already
 known-broken is below, and half of it already has a fix in flight.
 
-**Last updated:** 2026-11-20
+**Last updated:** 2026-11-23
 
 ---
 
@@ -76,10 +76,10 @@ Nothing here is a surprise. If you hit one of these, the issue exists.
 | The public Waku Slack app ("Add to Slack" on hosted waku) is built and has never run against Slack: the Slack app itself is not created, and `config/gateway.env` on the VM has none of its four values. One workspace maps to one tenant, and the hosted app has no channel allowlist. That tenant is a person, or the home of a team space's agent (spec 032, group A: `POST` and `GET /v1/team-homes` for waku.one, a team's Waku Memory key sealed in `control.db`, and a container that saves into the team's space). A team home has run against a fake Slack and a fake spawner only: `WAKU_AGENT_PLATFORM_SECRET` is set nowhere, `DELETE` answers 405, and a workspace a person's install holds is not moved. A direct message to the bot is answered for the person who added the app and for nobody else (spec 032, version A): it has run against a fake Slack only, and the live app has neither `im:history`, `message.im` nor its Messages tab yet. The Slack card on a hosted dashboard has been drawn from a stub answer only, and it has no Disconnect | — | — |
 | Google Calendar sign-in has no bundled OAuth client, so `waku connect google` needs your own `~/.waku/credentials.json` | — | — |
 
-**Providers are the recurring theme.** Three of the items above are one
-provider or another, and there is no single place that says which providers
-are known-good today. Until there is, treat the model picker as a list of
-things that *might* work.
+**Providers are the recurring theme.** `scripts/provider_smoke.py` sends one
+tool turn to each provider you have a key for and prints which answered. A
+model server on your own machine works through the `local` row (spec 034): no
+key, Ollama's address by default, and a model that supports tool calls.
 
 ## What is deliberately not built
 
@@ -96,8 +96,8 @@ Additionally, and worth stating because people ask:
 - **The judge evals are not in CI.** `make gate` runs deterministic evals at
   100% plus a judge threshold, and CI runs only the first half. The judge tier
   needs an API key, which CI does not have.
-- **No provider smoke check.** Nothing verifies that a model in the picker
-  resolves, which is why #137 reached a user.
+- **The provider smoke check is not in CI.** It needs real keys, so a model
+  that stops answering is found only when someone runs it.
 
 ## Open questions
 

@@ -53,6 +53,23 @@ copy the key's line into `~/.waku/.env`.
 
 **Check:** run `waku` and say hi. It answers in the terminal.
 
+### Run it on a model on your own computer
+
+Waku needs no key for a model server on your machine. Install
+[Ollama](https://ollama.com/download), download a model that can call tools,
+and point Waku at it:
+
+```bash
+ollama pull qwen3:8b
+WAKU_PROVIDER=local waku
+```
+
+Your words stay on your machine. LM Studio, llama.cpp's server and vLLM work
+the same way: set `WAKU_LOCAL_BASE_URL` to the server's address, for example
+`http://localhost:1234/v1` for LM Studio. The model must support tool calls,
+because every Waku turn offers tools; `llama3` does not, and the server
+refuses the turn.
+
 ## 3. Open the dashboard
 
 ```bash
