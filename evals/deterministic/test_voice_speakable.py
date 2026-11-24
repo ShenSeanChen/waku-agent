@@ -83,3 +83,41 @@ def test_ordinal_words(value, word):
 def test_the_gateway_speaks_dates_after_stripping_markdown():
     text = "🚀 Meeting **Sat 11 5:00 p.m.**"
     assert _speakable(text) == "Meeting Saturday the eleventh five p.m."
+
+
+# Full replies in the shape the calendar tools produce — the failure from the
+# demo clip, pinned end to end rather than as isolated tokens.
+REPLIES = [
+    (
+        "Here is what is on your local calendar from today onward.",
+        "Here is what is on your local calendar from today onward.",
+    ),
+    (
+        "Swim with Sergey: Sat 11 5:00 p.m.",
+        "Swim with Sergey: Saturday the eleventh five p.m.",
+    ),
+    (
+        "Norway versus England: Sat 11 10:00 a.m. - 12:00 p.m.",
+        "Norway versus England: Saturday the eleventh ten a.m. to noon",
+    ),
+    (
+        "Created event 2026-07-14T09:00 → 2026-07-14T10:00",
+        (
+            "Created event July fourteenth, twenty twenty-six at nine a.m. "
+            "to July fourteenth, twenty twenty-six at ten a.m."
+        ),
+    ),
+]
+
+
+@pytest.mark.parametrize("reply,spoken", REPLIES, ids=[r for r, _ in REPLIES])
+def test_calendar_replies_are_spoken_correctly(reply, spoken):
+    assert _speakable(reply) == spoken
+
+
+def test_installing_tada_does_not_change_the_default_engine(monkeypatch):
+    """The extra is opt-in: the model being installed must not select it."""
+    from waku.gateway import voice
+
+    monkeypatch.delenv("WAKU_TTS", raising=False)
+    assert voice.Mouth().engine in {"say", "kokoro"}

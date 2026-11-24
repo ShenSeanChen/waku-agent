@@ -185,6 +185,7 @@ def _speakable(text: str) -> str:
     """What actually gets voiced: no emoji, no markdown, no written dates/times."""
     if not text:
         return ""
+    text = text.replace("→", " to ")  # arrows are in _EMOJI; keep the connector first
     text = _EMOJI.sub("", text)
     text = re.sub(r"[*_`#>]", "", text)      # markdown emphasis/heading/quote/code marks
     text = speakable_dates(text)             # ISO timestamps and clock times, in words

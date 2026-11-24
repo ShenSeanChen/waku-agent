@@ -209,7 +209,7 @@ def _normalize_dates(text: str) -> str:
         text,
         flags=re.IGNORECASE,
     )
-    text = text.replace("→", " to ")
+    text = re.sub(r"\s*→\s*", " to ", text)
     text = re.sub(
         r"\b(\d{4})-(\d{2})-(\d{2})[T ](\d{1,2}):(\d{2})(?::\d{2}(?:\.\d+)?)?"
         r"(?:Z|[+-]\d{2}:?\d{2})?\b",
