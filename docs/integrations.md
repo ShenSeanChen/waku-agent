@@ -38,6 +38,24 @@ uv pip install '.[voice-neural]'          # neural Kokoro (bm_george); pulls tor
 
 Override either engine with `WAKU_VOICE` (a `say` voice name, or a Kokoro voice like `bf_emma`).
 
+**A local speech model.** [TADA](https://github.com/HumeAI/tada), from Hume, is a
+third choice. It runs on your machine and needs no API key. Its text and audio
+tokens are aligned one-to-one, so it cannot skip or invent words the way
+codec-based TTS can. It is opt-in:
+
+```bash
+uv pip install '.[voice-tada]'       # pulls torch (~2GB)
+WAKU_TTS=tada waku voice
+```
+
+TADA needs a reference clip and that clip's exact transcript. Waku uses the
+English sample shipped with `hume-tada` unless you set `WAKU_TADA_PROMPT_WAV`
+and `WAKU_TADA_PROMPT_TEXT` to your own. `WAKU_TADA_MODEL` selects the 1B
+English or 3B multilingual checkpoint; `WAKU_TADA_DEVICE` picks the device.
+The weights are gated: accept Meta's Llama 3.2 license on Hugging Face and run
+`hf auth login` before the first run. The model loads on the first reply, so
+that reply is slower than the ones after it.
+
 ## Phone to laptop
 
 ```bash

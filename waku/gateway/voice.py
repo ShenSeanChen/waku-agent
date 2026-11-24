@@ -8,9 +8,13 @@ through the exact same loop/memory/eval pipeline as typed text — a gateway
 only moves words in and out (that's the whole point of the gateway box).
 
   ears   faster-whisper (local Whisper, ~74MB model downloads on first run)
-  voice  macOS `say` with a British voice by default (zero setup), or the
-         neural Kokoro voice if installed:  pip install kokoro soundfile
-         then set WAKU_TTS=kokoro  (WAKU_VOICE=bm_george / bm_fable / ...)
+  voice  macOS `say` with a British voice by default (zero setup), the
+         neural Kokoro voice if installed (pip install kokoro soundfile;
+         WAKU_TTS=kokoro, WAKU_VOICE=bm_george / bm_fable / ...), or Hume's
+         open-source TADA model (pip install -e '.[voice-tada]'; WAKU_TTS=tada).
+         TADA runs locally with no API key, and its 1:1 text/audio alignment
+         makes skipped words impossible by construction. Its weights are
+         gated by Meta's Llama 3.2 license.
 
 Wake-word mode ("hey <name>, ...") is deliberately v2 — see docs/roadmap:
 openWakeWord can train a custom wake word for whatever we name this thing.
@@ -22,11 +26,79 @@ import os
 import re
 import subprocess
 import sys
+from collections.abc import Mapping
+from dataclasses import dataclass
+from typing import Any
 
 from waku.app import Waku
 from waku.gateway.cli import _observer  # show gate/tool lines in voice mode too
 
 SAMPLE_RATE = 16000
+
+# Engines are a closed set. An unknown WAKU_TTS used to fall through to `say`
+# silently, so the person heard the robotic voice with no clue why.
+_TTS_ENGINES = ("say", "kokoro", "tada")
+
+# hume-tada ships samples/ljspeech.wav. TADA is a speech-continuation model, not
+# a plain TTS endpoint: it needs a reference clip and that clip's exact
+# transcript. This is the pairing from the upstream README's example.
+_TADA_SAMPLE_TEXT = (
+    "The examination and testimony of the experts, enabled the commission "
+    "to conclude that five shots may have been fired."
+)
+
+
+def _tts_engine(configured: str | None, kokoro_available: bool) -> str:
+    """Pick the TTS engine without importing or loading any of them."""
+    name = (configured or "").strip().lower()
+    if not name:
+        return "kokoro" if kokoro_available else "say"
+    if name not in _TTS_ENGINES:
+        raise ValueError(f"Unknown WAKU_TTS={name!r}; expected one of: {', '.join(_TTS_ENGINES)}")
+    return name
+
+
+@dataclass(frozen=True)
+class TadaConfig:
+    model: str
+    prompt_wav: str   # empty = hume-tada's bundled English sample
+    prompt_text: str
+    device: str       # empty = cuda if available, else cpu
+
+
+def _tada_config(env: Mapping[str, str]) -> TadaConfig:
+    """Read TADA settings from an env mapping — pure, so evals can pin defaults."""
+
+    def value(name: str, default: str = "") -> str:
+        return (env.get(name) or "").strip() or default
+
+    prompt_wav = value("WAKU_TADA_PROMPT_WAV")
+    prompt_text = value("WAKU_TADA_PROMPT_TEXT")
+    # A custom voice clip needs its own transcript: the bundled LJSpeech text
+    # would silently misalign against someone else's audio.
+    if prompt_wav and not prompt_text:
+        raise ValueError(
+            "WAKU_TADA_PROMPT_WAV needs WAKU_TADA_PROMPT_TEXT: the clip's exact transcript"
+        )
+    if prompt_text and not prompt_wav:
+        raise ValueError(
+            "WAKU_TADA_PROMPT_TEXT needs WAKU_TADA_PROMPT_WAV: the clip it transcribes"
+        )
+
+    return TadaConfig(
+        model=value("WAKU_TADA_MODEL", "HumeAI/tada-1b"),
+        prompt_wav=prompt_wav,
+        prompt_text=prompt_text or _TADA_SAMPLE_TEXT,
+        device=value("WAKU_TADA_DEVICE"),
+    )
+
+
+def _tada_waveform(output) -> Any:
+    """First generated waveform — GenerationOutput.audio is a list."""
+    audio = getattr(output, "audio", None)
+    if not audio:
+        raise ValueError("TADA produced no audio")
+    return audio[0]
 
 
 def record_until_enter():
@@ -112,29 +184,95 @@ def _speakable(text: str) -> str:
     return "\n".join(ln.strip() for ln in text.splitlines()).strip()
 
 
+def _play(audio, sample_rate: int) -> None:
+    """One playback path for both neural engines — TADA and Kokoro output 24 kHz."""
+    import sounddevice as sd
+
+    sd.play(audio, sample_rate)
+    sd.wait()
+
+
+class _TadaEngine:
+    """Hume TADA, loaded on first speak so startup stays fast.
+
+    Verified against: hume-tada 0.1.9, 2026-11-24. The weights are gated by
+    Meta's Llama 3.2 license: accept it on Hugging Face and run `hf auth login`
+    before selecting this engine.
+    """
+
+    def __init__(self, config: TadaConfig):
+        self.config = config
+        self._loaded = None
+
+    def _load(self):
+        if self._loaded is None:
+            try:
+                from importlib import import_module
+                from importlib.resources import files
+
+                # Optional deps: import by name so a bare install stays importable.
+                torch = import_module("torch")
+                torchaudio = import_module("torchaudio")
+                Encoder = import_module("tada.modules.encoder").Encoder
+                TadaForCausalLM = import_module("tada.modules.tada").TadaForCausalLM
+            except ImportError as exc:
+                raise SystemExit(
+                    "WAKU_TTS=tada needs the voice extra: pip install -e '.[voice-tada]'"
+                ) from exc
+
+            device = self.config.device or ("cuda" if torch.cuda.is_available() else "cpu")
+            dtype = torch.bfloat16 if device.startswith("cuda") else torch.float32
+            try:
+                encoder = Encoder.from_pretrained("HumeAI/tada-codec", subfolder="encoder").to(device)
+                model = TadaForCausalLM.from_pretrained(self.config.model, torch_dtype=dtype).to(device)
+            except Exception as exc:
+                raise SystemExit(
+                    f"Could not load TADA model {self.config.model!r}: {exc}. "
+                    "Its weights are gated — accept the Meta Llama 3.2 license on "
+                    "Hugging Face and run `hf auth login`, then retry."
+                ) from exc
+
+            if self.config.prompt_wav:
+                wav_path = self.config.prompt_wav
+            else:
+                wav_path = str(files("tada").joinpath("samples/ljspeech.wav"))
+            audio, sample_rate = torchaudio.load(wav_path)
+            prompt = encoder(
+                audio.to(device), text=[self.config.prompt_text], sample_rate=sample_rate
+            )
+            self._loaded = (model, prompt)
+        return self._loaded
+
+    def speak(self, text: str) -> None:
+        model, prompt = self._load()
+        output = model.generate(prompt=prompt, text=text)
+        wave = _tada_waveform(output).detach().float().cpu()
+        if wave.ndim == 2:  # (channels, samples) -> (samples, channels)
+            wave = wave.T
+        _play(wave.numpy(), 24000)
+
+
 class Mouth:
-    """TTS with a boring, reliable default (macOS `say`) and a neural upgrade
-    (Kokoro-82M, Apache-2.0 — its bm_* voices are the proper British butler)."""
+    """TTS with a boring, reliable default (macOS `say`) and two opt-in neural
+    engines: Kokoro-82M (Apache-2.0, the proper British butler) and Hume TADA.
+    """
 
     def __init__(self):
-        self.engine = os.getenv("WAKU_TTS", "").strip().lower()
-        self.voice = os.getenv("WAKU_VOICE", "")
-        if not self.engine:
-            # Auto: use the nicer neural voice (Kokoro) if it's installed, else
-            # fall back to macOS `say`. So `pip install kokoro soundfile` alone
-            # upgrades the voice — no env var needed.
-            try:
-                import kokoro  # noqa: F401
+        from importlib.util import find_spec
 
-                self.engine = "kokoro"
-            except ImportError:
-                self.engine = "say"
-        if self.engine == "kokoro":
+        # find_spec does not execute the module — a broken kokoro install
+        # should still leave `say` available.
+        self.engine = _tts_engine(os.getenv("WAKU_TTS"), find_spec("kokoro") is not None)
+        self.voice = os.getenv("WAKU_VOICE", "")
+        self.tada: _TadaEngine | None = None
+        if self.engine == "tada":
+            self.tada = _TadaEngine(_tada_config(os.environ))
+        elif self.engine == "kokoro":
             from kokoro import KPipeline
 
             self.pipeline = KPipeline(lang_code="b")  # b = British English
             self.voice = self.voice or "bm_george"
-        elif self.engine == "say" and not self.voice:
+        elif not self.voice:
             self.voice = _best_say_voice()  # auto-upgrade to a Premium/Enhanced voice
 
     def speak(self, text: str) -> None:
@@ -142,15 +280,15 @@ class Mouth:
         if not text:
             return
         if self.engine == "kokoro":
-            import sounddevice as sd
-
             for _, _, audio in self.pipeline(text, voice=self.voice):
-                sd.play(audio, 24000)
-                sd.wait()
+                _play(audio, 24000)
+        elif self.engine == "tada":
+            assert self.tada is not None  # constructed for this engine in __init__
+            self.tada.speak(text)
         elif sys.platform == "darwin":
             subprocess.run(["say", "-v", self.voice or "Daniel", text], check=False)
         else:
-            print("(no TTS engine on this platform — set WAKU_TTS=kokoro)")
+            print("(no local TTS engine — set WAKU_TTS=kokoro or WAKU_TTS=tada)")
 
 
 def matches_wake(text: str, wake_word: str) -> bool:

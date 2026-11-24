@@ -99,6 +99,14 @@ voice-neural = [
     "kokoro>=0.9",
     "soundfile>=0.12",
 ]
+# Hume's open-source TADA speech model, as a third opt-in voice: WAKU_TTS=tada.
+# Local, no API key, 1:1 text/audio alignment (no skipped words). Heavy: pulls
+# torch (~2GB); the weights are gated by Meta's Llama 3.2 license, so the user
+# must accept it on Hugging Face and run `hf auth login` before first use.
+voice-tada = [
+    "hume-tada>=0.1.9",
+    "sounddevice>=0.4",
+]
 # Optional semantic-memory upgrade path: Supabase pgvector (see launch-rag)
 supabase = [
     "supabase>=2.0",
@@ -164,6 +172,21 @@ dev = [
 [build-system]
 requires = ["hatchling==1.32.4"]
 build-backend = "hatchling.build"
+
+# hume-tada pulls descript-audiotools, which pins protobuf<3.20; the arena
+# extra's mem0ai needs >=5.29. Nobody runs the memory arena and the local
+# voice model in one process, so uv resolves them in separate forks.
+[tool.uv]
+conflicts = [
+    [
+        { extra = "arena" },
+        { extra = "voice-tada" },
+    ],
+    [
+        { extra = "tracing" },
+        { extra = "voice-tada" },
+    ],
+]
 
 # An sdist should be what you need to BUILD and TEST waku — source, bundled
 # skills, schema, evals. Left alone it was 2.6 MB, and 2.5 MB of that was a
