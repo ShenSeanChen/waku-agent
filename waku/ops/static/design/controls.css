@@ -34,7 +34,7 @@
    Not here        which level a control is. Primary's paper ground, secondary's
                    lighter rule, destructive's --bad label, and the border
                    colour each one moves to on hover. Those stay with the
-                   component — cva variants in the product, .waitlist-btn and
+                   component — cva variants in the product, .button and
                    .chips in the landing page — because they answer "which of
                    the four is this", which is a question about the screen.
    ───────────────────────────────────────────────────────────────────────────── */
@@ -51,6 +51,11 @@
 [data-slot="toggle-group-item"],
 [data-slot="tabs-trigger"] {
   border-radius: var(--radius);
+}
+/* A button takes the button's corner on every page, the landing page
+   included (Emily, 2026-10-13). Since 2026-10-16 both are --radius, 4px. */
+[data-slot="button"] {
+  border-radius: var(--button-radius);
 }
 
 /* The exempt shapes, and the exemption is a token so that nothing later
@@ -73,6 +78,12 @@
    class on the element — said they were round. That is this file's own
    opening paragraph, discovered the slow way. */
 [data-slot="badge"] { border-radius: var(--shape-chip); }
+
+/* The Waku Agent bird joined them on 2026-10-03 (spec 040 N1): Button's
+   `shape="float"`, the one button that floats over the page, is a circle.
+   Here for the badge's reason above: the cva's rounded-circle is a layered
+   utility and the button rule in the list above is not. */
+[data-slot="button"][data-shape="float"] { border-radius: var(--shape-circle); }
 
 /* One duration and one curve for everything that moves. Only the three
    properties a control actually changes — transition-all would animate layout
@@ -135,6 +146,19 @@
   background-color: var(--surface-sunk);
 }
 
+/* A tertiary button is a link in button form: no ground and no edge. Pressed
+   gives it no ground, and focus gives it no box (Emily, 2026-11-03, on
+   "6 members"). Its label and its underline turn ink on hover, on focus and
+   while pressed, and the focused underline doubles in weight so a keyboard
+   user still sees where focus is. */
+[data-slot="button"][data-variant="tertiary"]:active:not(:disabled) {
+  background-color: transparent;
+}
+[data-slot="button"][data-variant="tertiary"]:focus-visible {
+  outline: none;
+  text-decoration-thickness: calc(var(--rule-width) * 2);
+}
+
 /* ── disabled ─────────────────────────────────────────────────────────────
    Colour, not opacity. Opacity fades the border, the label and the ground
    together, which dropped a disabled field's edge to about 1.5:1 — under the
@@ -158,6 +182,24 @@
 [data-slot="tabs-trigger"][aria-disabled="true"] {
   color: var(--disabled-fg);
   border-color: var(--disabled-edge);
+}
+
+/* A disabled button also drops its ground (Emily, 2026-11-02, D2 of the
+   indicator language): no fill, a faint edge and a faint label. A disabled
+   Primary then no longer shows the amber that marks the main action, and a
+   disabled Secondary no longer looks like one that works. */
+[data-slot="button"]:disabled,
+[data-slot="button"][data-disabled] {
+  background-color: transparent;
+}
+
+/* A tertiary button has no edge to fade, so a disabled one draws none: only
+   its label and underline go faint. The disabled edge drew a box around
+   "Forget" and around a whole saved-account row on the sign-in page while a
+   sign-in was redirecting (Emily, 2026-11-05). */
+[data-slot="button"][data-variant="tertiary"]:disabled,
+[data-slot="button"][data-variant="tertiary"][data-disabled] {
+  border-color: transparent;
 }
 
 /* Not here: pointer-events. "Nothing responds" is what :disabled already does
