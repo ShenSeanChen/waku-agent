@@ -23,7 +23,7 @@ STYLE = Path(__file__).resolve().parents[2] / "waku" / "ops" / "static" / "style
 
 def _desktop_rules(selector: str) -> dict[str, str]:
     """The declarations a browser applies to `selector` outside any @media."""
-    css = re.sub(r"/\*.*?\*/", "", STYLE.read_text(), flags=re.DOTALL)
+    css = re.sub(r"/\*.*?\*/", "", STYLE.read_text(encoding="utf-8"), flags=re.DOTALL)
     css = re.sub(r"@media[^{]*\{(?:[^{}]*\{[^{}]*\})*[^{}]*\}", "", css)
     out: dict[str, str] = {}
     for sel, body in re.findall(r"([^{}]*)\{([^{}]*)\}", css):

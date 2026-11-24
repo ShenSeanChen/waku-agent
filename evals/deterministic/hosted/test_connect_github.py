@@ -222,7 +222,7 @@ def test_the_container_side_takes_github_as_a_connector_name(tmp_path):
     assert is_connector_name("github")
     assert sync_connectors(tmp_path, "http://10.88.0.1:8788", ["github"]) is True
     assert '"url": "http://10.88.0.1:8788/connect/github/mcp"' in (
-        tmp_path / "mcp.json").read_text()
+        tmp_path / "mcp.json").read_text(encoding="utf-8")
 
 
 # --- the two values in config/gateway.env -----------------------------------------

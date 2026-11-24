@@ -43,11 +43,17 @@
 #   scoped_credentials    ignore WAKU_API_KEY / WAKU_BASE_URL; use only this
 #                         row's own key_env / base_url_env
 #
+# One more opt-in field, for a model server on the person's own machine:
+#   key_optional          the row needs no key. Waku sends a placeholder, never
+#                         says "no API key", and treats the row as set up once
+#                         it is chosen or base_url_env is set
+#
 # Model ids age. When one 404s, fix the row -- every past race and spend figure
 # is derived at read time, so a correction here fixes history too.
 
 [anthropic]
 kind = "anthropic"
+tier = "maker"
 key_env = "ANTHROPIC_API_KEY"
 model = "claude-sonnet-5"
 small_model = "claude-haiku-4-5-20251001"
@@ -70,6 +76,7 @@ price = [3.0, 15.0]
 
 [openai]
 kind = "openai"
+tier = "maker"
 key_env = "OPENAI_API_KEY"
 model = "gpt-5.5"
 small_model = "gpt-4.1-mini"
@@ -82,6 +89,7 @@ price = [2.5, 15.0]
 
 [openrouter]
 kind = "openai"
+tier = "platform"
 key_env = "OPENROUTER_API_KEY"
 base_url = "https://openrouter.ai/api/v1"
 model = "nvidia/nemotron-3-super-120b-a12b:free"
@@ -94,6 +102,7 @@ price = [1.0, 3.0]
 
 [gemini]
 kind = "openai"
+tier = "maker"
 key_env = "GEMINI_API_KEY"
 base_url = "https://generativelanguage.googleapis.com/v1beta/openai/"
 model = "gemini-3.5-flash"
@@ -105,6 +114,7 @@ price = [0.3, 2.5]
 
 [deepseek]
 kind = "openai"
+tier = "maker"
 key_env = "DEEPSEEK_API_KEY"
 base_url = "https://api.deepseek.com"
 model = "deepseek-v4-pro"
@@ -114,6 +124,7 @@ price = [0.435, 0.87]
 
 [minimax]
 kind = "anthropic"
+tier = "maker"
 key_env = "MINIMAX_API_KEY"
 base_url = "https://api.minimaxi.com/anthropic"
 model = "MiniMax-M3"
@@ -139,6 +150,7 @@ catalog_url = "https://api.minimax.io/anthropic/v1/models"
 
 [kimi]
 kind = "anthropic"
+tier = "maker"
 key_env = "MOONSHOT_API_KEY"
 base_url = "https://api.moonshot.ai/anthropic"
 model = "kimi-k3"
@@ -170,6 +182,7 @@ catalog_url = "https://api.moonshot.cn/v1/models"
 
 [glm]
 kind = "anthropic"
+tier = "maker"
 key_env = "ZHIPU_API_KEY"
 base_url = "https://api.z.ai/api/anthropic"
 model = "glm-5.2"
@@ -192,6 +205,7 @@ base_url = "https://open.bigmodel.cn/api/anthropic"
 
 [xai]
 kind = "openai"
+tier = "maker"
 key_env = "XAI_API_KEY"
 base_url = "https://api.x.ai/v1"
 model = "grok-4"
@@ -203,8 +217,27 @@ price = [3.0, 15.0]
 # OpenCode -- an OpenAI-compatible platform with two endpoints sharing one
 # platform key. zen serves free models; go serves the standard ones.
 
+# Groq runs open-weight models on its own chips (LPUs), so it is a platform,
+# not the maker of these models. Checked live on 2026-11-23: gpt-oss-120b and
+# gpt-oss-20b each called save_note and answered a follow-up through run_loop.
+# Prices from console.groq.com/docs/models the same day (gpt-oss-20b is
+# $0.075 / $0.30).
+[groq]
+kind = "openai"
+tier = "platform"
+key_env = "GROQ_API_KEY"
+base_url = "https://api.groq.com/openai/v1"
+model = "openai/gpt-oss-120b"
+small_model = "openai/gpt-oss-20b"
+flagship = "openai/gpt-oss-120b"
+fast = "openai/gpt-oss-20b"
+claims_families = false
+key_url = "https://console.groq.com/keys"
+price = [0.15, 0.6]
+
 [opencode_zen]
 kind = "openai"
+tier = "platform"
 key_env = "OPENCODE_ZEN_API_KEY"
 base_url = "https://opencode.ai/zen/v1"
 model = "deepseek-v4-flash-free"
@@ -214,12 +247,36 @@ price = [0.435, 0.87]
 
 [opencode_go]
 kind = "openai"
+tier = "platform"
 key_env = "OPENCODE_GO_API_KEY"
 base_url = "https://opencode.ai/zen/go/v1"
 model = "deepseek-v4-flash"
 small_model = "deepseek-v4-flash"
 key_url = "https://opencode.ai/zen"
 price = [0.435, 0.87]
+
+# A model server on this computer. Ollama, LM Studio, llama.cpp's server and
+# vLLM all speak the OpenAI API, so one row covers them: WAKU_LOCAL_BASE_URL
+# picks the server (Ollama's address by default; LM Studio is
+# http://localhost:1234/v1) and the picker lists whatever it has loaded. No
+# key, no spend, and nothing leaves the machine unless the address points
+# elsewhere. The model has to support tool calls: qwen3 does, llama3 does not.
+# claims_families is false so a model name here never takes a family such as
+# deepseek-* away from the provider that sells it.
+
+[local]
+kind = "openai"
+tier = "local"
+key_env = "WAKU_LOCAL_API_KEY"
+base_url = "http://localhost:11434/v1"
+base_url_env = "WAKU_LOCAL_BASE_URL"
+model = "qwen3:8b"
+small_model = "qwen3:8b"
+label = "Local (Ollama, LM Studio)"
+key_optional = true
+claims_families = false
+key_url = "https://ollama.com/download"
+price = [0.0, 0.0]
 
 # The hosted free tier. Hidden on a local machine: with no
 # WAKU_PLATFORM_BASE_URL set it appears in no page, list or error message,
@@ -230,6 +287,7 @@ price = [0.435, 0.87]
 # they exist because test_providers_registry.py requires them.
 [waku-platform]
 kind = "anthropic"
+tier = "platform"
 key_env = "WAKU_PLATFORM_TOKEN"
 base_url_env = "WAKU_PLATFORM_BASE_URL"
 model = "claude-sonnet-5"

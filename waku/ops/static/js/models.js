@@ -232,8 +232,20 @@ async function pinModel(provider, model, action){
 // plus an edit modal. Status is derived, never stored: unconfigured = no key,
 // configured = key set but disabled, enabled = key set and available. The
 // ACTIVE provider (settings.provider) can't be disabled (server guards too).
+// A model server on this computer (the "local" row) needs an address, not a
+// key: its first field is the address, and the key, when there is one, is
+// optional. It counts as set up once it is the current provider or has an
+// address saved.
+function isServerRow(p){
+  const first = (p.fields || [])[0];
+  return !!(first && !first.secret && first.name.endsWith("_BASE_URL"));
+}
+
 function providerCardStatus(p, st){
-  const keySet = !!(p.fields && p.fields[0] && p.fields[0].configured);
+  const first = (p.fields || [])[0];
+  const keySet = isServerRow(p)
+    ? !!(first.configured || p.key === st.provider)
+    : !!(first && first.configured);
   if (!keySet) return "unconfigured";
   return (st.disabled_providers || []).includes(p.key) ? "configured" : "enabled";
 }
@@ -245,8 +257,21 @@ function modelsGrid(d){
     : providerCardStatus(p, st) === "configured" ? 2 : 3;
   const providers = (d.providers || []).slice()
     .sort((a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name));
-  return `<div class="provgrid">` + providers.map(p => providerCard(p, st)).join("")
-       + jevCard(d) + `</div>`;
+  // Three places a model can run: its maker's own API, a platform that runs
+  // open models on its own hardware, or a server on this computer.
+  const tiers = [
+    ["maker", "Model makers", "The company that trained the model runs it for you."],
+    ["platform", "Inference platforms", "Another company runs open models on its own hardware, often faster or cheaper."],
+    ["local", "On this computer", "A model server on your own machine, such as Ollama. What you type stays here."],
+  ];
+  const known = new Set(tiers.map(([key]) => key));
+  const section = (title, about, cards) => `<div style="margin-bottom:var(--space-6)">
+      <h2>${esc(title)}</h2>${about ? `<p class="meta" style="margin:0 0 var(--space-3)">${esc(about)}</p>` : ""}
+      <div class="provgrid">${cards}</div></div>`;
+  return tiers.map(([key, title, about]) => {
+    const rows = providers.filter(p => (known.has(p.tier) ? p.tier : "maker") === key);
+    return rows.length ? section(title, about, rows.map(p => providerCard(p, st)).join("")) : "";
+  }).join("") + section("Other keys", "", jevCard(d));
 }
 
 // Jev is not a chat provider -- it cannot hold a conversation -- so it is not in
@@ -327,17 +352,28 @@ function openProviderModal(provider){
   const p = (D.providers || []).find(x => x.key === provider);
   if (!p) return;
   const current = provider === st.provider;
-  const f = (p.fields || [])[0] || {};
+  const server = isServerRow(p);
+  const f = (server ? (p.fields || []).find(field => field.secret) : (p.fields || [])[0]) || {};
   const baseField = (p.fields || []).find(field => field.name.endsWith("_BASE_URL"));
   const selectedBaseUrl = current && st.base_url ? st.base_url : (baseField?.value || "");
+  const keyLabel = server
+    ? `<label class="fld"><span>API key <span class="meta">(optional, only if your server asks for one)</span>
+        ${f.configured ? uiBadge("set ····" + esc(f.last4 || ""), "ok") : ""}</span>
+        <input type="password" id="pm-key" placeholder="${f.configured ? "key on file — blank keeps it" : "leave blank for Ollama or LM Studio"}"></label>`
+    : `<label class="fld"><span>API key <span class="meta">(${esc(f.name || "")})</span>
+        ${f.configured ? uiBadge("set ····" + esc(f.last4 || ""), "ok")
+                       : uiBadge("not set", "neutral")}</span>
+        <input type="password" id="pm-key" placeholder="${f.configured ? "key on file — blank keeps it" : "paste key"}"></label>`;
+  const serverField = server ? `
+      <p class="meta" style="margin:0">Runs a model on this computer with Ollama, LM Studio, llama.cpp or vLLM. What you type stays on this machine.</p>
+      <label class="fld"><span>Server address <span class="meta">(Ollama: localhost:11434/v1 · LM Studio: localhost:1234/v1)</span></span>
+        <input type="text" id="pm-base-url" value="${escAttr(selectedBaseUrl)}" onfocus="markEditing()"></label>` : "";
   const d = openDialog(`
       <div class="u dialog-head" style="display:flex;justify-content:space-between;align-items:center">
         <b>${esc(p.name)}</b>${uiButton("✕", {level: "tertiary", size: "sm", onclick: "closeProviderModal()", attrs: 'aria-label="close"'})}</div>
-      <label class="fld"><span>API key <span class="meta">(${esc(f.name || "")})</span>
-        ${f.configured ? uiBadge("set ····" + esc(f.last4 || ""), "ok")
-                       : uiBadge("not set", "neutral")}</span>
-        <input type="password" id="pm-key" placeholder="${f.configured ? "key on file — blank keeps it" : "paste key"}"></label>
-      ${baseField ? `<label class="fld"><span>Base URL <span class="meta">(select the API key's region)</span></span>
+      ${serverField}
+      ${keyLabel}
+      ${baseField && !server ? `<label class="fld"><span>Base URL <span class="meta">(select the API key's region)</span></span>
         <select id="pm-base-url" onfocus="markEditing()">
           ${(baseField.options || []).map((url, index) => {
             const label = (baseField.option_labels || [])[index];

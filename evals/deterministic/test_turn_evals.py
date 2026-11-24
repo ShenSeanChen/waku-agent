@@ -227,7 +227,7 @@ def test_a_check_that_raises_is_na_and_the_page_still_builds(monkeypatch, tmp_pa
     check = next(s for s in built["scores"] if s["name"] == "spend_claim")
     assert check["value"] is None and check["note"] == "check error"
     (tmp_path / "traces").mkdir()
-    (tmp_path / "traces" / "2026-10-05.jsonl").write_text((FIXTURES / REHEARSAL).read_text())
+    (tmp_path / "traces" / "2026-10-05.jsonl").write_text((FIXTURES / REHEARSAL).read_text(encoding="utf-8"))
     assert obs.payload(tmp_path, window="all", now=NOW)["turns"]
 
 
@@ -390,12 +390,12 @@ def test_the_judge_writes_one_score_event_with_cost_and_model(judged_home):
     assert event["judge"] == "claude-haiku-4-5-20251001"
     assert event["cost_usd"] == obs.llm_cost("anthropic", "claude-haiku-4-5-20251001", {"in": 1200, "out": 60})
     lines = [json.loads(x) for p in (judged_home / "traces").glob("*.jsonl")
-             for x in p.read_text().splitlines()]
+             for x in p.read_text(encoding="utf-8").splitlines()]
     # The score line's own ts: glob order across trace files is the folder's
     # listing order, so "the last line read" is not always the score line.
     scores = [e for e in lines if e["type"] == "score"]
     assert len(scores) == 1 and scores[0] == {**event, "ts": scores[0]["ts"]}
-    ledger = [json.loads(x) for x in (judged_home / "usage.jsonl").read_text().splitlines()]
+    ledger = [json.loads(x) for x in (judged_home / "usage.jsonl").read_text(encoding="utf-8").splitlines()]
     assert ledger[0]["kind"] == "judge" and ledger[0]["in"] == 1200
     # the page shows the judge's chip, with the model named in its note
     turn = obs.payload(judged_home, window="all", now=NOW)["turns"][0]
@@ -427,7 +427,7 @@ def test_an_unreadable_verdict_writes_no_score(judged_home):
 def test_the_newest_judge_score_wins(judged_home):
     te.judge_turn(judged_home, TID, _FakeClient(), "m", "anthropic", now=1e9)
     te._RECENT.clear()
-    with open(next((judged_home / "traces").glob("*.jsonl")), "a") as f:
+    with open(next((judged_home / "traces").glob("*.jsonl")), "a", encoding="utf-8") as f:
         f.write(json.dumps({"type": "score", "turn_id": TID, "source": "judge", "name": "answer_grounded",
                             "value": 0.9, "note": "newer", "ts": "2999-01-01T00:00:00+00:00"}) + "\n")
     turn = obs.payload(judged_home, window="all", now=NOW)["turns"][0]
