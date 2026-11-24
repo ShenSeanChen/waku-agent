@@ -27,6 +27,10 @@ SPOKEN = [
     ("Call me at 5 p.m. tomorrow", "Call me at five p.m. tomorrow"),
     ("Meeting 09:00 → 10:00", "Meeting nine a.m. to ten a.m."),
     ("Meeting at 9:00.", "Meeting at nine a.m."),
+    (
+        "The meeting moved to 2026-12-02T14:30.",
+        "The meeting moved to December second, twenty twenty-six at two thirty p.m.",
+    ),
     ("Start 9:00, end 10:00.", "Start nine a.m., end ten a.m."),
     ("2024-02-29", "February twenty-ninth, twenty twenty-four"),
     ("Feb 29, 2024", "February twenty-ninth, twenty twenty-four"),

@@ -149,7 +149,7 @@ def _normalize_dates(text: str) -> str:
             and _valid_date(year, month, day)
         ):
             return match.group(0)
-        return f"{_date(year, month, day)} at {_clock(hour, minute)}"
+        return _no_double_stop(match, f"{_date(year, month, day)} at {_clock(hour, minute)}")
 
     def iso_date(match: re.Match) -> str:
         year, month, day = (int(g) for g in match.groups())
