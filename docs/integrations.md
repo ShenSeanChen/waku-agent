@@ -38,6 +38,11 @@ uv pip install '.[voice-neural]'          # neural Kokoro (bm_george); pulls tor
 
 Override either engine with `WAKU_VOICE` (a `say` voice name, or a Kokoro voice like `bf_emma`).
 
+Before synthesis, Waku rewrites written dates and clock times into spoken form
+for every engine. `Sat 11 5:00 p.m.` reaches the voice as "Saturday the
+eleventh five p.m." — the form the calendar demo needed. Ambiguous numeric
+dates such as `03/04/2026` are left alone rather than guessed.
+
 **A local speech model.** [TADA](https://github.com/HumeAI/tada), from Hume, is a
 third choice. It runs on your machine and needs no API key. Its text and audio
 tokens are aligned one-to-one, so it cannot skip or invent words the way

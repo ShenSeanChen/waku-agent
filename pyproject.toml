@@ -106,6 +106,9 @@ voice-neural = [
 voice-tada = [
     "hume-tada>=0.1.9",
     "sounddevice>=0.4",
+    # Read the prompt clip. torchaudio.load needs torchcodec in current
+    # releases; soundfile is already the repo's choice for the Kokoro extra.
+    "soundfile>=0.12",
 ]
 # Optional semantic-memory upgrade path: Supabase pgvector (see launch-rag)
 supabase = [

@@ -32,6 +32,7 @@ from typing import Any
 
 from waku.app import Waku
 from waku.gateway.cli import _observer  # show gate/tool lines in voice mode too
+from waku.gateway.speakable import speakable_dates
 
 SAMPLE_RATE = 16000
 
@@ -175,11 +176,12 @@ _EMOJI = re.compile(
 
 
 def _speakable(text: str) -> str:
-    """What actually gets voiced: no emoji, no stray markdown markers, tidy spaces."""
+    """What actually gets voiced: no emoji, no markdown, no written dates/times."""
     if not text:
         return ""
     text = _EMOJI.sub("", text)
     text = re.sub(r"[*_`#>]", "", text)      # markdown emphasis/heading/quote/code marks
+    text = speakable_dates(text)             # ISO timestamps and clock times, in words
     text = re.sub(r"[ \t]{2,}", " ", text)   # collapse gaps left by removed glyphs
     return "\n".join(ln.strip() for ln in text.splitlines()).strip()
 
@@ -212,7 +214,7 @@ class _TadaEngine:
 
                 # Optional deps: import by name so a bare install stays importable.
                 torch = import_module("torch")
-                torchaudio = import_module("torchaudio")
+                soundfile = import_module("soundfile")
                 Encoder = import_module("tada.modules.encoder").Encoder
                 TadaForCausalLM = import_module("tada.modules.tada").TadaForCausalLM
             except ImportError as exc:
@@ -236,10 +238,12 @@ class _TadaEngine:
                 wav_path = self.config.prompt_wav
             else:
                 wav_path = str(files("tada").joinpath("samples/ljspeech.wav"))
-            audio, sample_rate = torchaudio.load(wav_path)
-            prompt = encoder(
-                audio.to(device), text=[self.config.prompt_text], sample_rate=sample_rate
-            )
+            audio, sample_rate = soundfile.read(wav_path, dtype="float32")
+            if audio.ndim == 2:  # soundfile gives (frames, channels)
+                audio = audio.mean(axis=1) if audio.shape[1] > 1 else audio[:, 0]
+            # The encoder treats the first axis as a batch of one mono clip.
+            audio = torch.from_numpy(audio).unsqueeze(0)
+            prompt = encoder(audio.to(device), text=[self.config.prompt_text], sample_rate=sample_rate)
             self._loaded = (model, prompt)
         return self._loaded
 

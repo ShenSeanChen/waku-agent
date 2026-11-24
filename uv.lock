@@ -3,24 +3,24 @@ revision = 5
 requires-python = ">=3.11"
 resolution-markers = [
     "python_full_version >= '3.14' and extra != 'extra-10-waku-agent-arena' and extra != 'extra-10-waku-agent-tracing' and extra == 'extra-10-waku-agent-voice-tada'",
-    "python_full_version == '3.13.*' and extra != 'extra-10-waku-agent-arena' and extra != 'extra-10-waku-agent-tracing' and extra == 'extra-10-waku-agent-voice-tada'",
-    "python_full_version == '3.12.*' and extra != 'extra-10-waku-agent-arena' and extra != 'extra-10-waku-agent-tracing' and extra == 'extra-10-waku-agent-voice-tada'",
-    "python_full_version < '3.12' and extra != 'extra-10-waku-agent-arena' and extra != 'extra-10-waku-agent-tracing' and extra == 'extra-10-waku-agent-voice-tada'",
     "python_full_version >= '3.14' and sys_platform == 'win32' and extra == 'extra-10-waku-agent-arena' and extra != 'extra-10-waku-agent-voice-tada'",
     "python_full_version >= '3.14' and sys_platform != 'win32' and extra == 'extra-10-waku-agent-arena' and extra != 'extra-10-waku-agent-voice-tada'",
-    "python_full_version == '3.13.*' and sys_platform == 'win32' and extra == 'extra-10-waku-agent-arena' and extra != 'extra-10-waku-agent-voice-tada'",
-    "python_full_version == '3.13.*' and sys_platform != 'win32' and extra == 'extra-10-waku-agent-arena' and extra != 'extra-10-waku-agent-voice-tada'",
-    "python_full_version == '3.12.*' and sys_platform == 'win32' and extra == 'extra-10-waku-agent-arena' and extra != 'extra-10-waku-agent-voice-tada'",
-    "python_full_version < '3.12' and sys_platform == 'win32' and extra == 'extra-10-waku-agent-arena' and extra != 'extra-10-waku-agent-voice-tada'",
-    "python_full_version == '3.12.*' and sys_platform != 'win32' and extra == 'extra-10-waku-agent-arena' and extra != 'extra-10-waku-agent-voice-tada'",
-    "python_full_version < '3.12' and sys_platform != 'win32' and extra == 'extra-10-waku-agent-arena' and extra != 'extra-10-waku-agent-voice-tada'",
     "python_full_version >= '3.14' and sys_platform == 'win32' and extra != 'extra-10-waku-agent-arena' and extra != 'extra-10-waku-agent-voice-tada'",
     "python_full_version >= '3.14' and sys_platform != 'win32' and extra != 'extra-10-waku-agent-arena' and extra != 'extra-10-waku-agent-voice-tada'",
+    "python_full_version == '3.13.*' and extra != 'extra-10-waku-agent-arena' and extra != 'extra-10-waku-agent-tracing' and extra == 'extra-10-waku-agent-voice-tada'",
+    "python_full_version == '3.13.*' and sys_platform == 'win32' and extra == 'extra-10-waku-agent-arena' and extra != 'extra-10-waku-agent-voice-tada'",
+    "python_full_version == '3.13.*' and sys_platform != 'win32' and extra == 'extra-10-waku-agent-arena' and extra != 'extra-10-waku-agent-voice-tada'",
     "python_full_version == '3.13.*' and sys_platform == 'win32' and extra != 'extra-10-waku-agent-arena' and extra != 'extra-10-waku-agent-voice-tada'",
     "python_full_version == '3.13.*' and sys_platform != 'win32' and extra != 'extra-10-waku-agent-arena' and extra != 'extra-10-waku-agent-voice-tada'",
+    "python_full_version == '3.12.*' and extra != 'extra-10-waku-agent-arena' and extra != 'extra-10-waku-agent-tracing' and extra == 'extra-10-waku-agent-voice-tada'",
+    "python_full_version == '3.12.*' and sys_platform == 'win32' and extra == 'extra-10-waku-agent-arena' and extra != 'extra-10-waku-agent-voice-tada'",
+    "python_full_version == '3.12.*' and sys_platform != 'win32' and extra == 'extra-10-waku-agent-arena' and extra != 'extra-10-waku-agent-voice-tada'",
     "python_full_version == '3.12.*' and sys_platform == 'win32' and extra != 'extra-10-waku-agent-arena' and extra != 'extra-10-waku-agent-voice-tada'",
-    "python_full_version < '3.12' and sys_platform == 'win32' and extra != 'extra-10-waku-agent-arena' and extra != 'extra-10-waku-agent-voice-tada'",
     "python_full_version == '3.12.*' and sys_platform != 'win32' and extra != 'extra-10-waku-agent-arena' and extra != 'extra-10-waku-agent-voice-tada'",
+    "python_full_version < '3.12' and extra != 'extra-10-waku-agent-arena' and extra != 'extra-10-waku-agent-tracing' and extra == 'extra-10-waku-agent-voice-tada'",
+    "python_full_version < '3.12' and sys_platform == 'win32' and extra == 'extra-10-waku-agent-arena' and extra != 'extra-10-waku-agent-voice-tada'",
+    "python_full_version < '3.12' and sys_platform != 'win32' and extra == 'extra-10-waku-agent-arena' and extra != 'extra-10-waku-agent-voice-tada'",
+    "python_full_version < '3.12' and sys_platform == 'win32' and extra != 'extra-10-waku-agent-arena' and extra != 'extra-10-waku-agent-voice-tada'",
     "python_full_version < '3.12' and sys_platform != 'win32' and extra != 'extra-10-waku-agent-arena' and extra != 'extra-10-waku-agent-voice-tada'",
 ]
 conflicts = [[
@@ -1998,8 +1998,8 @@ resolution-markers = [
     "python_full_version == '3.13.*' and sys_platform == 'win32'",
     "python_full_version == '3.13.*' and sys_platform != 'win32'",
     "python_full_version == '3.12.*' and sys_platform == 'win32'",
-    "python_full_version < '3.12' and sys_platform == 'win32'",
     "python_full_version == '3.12.*' and sys_platform != 'win32'",
+    "python_full_version < '3.12' and sys_platform == 'win32'",
     "python_full_version < '3.12' and sys_platform != 'win32'",
 ]
 dependencies = [
@@ -2124,8 +2124,8 @@ resolution-markers = [
     "python_full_version == '3.13.*' and sys_platform == 'win32'",
     "python_full_version == '3.13.*' and sys_platform != 'win32'",
     "python_full_version == '3.12.*' and sys_platform == 'win32'",
-    "python_full_version < '3.12' and sys_platform == 'win32'",
     "python_full_version == '3.12.*' and sys_platform != 'win32'",
+    "python_full_version < '3.12' and sys_platform == 'win32'",
     "python_full_version < '3.12' and sys_platform != 'win32'",
 ]
 dependencies = [
@@ -2482,8 +2482,8 @@ resolution-markers = [
     "python_full_version == '3.13.*' and sys_platform == 'win32'",
     "python_full_version == '3.13.*' and sys_platform != 'win32'",
     "python_full_version == '3.12.*' and sys_platform == 'win32'",
-    "python_full_version < '3.12' and sys_platform == 'win32'",
     "python_full_version == '3.12.*' and sys_platform != 'win32'",
+    "python_full_version < '3.12' and sys_platform == 'win32'",
     "python_full_version < '3.12' and sys_platform != 'win32'",
 ]
 dependencies = [
@@ -4108,18 +4108,18 @@ version = "2.5.1"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
     "python_full_version >= '3.14' and extra != 'extra-10-waku-agent-arena' and extra != 'extra-10-waku-agent-tracing' and extra == 'extra-10-waku-agent-voice-tada'",
-    "python_full_version == '3.13.*' and extra != 'extra-10-waku-agent-arena' and extra != 'extra-10-waku-agent-tracing' and extra == 'extra-10-waku-agent-voice-tada'",
-    "python_full_version == '3.12.*' and extra != 'extra-10-waku-agent-arena' and extra != 'extra-10-waku-agent-tracing' and extra == 'extra-10-waku-agent-voice-tada'",
     "python_full_version >= '3.14' and sys_platform == 'win32' and extra == 'extra-10-waku-agent-arena' and extra != 'extra-10-waku-agent-voice-tada'",
     "python_full_version >= '3.14' and sys_platform != 'win32' and extra == 'extra-10-waku-agent-arena' and extra != 'extra-10-waku-agent-voice-tada'",
-    "python_full_version == '3.13.*' and sys_platform == 'win32' and extra == 'extra-10-waku-agent-arena' and extra != 'extra-10-waku-agent-voice-tada'",
-    "python_full_version == '3.13.*' and sys_platform != 'win32' and extra == 'extra-10-waku-agent-arena' and extra != 'extra-10-waku-agent-voice-tada'",
-    "python_full_version == '3.12.*' and sys_platform == 'win32' and extra == 'extra-10-waku-agent-arena' and extra != 'extra-10-waku-agent-voice-tada'",
-    "python_full_version == '3.12.*' and sys_platform != 'win32' and extra == 'extra-10-waku-agent-arena' and extra != 'extra-10-waku-agent-voice-tada'",
     "python_full_version >= '3.14' and sys_platform == 'win32' and extra != 'extra-10-waku-agent-arena' and extra != 'extra-10-waku-agent-voice-tada'",
     "python_full_version >= '3.14' and sys_platform != 'win32' and extra != 'extra-10-waku-agent-arena' and extra != 'extra-10-waku-agent-voice-tada'",
+    "python_full_version == '3.13.*' and extra != 'extra-10-waku-agent-arena' and extra != 'extra-10-waku-agent-tracing' and extra == 'extra-10-waku-agent-voice-tada'",
+    "python_full_version == '3.13.*' and sys_platform == 'win32' and extra == 'extra-10-waku-agent-arena' and extra != 'extra-10-waku-agent-voice-tada'",
+    "python_full_version == '3.13.*' and sys_platform != 'win32' and extra == 'extra-10-waku-agent-arena' and extra != 'extra-10-waku-agent-voice-tada'",
     "python_full_version == '3.13.*' and sys_platform == 'win32' and extra != 'extra-10-waku-agent-arena' and extra != 'extra-10-waku-agent-voice-tada'",
     "python_full_version == '3.13.*' and sys_platform != 'win32' and extra != 'extra-10-waku-agent-arena' and extra != 'extra-10-waku-agent-voice-tada'",
+    "python_full_version == '3.12.*' and extra != 'extra-10-waku-agent-arena' and extra != 'extra-10-waku-agent-tracing' and extra == 'extra-10-waku-agent-voice-tada'",
+    "python_full_version == '3.12.*' and sys_platform == 'win32' and extra == 'extra-10-waku-agent-arena' and extra != 'extra-10-waku-agent-voice-tada'",
+    "python_full_version == '3.12.*' and sys_platform != 'win32' and extra == 'extra-10-waku-agent-arena' and extra != 'extra-10-waku-agent-voice-tada'",
     "python_full_version == '3.12.*' and sys_platform == 'win32' and extra != 'extra-10-waku-agent-arena' and extra != 'extra-10-waku-agent-voice-tada'",
     "python_full_version == '3.12.*' and sys_platform != 'win32' and extra != 'extra-10-waku-agent-arena' and extra != 'extra-10-waku-agent-voice-tada'",
 ]
@@ -4385,8 +4385,8 @@ resolution-markers = [
     "python_full_version == '3.13.*' and sys_platform == 'win32'",
     "python_full_version == '3.13.*' and sys_platform != 'win32'",
     "python_full_version == '3.12.*' and sys_platform == 'win32'",
-    "python_full_version < '3.12' and sys_platform == 'win32'",
     "python_full_version == '3.12.*' and sys_platform != 'win32'",
+    "python_full_version < '3.12' and sys_platform == 'win32'",
     "python_full_version < '3.12' and sys_platform != 'win32'",
 ]
 dependencies = [
@@ -5219,8 +5219,8 @@ resolution-markers = [
     "python_full_version == '3.13.*' and sys_platform == 'win32'",
     "python_full_version == '3.13.*' and sys_platform != 'win32'",
     "python_full_version == '3.12.*' and sys_platform == 'win32'",
-    "python_full_version < '3.12' and sys_platform == 'win32'",
     "python_full_version == '3.12.*' and sys_platform != 'win32'",
+    "python_full_version < '3.12' and sys_platform == 'win32'",
     "python_full_version < '3.12' and sys_platform != 'win32'",
 ]
 dependencies = [
@@ -5256,8 +5256,8 @@ resolution-markers = [
     "python_full_version == '3.13.*' and sys_platform == 'win32'",
     "python_full_version == '3.13.*' and sys_platform != 'win32'",
     "python_full_version == '3.12.*' and sys_platform == 'win32'",
-    "python_full_version < '3.12' and sys_platform == 'win32'",
     "python_full_version == '3.12.*' and sys_platform != 'win32'",
+    "python_full_version < '3.12' and sys_platform == 'win32'",
     "python_full_version < '3.12' and sys_platform != 'win32'",
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/66/70/e908e9c5e52ef7c3a6c7902c9dfbb34c7e29c25d2f81ade3856445fd5c94/protobuf-6.33.6.tar.gz", hash = "sha256:a6768d25248312c297558af96a9f9c929e8c4cee0659cb07e780731095f38135", size = 444531, upload-time = "2026-03-18T19:05:00.988Z" }
@@ -6451,18 +6451,18 @@ version = "1.18.0"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
     "python_full_version >= '3.14' and extra != 'extra-10-waku-agent-arena' and extra != 'extra-10-waku-agent-tracing' and extra == 'extra-10-waku-agent-voice-tada'",
-    "python_full_version == '3.13.*' and extra != 'extra-10-waku-agent-arena' and extra != 'extra-10-waku-agent-tracing' and extra == 'extra-10-waku-agent-voice-tada'",
-    "python_full_version == '3.12.*' and extra != 'extra-10-waku-agent-arena' and extra != 'extra-10-waku-agent-tracing' and extra == 'extra-10-waku-agent-voice-tada'",
     "python_full_version >= '3.14' and sys_platform == 'win32' and extra == 'extra-10-waku-agent-arena' and extra != 'extra-10-waku-agent-voice-tada'",
     "python_full_version >= '3.14' and sys_platform != 'win32' and extra == 'extra-10-waku-agent-arena' and extra != 'extra-10-waku-agent-voice-tada'",
-    "python_full_version == '3.13.*' and sys_platform == 'win32' and extra == 'extra-10-waku-agent-arena' and extra != 'extra-10-waku-agent-voice-tada'",
-    "python_full_version == '3.13.*' and sys_platform != 'win32' and extra == 'extra-10-waku-agent-arena' and extra != 'extra-10-waku-agent-voice-tada'",
-    "python_full_version == '3.12.*' and sys_platform == 'win32' and extra == 'extra-10-waku-agent-arena' and extra != 'extra-10-waku-agent-voice-tada'",
-    "python_full_version == '3.12.*' and sys_platform != 'win32' and extra == 'extra-10-waku-agent-arena' and extra != 'extra-10-waku-agent-voice-tada'",
     "python_full_version >= '3.14' and sys_platform == 'win32' and extra != 'extra-10-waku-agent-arena' and extra != 'extra-10-waku-agent-voice-tada'",
     "python_full_version >= '3.14' and sys_platform != 'win32' and extra != 'extra-10-waku-agent-arena' and extra != 'extra-10-waku-agent-voice-tada'",
+    "python_full_version == '3.13.*' and extra != 'extra-10-waku-agent-arena' and extra != 'extra-10-waku-agent-tracing' and extra == 'extra-10-waku-agent-voice-tada'",
+    "python_full_version == '3.13.*' and sys_platform == 'win32' and extra == 'extra-10-waku-agent-arena' and extra != 'extra-10-waku-agent-voice-tada'",
+    "python_full_version == '3.13.*' and sys_platform != 'win32' and extra == 'extra-10-waku-agent-arena' and extra != 'extra-10-waku-agent-voice-tada'",
     "python_full_version == '3.13.*' and sys_platform == 'win32' and extra != 'extra-10-waku-agent-arena' and extra != 'extra-10-waku-agent-voice-tada'",
     "python_full_version == '3.13.*' and sys_platform != 'win32' and extra != 'extra-10-waku-agent-arena' and extra != 'extra-10-waku-agent-voice-tada'",
+    "python_full_version == '3.12.*' and extra != 'extra-10-waku-agent-arena' and extra != 'extra-10-waku-agent-tracing' and extra == 'extra-10-waku-agent-voice-tada'",
+    "python_full_version == '3.12.*' and sys_platform == 'win32' and extra == 'extra-10-waku-agent-arena' and extra != 'extra-10-waku-agent-voice-tada'",
+    "python_full_version == '3.12.*' and sys_platform != 'win32' and extra == 'extra-10-waku-agent-arena' and extra != 'extra-10-waku-agent-voice-tada'",
     "python_full_version == '3.12.*' and sys_platform == 'win32' and extra != 'extra-10-waku-agent-arena' and extra != 'extra-10-waku-agent-voice-tada'",
     "python_full_version == '3.12.*' and sys_platform != 'win32' and extra != 'extra-10-waku-agent-arena' and extra != 'extra-10-waku-agent-voice-tada'",
 ]
@@ -7439,8 +7439,8 @@ resolution-markers = [
     "python_full_version == '3.13.*' and sys_platform == 'win32'",
     "python_full_version == '3.13.*' and sys_platform != 'win32'",
     "python_full_version == '3.12.*' and sys_platform == 'win32'",
-    "python_full_version < '3.12' and sys_platform == 'win32'",
     "python_full_version == '3.12.*' and sys_platform != 'win32'",
+    "python_full_version < '3.12' and sys_platform == 'win32'",
     "python_full_version < '3.12' and sys_platform != 'win32'",
 ]
 dependencies = [
@@ -7747,6 +7747,7 @@ voice-neural = [
 voice-tada = [
     { name = "hume-tada" },
     { name = "sounddevice" },
+    { name = "soundfile" },
 ]
 whatsapp = [
     { name = "httpx" },
@@ -7790,6 +7791,7 @@ requires-dist = [
     { name = "sounddevice", marker = "extra == 'voice'", specifier = ">=0.4" },
     { name = "sounddevice", marker = "extra == 'voice-tada'", specifier = ">=0.4" },
     { name = "soundfile", marker = "extra == 'voice-neural'", specifier = ">=0.12" },
+    { name = "soundfile", marker = "extra == 'voice-tada'", specifier = ">=0.12" },
     { name = "supabase", marker = "extra == 'supabase'", specifier = ">=2.0" },
     { name = "zep-cloud", marker = "extra == 'arena'", specifier = ">=2.0" },
 ]
