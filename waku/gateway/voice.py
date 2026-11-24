@@ -25,6 +25,7 @@ import sys
 
 from waku.app import Waku
 from waku.gateway.cli import _observer  # show gate/tool lines in voice mode too
+from waku.gateway.speakable import speakable_dates
 
 SAMPLE_RATE = 16000
 
@@ -103,11 +104,13 @@ _EMOJI = re.compile(
 
 
 def _speakable(text: str) -> str:
-    """What actually gets voiced: no emoji, no stray markdown markers, tidy spaces."""
+    """What actually gets voiced: no emoji, no markdown, no written dates/times."""
     if not text:
         return ""
+    text = text.replace("→", " to ")  # arrows are in _EMOJI; keep the connector first
     text = _EMOJI.sub("", text)
     text = re.sub(r"[*_`#>]", "", text)      # markdown emphasis/heading/quote/code marks
+    text = speakable_dates(text)             # ISO timestamps and clock times, in words
     text = re.sub(r"[ \t]{2,}", " ", text)   # collapse gaps left by removed glyphs
     return "\n".join(ln.strip() for ln in text.splitlines()).strip()
 
