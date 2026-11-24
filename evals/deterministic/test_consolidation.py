@@ -750,3 +750,27 @@ def test_already_synced_duplicate_is_not_sent_to_waku_memory(memory):
     assert "Alex prefers morning meetings." not in sent_contents
     # The new Acme fact must still go through normally.
     assert "The Acme demo is on Friday." in sent_contents
+
+
+class ListOnlyStore:
+    """A store with `list` and no `contains`, the shape of the Mem0, Supabase,
+    LangMem and Zep stores."""
+
+    def __init__(self, rows):
+        self.rows, self.added = rows, []
+
+    def list(self, limit: int = 200) -> list[dict]:
+        return self.rows[:limit]
+
+    def add(self, subject, content, source="user"):
+        self.added.append(content)
+
+
+def test_a_store_without_contains_still_drops_duplicates(memory):
+    """The duplicate check moved to `contains`, which only the SQLite store has.
+    Every other store must still be checked against its newest facts."""
+    store = ListOnlyStore([{"subject": "alex", "content": "Alex prefers morning meetings."}])
+    add_exchanges(memory.conn, 3)
+    memory.client = CountingClient([response([text_block(DISTILLED)])])
+    kept_if_due(memory.conn, memory.client, "small-model", 3, store, memory.episodes)
+    assert store.added == ["The Acme demo is on Friday."]

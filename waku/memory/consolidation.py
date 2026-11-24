@@ -267,6 +267,16 @@ def kept_if_due(
     # even when the store holds more than 200 entries.
     if hasattr(facts, "contains"):
         proposed = [f for f in proposed if not facts.contains(f["subject"], f["content"])]
+    elif hasattr(facts, "list"):
+        # Mem0, Supabase, LangMem and Zep have no `contains`: compare against
+        # the newest 200, as before, rather than not checking at all.
+        existing = {
+            (f.get("subject", "").lower().strip(), f.get("content", "").lower().strip())
+            for f in facts.list(limit=200)
+            if isinstance(f, dict)
+        }
+        proposed = [f for f in proposed
+                    if (f["subject"].lower().strip(), f["content"].lower().strip()) not in existing]
     kept = slot_gate.keep(proposed)
     # A model may answer the flag as "true"; anything else, or no flag, is personal.
     research = str(distilled.get("company_research")).lower() == "true"
