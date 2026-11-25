@@ -429,6 +429,33 @@ class TurnTagged:
         return answer if isinstance(answer, dict) else None
 
 
+_REASONING_OPEN, _REASONING_CLOSE = "<reasoning>", "</reasoning>"
+
+
+def _split_reasoning(text: str) -> tuple[str | None, str]:
+    """(reasoning, reply) for a reply that STARTS with <reasoning>...</reasoning>.
+
+    gpt-oss on Amazon Bedrock writes its reasoning into the answer text this
+    way (spec 036). Only a closed block at the very start counts, after any
+    leading whitespace; a reply that mentions the tag anywhere else, or never
+    closes it, comes back as (None, text), unchanged."""
+    body = text.lstrip()
+    if not body.startswith(_REASONING_OPEN):
+        return None, text
+    end = body.find(_REASONING_CLOSE)
+    if end < 0:
+        return None, text
+    reasoning = body[len(_REASONING_OPEN):end].strip()
+    return reasoning, body[end + len(_REASONING_CLOSE):].lstrip()
+
+
+def _reasoning_from_text(thinking: str):
+    """A thinking block for reasoning that arrived inside the answer text.
+    from_text marks it so _to_openai does not send it back as
+    reasoning_content, a field this endpoint never used."""
+    return SimpleNamespace(type="thinking", thinking=thinking, from_text=True)
+
+
 class OpenAICompatClient:
     """Speaks the Anthropic Messages shape the loop expects, backed by an
     OpenAI-style chat.completions API. The adapter preserves reasoning and
@@ -478,7 +505,8 @@ class OpenAICompatClient:
                         call["extra_content"] = extra
                     calls.append(call)
                 entry: dict = {"role": "assistant", "content": text or None}
-                thinking = [b.thinking for b in content if getattr(b, "type", "") == "thinking"]
+                thinking = [b.thinking for b in content if getattr(b, "type", "") == "thinking"
+                            and not getattr(b, "from_text", False)]
                 if thinking:
                     entry["reasoning_content"] = "".join(thinking)
                 if calls:
@@ -563,8 +591,12 @@ class OpenAICompatClient:
         if isinstance(reasoning, str):
             self._remember_reasoning(model)
             blocks.append(SimpleNamespace(type="thinking", thinking=reasoning))
-        if choice.content:
-            blocks.append(SimpleNamespace(type="text", text=choice.content))
+        text = choice.content or ""
+        in_text, text = _split_reasoning(text)
+        if in_text is not None:
+            blocks.append(_reasoning_from_text(in_text))
+        if text:
+            blocks.append(SimpleNamespace(type="text", text=text))
         for call in choice.tool_calls or []:
             blocks.append(SimpleNamespace(
                 type="tool_use", id=call.id, name=call.function.name,
@@ -604,6 +636,11 @@ class _OpenAIStream:
         self._kwargs = kwargs
         self._text: list[str] = []
         self._reasoning: list[str] = []
+        # Text held back until it is clear whether the reply opens with a
+        # <reasoning> block (see _split_reasoning). None once that is decided.
+        self._held: str | None = ""
+        self._reasoning_in_text: str | None = None
+        self._after_block = False           # drop whitespace between block and answer
         self._tools: dict[int, dict] = {}   # index → {id, name, args, extra?}
         self._usage = None
 
@@ -628,8 +665,10 @@ class _OpenAIStream:
                 self._client._remember_reasoning(self._kwargs["model"])
                 self._reasoning.append(reasoning)
             if getattr(delta, "content", None):
-                self._text.append(delta.content)
-                yield delta.content
+                shown = self._show(delta.content)
+                if shown:
+                    self._text.append(shown)
+                    yield shown
             for tc in (getattr(delta, "tool_calls", None) or []):
                 slot = self._tools.setdefault(tc.index, {"id": None, "name": "", "args": ""})
                 if tc.id:
@@ -642,11 +681,39 @@ class _OpenAIStream:
                 # Later argument chunks may omit it; keep what we received.
                 if getattr(tc, "extra_content", None):
                     slot["extra"] = tc.extra_content
+        if self._held:
+            # The stream ended before a block closed: show the text as written.
+            shown, self._held = self._held, None
+            self._text.append(shown)
+            yield shown
+
+    def _show(self, piece: str) -> str:
+        """The part of `piece` a person may see now. A reply that opens with
+        <reasoning> is held until </reasoning> arrives, then the block moves to
+        the trace and only the answer after it is shown."""
+        if self._held is None:
+            if self._after_block:
+                piece = piece.lstrip()
+                self._after_block = not piece
+            return piece
+        self._held += piece
+        start = self._held.lstrip()
+        if not start or _REASONING_OPEN.startswith(start):
+            return ""                       # still could be the opening tag
+        if start.startswith(_REASONING_OPEN) and _REASONING_CLOSE not in start:
+            return ""                       # inside the block, not closed yet
+        reasoning, shown = _split_reasoning(self._held)
+        self._reasoning_in_text = reasoning
+        self._after_block = reasoning is not None and not shown
+        self._held = None
+        return shown
 
     def get_final_message(self):
         blocks = []
         if self._reasoning:
             blocks.append(SimpleNamespace(type="thinking", thinking="".join(self._reasoning)))
+        if self._reasoning_in_text is not None:
+            blocks.append(_reasoning_from_text(self._reasoning_in_text))
         text = "".join(self._text)
         if text:
             blocks.append(SimpleNamespace(type="text", text=text))
