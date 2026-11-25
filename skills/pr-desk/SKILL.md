@@ -1,6 +1,6 @@
 ---
 name: pr-desk
-description: PR desk: morning digest of open pull requests, with CI checks, size, area, plus a drafted pull request review approved in Slack.
+description: PR desk: morning digest of open pull requests, with CI checks, size, area, posted in Slack.
 ---
 
 ## Set it up once

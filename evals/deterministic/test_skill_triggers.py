@@ -121,7 +121,6 @@ MESSAGES = {
         "morning PR digest",
         "post the morning digest of open pull requests",
         "which pull requests have failing CI checks",
-        "draft a review of pull request 428",
     ],
 }
 
