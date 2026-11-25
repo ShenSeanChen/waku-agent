@@ -75,6 +75,16 @@ MODEL_PRICING = {
     "deepseek-v4-flash": (0.15, 0.30),
     # free tier on opencode_zen
     "deepseek-v4-flash-free": (0.0, 0.0),
+    # Amazon Bedrock, us-east-1, on-demand standard tier. From AWS's Price List
+    # offer file (pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrock/
+    # current/us-east-1/index.json, published 2026-11-23), read 2026-11-24;
+    # deepseek, nemotron and devstral also match aws.amazon.com/bedrock/pricing/.
+    # Other regions cost more (Sydney, London), so this is the us-east-1 rate.
+    "openai.gpt-oss-120b-1:0": (0.15, 0.60),
+    "deepseek.v3.2": (0.62, 1.85),
+    "qwen.qwen3-32b-v1:0": (0.15, 0.60),
+    "nvidia.nemotron-super-3-120b": (0.15, 0.65),
+    "mistral.devstral-2-123b": (0.40, 2.00),
 }
 
 
@@ -108,6 +118,13 @@ MODEL_CUTOFF = {
     # OpenCode / deepseek
     "deepseek-v4-flash": "2026-04",
     "deepseek-v4-flash-free": "2026-04",
+    # Amazon Bedrock. Not checked against the makers' model cards yet, so the
+    # arena shows a dash rather than a guess.
+    "openai.gpt-oss-120b-1:0": None,
+    "deepseek.v3.2": None,
+    "qwen.qwen3-32b-v1:0": None,
+    "nvidia.nemotron-super-3-120b": None,
+    "mistral.devstral-2-123b": None,
 }
 
 
