@@ -21,7 +21,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from waku.alwayson import approvals, outbox, runs, timers
+from waku.alwayson import approvals, events, outbox, runs, timers
 from waku.alwayson.events import Inbox
 from waku.alwayson.sources import github as github_source
 from waku.alwayson.worker import CHAT_STYLE, SHARED_PLACE, AgentRun, Worker, render
@@ -255,3 +255,18 @@ def test_the_desk_run_is_started_with_only_its_tools(home, conn):
         agent.close()
     assert [r["note"] for r in conn.execute("SELECT note FROM timers")] == [NOTE]
     assert client._script == [], "the model was called for one run"
+
+
+def test_the_desk_run_loads_the_pr_desk_skill(home, conn):
+    """The skill is chosen by the words of the run's own message."""
+    from pathlib import Path
+
+    from waku.memory.procedural.loader import SkillLoader
+
+    loader = SkillLoader([Path(__file__).resolve().parents[2] / "skills"])
+    clock = Clock(MONDAY_9)
+    _poll(home, [PR_428])
+    _desk_timer(conn)
+    _fire(conn, clock)
+    prompt = render([events.claim_next(conn)])
+    assert [skill.name for skill in loader.match(prompt)][:1] == ["pr-desk"]
