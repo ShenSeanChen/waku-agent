@@ -180,6 +180,9 @@ class RunContext:
     # Set while the worker runs a call the owner approved (approvals.py): the
     # key of the one row that call may write.
     approved_key: str | None = None
+    # Set for the PR desk's run (spec 035): the only tools it may call. A pull
+    # request's text reaches that run, and anyone can write one.
+    only: frozenset[str] | None = None
 
     def next_key(self) -> str:
         """`<run>:1`, `<run>:2`, ... in call order. The run's reply is `<run>:0`.
@@ -204,9 +207,9 @@ _RUNS_LOCK = threading.Lock()
 
 @contextmanager
 def running(home: Path, run_id: str, address: tuple[str, dict] | None,
-            approved_key: str | None = None):
+            approved_key: str | None = None, only: frozenset[str] | None = None):
     """Mark a run as in flight for this home while the block runs."""
-    context = RunContext(run_id, address, approved_key=approved_key)
+    context = RunContext(run_id, address, approved_key=approved_key, only=only)
     with _RUNS_LOCK:
         _RUNS[Path(home)] = context
     try:

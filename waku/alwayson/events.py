@@ -97,6 +97,16 @@ def recover(conn: sqlite3.Connection) -> int:
     return cursor.rowcount
 
 
+def quiet_since(conn: sqlite3.Connection, after_id: int, limit: int = 50) -> list[dict]:
+    """The payloads of quiet rows written after row `after_id`, oldest first:
+    the pull requests the PR desk's run reads (spec 035). At most `limit`,
+    the newest, so a first digest after a long gap stays one message."""
+    rows = conn.execute(
+        "SELECT payload FROM events WHERE id > ? AND json_extract(payload, '$.quiet') = 1 "
+        "ORDER BY id DESC LIMIT ?", (after_id, limit)).fetchall()
+    return [json.loads(row["payload"]) for row in reversed(rows)]
+
+
 class Inbox:
     """What a handler holds: `add` writes one row from whichever thread the
     handler runs on. SQLite connections stay on the thread that opened them,
