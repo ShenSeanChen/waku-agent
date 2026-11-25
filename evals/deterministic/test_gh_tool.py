@@ -10,7 +10,7 @@ The design being defended, from the module docstring:
 
     ARGV IS CONSTRUCTED, NEVER FILTERED.
 
-The model picks a label from a table of five; every other argv element is
+The model picks a label from a table of six; every other argv element is
 either a literal in the source or a value that matched a regex. So the tests
 below check the boundary in two independent ways — the refusal text, and the
 stronger claim that the subprocess is never reached at all. The second is what
@@ -25,6 +25,7 @@ describing it.
 from __future__ import annotations
 
 import inspect
+import json
 import subprocess
 
 import pytest
@@ -76,14 +77,15 @@ def test_write_commands_never_reach_a_subprocess(command, no_subprocess):
     assert "pr list" in out, "the refusal should name what IS allowed"
 
 
-def test_the_allowlist_is_exactly_the_five_read_commands():
-    """Adding a sixth entry should be a deliberate, reviewed act. If this fails,
-    someone widened the tool's reach — check that they meant to."""
+def test_the_allowlist_is_exactly_the_six_read_commands():
+    """Adding a seventh entry should be a deliberate, reviewed act. If this
+    fails, someone widened the tool's reach — check that they meant to."""
     assert set(github._ALLOWED) == {
-        "pr list", "pr view", "pr diff", "issue list", "issue view",
+        "pr list", "pr view", "pr diff", "pr checks", "issue list", "issue view",
     }
     for argv in github._ALLOWED.values():
-        assert not ({"merge", "close", "create", "comment", "edit", "delete"} & set(argv))
+        assert not ({"merge", "close", "create", "comment", "edit", "delete", "review"}
+                    & set(argv))
 
 
 def test_a_hostile_repo_is_refused_not_escaped(no_subprocess):
@@ -95,7 +97,7 @@ def test_a_hostile_repo_is_refused_not_escaped(no_subprocess):
 
 
 def test_view_and_diff_require_a_real_number(no_subprocess):
-    for command in ("pr view", "pr diff", "issue view"):
+    for command in ("pr view", "pr diff", "pr checks", "issue view"):
         assert "number" in github.gh_read(command, number=0)
         assert "number" in github.gh_read(command, number=-3)
         assert "number" in github.gh_read(command, number="not-a-number")  # type: ignore[arg-type]
@@ -252,3 +254,45 @@ def test_the_description_tells_the_model_the_boundary():
     assert "read-only" in desc
     for verb in ("merge", "comment", "close"):
         assert verb in desc
+
+
+# --- pr checks (spec 035) ---------------------------------------------------
+
+_CHECKS = json.dumps([
+    {"name": "skills-and-evals", "state": "SUCCESS", "bucket": "pass", "workflow": "validate"},
+    {"name": "hosted-docker", "state": "FAILURE", "bucket": "fail", "workflow": "hosted"},
+    {"name": "lint", "state": "PENDING", "bucket": "pending", "workflow": ""}])
+
+
+def test_github_read_pr_checks(capture):
+    """The digest reads the CI that GitHub already ran: one more read row,
+    and the write guard above still refuses everything else."""
+    capture["stdout"] = _CHECKS
+    out = github.gh_read("pr checks", number=428, repo="acme/app")
+    assert capture["argv"] == ["gh", "pr", "checks", "428", "--repo", "acme/app",
+                               "--json", "name,state,bucket,workflow"]
+    assert out == ("1 passed, 1 failed, 1 pending\n"
+                   "pass: validate / skills-and-evals\n"
+                   "fail: hosted / hosted-docker\n"
+                   "pending: lint")
+
+
+@pytest.mark.parametrize("code", [1, 8])
+def test_pr_checks_reads_json_when_gh_exits_for_a_red_or_pending_check(monkeypatch, code):
+    """`gh pr checks` exits 1 when a check failed and 8 when one is pending,
+    and prints the JSON all the same. A red CI is an answer, not an error."""
+    monkeypatch.setattr(github.subprocess, "run", lambda *a, **k: subprocess.CompletedProcess(
+        a[0], code, stdout=_CHECKS, stderr=""))
+    assert github.gh_read("pr checks", number=428).startswith("1 passed, 1 failed")
+
+
+def test_pr_checks_with_no_checks_says_so(monkeypatch):
+    monkeypatch.setattr(github.subprocess, "run", lambda *a, **k: subprocess.CompletedProcess(
+        a[0], 1, stdout="", stderr="no checks reported on the 'feature' branch"))
+    assert github.gh_read("pr checks", number=428) == "no checks reported on the 'feature' branch"
+
+
+def test_another_command_still_fails_on_a_non_zero_exit(monkeypatch):
+    monkeypatch.setattr(github.subprocess, "run", lambda *a, **k: subprocess.CompletedProcess(
+        a[0], 1, stdout="[]", stderr="HTTP 404"))
+    assert github.gh_read("pr view", number=428) == "HTTP 404"
