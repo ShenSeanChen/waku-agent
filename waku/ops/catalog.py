@@ -243,8 +243,21 @@ def pinned_specs() -> list[str]:
         except (json.JSONDecodeError, OSError):
             saved = None
         if saved is not None:
-            return [spec for spec in saved if not _stale_platform_pin(spec)]
+            kept = [spec for spec in saved if not _stale_platform_pin(spec)]
+            return kept + _unpinned_provider_defaults(kept)
     return default_pinned_specs()
+
+
+def _unpinned_provider_defaults(kept: list[str]) -> list[str]:
+    """Defaults for a provider that has a key but no pin in the saved list.
+
+    The starter shortlist is written once. Without this, a provider whose key
+    is added later (Groq, Amazon Bedrock) showed "enabled" on the Models page
+    and never reached the chat switcher, because nothing pinned it. These are
+    not written to models.json: pinning one of them keeps it, and the Models
+    page's Disable button is how a provider leaves the switcher."""
+    have = {spec.partition(":")[0] for spec in kept}
+    return [spec for spec in default_pinned_specs() if spec.partition(":")[0] not in have]
 
 
 def default_model_for(provider: str) -> str:
