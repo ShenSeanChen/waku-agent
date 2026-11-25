@@ -36,6 +36,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import sys
 import threading
 import urllib.error
 import urllib.parse
@@ -43,6 +44,7 @@ import urllib.request
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 
@@ -174,6 +176,20 @@ def test_correctly_signed_text_message_is_200_and_invokes_the_agent_once(gateway
         {"text": "what is on my calendar today?", "source": "whatsapp"}
     ]
     assert gateway.sent == [(ALLOWED_PHONE, "echo: what is on my calendar today?")]
+
+
+def test_send_message_posts_text_to_the_versioned_phone_endpoint(monkeypatch):
+    post = Mock()
+    monkeypatch.setitem(sys.modules, "httpx", SimpleNamespace(post=post))
+
+    assert whatsapp._send_message("test-token", "12345", ALLOWED_PHONE, "hello")
+
+    post.assert_called_once()
+    assert post.call_args.args == ("https://graph.facebook.com/v26.0/12345/messages",)
+    assert post.call_args.kwargs["json"] == {
+        "messaging_product": "whatsapp", "to": ALLOWED_PHONE, "type": "text",
+        "text": {"body": "hello"},
+    }
 
 
 # ---------- webhook verification (GET)

@@ -108,7 +108,7 @@ def _send_message(token: str, phone_number_id: str, to: str, text: str) -> bool:
     """Send a text message via the Meta Cloud API. Returns True on success."""
     import httpx
 
-    url = f"https://graph.facebook.com/v21.0/{phone_number_id}/messages"
+    url = f"https://graph.facebook.com/v26.0/{phone_number_id}/messages"
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
     payload = {"messaging_product": "whatsapp", "to": to, "type": "text", "text": {"body": text}}
     try:
