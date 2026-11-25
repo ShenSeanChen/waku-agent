@@ -37,15 +37,22 @@ def _event(row: sqlite3.Row) -> Event:
 
 
 def insert(conn: sqlite3.Connection, *, source: str, external_id: str, session_id: str,
-           payload: dict, received_at: str | None = None) -> int | None:
-    """Write one pending row. Returns its id, or None when this source already
+           payload: dict, received_at: str | None = None,
+           status: str = "pending") -> int | None:
+    """Write one row. Returns its id, or None when this source already
     delivered this external_id: Slack and GitHub resend a message whose answer
-    was slow, and UNIQUE(source, external_id) makes the second delivery a no-op."""
+    was slow, and UNIQUE(source, external_id) makes the second delivery a no-op.
+
+    A message a run answers is `pending`. A quiet row is `done` from the
+    start (spec 035): a pull request that the PR desk's morning run reads,
+    which starts no run of its own."""
+    if status not in ("pending", "done"):
+        raise ValueError(f"a new event is pending or done, not '{status}'")
     received_at = received_at or datetime.now(UTC).isoformat(timespec="seconds")
     cursor = conn.execute(
-        "INSERT OR IGNORE INTO events (received_at, source, external_id, session_id, payload) "
-        "VALUES (?, ?, ?, ?, ?)",
-        (received_at, source, str(external_id), session_id, json.dumps(payload)))
+        "INSERT OR IGNORE INTO events (received_at, source, external_id, session_id, payload, "
+        "status) VALUES (?, ?, ?, ?, ?, ?)",
+        (received_at, source, str(external_id), session_id, json.dumps(payload), status))
     conn.commit()
     return cursor.lastrowid if cursor.rowcount else None
 
@@ -99,7 +106,8 @@ class Inbox:
         self.home = home
         self._local = threading.local()
 
-    def add(self, *, source: str, external_id: str, session_id: str, payload: dict) -> bool:
+    def add(self, *, source: str, external_id: str, session_id: str, payload: dict,
+            status: str = "pending") -> bool:
         """True when a row was written, False for a redelivery."""
         conn = getattr(self._local, "conn", None)
         if conn is None:
@@ -107,4 +115,4 @@ class Inbox:
 
             conn = self._local.conn = connect(self.home)
         return insert(conn, source=source, external_id=external_id,
-                      session_id=session_id, payload=payload) is not None
+                      session_id=session_id, payload=payload, status=status) is not None
