@@ -43,7 +43,7 @@ from typing import Any
 
 from waku.alwayson import approvals, events, outbox, runs, timers
 from waku.alwayson.events import Event
-from waku.loop.agent import text_with_sign_in
+from waku.loop.agent import credits_notice, text_with_sign_in
 from waku.memory import tool_note
 
 BATCH_WAIT_SECONDS = 3.0
@@ -360,6 +360,9 @@ FAILED_AFTER = ("Something went wrong on my side after that, so I cannot say mor
                 "it. Ask me again if you need more.")
 NOT_ANSWERED = ("Something went wrong on my side and I could not answer in {where}. "
                 "Nothing was posted there.")
+# The same, when the reason is the person's Waku credits (spec 042). The
+# notice is the hosted proxy's sentence, with the price and the link.
+NOT_ANSWERED_CREDITS = "I could not answer in {where}. Nothing was posted there. {notice}"
 # What the conversation reads as the result of an approved call that raised.
 CALL_FAILED = "Error: the call did not finish. Something went wrong on my side."
 
@@ -548,7 +551,7 @@ class Worker:
             runs.finish(self.conn, run.id, self._ended(run.id, "failed"), now=self._now())
             events.mark(self.conn, ids, "failed")
             self._log(f"(serve) the run for {first.session_id} failed: {safe_exception(exc)}")
-            self._queue_failed(run.id, batch)
+            self._queue_failed(run.id, batch, credits_notice(exc))
         else:
             if not isinstance(outcome, runs.Outcome):
                 outcome = runs.Outcome(outcome)
@@ -715,17 +718,25 @@ class Worker:
                       body="\n".join(f"{what}. {did}" for what in arrived),
                       idempotency_key=f"{run_id}:note", now=self._now())
 
-    def _queue_failed(self, run_id: int, batch: list[Event]) -> None:
+    def _queue_failed(self, run_id: int, batch: list[Event],
+                      notice: str | None = None) -> None:
         """A run that raised still says one plain sentence: what did not work
         and what to do. The reason stays in the log. When the batch held the
         outcome of a call the owner approved, the sentence follows it, so the
         person reads what the call answered. A place other people read gets
-        nothing, and the owner is told there was no answer there."""
+        nothing, and the owner is told there was no answer there.
+
+        `notice` is set when the hosted proxy refused the turn because the
+        person's Waku credits ran out (spec 042). The person then reads that
+        sentence, which names the price and the link, instead of FAILED, which
+        told them to restart a computer they do not have. In a shared place
+        the owner pays, so the owner reads it, privately."""
         address = reply_address(batch)
         if address is None:
             return
         outcomes = [e.payload.get("text", "") for e in batch if e.source == approvals.SOURCE]
-        body = "\n\n".join([*outcomes, FAILED_AFTER if outcomes else FAILED])
+        sorry = notice or (FAILED_AFTER if outcomes else FAILED)
+        body = "\n\n".join([*outcomes, sorry])
         if not approvals.reply_is_free(address):
             owner = next(iter(outbox.owner_addresses()), None)
             if owner is None:
@@ -733,7 +744,9 @@ class Worker:
             channel, target = address
             where = (f"{target.get('repo')}#{target.get('number')}" if channel == "github"
                      else channel.capitalize())
-            address, body = owner, NOT_ANSWERED.format(where=where)
+            body = (NOT_ANSWERED_CREDITS.format(where=where, notice=notice) if notice
+                    else NOT_ANSWERED.format(where=where))
+            address = owner
         outbox.insert(self.conn, run_id=str(run_id), channel=address[0], target=address[1],
                       body=without_chat_ids(body, address),
                       idempotency_key=f"{run_id}:failed", now=self._now())
