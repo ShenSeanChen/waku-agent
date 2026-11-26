@@ -269,7 +269,7 @@ class MCPBridge:
             tools.extend(as_tool(srv, meta, self.call) for meta in metas)
         return tools
 
-    async def _open_streams(self, spec: dict):
+    async def _open_streams(self, spec: dict, stack: AsyncExitStack):
         """Connect one server and return its (read, write) streams.
 
         The transport is chosen by the config's shape rather than by a
@@ -288,7 +288,7 @@ class MCPBridge:
             params = StdioServerParameters(
                 command=spec["command"], args=spec.get("args", []), env=spec.get("env") or None
             )
-            return await self._stack.enter_async_context(stdio_client(params))
+            return await stack.enter_async_context(stdio_client(params))
 
         from mcp.client.streamable_http import create_mcp_http_client, streamable_http_client
 
@@ -332,10 +332,10 @@ class MCPBridge:
         # to authenticate this transport. Because we build the client rather
         # than letting the transport build one, we own its lifecycle — hence
         # entering it on the stack ourselves.
-        client = await self._stack.enter_async_context(
+        client = await stack.enter_async_context(
             create_mcp_http_client(headers=headers, auth=auth)
         )
-        return await self._stack.enter_async_context(
+        return await stack.enter_async_context(
             streamable_http_client(url, http_client=client)
         )
 
@@ -363,13 +363,26 @@ class MCPBridge:
 
         name = spec["name"]
         self._specs[name] = spec
-        read, write = await self._open_streams(spec)
-        info = types.Implementation(name=CLIENT_NAME, version=__version__)
-        session = await self._stack.enter_async_context(
-            ClientSession(read, write, client_info=info))
-        await session.initialize()
+        # One exit stack per server (spec 038). A server that fails while
+        # connecting is closed here, at once, in this task: its transport's
+        # task group otherwise stayed open on the shared stack and cancelled
+        # every server connected after it.
+        stack = AsyncExitStack()
+        try:
+            read, write = await self._open_streams(spec, stack)
+            info = types.Implementation(name=CLIENT_NAME, version=__version__)
+            session = await stack.enter_async_context(
+                ClientSession(read, write, client_info=info))
+            await session.initialize()
+            tools = (await session.list_tools()).tools
+        except BaseException:
+            try:
+                await stack.aclose()
+            except BaseException:
+                pass
+            raise
+        self._stack.push_async_callback(stack.aclose)
         self._sessions[name] = session
-        tools = (await session.list_tools()).tools
         # `input_schema` in the SDK's 2.x line; it was `inputSchema` in 1.x.
         # getattr covers both so a user on either pin gets a working connector
         # rather than an AttributeError reported as "failed to connect".
@@ -388,6 +401,17 @@ class MCPBridge:
                 continue
             try:
                 listed[name] = await self._connect_one(spec)
+            except asyncio.CancelledError:
+                # Spec 038: a refused sign-in fails inside the transport's own
+                # task group, which cancels this task rather than raising. That
+                # cancelled the whole connect and every other server with it,
+                # so no agent could be built. Only that cancellation is
+                # absorbed; any other one (Waku closing) still propagates.
+                if name not in self.needs_sign_in:
+                    raise
+                asyncio.current_task().uncancel()
+                print(f"MCP server '{name}' needs a sign-in; left out of this turn")
+                continue
             except Exception as first_exc:  # one bad server shouldn't stop the rest
                 # Bound to a name of our own: Python unbinds an `except … as`
                 # variable at the end of the block, so the retry below cannot

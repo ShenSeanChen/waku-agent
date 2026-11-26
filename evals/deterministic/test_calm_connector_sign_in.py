@@ -164,3 +164,47 @@ def test_the_not_now_route_is_blocked_on_hosted():
     from hosted.core.policy import BLOCK_MESSAGES, CONNECTORS_BLOCKED
 
     assert BLOCK_MESSAGES["/api/connectors/snooze"] == CONNECTORS_BLOCKED
+
+
+def test_a_refused_sign_in_does_not_cancel_the_next_server(tmp_path):
+    """Found on port 7778 (2026-11-25), with treg's lapsed sign-in: refusing
+    the sign-in fails inside the transport's own task group, which cancels the
+    connecting task instead of raising. That cancelled every server after it
+    and the whole agent build ("could not start a new chat. CancelledError").
+    Each server now has its own exit stack, closed at once when it fails."""
+    import contextlib
+    import json
+    import sys
+    from pathlib import Path
+
+    pytest.importorskip("mcp", reason="the MCP connector is an optional extra")
+    from waku.tools.mcp_client import MCPBridge
+
+    demo = Path(__file__).resolve().parents[2] / "evals" / "fixtures" / "mcp_demo_server.py"
+    config = tmp_path / "mcp.json"
+    config.write_text(json.dumps({"servers": [
+        {"name": "lapsed", "url": "https://example.test/mcp", "oauth": True},
+        {"name": "demo", "command": sys.executable, "args": [str(demo)]},
+    ]}), encoding="utf-8")
+    bridge = MCPBridge(config, interactive=False, timeout=30.0)
+    bridge._token_exists = lambda spec: True   # an old token is on disk
+    real_open = bridge._open_streams
+
+    @contextlib.asynccontextmanager
+    async def cancelled_by_its_transport():
+        bridge._note_sign_in_needed("lapsed")
+        raise asyncio.CancelledError
+        yield  # pragma: no cover
+
+    async def open_streams(spec, stack):
+        if spec["name"] == "lapsed":
+            return await stack.enter_async_context(cancelled_by_its_transport())
+        return await real_open(spec, stack)
+
+    bridge._open_streams = open_streams
+    try:
+        tools = bridge.start()
+        assert bridge.needs_sign_in == ["lapsed"]
+        assert bridge.connected("demo") and tools
+    finally:
+        bridge.close()
