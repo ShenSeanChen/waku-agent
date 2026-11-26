@@ -344,13 +344,17 @@ const chatTurnCard = t => uiCard(`
 function renderSignInCards(names){
   const box = document.getElementById("docksignin");
   if (!box) return;
+  // The buttons sit under the sentence, not in the notice's side slot: the
+  // chat column is narrow, and beside two buttons the words wrapped a letter
+  // to a line.
   box.innerHTML = (names || []).map(name => uiNotice("note",
-    `<b>${esc(name)}</b> needs you to sign in again. Its tools are left out until you do.`,
-    uiButton("Sign in", {level: "primary", size: "sm",
-      onclick: "sendChat({value: this.dataset.say, focus(){}})",
-      attrs: `data-say="connect ${esc(name)}"`})
-    + " " + uiButton("Not now", {level: "secondary", size: "sm",
-      onclick: "snoozeSignIn(this.dataset.name)", attrs: `data-name="${esc(name)}"`}))).join("");
+    `<b>${esc(name)}</b> needs you to sign in again. Its tools are left out until you do.
+     <div style="display:flex;gap:var(--space-2);margin-top:var(--space-2)">${
+      uiButton("Sign in", {level: "primary", size: "sm",
+        onclick: "sendChat({value: this.dataset.say, focus(){}})",
+        attrs: `data-say="connect ${esc(name)}"`})}${
+      uiButton("Not now", {level: "secondary", size: "sm",
+        onclick: "snoozeSignIn(this.dataset.name)", attrs: `data-name="${esc(name)}"`})}</div>`)).join("");
 }
 async function snoozeSignIn(name){
   const r = await postJSON("/api/connectors/snooze", {name});
