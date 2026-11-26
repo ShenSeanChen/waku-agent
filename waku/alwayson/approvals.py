@@ -88,6 +88,26 @@ def _hosted_slack(address: Address) -> bool:
     return address[0] == "slack" and os.getenv("WAKU_HOSTED", "") == "1"
 
 
+# ---- the PR desk's channel (spec 035) ----------------------------------------
+
+_CHANNEL_RE = re.compile(r"^[A-Z0-9]+$")
+
+
+def digest_channel() -> str:
+    """WAKU_DIGEST_CHANNEL: the Slack channel id the PR desk posts its morning
+    digest to, `#dev` for the maintainers. Empty when it is not set or is not
+    a channel id."""
+    channel = os.getenv("WAKU_DIGEST_CHANNEL", "").strip()
+    return channel if _CHANNEL_RE.match(channel) else ""
+
+
+def digest_address() -> Address | None:
+    """Where the digest goes: the channel itself, not a thread. `digest`
+    marks the row, so a drafted review can wait in a thread under it."""
+    channel = digest_channel()
+    return ("slack", {"channel": channel, "digest": True}) if channel else None
+
+
 def _send_message(args: dict, address: Address | None) -> str:
     """A message to the owner is a reply. So is a message back into the
     conversation the run came from, when the run's own reply would go there
@@ -390,6 +410,11 @@ ALREADY_WAITS = ("Not run: another call in this conversation already waits for a
                  "[{code}]. One call waits at a time.")
 NOBODY = ("Not run: this call needs the owner's approval, and WAKU_OWNER names no chat "
           "where the owner can answer. Set WAKU_OWNER in .env to telegram:<chat id>.")
+# What the model reads when the PR desk's run calls any tool other than
+# worker.DESK_TOOLS. A pull request's text reaches that run, and anyone can
+# open one (spec 035, decision 2). Like every text here, it names no tool.
+OUTSIDE_DESK = ("Not run: this run reads GitHub and drafts one review, and it can do "
+                "nothing else.")
 
 
 class Gate:
@@ -412,6 +437,8 @@ class Gate:
         if context is None or not context.run_id.isdigit():
             return None, ""
         args = args if isinstance(args, dict) else {}
+        if context.only is not None and tool not in context.only:
+            return OUTSIDE_DESK, ""
         known = self._tools.get(tool) if self._tools is not None else None
         if self._tools is not None and known is None and tool not in MODES:
             # No such tool, so there is nothing to approve. The registry tells

@@ -66,13 +66,26 @@ It listens to whichever of these three you configure in `.env`:
 |---|---|---|
 | Telegram | `TELEGRAM_BOT_TOKEN`, `TELEGRAM_ALLOWED_USER` | every message from an allowed user |
 | Slack | `SLACK_APP_TOKEN`, `SLACK_BOT_TOKEN`, `SLACK_ALLOWED_CHANNELS`, and `pip install 'waku-agent[slack]'`. The Slack card on the dashboard's Connections page sets the same three values. The app comes from a manifest: see "Slack from a manifest" below | an @mention in an allowed channel of your workspace |
-| GitHub | `WAKU_GITHUB_REPOS`, and `gh auth login` once | an open issue with the label `waku`; with `WAKU_GITHUB_LOGIN`, a comment that mentions that login, from an owner, member or collaborator |
+| GitHub | `WAKU_GITHUB_REPOS`, and `gh auth login` once | an open issue with the label `waku`; with `WAKU_GITHUB_LOGIN`, a comment that mentions that login, from an owner, member or collaborator; every pull request opened or marked ready, recorded quietly for the PR desk (below) |
 
 Slack uses Socket Mode and GitHub is polled through the `gh` CLI every 60
 seconds, so a laptop needs no public address. On a server, set
 `GITHUB_WEBHOOK_SECRET` and point the repository's webhook at
 `POST /webhooks/github`: `waku serve` then listens on `127.0.0.1:7780`, checks
 GitHub's signature on every delivery, and stops polling.
+
+### The PR desk
+
+Every pull request that is opened or marked ready for review in
+`WAKU_GITHUB_REPOS` is recorded, whoever opened it, but it starts no run.
+Ask Waku for "a morning PR digest" and the `pr-desk` skill sets a weekday
+timer whose note starts with "PR desk". Each morning that run lists the pull
+requests recorded since the last digest, reads their CI with `github_read`
+(set `WAKU_GH_TOOL=1`), and posts one digest to the Slack channel id in
+`WAKU_DIGEST_CHANNEL`. That post does not ask first, because the run can only
+read GitHub: a pull request's title and description come from whoever opened
+it, so the run reads them as data and cannot call any other tool. With the
+webhook, add the event "Pull requests".
 
 ### Slack from a manifest
 

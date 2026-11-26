@@ -53,6 +53,12 @@ from datetime import UTC, date, datetime, time, timedelta, timezone, tzinfo
 from waku.alwayson import events, outbox
 
 SOURCE = "timer"
+# A timer whose note starts with "PR desk" wakes the PR desk's morning run
+# (spec 035). Its event carries the pull requests GitHub reported since this
+# timer last fired, and it runs in a conversation of its own, `pr-desk:<id>`,
+# so a review waiting there never blocks a call in the chat that set it: one
+# call waits per conversation.
+PR_DESK_NOTE = "pr desk"
 # The longest the loop sleeps between two looks at the table.
 CHECK_SECONDS = 30.0
 # What `repeat` may hold, and the weekdays each fires on (Monday is 0).
@@ -226,9 +232,33 @@ def due(conn: sqlite3.Connection, now: datetime) -> list[Timer]:
     return [_timer(row) for row in rows]
 
 
+def is_pr_desk(note: str) -> bool:
+    """Whether a timer's note asks for the PR desk: it starts with "PR desk"."""
+    return (note or "").strip().lower().startswith(PR_DESK_NOTE)
+
+
 def mark_fired(conn: sqlite3.Connection, timer_id: int) -> None:
     conn.execute("UPDATE timers SET status = 'fired' WHERE id = ?", (timer_id,))
     conn.commit()
+
+
+def _last_event(conn: sqlite3.Connection, timer_id: int) -> int:
+    """The id of the newest event this timer wrote, or 0."""
+    row = conn.execute(
+        "SELECT MAX(id) AS last FROM events WHERE source = ? "
+        "AND (external_id = ? OR external_id LIKE ?)",
+        (SOURCE, f"timer:{timer_id}", f"timer:{timer_id}:%")).fetchone()
+    return row["last"] or 0
+
+
+def _session(conn: sqlite3.Connection, timer: Timer, payload: dict) -> str:
+    """The conversation a timer's run is in. A PR desk timer's payload also
+    gets every quiet pull request since the timer last fired."""
+    if not is_pr_desk(timer.note):
+        return timer.session_id
+    payload["prs"] = [row["pr"] for row in events.quiet_since(conn, _last_event(conn, timer.id))
+                      if isinstance(row.get("pr"), dict)]
+    return f"pr-desk:{timer.id}"
 
 
 def fire(conn: sqlite3.Connection, timer: Timer, now: datetime) -> bool:
@@ -245,7 +275,7 @@ def fire(conn: sqlite3.Connection, timer: Timer, now: datetime) -> bool:
     if timer.address:
         payload["channel"], payload["reply_to"] = timer.address
     events.insert(conn, source=SOURCE, external_id=f"timer:{timer.id}",
-                  session_id=timer.session_id, payload=payload,
+                  session_id=_session(conn, timer, payload), payload=payload,
                   received_at=outbox._stamp(now))
     mark_fired(conn, timer.id)
     return True
@@ -270,7 +300,7 @@ def _fire_repeating(conn: sqlite3.Connection, timer: Timer, now: datetime) -> bo
             payload["channel"], payload["reply_to"] = timer.address
         day = occurrence.astimezone(zone_of(timer.zone)).date().isoformat()
         events.insert(conn, source=SOURCE, external_id=f"timer:{timer.id}:{day}",
-                      session_id=timer.session_id, payload=payload,
+                      session_id=_session(conn, timer, payload), payload=payload,
                       received_at=outbox._stamp(now))
     conn.execute("UPDATE timers SET due_at = ? WHERE id = ? AND status = 'pending'",
                  (outbox._stamp(next_occurrence(now, *rule)), timer.id))

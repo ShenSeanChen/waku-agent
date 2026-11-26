@@ -10,14 +10,14 @@ THE SAFETY RULE, and why this file is shaped the way it is:
     ARGV IS CONSTRUCTED, NEVER FILTERED.
 
 The model does not hand us a command string that we sanitise. It hands us a
-label we look up in a table of five read-only commands, plus a couple of typed
+label we look up in a table of six read-only commands, plus a couple of typed
 scalars we validate and then place ourselves. Everything the subprocess sees is
 either a literal written in this file or a value that matched a regex. There is
 no code path where model output becomes a `gh` flag.
 
 That is a stronger guarantee than blocklisting `merge`, `close` and friends,
 because a blocklist has to imagine every dangerous verb in advance and `gh` adds
-subcommands every release. An allowlist only has to be right about the five we
+subcommands every release. An allowlist only has to be right about the six we
 want. Refusal happens BEFORE a process exists, which is what
 test_gh_tool.py::test_write_commands_never_reach_a_subprocess pins.
 
@@ -54,12 +54,22 @@ _ALLOWED: dict[str, list[str]] = {
     "pr list": ["pr", "list"],
     "pr view": ["pr", "view"],
     "pr diff": ["pr", "diff"],
+    # The CI GitHub already ran on a pull request (spec 035): the PR desk reads
+    # it instead of running tests itself.
+    "pr checks": ["pr", "checks"],
     "issue list": ["issue", "list"],
     "issue view": ["issue", "view"],
 }
-_NEEDS_NUMBER = {"pr view", "pr diff", "issue view"}
+_NEEDS_NUMBER = {"pr view", "pr diff", "pr checks", "issue view"}
 _IS_LIST = {"pr list", "issue list"}
 _JSON_FIELDS = "number,title,author,updatedAt,url"
+# A pull request also carries its size, which the PR desk's digest reports.
+# Issues have no such fields, and gh rejects a field the type lacks.
+_PR_LIST_FIELDS = _JSON_FIELDS + ",additions,deletions,changedFiles,isDraft"
+_CHECK_FIELDS = "name,state,bucket,workflow"
+# `gh pr checks` exits 1 when a check failed and 8 when one is pending, and
+# prints its JSON either way.
+_OK_CODES: dict[str, tuple[int, ...]] = {"pr checks": (0, 1, 8)}
 
 _REFUSAL = (
     "Waku's GitHub tool is read-only. Allowed commands: "
@@ -68,9 +78,11 @@ _REFUSAL = (
 )
 
 
-def _run(argv: list[str], timeout: int = _TIMEOUT) -> tuple[bool, str]:
+def _run(argv: list[str], timeout: int = _TIMEOUT,
+         ok_codes: tuple[int, ...] = (0,)) -> tuple[bool, str]:
     """One `gh` invocation. Returns (ok, text); the text is an explanation when
-    ok is False. Mirrors apple.py::_osa — same contract, different binary."""
+    ok is False. Mirrors apple.py::_osa — same contract, different binary.
+    `ok_codes` names the exit codes that still carry an answer on stdout."""
     try:
         # gh emits UTF-8 even when the Windows locale uses a legacy encoding.
         r = subprocess.run(
@@ -85,7 +97,7 @@ def _run(argv: list[str], timeout: int = _TIMEOUT) -> tuple[bool, str]:
                        "Try again, or check status.github.com.")
     except OSError as exc:
         return False, f"could not run gh ({exc})"
-    if r.returncode != 0:
+    if r.returncode not in ok_codes or (r.returncode != 0 and not (r.stdout or "").strip()):
         err = (r.stderr or "gh failed").strip()[:200]
         if "auth" in err.lower() or "logged in" in err.lower():
             return False, f"gh is not authenticated. Run `gh auth login`. ({err})"
@@ -122,7 +134,9 @@ def _argv(command: str, number: int, repo: str, limit: int) -> tuple[bool, list[
         except (TypeError, ValueError, OverflowError):
             return False, f"'{command}' needs an integer limit."
         argv += ["--limit", str(max(1, min(row_limit, 50)))]
-        argv += ["--json", _JSON_FIELDS]
+        argv += ["--json", _PR_LIST_FIELDS if command == "pr list" else _JSON_FIELDS]
+    if command == "pr checks":
+        argv += ["--json", _CHECK_FIELDS]
     return True, argv
 
 
@@ -151,8 +165,29 @@ def _format(rows: list[dict]) -> str:
     lines = []
     for r in rows:
         who = (r.get("author") or {}).get("login", "?")
+        size = (f" · +{r['additions']}/-{r['deletions']} in {r.get('changedFiles', '?')} files"
+                if "additions" in r and "deletions" in r else "")
+        draft = " · draft" if r.get("isDraft") else ""
         lines.append(f"#{r.get('number')} {r.get('title', '')} — @{who} "
-                     f"(updated {(r.get('updatedAt') or '')[:10]})")
+                     f"(updated {(r.get('updatedAt') or '')[:10]}){size}{draft}")
+    return "\n".join(lines)
+
+
+def _checks(out: str) -> str:
+    """`gh pr checks --json` as one summary line and one line per check."""
+    try:
+        rows = json.loads(out or "[]")
+    except json.JSONDecodeError:
+        return f"gh returned something that was not JSON: {out[:200]}"
+    if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
+        return "gh did not return a JSON list of objects."
+    if not rows:
+        return "No CI checks are reported on this pull request."
+    count = {b: sum(1 for row in rows if row.get("bucket") == b) for b in ("pass", "fail", "pending")}
+    lines = [f"checks: {count['pass']} pass, {count['fail']} fail, {count['pending']} pending"]
+    for row in rows:
+        workflow = f"{row['workflow']} / " if row.get("workflow") else ""
+        lines.append(f"{row.get('bucket', '?')}: {workflow}{row.get('name', '')}")
     return "\n".join(lines)
 
 
@@ -175,9 +210,14 @@ def gh_read(command: str, number: int = 0, repo: str = "", limit: int = 10) -> s
     ok, argv = _argv(command, number, repo, limit)
     if not ok:
         return str(argv)
-    ok, out = _run(argv)  # type: ignore[arg-type]
+    codes = _OK_CODES.get(command)
+    # Only `pr checks` passes exit codes, so a caller that stands in its own
+    # `_run(argv)` (the always-on example eval) still works for every other row.
+    ok, out = (_run(argv, ok_codes=codes) if codes else _run(argv))  # type: ignore[arg-type]
     if not ok:
         return out
+    if command == "pr checks":
+        return _checks(out)
     if len(out) > _MAX_CHARS:
         return out[:_MAX_CHARS] + (
             f"\n\n… truncated at {_MAX_CHARS} chars. Run `gh {command} {number}` "

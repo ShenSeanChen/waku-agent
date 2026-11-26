@@ -117,6 +117,11 @@ MESSAGES = {
         "quiz my proficiency in Docker networking",
         "diagnose my concept mastery of distributed consensus",
     ],
+    "pr-desk": [
+        "morning PR digest",
+        "post the morning digest of open pull requests",
+        "which pull requests have failing CI checks",
+    ],
 }
 
 
@@ -145,3 +150,11 @@ def test_every_skill_named_here_still_exists():
     real = {skill.name for skill in LOADER.skills}
     stale = sorted(set(MESSAGES) - real)
     assert not stale, f"MESSAGES names skills that no longer exist: {stale}"
+
+
+def test_pr_desk_skill_triggers():
+    """Spec 035: the skill loads on "morning PR digest" and on no everyday
+    message."""
+    assert _loaded("morning PR digest")[:1] == ["pr-desk"]
+    for message in EVERYDAY:
+        assert "pr-desk" not in _loaded(message), message

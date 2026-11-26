@@ -1,5 +1,8 @@
-"""GitHub as an event source (spec 023): an issue that carries the label
-`waku`, or a comment that mentions the agent, becomes one row in `events`.
+"""GitHub as an event source (spec 023, spec 035): an issue that carries the
+label `waku`, or a comment that mentions the agent, becomes one row in
+`events`, and so does every pull request that is opened or marked ready for
+review. A pull request's row is quiet: it is stored `done`, starts no run, and
+waits for the PR desk's morning digest (worker.PR_DESK_PROMPT).
 
 Two ways in, and both write the same event:
 
@@ -12,14 +15,18 @@ Two ways in, and both write the same event:
                          POST /webhooks/github instead, checks GitHub's
                          X-Hub-Signature-256 on every delivery, and the poller
                          stays off. Point the repository's webhook at it with
-                         the events "Issues" and "Issue comments".
+                         the events "Issues", "Issue comments" and
+                         "Pull requests".
 
 Who is heard: whoever can label an issue, and for a mention, an owner, member
 or collaborator of the repository. A stranger's comment on a public repository
-never reaches the model.
+never reaches the model. Anyone who opens a pull request is recorded, a
+stranger included. The model reads a pull request's text as data, never as an
+instruction.
 
   external_id   the webhook's X-GitHub-Delivery; `label:<repo>#<n>` and
-                `comment:<id>` from the poller
+                `comment:<id>` from the poller; `pr:<repo>#<n>` for a pull
+                request, from both ways in
   session_id    github:<owner>/<repo>#<number>, one conversation per issue
 """
 
@@ -42,6 +49,10 @@ POLL_SECONDS = 60
 # A comment only counts from someone with a role in the repository.
 TRUSTED_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
 _MAX_BODY_CHARS = 8000
+# The start of a pull request's description that the PR desk's run reads.
+_MAX_PR_BODY_CHARS = 2000
+# The two webhook actions that make a pull request new to the desk.
+PR_ACTIONS = frozenset({"opened", "ready_for_review"})
 
 
 def login() -> str:
@@ -91,6 +102,41 @@ def _mention_event(repo: str, number: int, title: str, body: str, author: str, u
                         "reply_to": {"repo": repo, "number": number}, "url": url}}
 
 
+def _count(value) -> int:
+    """A line count GitHub reported, or 0 when it reported none."""
+    return value if isinstance(value, int) and value >= 0 else 0
+
+
+def _pr_event(repo: str, number: int, title: str, body: str, author: str, url: str,
+              additions: int, deletions: int) -> dict:
+    """PR #428 opened, or marked ready for review (spec 035). Its row is
+    quiet: stored `done`, so no run starts, and the PR desk's morning run
+    reads every quiet row since the last digest. Forty pull requests in a day
+    cost one run. The external id names the pull request, not the delivery,
+    so the poller, the webhook and a redelivery all write one row."""
+    return {"external_id": f"pr:{repo}#{number}", "status": "done",
+            "session_id": f"github:{repo}#{number}",
+            "payload": {"text": f'Pull request {repo}#{number} "{title}" by {author}, '
+                                f"+{additions}/-{deletions}.",
+                        "quiet": True, "sender": {"login": author}, "url": url,
+                        "pr": {"repo": repo, "number": number, "title": title,
+                               "author": author, "url": url, "additions": additions,
+                               "deletions": deletions,
+                               "body": (body or "")[:_MAX_PR_BODY_CHARS]}}}
+
+
+def _from_pull_request(repo: str, data: dict) -> dict | None:
+    pr = data.get("pull_request") or {}
+    number = pr.get("number")
+    if (not repo or not isinstance(number, int) or data.get("action") not in PR_ACTIONS
+            or pr.get("draft")):
+        return None
+    return _pr_event(repo, number, pr.get("title") or "", pr.get("body") or "",
+                     (pr.get("user") or {}).get("login") or "someone",
+                     pr.get("html_url") or "", _count(pr.get("additions")),
+                     _count(pr.get("deletions")))
+
+
 # ---- the webhook -----------------------------------------------------------
 
 def verified(secret: str, body: bytes, signature: str) -> bool:
@@ -104,8 +150,10 @@ def verified(secret: str, body: bytes, signature: str) -> bool:
 
 def from_webhook(event: str, data: dict, who: str) -> dict | None:
     """The event one delivery asks for, or None when it asks for nothing."""
-    issue = data.get("issue") or {}
     repo = (data.get("repository") or {}).get("full_name") or ""
+    if event == "pull_request":
+        return _from_pull_request(repo, data)
+    issue = data.get("issue") or {}
     number = issue.get("number")
     if not repo or not isinstance(number, int):
         return None
@@ -146,7 +194,9 @@ def webhook_route(inbox: Inbox, secret: str, who: str):
             return 400, b"{}"
         found = from_webhook(headers.get("X-GitHub-Event", ""), data, who)
         if found is not None:
-            inbox.add(source="github", external_id=delivery, **found)
+            # A pull request names its own external id; every other event
+            # uses the delivery's.
+            inbox.add(source="github", **{"external_id": delivery, **found})
         return 200, b"{}"
 
     return handle
@@ -210,6 +260,25 @@ class Poller:
                                     **found)
         return added
 
+    def _opened(self, repo: str) -> int:
+        """Open pull requests that are not drafts. The first poll records every
+        one that is open; later polls add only new ones, because the external
+        id `pr:<repo>#<n>` is unique. A draft is recorded at the first poll
+        after it is marked ready."""
+        rows = self._gh(["gh", "pr", "list", "--repo", repo, "--state", "open", "--limit", "50",
+                         "--json", "number,title,body,author,url,isDraft,additions,deletions"])
+        added = 0
+        for row in rows or []:
+            number = row.get("number")
+            if not isinstance(number, int) or row.get("isDraft"):
+                continue
+            found = _pr_event(repo, number, row.get("title") or "", row.get("body") or "",
+                              (row.get("author") or {}).get("login") or "someone",
+                              row.get("url") or "", _count(row.get("additions")),
+                              _count(row.get("deletions")))
+            added += self.inbox.add(source="github", **found)
+        return added
+
     def _mentioned(self, repo: str, since: str) -> int | None:
         rows = self._gh(["gh", "api", "--method", "GET", f"repos/{repo}/issues/comments",
                          "-f", f"since={since}", "-f", "per_page=100"])
@@ -235,6 +304,7 @@ class Poller:
         started, since, added, complete = self._now(), self._since, 0, True
         for repo in self.repos:
             added += self._labelled(repo)
+            added += self._opened(repo)
             if self.login:
                 mentioned = self._mentioned(repo, since)
                 complete = complete and mentioned is not None
