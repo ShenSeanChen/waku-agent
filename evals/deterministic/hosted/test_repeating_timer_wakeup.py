@@ -15,7 +15,9 @@ waku/alwayson (MIT) writes the report, hosted/ (Elastic License 2.0) reads it.
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
-from zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+import pytest
 
 from hosted.core import idle
 from hosted.gateway.store import ControlDb
@@ -23,7 +25,10 @@ from waku.alwayson import handover, timers
 from waku.db import connect
 
 ANA = "anaanaanaana"   # a tenant id is twelve letters
-FRIDAY_9 = datetime(2026, 11, 20, 9, 0, tzinfo=ZoneInfo("Europe/Madrid"))
+try:
+    FRIDAY_9 = datetime(2026, 11, 20, 9, 0, tzinfo=ZoneInfo("Europe/Madrid"))
+except ZoneInfoNotFoundError:
+    pytest.skip("tzdata is not installed (Windows)", allow_module_level=True)
 
 
 def test_the_gateway_stores_the_next_day_after_each_day_fired(tmp_path):

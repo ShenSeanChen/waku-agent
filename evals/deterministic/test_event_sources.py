@@ -320,6 +320,7 @@ def test_slack_source_names_the_extra_when_it_is_missing(monkeypatch, inbox):
 def test_slack_sdk_is_not_needed_to_import_waku(tmp_path):
     """The import guard: slack_sdk is behind the extra [slack], so `waku`,
     `waku serve` and the Slack source itself import without it."""
+    import os
     import subprocess
 
     code = ("import sys; sys.modules['slack_sdk'] = None\n"
@@ -328,10 +329,12 @@ def test_slack_sdk_is_not_needed_to_import_waku(tmp_path):
             "sources, routes = waku.alwayson.serve.configured(Settings())\n"
             "assert 'slack' in sources\n"
             "print('imported')")
+    env = {"PATH": "", "HOME": str(tmp_path), "WAKU_HOME": str(tmp_path),
+           "PYTHONPATH": str(__import__("pathlib").Path(__file__).parents[2])}
+    if sys.platform == "win32" and "SYSTEMROOT" in os.environ:
+        env["SYSTEMROOT"] = os.environ["SYSTEMROOT"]
     done = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True,
-                          cwd=tmp_path, check=False,
-                          env={"PATH": "", "HOME": str(tmp_path), "WAKU_HOME": str(tmp_path),
-                               "PYTHONPATH": str(__import__("pathlib").Path(__file__).parents[2])})
+                          cwd=tmp_path, check=False, env=env)
     assert done.returncode == 0, done.stderr
     assert done.stdout.strip() == "imported"
 
