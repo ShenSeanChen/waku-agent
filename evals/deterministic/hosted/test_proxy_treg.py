@@ -23,7 +23,6 @@ from hosted.proxy.config import ProxyConfig
 from hosted.proxy.ledger import Ledger
 from hosted.proxy.treg import (
     MAX_COST_HEADER,
-    NO_CREDITS,
     NO_WALLET,
     TregRelay,
     treg_cost,
@@ -35,6 +34,7 @@ DISABLED_TOKEN = "d" * 43
 TREG_TOKEN = "treg_org_" + "s" * 40
 MEMORY_KEY = "mem_sk_" + "w" * 43
 ENDPOINT = "tikhub.tiktok.user.profile"
+NOW = 1_790_000_000.0   # 21 Sep 2026: the Free sentence names 1 Oct
 
 
 def _config(tmp_path) -> ProxyConfig:
@@ -48,14 +48,15 @@ def _config(tmp_path) -> ProxyConfig:
 
 
 class FakeWallet:
-    def __init__(self, plan="free", left=1000, raises=False):
+    def __init__(self, plan="free", left=1000, raises=False, allowed=None, notice=None):
         self.plan, self.left, self.raises = plan, left, raises
+        self.allowed, self.notice = allowed, notice
         self.charges: list[dict] = []
 
     async def balance(self, key):
         if self.raises:
             raise OSError("api.waku.one unreachable")
-        return Balance(self.plan, self.left)
+        return Balance(self.plan, self.left, allowed=self.allowed, notice=self.notice)
 
     def charge(self, key, *, turn_id, model, usd):
         self.charges.append({"key": key, "turn_id": turn_id, "model": model, "usd": usd})
@@ -132,7 +133,7 @@ class Rig:
         relay = TregRelay(session=self.session, token=TREG_TOKEN, max_call_usd=0.5,
                           resolve=self.resolve or default_resolve,
                           memory_key=lambda token: self.key, wallet=self.wallet,
-                          upstream_url=upstream_url)
+                          upstream_url=upstream_url, now=lambda: NOW)
         config = _config(self.tmp_path)
         proxy = MeteringProxy(config=config, ledger=Ledger(config.ledger_db),
                               resolve=self.resolve or default_resolve, upstream=None,
@@ -227,7 +228,27 @@ def test_a_free_person_at_zero_credits_never_reaches_treg(tmp_path):
             return await rig.post(tools_call()), rig.treg.seen
 
     (status, _, body), seen = _run(go())
-    assert status == 403 and json.loads(body)["error"]["message"] == NO_CREDITS and seen == []
+    assert status == 403 and seen == []
+    # Spec 042: the model call's refusal, word for word.
+    assert json.loads(body)["error"] == {
+        "type": "permission_error", "code": "credits_used_up",
+        "message": "You've used this month's free Waku credits, so Waku Agent is paused "
+                   "until 1 Oct. Pro gives you 500,000 credits a month for $20: "
+                   "https://www.waku.one/settings/plan"}
+
+
+def test_a_pro_person_waku_memory_refuses_never_reaches_treg(tmp_path):
+    notice = "Add 250,000 credits for $10 to carry on."
+
+    async def go():
+        wallet = FakeWallet(plan="pro", left=-1, allowed=False, notice=notice)
+        async with Rig(tmp_path, wallet=wallet) as rig:
+            return await rig.post(tools_call()), rig.treg.seen
+
+    (status, _, body), seen = _run(go())
+    assert status == 403 and seen == []
+    assert json.loads(body)["error"] == {
+        "type": "permission_error", "code": "credits_used_up", "message": notice}
 
 
 def test_a_pro_person_below_zero_and_an_unreachable_wallet_are_both_served(tmp_path):
