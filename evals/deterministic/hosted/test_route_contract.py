@@ -98,6 +98,7 @@ EXPECTED = {
     "/api/connectors/add": "block",
     "/api/connectors/remove": "block",
     "/api/connectors/approve": "block",
+    "/api/connectors/snooze": "block",
 }
 
 

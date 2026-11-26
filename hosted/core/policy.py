@@ -185,6 +185,7 @@ DECISIONS: dict[str, str] = {
     "/api/connectors/add": BLOCK,
     "/api/connectors/remove": BLOCK,
     "/api/connectors/approve": BLOCK,
+    "/api/connectors/snooze": BLOCK,
 }
 
 BLOCK_MESSAGES: dict[str, str] = {
@@ -207,6 +208,7 @@ BLOCK_MESSAGES: dict[str, str] = {
     "/api/connectors/add": CONNECTORS_BLOCKED,
     "/api/connectors/remove": CONNECTORS_BLOCKED,
     "/api/connectors/approve": CONNECTORS_BLOCKED,
+    "/api/connectors/snooze": CONNECTORS_BLOCKED,
 }
 
 # Substrings no path may contain. The query is split off first, so a percent

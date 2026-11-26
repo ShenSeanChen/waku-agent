@@ -547,6 +547,7 @@ def collect() -> dict:
         },
         "db": db_info,
         "settings": info,
+        "sign_in": sign_in_cards(),
         "providers": [asdict(view) for view in list_providers()],
         # Where a model key was looked for, for the setup page (spec 013).
         # Paths and yes-or-no only: no value ever enters this payload.
@@ -696,6 +697,28 @@ def connectors_approve(payload: dict) -> dict:
     except connectors.Refused as refused:
         return {"error": str(refused)}
     return {"ok": True, "name": name, "writes": "allow" if allow else "ask"}
+
+
+def sign_in_cards() -> list[str]:
+    """Spec 038 G: the connectors the chat's top card asks about, by name.
+    Empty on hosted Waku, whose connectors sign in at agent.waku.one/setup."""
+    from waku.tools import connectors
+
+    if connectors.hosted() or handover.enabled():
+        return []
+    home = load_settings().home
+    return connectors.sign_in_due(home, connectors.needing_sign_in(home))
+
+
+def connectors_snooze(payload: dict) -> dict:
+    """Not now on the chat's sign-in card: quiet for a day (spec 038 G)."""
+    from waku.tools import connectors
+
+    name = str(payload.get("name") or "")
+    if not name:
+        return {"error": "Which connector? Send its name."}
+    connectors.snooze_sign_in(load_settings().ensure_home(), name)
+    return {"ok": True, "sign_in": sign_in_cards()}
 
 
 def connectors_remove(payload: dict) -> dict:
@@ -1155,7 +1178,8 @@ def chat_state() -> dict:
     return {"ok": True, "sessions": session_list(conn),
             "current_session": live.session.session_id if live is not None else dash_session(),
             "settings": {k: info.get(k) for k in
-                         ("provider", "model", "small_model", "pinned", "disabled_providers")}}
+                         ("provider", "model", "small_model", "pinned", "disabled_providers")},
+            "sign_in": sign_in_cards()}
 
 
 def session_action(payload: dict) -> dict:
@@ -1787,7 +1811,8 @@ class Handler(BaseHTTPRequestHandler):
                   "/api/waiting/cancel": waiting_cancel,
                   "/api/connectors/add": connectors_add,
                   "/api/connectors/remove": connectors_remove,
-                  "/api/connectors/approve": connectors_approve}
+                  "/api/connectors/approve": connectors_approve,
+                  "/api/connectors/snooze": connectors_snooze}
         if self.path not in routes:
             self.send_response(404)
             self.end_headers()
@@ -1883,6 +1908,14 @@ def main() -> None:
         # and dispatcher in this process. None on a person's own machine,
         # where `waku serve` is its own command.
         alwayson = handover.start(load_settings())
+        # Spec 038 F: find lapsed sign-ins before anyone asks, in the
+        # background and with no browser, so the chat can show its card.
+        if not handover.enabled():
+            from waku.tools import connectors as _connectors
+
+            threading.Thread(target=_connectors.check_sign_ins,
+                             args=(load_settings().home,), daemon=True,
+                             name="sign-in-check").start()
         print(f"Waku dashboard → http://localhost:{port}  (Ctrl-C to stop)")
         try:
             server.serve_forever()

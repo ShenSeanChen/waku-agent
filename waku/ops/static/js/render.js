@@ -338,6 +338,25 @@ const chatTurnCard = t => uiCard(`
   ${receiptBlock(t.receipt)}
   ${(t.notices || []).map(noticeLine).join("")}`, {cls: "reply"});
 
+// Spec 038 G: one card above the chat per connector whose sign-in lapsed.
+// Sign in sends "connect <name>", the same words a person would type; Not
+// now quiets it for a day. Nothing opens a browser until Sign in is pressed.
+function renderSignInCards(names){
+  const box = document.getElementById("docksignin");
+  if (!box) return;
+  box.innerHTML = (names || []).map(name => uiNotice("note",
+    `<b>${esc(name)}</b> needs you to sign in again. Its tools are left out until you do.`,
+    uiButton("Sign in", {level: "primary", size: "sm",
+      onclick: "sendChat({value: this.dataset.say, focus(){}})",
+      attrs: `data-say="connect ${esc(name)}"`})
+    + " " + uiButton("Not now", {level: "secondary", size: "sm",
+      onclick: "snoozeSignIn(this.dataset.name)", attrs: `data-name="${esc(name)}"`}))).join("");
+}
+async function snoozeSignIn(name){
+  const r = await postJSON("/api/connectors/snooze", {name});
+  renderSignInCards((r && r.sign_in) || []);
+}
+
 // A line under a reply (spec 021), with a Sign in button when it is a
 // connector left out for its sign-in (spec 038). The button sends the same
 // "connect <name>" a person would type, and only then does a link appear.

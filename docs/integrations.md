@@ -514,7 +514,9 @@ Under the reply one line names the server, once a day at most, and the
 dashboard shows a Sign in button beside it. Telegram, Slack and WhatsApp get
 the same line as text. The browser opens only when you ask: the button, "connect
 <name>" in chat, or `waku mcp login <name>`. The Connections page marks the
-server "needs sign-in".
+server "needs sign-in". The dashboard also checks every sign-in server in the
+background when it starts, and puts a card at the top of the chat for each
+one that needs you: **Sign in**, or **Not now** to hear about it tomorrow.
 
 ### Which account am I signed in as?
 

@@ -95,3 +95,72 @@ def test_the_connections_card_says_needs_sign_in():
     row = {"name": "treg", "connected": False, "account": "sean@example.test",
            "needs_sign_in": True}
     assert _server_state(row, None)[1] == NEEDS_SIGN_IN
+
+
+# ---- amendment F and G: checked at start, a card with Sign in and Not now ----
+
+@pytest.fixture
+def clean_record():
+    connectors._NEEDS.clear()
+    yield
+    connectors._NEEDS.clear()
+
+
+def test_the_start_check_records_who_needs_a_sign_in(tmp_path, clean_record):
+    class FakeBridge:
+        closed = False
+
+        def __init__(self):
+            self.needs_sign_in = ["treg"]
+
+        def start(self):
+            return []
+
+        def close(self):
+            FakeBridge.closed = True
+
+    assert connectors.check_sign_ins(tmp_path, bridge=FakeBridge) == ["treg"]
+    assert FakeBridge.closed
+    assert connectors.needing_sign_in(tmp_path) == ["treg"]
+
+
+def test_a_finished_sign_in_clears_the_card(tmp_path, clean_record):
+    import os
+    import time
+
+    connectors.record_needs_sign_in(["treg"], at=time.time() - 60)
+    token = tmp_path / "mcp-auth" / "treg.json"
+    token.parent.mkdir()
+    token.write_text("{}", encoding="utf-8")
+    os.utime(token, None)   # written after the finding, as a sign-in does
+
+    assert connectors.needing_sign_in(tmp_path) == []
+
+
+def test_not_now_quiets_the_card_for_a_day(tmp_path):
+    now = datetime(2026, 11, 25, 9, 0, tzinfo=UTC)
+
+    assert connectors.sign_in_due(tmp_path, ["treg", "linear"], now=now) == ["treg", "linear"]
+    connectors.snooze_sign_in(tmp_path, "treg", now=now)
+    assert connectors.sign_in_due(tmp_path, ["treg", "linear"],
+                                  now=now + timedelta(hours=2)) == ["linear"]
+    assert connectors.sign_in_due(tmp_path, ["treg"],
+                                  now=now + timedelta(hours=25)) == ["treg"]
+
+
+def test_the_card_opens_no_browser_and_names_both_buttons():
+    """The card only sends "connect <name>" or Not now; no link is in it."""
+    from pathlib import Path
+
+    js = (Path(__file__).resolve().parents[2] / "waku/ops/static/js/render.js").read_text(
+        encoding="utf-8")
+    card = js[js.index("function renderSignInCards"):js.index("async function snoozeSignIn")]
+    assert '"Sign in"' in card and '"Not now"' in card
+    assert "connect ${esc(name)}" in card
+    assert "window.open" not in card and "http" not in card
+
+
+def test_the_not_now_route_is_blocked_on_hosted():
+    from hosted.core.policy import BLOCK_MESSAGES, CONNECTORS_BLOCKED
+
+    assert BLOCK_MESSAGES["/api/connectors/snooze"] == CONNECTORS_BLOCKED
