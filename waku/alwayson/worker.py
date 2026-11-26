@@ -448,7 +448,10 @@ def with_low_credits_line(home: Path, reply: str, state: str | None,
             return reply
     except OSError:
         pass   # never warned yet
-    path.write_text(month + "\n", encoding="utf-8")
+    try:
+        path.write_text(month + "\n", encoding="utf-8")
+    except OSError:
+        return reply   # a warning must never cost the person their reply
     return f"{reply}\n\n{LOW_CREDITS}"
 
 

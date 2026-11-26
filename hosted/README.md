@@ -1046,7 +1046,7 @@ which holds the platform key and nothing else does:
   back, because Waku sends them on the next call.
 
 - **One wallet.** Each settled call is also charged to the person's waku.one
-  credits, at 25,000 credits a dollar, with their own Waku Memory key (spec
+  credits, at 37,500 credits a dollar (1.5× model cost), with their own Waku Memory key (spec
   004 D; `POST /agent-usage`). Waku Memory decides who may still call: its
   `GET /agent-usage/balance` answers `allowed` and `notice` (spec 042), read
   once a minute per person. A person with `allowed: false`, on any plan, is

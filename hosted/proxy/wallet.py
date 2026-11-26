@@ -81,7 +81,10 @@ class WakuMemoryWallet:
             allowed=allowed if isinstance(allowed, bool) else None,
             notice=notice if isinstance(notice, str) and notice.strip() else None,
             state=state if state in CREDIT_STATES else None)
-        self._balances[key] = (self._now(), balance)
+        # A refusal is not cached: a person who just bought credits must not
+        # stay refused for the rest of the cache window (review, 2026-11-26).
+        if balance.allowed is not False:
+            self._balances[key] = (self._now(), balance)
         return balance
 
     def charge(self, key: str, *, turn_id: str, model: str, usd: float) -> asyncio.Task:

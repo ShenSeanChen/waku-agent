@@ -297,3 +297,16 @@ def test_a_turn_reads_its_credits_state_from_the_charges_answer(tmp_path, answer
     finally:
         waku.close()
     assert result.reply == "Lunch is at 1." and result.credits_state == state
+
+
+def test_an_unwritable_home_never_costs_the_person_their_reply(tmp_path, monkeypatch):
+    """Review, 2026-11-26: the 80% line must not turn a good reply into a failure."""
+    from pathlib import Path
+
+    from waku.alwayson.worker import with_low_credits_line
+
+    def refuse(*_args, **_kwargs):
+        raise PermissionError("read-only home")
+
+    monkeypatch.setattr(Path, "write_text", refuse)
+    assert with_low_credits_line(tmp_path, "Lunch is at 1.", "low", OWNER, NOON) == "Lunch is at 1."

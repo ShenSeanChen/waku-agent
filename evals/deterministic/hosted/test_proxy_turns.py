@@ -44,8 +44,8 @@ ENDPOINT = "tomba.email.find"
 
 
 def credits_for(usd: float) -> int:
-    """Waku Memory's own rule (waku_api/agent_usage.py): 25,000 a dollar, rounded up."""
-    return math.ceil(usd * 25_000)
+    """Waku Memory's own rule (waku_api/agent_usage.py): 37,500 a dollar since spec 106, rounded up."""
+    return math.ceil(usd * 37_500)
 
 
 class FakeWallet:

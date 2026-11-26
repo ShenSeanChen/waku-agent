@@ -102,7 +102,9 @@ async def wallet_verdict(wallet: Wallet | None, key: str, at: float) -> Verdict:
     except Exception as exc:
         _LOG.info("credits balance unavailable: %s", exc)
         return Verdict(NO_BALANCE)
-    if balance is None:
+    if balance is None or balance.plan == "unknown":
+        # "unknown" is what a Waku Memory that could not read the balance
+        # once answered with a 200; the $1 cap must still apply to it.
         return Verdict(NO_BALANCE)
     if balance.allowed is None:
         refused = balance.plan == "free" and balance.credits_left <= 0
