@@ -148,22 +148,59 @@ def test_not_now_quiets_the_card_for_a_day(tmp_path):
                                   now=now + timedelta(hours=25)) == ["treg"]
 
 
-def test_the_card_opens_no_browser_and_names_both_buttons():
-    """The card only sends "connect <name>" or Not now; no link is in it."""
+def test_only_a_pressed_sign_in_opens_a_page():
+    """The card draws two buttons and opens nothing; the one window.open is in
+    signInTo, which runs only from a press of Sign in."""
     from pathlib import Path
 
     js = (Path(__file__).resolve().parents[2] / "waku/ops/static/js/render.js").read_text(
         encoding="utf-8")
-    card = js[js.index("function renderSignInCards"):js.index("async function snoozeSignIn")]
-    assert '"Sign in"' in card and '"Not now"' in card
-    assert "connect ${esc(name)}" in card
-    assert "window.open" not in card and "http" not in card
+    card = js[js.index("function renderSignInCards"):js.index("async function signInTo")]
+    press = js[js.index("async function signInTo"):js.index("async function snoozeSignIn")]
+    assert '"Sign in"' in card and '"Not now"' in card and "signInTo(" in card
+    assert "window.open" not in card
+    assert "window.open" in press and "/api/connectors/sign_in" in press
+
+
+def test_the_sign_in_route_returns_the_link_and_rebuilds_after(tmp_path, monkeypatch):
+    """Found on 7778: the first Sign in sent "connect treg" to the model,
+    which may not approve its own connect tool in the dashboard chat, so no
+    link came back. The button now starts the sign-in itself."""
+    import threading
+
+    from waku.ops import browser_agent, dashboard
+
+    monkeypatch.setenv("WAKU_HOME", str(tmp_path))
+    rebuilt = []
+    monkeypatch.setattr(browser_agent, "rebuild", lambda: rebuilt.append(1))
+
+    class Flow:
+        def __init__(self):
+            self.done, self.ok, self.reason = threading.Event(), False, ""
+            self.link = "https://treg.example/authorize?redirect_uri=http://127.0.0.1:41765/callback"
+
+    started = {}
+
+    def fake_start(home, name, on_done=None):
+        started["name"], started["on_done"] = name, on_done
+        return Flow()
+
+    monkeypatch.setattr(connectors, "start_sign_in", fake_start)
+    out = dashboard.connectors_sign_in({"name": "treg"})
+
+    assert started["name"] == "treg" and out["link"].startswith("https://treg.example/")
+    finished = Flow()
+    finished.ok = True
+    started["on_done"](finished)
+    assert rebuilt == [1]
+    assert "error" in dashboard.connectors_sign_in({})
 
 
 def test_the_not_now_route_is_blocked_on_hosted():
     from hosted.core.policy import BLOCK_MESSAGES, CONNECTORS_BLOCKED
 
     assert BLOCK_MESSAGES["/api/connectors/snooze"] == CONNECTORS_BLOCKED
+    assert BLOCK_MESSAGES["/api/connectors/sign_in"] == CONNECTORS_BLOCKED
 
 
 def test_a_refused_sign_in_does_not_cancel_the_next_server(tmp_path):

@@ -351,10 +351,19 @@ function renderSignInCards(names){
     `<b>${esc(name)}</b> needs you to sign in again. Its tools are left out until you do.
      <div style="display:flex;gap:var(--space-2);margin-top:var(--space-2)">${
       uiButton("Sign in", {level: "primary", size: "sm",
-        onclick: "sendChat({value: this.dataset.say, focus(){}})",
-        attrs: `data-say="connect ${esc(name)}"`})}${
+        onclick: "signInTo(this.dataset.name, this)", attrs: `data-name="${esc(name)}"`})}${
       uiButton("Not now", {level: "secondary", size: "sm",
         onclick: "snoozeSignIn(this.dataset.name)", attrs: `data-name="${esc(name)}"`})}</div>`)).join("");
+}
+// Sign in, pressed: start the sign-in and open its page in a new tab. The
+// person pressed it, so this is the one place a sign-in page opens.
+async function signInTo(name, button){
+  if (button) button.disabled = true;
+  const r = await postJSON("/api/connectors/sign_in", {name});
+  if (r && r.link) window.open(r.link, "_blank", "noopener");
+  const box = document.getElementById("docksignin");
+  if (box) box.innerHTML = uiNotice(r && r.error ? "failed" : "note",
+    esc((r && (r.error || r.message)) || "The sign-in did not start."));
 }
 async function snoozeSignIn(name){
   const r = await postJSON("/api/connectors/snooze", {name});
@@ -367,8 +376,7 @@ async function snoozeSignIn(name){
 function noticeLine(n){
   const m = /Say "connect ([\w.-]+)"/.exec(n || "");
   const button = m ? " " + uiButton("Sign in", {level: "secondary", size: "sm",
-    onclick: "sendChat({value: this.dataset.say, focus(){}})",
-    attrs: `data-say="connect ${esc(m[1])}"`}) : "";
+    onclick: "signInTo(this.dataset.name, this)", attrs: `data-name="${esc(m[1])}"`}) : "";
   return `<div class="meta plugin-notice">${esc(n)}${button}</div>`;
 }
 

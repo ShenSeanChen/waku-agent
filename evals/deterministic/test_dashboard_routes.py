@@ -52,6 +52,7 @@ POST_ROUTES = {
     # spec 025: let one connector write without asking, or take that back
     "/api/connectors/approve",
     "/api/connectors/snooze",
+    "/api/connectors/sign_in",
 }
 
 # Paths served on GET, either exactly or as a prefix.
