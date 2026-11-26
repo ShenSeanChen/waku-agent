@@ -15,7 +15,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from datetime import UTC, datetime, timedelta, timezone
-from zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import pytest
 
@@ -23,8 +23,11 @@ from waku.alwayson import events, handover, outbox, timers, waiting
 from waku.alwayson.worker import BRIEF_PROMPT, TIMER_PROMPT, Worker, render
 from waku.db import connect
 
-MADRID = ZoneInfo("Europe/Madrid")
-NEW_YORK = ZoneInfo("America/New_York")
+try:
+    MADRID = ZoneInfo("Europe/Madrid")
+    NEW_YORK = ZoneInfo("America/New_York")
+except ZoneInfoNotFoundError:
+    pytest.skip("tzdata is not installed (Windows)", allow_module_level=True)
 # Thursday 19 November 2026, 22:00 in Madrid: the evening Ana asks.
 THURSDAY_EVENING = datetime(2026, 11, 19, 21, 0, tzinfo=UTC)
 FRIDAY_9 = datetime(2026, 11, 20, 9, 0, tzinfo=MADRID)

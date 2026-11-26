@@ -70,11 +70,26 @@ def write(home: Path, entries: dict) -> None:
     path.write_text(json.dumps(entries, indent=2) + "\n", encoding="utf-8")
 
 
+def _dir_exists(folder: Path) -> bool:
+    """True only when every segment before `..` exists on disk.
+
+    Windows normalizes `missing/..` to `.` before checking the filesystem, so
+    `Path("waku-one/..").is_dir()` would otherwise return True in any folder.
+    """
+    if not folder.is_dir():
+        return False
+    parts = folder.parts
+    return not any(
+        part == ".." and i > 0 and not Path(*parts[:i]).is_dir()
+        for i, part in enumerate(parts)
+    )
+
+
 def entry_for(source: str) -> dict:
     """What `waku plugin marketplace add <source>` records: a folder on this
     machine, or a GitHub repository written owner/repo, optionally @ref."""
     folder = Path(source).expanduser()
-    if folder.is_dir():
+    if _dir_exists(folder):
         return {"path": str(folder.resolve())}
     match = _REPO.match(source.strip())
     if not match:

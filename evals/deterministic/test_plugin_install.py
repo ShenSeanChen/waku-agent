@@ -6,6 +6,7 @@ from __future__ import annotations
 import io
 import json
 import tarfile
+from pathlib import Path
 
 import pytest
 
@@ -47,7 +48,7 @@ def test_a_catalog_cannot_take_the_built_in_name_or_a_recorded_one(tmp_path):
 
     cli.run(["marketplace", "add", str(make_marketplace(tmp_path / "a", name="team"))], home, _no)
     reply = cli.run(["marketplace", "add", str(make_marketplace(tmp_path / "b", name="team"))], home, _no)
-    assert "already recorded" in reply and marketplace.read(home)["team"]["path"].endswith("/a")
+    assert "already recorded" in reply and Path(marketplace.read(home)["team"]["path"]).name == "a"
 
 
 def test_removing_the_built_in_marketplace_does_not_claim_it_is_gone(tmp_path):

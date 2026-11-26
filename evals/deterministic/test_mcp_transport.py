@@ -239,8 +239,9 @@ def test_oauth_tokens_are_stored_per_server_and_not_world_readable():
     written = sorted(p.name for p in (home / "mcp-auth").glob("*.json"))
     assert written == ["server_a.json", "server_b.json"]
 
-    mode = (home / "mcp-auth" / "server_a.json").stat().st_mode
-    assert not mode & (stat.S_IRGRP | stat.S_IROTH), "token file is readable beyond its owner"
+    if sys.platform != "win32":
+        mode = (home / "mcp-auth" / "server_a.json").stat().st_mode
+        assert not mode & (stat.S_IRGRP | stat.S_IROTH), "token file is readable beyond its owner"
 
 
 def test_a_corrupt_token_file_costs_a_sign_in_not_a_crash():
@@ -285,7 +286,7 @@ def test_an_oauth_failure_does_not_send_you_to_auth_env():
     )
     assert "auth_env" not in hint
     assert "sign-in did not complete" in hint
-    assert "/home/.waku/mcp-auth" in hint, "say where to delete, not just that one can"
+    assert str(Path("/home/.waku/mcp-auth")) in hint, "say where to delete, not just that one can"
 
 
 def test_an_api_key_failure_names_the_variable_that_holds_the_key():

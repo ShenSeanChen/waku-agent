@@ -360,7 +360,7 @@ def test_a_backup_env_that_is_not_there_is_refused_before_the_lock(tmp_path):
     assert shelllib.calls(tmp_path) == []
 
 
-@pytest.mark.skipif(os.geteuid() == 0, reason="root reads a 0000 file")
+@pytest.mark.skipif(getattr(os, "geteuid", lambda: -1)() == 0, reason="root reads a 0000 file")
 def test_a_backup_env_that_cannot_be_read_is_refused_before_the_lock(tmp_path):
     """The case an existence check accepts: the file is there, and this process
     cannot open it. config/backup.env is 0600 root:root, so the process that
@@ -421,7 +421,7 @@ def test_a_password_file_that_is_not_there_is_refused_before_the_lock(tmp_path):
     assert shelllib.calls(tmp_path) == []
 
 
-@pytest.mark.skipif(os.geteuid() == 0, reason="root reads a 0000 file")
+@pytest.mark.skipif(getattr(os, "geteuid", lambda: -1)() == 0, reason="root reads a 0000 file")
 def test_a_password_file_that_cannot_be_read_is_refused_before_the_lock(tmp_path):
     """The one shape `-s` alone accepts: a file with bytes in it that this
     process cannot open. restic would fail at the repository, hours later and

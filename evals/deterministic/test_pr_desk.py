@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timedelta
-from zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import pytest
 
@@ -27,7 +27,10 @@ from waku.alwayson.sources import github as github_source
 from waku.alwayson.worker import CHAT_STYLE, SHARED_PLACE, AgentRun, Worker, render
 from waku.db import connect
 
-PACIFIC = ZoneInfo("America/Los_Angeles")
+try:
+    PACIFIC = ZoneInfo("America/Los_Angeles")
+except ZoneInfoNotFoundError:
+    pytest.skip("tzdata is not installed (Windows)", allow_module_level=True)
 # Monday 30 November 2026, 09:00 in Los Angeles.
 MONDAY_9 = datetime(2026, 11, 30, 9, 0, tzinfo=PACIFIC)
 NOTE = "PR desk: acme/app"
