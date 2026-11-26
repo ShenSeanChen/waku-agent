@@ -161,9 +161,10 @@ def _disconnect_tool(args: dict, address: Address | None) -> str:
     return ALLOW if connectors.hosted() else ASK
 
 
-# The tools whose mode nothing in the environment changes (spec 025, decision
-# 1): adding or removing a server always takes the owner's yes.
-ALWAYS_ASK = frozenset({"connect_tool", "disconnect_tool"})
+# The tools whose mode nothing in the environment changes. Adding or removing
+# a server always takes the owner's yes (spec 025, decision 1), and a drafted
+# review always waits for a maintainer (spec 035, decision 2).
+ALWAYS_ASK = frozenset({"connect_tool", "disconnect_tool", "github_review"})
 
 # The built-in table. A tool that reads, or that writes only to the person's
 # own machine and accounts, is `allow`. A tool that writes to a third party is
@@ -180,6 +181,10 @@ MODES: dict[str, str | Callable[[dict, Address | None], str]] = {
     "update_soul": ALLOW,
     "create_skill": ALLOW,
     "github_read": ALLOW,
+    # A review posted on a pull request, as a comment (spec 035). In
+    # ALWAYS_ASK too, so WAKU_APPROVE_ALLOW cannot turn it into a write that
+    # runs unasked.
+    "github_review": ASK,
     "delegate_task": ALLOW,
     "run_command": ALLOW,      # a skeleton: it runs nothing yet
     "browse_web": ALLOW,       # a skeleton: it opens nothing yet
@@ -233,7 +238,7 @@ def mode(tool: str, args: dict, address: Address | None = None,
          allowed: tuple[str, ...] = ()) -> str:
     """`allow` or `ask` for one call, decided in this order:
 
-      1. connect_tool and disconnect_tool ask, whatever comes next.
+      1. connect_tool, disconnect_tool and github_review ask, whatever comes next.
       2. WAKU_APPROVE_ASK or WAKU_APPROVE_ALLOW names the tool: that wins, and
          `ask` wins when a tool is in both.
       3. The built-in table knows the tool.
@@ -336,11 +341,18 @@ def _describe_any(tool: str, args: dict) -> str:
     return "\n".join(lines)
 
 
+def _describe_github_review(args: dict) -> str:
+    body = str(args.get("body", "")).strip()
+    short = body if len(body) <= 200 else body[:200] + "…"
+    return f'Review on {args.get("repo")}#{args.get("number")}, as a comment: "{short}"'
+
+
 # What a call will do, in the tool's own words. The owner reads this.
 DESCRIBE: dict[str, Callable[[dict], str]] = {
     "send_message": _describe_send_message,
     "connect_tool": _describe_connect_tool,
     "disconnect_tool": _describe_disconnect_tool,
+    "github_review": _describe_github_review,
 }
 _MAX_DESCRIPTION_CHARS = 1500
 
