@@ -220,7 +220,10 @@ def test_a_pin_equal_to_the_placeholder_survives_without_an_override(hosted, mon
     from waku.ops import catalog
 
     catalog.save_pinned([f"{PLATFORM}:claude-sonnet-5"])
-    assert catalog.pinned_specs() == [f"{PLATFORM}:claude-sonnet-5"]
+    # Only this row's pins: a provider whose key an earlier test left in the
+    # environment now adds its defaults (spec 036), which is not this test.
+    specs = catalog.pinned_specs()
+    assert [s for s in specs if s.startswith(f"{PLATFORM}:")] == [f"{PLATFORM}:claude-sonnet-5"]
 
 
 # --- claims_families = false excludes the row from OWNING a family. It is

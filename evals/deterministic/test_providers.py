@@ -350,3 +350,29 @@ def test_an_unfamiliar_model_name_is_left_alone(monkeypatch):
     get_client(settings)
 
     assert settings.small_model == "moonshot-v1-8k", "a deliberate choice was overridden"
+
+
+def test_bedrock_prices():
+    """Spec 036. The five models measured on Bedrock on 2026-11-24 each carry
+    AWS's us-east-1 on-demand rate, so the receipt and the model race show a
+    cost instead of the provider-level estimate."""
+    from waku.ops import receipt
+    from waku.ops.pricing import MODEL_PRICING, price_for
+
+    expected = {
+        "openai.gpt-oss-120b-1:0": (0.15, 0.60),
+        "deepseek.v3.2": (0.62, 1.85),
+        "qwen.qwen3-32b-v1:0": (0.15, 0.60),
+        "nvidia.nemotron-super-3-120b": (0.15, 0.65),
+        "mistral.devstral-2-123b": (0.40, 2.00),
+    }
+    for model, rate in expected.items():
+        assert MODEL_PRICING[model] == rate
+        assert price_for("bedrock", model) == rate
+
+    # One Bedrock turn on Devstral 2: 1M tokens in, 100k out is $0.40 + $0.20.
+    events = [("llm", {"iteration": 1, "usage": {"in": 1_000_000, "out": 100_000}})]
+    got = receipt.build(events, turn_id="t1", model="mistral.devstral-2-123b",
+                        provider="bedrock", default_model="mistral.devstral-2-123b")
+    assert got["model"]["usd"] == pytest.approx(0.60)
+    assert got["total_usd"] == pytest.approx(0.60)
