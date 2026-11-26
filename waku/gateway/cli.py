@@ -14,7 +14,7 @@ from rich.panel import Panel
 from rich.text import Text
 
 from waku.app import Waku
-from waku.loop.agent import text_with_sign_in
+from waku.loop.agent import credits_notice, text_with_sign_in
 
 console = Console()
 
@@ -71,6 +71,7 @@ def main() -> None:
     from waku.config import home_notice
     if notice := home_notice():
         console.print(f"[yellow]{notice}[/yellow]", markup=True)
+    paused = False
     while True:
         try:
             user_message = console.input("[bold cyan]you ›[/bold cyan] ").strip()
@@ -89,9 +90,21 @@ def main() -> None:
                 )
             )
             continue
-        result = waku.respond(user_message, observer=_observer, source="cli")
+        try:
+            result = waku.respond(user_message, observer=_observer, source="cli")
+        except Exception as exc:
+            # Out of Waku credits (spec 042): one sentence with the link to
+            # pay, then stop, because every next message would be refused too.
+            notice = credits_notice(exc)
+            if notice is None:
+                raise
+            console.print(Text(notice))
+            paused = True
+            break
         console.print(f"[bold green]waku ›[/bold green] {text_with_sign_in(result)}\n")
     waku.close()   # spec 021: lets the last turn's Stop hook finish
+    if paused:
+        raise SystemExit(1)
     console.print("[dim]bye — your memory stays in state.db[/dim]")
 
 

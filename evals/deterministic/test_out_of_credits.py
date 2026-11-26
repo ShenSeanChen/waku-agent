@@ -12,14 +12,18 @@ not come back.
 
 from __future__ import annotations
 
+import asyncio
 import json
 from datetime import UTC, datetime
+from types import SimpleNamespace
 
 import pytest
 
 from waku.alwayson import events
 from waku.alwayson.worker import FAILED, Worker
 from waku.db import connect
+from waku.gateway import runner as runner_module
+from waku.gateway.runner import GATEWAY_ERROR_REPLY
 from waku.loop.agent import credits_notice, error_text
 
 NOTICE = ("You've used this month's Waku credits, so Waku Agent is paused. "
@@ -152,3 +156,65 @@ def test_a_streamed_turn_that_runs_out_of_credits_ends_with_the_notice(monkeypat
     except Exception as exc:
         done = dashboard.failure_event(exc)
     assert "notice" in done and "error" not in done
+
+
+# ---- local gateways (Telegram, Discord) and the terminal chat ---------------
+
+class _RefusingAgent:
+    def __init__(self) -> None:
+        self.session = SimpleNamespace(session_id="")
+        self.closed = False
+
+    def respond(self, text, **kwargs):
+        raise OutOfCredits()
+
+    def close(self) -> None:
+        self.closed = True
+
+
+@pytest.mark.parametrize("exc,expected", [
+    (OutOfCredits(), NOTICE),
+    (RuntimeError("model is down"), GATEWAY_ERROR_REPLY),
+])
+def test_a_gateway_sends_the_notice_and_only_the_notice(exc, expected):
+    class Agent(_RefusingAgent):
+        def respond(self, text, **kwargs):
+            raise exc
+
+    runner = runner_module.GatewayAgentRunner(Agent, session_id="telegram", source="telegram")
+    sent: list[str] = []
+
+    async def send(text):
+        sent.append(text)
+
+    try:
+        asyncio.run(runner_module.run_gateway_turn(runner, "hi", send, logger=lambda line: None))
+    finally:
+        runner.close()
+    assert sent == [expected]
+
+
+def test_the_terminal_prints_the_notice_and_exits_non_zero(tmp_path, monkeypatch, capsys):
+    from rich.console import Console
+
+    from waku import app, config, memory_choice
+    from waku.gateway import cli
+
+    agent = _RefusingAgent()
+    agent.settings = SimpleNamespace(home=tmp_path, model="m")
+    typed = iter(["What is on my calendar today?", "this is never read"])
+    monkeypatch.setattr(app, "Waku", lambda: agent)
+    monkeypatch.setattr(cli, "Waku", lambda: agent)
+    monkeypatch.setattr(config, "load_settings", lambda: None)
+    monkeypatch.setattr(config, "home_notice", lambda: "")
+    monkeypatch.setattr(memory_choice, "maybe_ask", lambda settings: None)
+    monkeypatch.setattr(cli, "console", Console(width=400, force_terminal=False))
+    monkeypatch.setattr(cli.console, "input", lambda prompt: next(typed))
+
+    with pytest.raises(SystemExit) as stopped:
+        cli.main()
+
+    out = capsys.readouterr().out
+    assert stopped.value.code == 1
+    assert NOTICE in out and "Traceback" not in out and "Error code" not in out
+    assert agent.closed
