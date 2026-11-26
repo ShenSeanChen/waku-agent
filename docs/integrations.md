@@ -498,7 +498,7 @@ the session gone at the same moment share one new session.
 
 A server that speaks MCP's authorization spec needs no key at all. `waku mcp
 add <name> <address>` writes this entry and signs in at once. Written by hand,
-it opens your browser on first use:
+sign in with `waku mcp login <name>`:
 
 ```json
 {"servers": [{"name": "waku_memory",
@@ -519,6 +519,17 @@ sign-in does not start, and Waku says which port to free.
 
 `oauth` and `auth_env` are two answers to one question, so naming both is
 refused rather than resolved by precedence.
+
+**A chat turn never opens a browser** (spec 038). Waku refreshes a token on
+its own. When a server has no token, or its sign-in has lapsed and cannot be
+refreshed, the turn leaves that server out and answers with everything else.
+Under the reply one line names the server, once a day at most, and the
+dashboard shows a Sign in button beside it. Telegram, Slack and WhatsApp get
+the same line as text. The browser opens only when you ask: the button, "connect
+<name>" in chat, or `waku mcp login <name>`. The Connections page marks the
+server "needs sign-in". The dashboard also checks every sign-in server in the
+background when it starts, and puts a card at the top of the chat for each
+one that needs you: **Sign in**, or **Not now** to hear about it tomorrow.
 
 ### Which account am I signed in as?
 

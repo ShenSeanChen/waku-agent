@@ -15,6 +15,8 @@ from collections.abc import Awaitable, Callable
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
+from waku.loop.agent import text_with_sign_in
+
 GATEWAY_ERROR_REPLY = "Waku couldn't process that message. Check the dashboard terminal."
 
 
@@ -129,7 +131,7 @@ async def run_gateway_turn(
 
     logger(f"waku › {result.reply}")
     try:
-        await send(result.reply or "(no reply)")
+        await send(text_with_sign_in(result) or "(no reply)")
     except Exception as exc:
         detail = runner.record_error(exc, action="reply delivery")
         logger(f"({runner.source}) reply delivery failed: {detail}")

@@ -754,11 +754,10 @@ def test_chat_the_always_on_agent_opens_no_browser_for_a_server_not_signed_in(
     monkeypatch.setattr(webbrowser, "open_new_tab", opened.append)
     connectors.add(tmp_path, "linear", url="http://127.0.0.1:9/mcp")
 
-    waku = make_waku(tmp_path, client=ScriptedClient([]), episodic_store="sqlite",
-                     mcp_sign_in=False)
+    waku = make_waku(tmp_path, client=ScriptedClient([]), episodic_store="sqlite")
     try:
         bridge = waku.tools.mcp_bridge
-        assert not bridge.connected("linear") and bridge.servers == []
+        assert not bridge.connected("linear") and bridge.needs_sign_in == ["linear"]
     finally:
         waku.close()
         waku.conn.close()

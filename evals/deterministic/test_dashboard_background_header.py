@@ -298,6 +298,8 @@ NETWORK_CALLERS = {
     ("models.js", "loadModalModels"): "user",
     ("models.js", "submitProviderModal"): "user",
     ("render.js", "sendChat"): "user",
+    ("render.js", "snoozeSignIn"): "user",
+    ("render.js", "signInTo"): "user",
     ("util.js", "revealFile"): "user",
     ("util.js", "postJSON"): "primitive",
     ("views.js", "runQuery"): "user",

@@ -187,6 +187,7 @@ async function refresh(background = false){
     resumeLive();   // a real reply: whatever paused us is over
     render(); tickLive();
     syncModelChip();  // keep the dock's model pill in sync with the active brain
+    renderSignInCards(D.sign_in);   // spec 038: connectors that need a sign-in
     applyTele();      // reflect the stats on/off choice (default on)
     syncLiveView(background);   // live-update an opened conversation (e.g. new phone messages)
     if (!dockRestored) restoreDock(background);

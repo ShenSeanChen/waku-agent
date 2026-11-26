@@ -86,6 +86,18 @@ class LoopResult:
     # Spec 021: the lines a plugin's hooks asked to show the person
     # (systemMessage). The dashboard draws them under the reply.
     notices: list[str] = field(default_factory=list)
+    # Spec 038: the lines about connectors left out for a sign-in. They are in
+    # `notices` too; this copy is what a text gateway adds to its reply,
+    # since a phone has no place under the reply to draw them.
+    sign_in_notices: list[str] = field(default_factory=list)
+
+
+def text_with_sign_in(result) -> str:
+    """A turn's reply as a text gateway sends it: the reply, then any line
+    about a connector left out for its sign-in (spec 038)."""
+    reply = getattr(result, "reply", "") or ""
+    lines = getattr(result, "sign_in_notices", None) or []
+    return "\n\n".join([reply, *lines]) if lines else reply
 
 
 def run_loop(

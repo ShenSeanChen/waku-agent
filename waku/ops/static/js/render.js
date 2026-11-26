@@ -336,7 +336,57 @@ const chatTurnCard = t => uiCard(`
   ${keptList(t.consolidation)}
   ${teleFooter(t)}
   ${receiptBlock(t.receipt)}
-  ${(t.notices || []).map(n => `<div class="meta plugin-notice">${esc(n)}</div>`).join("")}`, {cls: "reply"});
+  ${(t.notices || []).map(noticeLine).join("")}`, {cls: "reply"});
+
+// Spec 038 G: one card above the chat per connector whose sign-in lapsed.
+// Sign in sends "connect <name>", the same words a person would type; Not
+// now quiets it for a day. Nothing opens a browser until Sign in is pressed.
+// What a pressed Sign in said, by name, kept so the page's refresh, which
+// redraws the cards every few seconds, does not wipe it.
+const signInSaid = {};
+function renderSignInCards(names){
+  const box = document.getElementById("docksignin");
+  if (!box) return;
+  for (const name of Object.keys(signInSaid)) if (!(names || []).includes(name)) delete signInSaid[name];
+  // The buttons sit under the sentence, not in the notice's side slot: the
+  // chat column is narrow, and beside two buttons the words wrapped a letter
+  // to a line.
+  box.innerHTML = (names || []).map(name => signInSaid[name]
+    ? uiNotice(signInSaid[name].level, esc(signInSaid[name].text))
+    : uiNotice("note",
+    `<b>${esc(name)}</b> needs you to sign in again. Its tools are left out until you do.
+     <div style="display:flex;gap:var(--space-2);margin-top:var(--space-2)">${
+      uiButton("Sign in", {level: "primary", size: "sm",
+        onclick: "signInTo(this.dataset.name, this)", attrs: `data-name="${esc(name)}"`})}${
+      uiButton("Not now", {level: "secondary", size: "sm",
+        onclick: "snoozeSignIn(this.dataset.name)", attrs: `data-name="${esc(name)}"`})}</div>`)).join("");
+}
+// Sign in, pressed: start the sign-in and open its page in a new tab. The
+// person pressed it, so this is the one place a sign-in page opens.
+async function signInTo(name, button){
+  if (button) button.disabled = true;
+  const r = await postJSON("/api/connectors/sign_in", {name});
+  if (r && r.link) window.open(r.link, "_blank", "noopener");
+  signInSaid[name] = r && r.link
+    ? {level: "note", text: `The ${name} sign-in page is open in a new tab. Finish it there; this card goes away once you have.`}
+    : {level: r && r.error ? "failed" : "note",
+       text: (r && (r.error || r.message)) || "The sign-in did not start."};
+  renderSignInCards((D && D.sign_in) || [name]);
+}
+async function snoozeSignIn(name){
+  const r = await postJSON("/api/connectors/snooze", {name});
+  renderSignInCards((r && r.sign_in) || []);
+}
+
+// A line under a reply (spec 021), with a Sign in button when it is a
+// connector left out for its sign-in (spec 038). The button sends the same
+// "connect <name>" a person would type, and only then does a link appear.
+function noticeLine(n){
+  const m = /Say "connect ([\w.-]+)"/.exec(n || "");
+  const button = m ? " " + uiButton("Sign in", {level: "secondary", size: "sm",
+    onclick: "signInTo(this.dataset.name, this)", attrs: `data-name="${esc(m[1])}"`}) : "";
+  return `<div class="meta plugin-notice">${esc(n)}${button}</div>`;
+}
 
 // While a turn runs we stream it live: stages light up as the harness reaches
 // them, and the reply text appears token by token (with a blinking caret).

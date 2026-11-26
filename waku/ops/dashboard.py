@@ -547,6 +547,7 @@ def collect() -> dict:
         },
         "db": db_info,
         "settings": info,
+        "sign_in": sign_in_cards(),
         "providers": [asdict(view) for view in list_providers()],
         # Where a model key was looked for, for the setup page (spec 013).
         # Paths and yes-or-no only: no value ever enters this payload.
@@ -696,6 +697,57 @@ def connectors_approve(payload: dict) -> dict:
     except connectors.Refused as refused:
         return {"error": str(refused)}
     return {"ok": True, "name": name, "writes": "allow" if allow else "ask"}
+
+
+def sign_in_cards() -> list[str]:
+    """Spec 038 G: the connectors the chat's top card asks about, by name.
+    Empty on hosted Waku, whose connectors sign in at agent.waku.one/setup."""
+    from waku.tools import connectors
+
+    if connectors.hosted() or handover.enabled():
+        return []
+    home = load_settings().home
+    return connectors.sign_in_due(home, connectors.needing_sign_in(home))
+
+
+def connectors_sign_in(payload: dict) -> dict:
+    """Sign in on the chat's card or under a reply (spec 038 G): start the
+    named server's sign-in and return its link, which the page opens because
+    the person pressed the button. A stale token is not trusted: the server
+    is asked again, and a refused refresh hands over the link. Once the
+    sign-in finishes, the agent is built again so the next turn has the tools."""
+    from waku.ops import browser_agent
+    from waku.tools import connectors
+
+    name = str(payload.get("name") or "")
+    if not name:
+        return {"error": "Which connector? Send its name."}
+
+    def after(flow) -> None:
+        if flow.ok:
+            browser_agent.rebuild()
+
+    try:
+        flow = connectors.start_sign_in(load_settings().ensure_home(), name, on_done=after)
+    except connectors.Refused as refused:
+        return {"error": str(refused)}
+    if flow.done.is_set() and flow.ok:
+        return {"ok": True, "link": None, "message": f"'{name}' is connected."}
+    if flow.link:
+        return {"ok": True, "link": flow.link, "message": connectors.link_words(name, flow)}
+    return {"error": flow.reason or f"The sign-in to '{name}' did not start. "
+                                    f"Run: waku mcp login {name}"}
+
+
+def connectors_snooze(payload: dict) -> dict:
+    """Not now on the chat's sign-in card: quiet for a day (spec 038 G)."""
+    from waku.tools import connectors
+
+    name = str(payload.get("name") or "")
+    if not name:
+        return {"error": "Which connector? Send its name."}
+    connectors.snooze_sign_in(load_settings().ensure_home(), name)
+    return {"ok": True, "sign_in": sign_in_cards()}
 
 
 def connectors_remove(payload: dict) -> dict:
@@ -881,6 +933,10 @@ def _mcp_row(home: Path, spec: dict, live, tools: list) -> dict:
         "tools": (sum(1 for t in tools if t.name.startswith(f"{name}_"))
                   if bridge is not None else None),
         "account": account,
+        # Spec 038: the agent left it out of its turns because its sign-in
+        # lapsed, though a token is still on disk.
+        "needs_sign_in": bool(bridge is not None
+                              and name in (getattr(bridge, "needs_sign_in", None) or [])),
     }
 
 
@@ -1783,7 +1839,9 @@ class Handler(BaseHTTPRequestHandler):
                   "/api/waiting/cancel": waiting_cancel,
                   "/api/connectors/add": connectors_add,
                   "/api/connectors/remove": connectors_remove,
-                  "/api/connectors/approve": connectors_approve}
+                  "/api/connectors/approve": connectors_approve,
+                  "/api/connectors/snooze": connectors_snooze,
+                  "/api/connectors/sign_in": connectors_sign_in}
         if self.path not in routes:
             self.send_response(404)
             self.end_headers()
@@ -1879,6 +1937,14 @@ def main() -> None:
         # and dispatcher in this process. None on a person's own machine,
         # where `waku serve` is its own command.
         alwayson = handover.start(load_settings())
+        # Spec 038 F: find lapsed sign-ins before anyone asks, in the
+        # background and with no browser, so the chat can show its card.
+        if not handover.enabled():
+            from waku.tools import connectors as _connectors
+
+            threading.Thread(target=_connectors.check_sign_ins,
+                             args=(load_settings().home,), daemon=True,
+                             name="sign-in-check").start()
         print(f"Waku dashboard → http://localhost:{port}  (Ctrl-C to stop)")
         try:
             server.serve_forever()

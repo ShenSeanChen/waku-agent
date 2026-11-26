@@ -630,6 +630,144 @@ def _free_name(home: Path, name: str) -> str:
     return next(f"{name[:29]}_{n}" for n in range(2, 100) if f"{name[:29]}_{n}" not in taken)
 
 
+# ---- spec 038: a lapsed sign-in is a reminder, not a browser ----------------
+
+REMIND_EVERY_HOURS = 24
+_REMINDED = "reminded.json"
+
+
+def sign_in_line(name: str) -> str:
+    """The line under a reply when a connector was left out for its sign-in.
+    "connect <name>" is what the chat already answers with a sign-in link, in
+    the dashboard and on a phone alike."""
+    return (f"'{name}' needs you to sign in again, so its tools were left out of this "
+            f"reply. Say \"connect {name}\" when you want the sign-in link.")
+
+
+def _reminded(home: Path) -> tuple[Path, dict]:
+    path = Path(home) / "mcp-auth" / _REMINDED
+    try:
+        seen = json.loads(path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError):
+        seen = {}
+    return path, seen if isinstance(seen, dict) else {}
+
+
+def _recent(stamp, now) -> bool:
+    from datetime import datetime, timedelta
+
+    try:
+        return now - datetime.fromisoformat(str(stamp)) < timedelta(hours=REMIND_EVERY_HOURS)
+    except (TypeError, ValueError):
+        return False
+
+
+def sign_in_due(home: Path, names: list[str], now=None) -> list[str]:
+    """The names a chat card asks about now: not reminded of, nor put off
+    with Not now, in the last REMIND_EVERY_HOURS. Reads only."""
+    from datetime import UTC, datetime
+
+    now = now or datetime.now(UTC)
+    _, seen = _reminded(home)
+    return [name for name in names if not _recent(seen.get(name), now)]
+
+
+def snooze_sign_in(home: Path, name: str, now=None) -> None:
+    """Not now on the chat card: quiet for REMIND_EVERY_HOURS."""
+    from datetime import UTC, datetime
+
+    now = now or datetime.now(UTC)
+    path, seen = _reminded(home)
+    seen[str(name)] = now.isoformat(timespec="seconds")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(seen), encoding="utf-8")
+
+
+# Spec 038 F: the servers known to need a sign-in, by name, with when that was
+# found. Filled by the check at dashboard start and by every turn. A name
+# leaves once its token file is newer than the finding: a sign-in wrote it.
+_NEEDS: dict[str, float] = {}
+_NEEDS_LOCK = threading.Lock()
+
+
+def record_needs_sign_in(names, at: float | None = None) -> None:
+    import time
+
+    at = time.time() if at is None else at
+    with _NEEDS_LOCK:
+        for name in names:
+            _NEEDS[str(name)] = at
+
+
+def needing_sign_in(home: Path) -> list[str]:
+    """The recorded names still waiting for a sign-in, in the order found."""
+    from waku.tools.mcp_oauth import AUTH_DIR, _sanitise
+
+    with _NEEDS_LOCK:
+        for name, at in list(_NEEDS.items()):
+            token = Path(home) / AUTH_DIR / f"{_sanitise(name)}.json"
+            try:
+                if token.stat().st_mtime > at:
+                    del _NEEDS[name]
+            except FileNotFoundError:
+                pass
+        return list(_NEEDS)
+
+
+def check_sign_ins(home: Path, bridge: Callable | None = None) -> list[str]:
+    """Connect every sign-in server once, with no browser, and record which
+    need a sign-in (spec 038 F). Run in the background at dashboard start;
+    returns the names found."""
+    if bridge is None:
+        from waku.plugins import store
+        from waku.tools.mcp_client import MCPBridge
+
+        def bridge():
+            return MCPBridge(Path(home) / "mcp.json", extra_servers=store.servers(Path(home)),
+                             skip=lambda spec: not spec.get("oauth"), interactive=False)
+    probe = bridge()
+    try:
+        probe.start()
+    except Exception:
+        pass
+    finally:
+        try:
+            probe.close()
+        except Exception:
+            pass
+    found = list(getattr(probe, "needs_sign_in", []) or [])
+    record_needs_sign_in(found)
+    return found
+
+
+def sign_in_reminders(home: Path, names: list[str], now=None) -> list[str]:
+    """One line per connector that needs a sign-in, at most once a day each.
+
+    The first turn after a sign-in lapses says so; the next ones within
+    REMIND_EVERY_HOURS stay quiet, so an unused connector does not nag. The
+    times are kept in mcp-auth/reminded.json, beside the tokens they are
+    about, and a name that no longer needs a sign-in is dropped from it."""
+    from datetime import UTC, datetime, timedelta
+
+    now = now or datetime.now(UTC)
+    path, seen = _reminded(home)
+    record_needs_sign_in(names)
+    lines, kept = [], {}
+    for name in names:
+        try:
+            last = datetime.fromisoformat(str(seen.get(name)))
+        except ValueError:
+            last = None
+        if last is None or now - last >= timedelta(hours=REMIND_EVERY_HOURS):
+            lines.append(sign_in_line(name))
+            last = now
+        kept[name] = last.isoformat(timespec="seconds")
+    if kept != seen:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(kept), encoding="utf-8")
+    return lines
+
+
 def tell_owner(home: Path, flow: SignIn) -> None:
     """One message to the owner when a sign-in that chat started ends: the
     server is connected, or the link they were sent no longer works. A

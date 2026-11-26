@@ -179,8 +179,13 @@ def _auth_hint(spec: dict, auth_dir: Path) -> str:
 class MCPBridge:
     def __init__(self, config_path: Path, timeout: float = 30.0,
                  call_timeout: float | None = None, skip=None, extra_servers=(),
-                 open_url=None):
+                 open_url=None, interactive: bool = True):
         self.config_path = config_path
+        # Spec 038: False when a turn is connecting. A server that would need
+        # a sign-in is then left out and named in `needs_sign_in`, and no
+        # browser opens. `waku mcp login` and the chat's connect keep True.
+        self.interactive = interactive
+        self.needs_sign_in: list[str] = []
         # Spec 025: what receives a sign-in link in place of this machine's
         # browser. None opens the browser, as `waku mcp login` does.
         self._open_url = open_url
@@ -231,6 +236,8 @@ class MCPBridge:
         """
         from waku.tools.mcp_oauth import SIGN_IN_TIMEOUT
 
+        if not self.interactive:
+            return self.timeout * 2
         if any(s.get("oauth") and not self._token_exists(s) for s in servers):
             return SIGN_IN_TIMEOUT + 60.0
         return self.timeout * 2
@@ -262,7 +269,7 @@ class MCPBridge:
             tools.extend(as_tool(srv, meta, self.call) for meta in metas)
         return tools
 
-    async def _open_streams(self, spec: dict):
+    async def _open_streams(self, spec: dict, stack: AsyncExitStack):
         """Connect one server and return its (read, write) streams.
 
         The transport is chosen by the config's shape rather than by a
@@ -281,7 +288,7 @@ class MCPBridge:
             params = StdioServerParameters(
                 command=spec["command"], args=spec.get("args", []), env=spec.get("env") or None
             )
-            return await self._stack.enter_async_context(stdio_client(params))
+            return await stack.enter_async_context(stdio_client(params))
 
         from mcp.client.streamable_http import create_mcp_http_client, streamable_http_client
 
@@ -316,19 +323,25 @@ class MCPBridge:
             # discovery and the refresh itself, so this is handed to the
             # client once and never thought about again.
             auth = build_provider(url, spec["name"], self.config_path.parent,
-                                  open_url=self._open_url)
+                                  open_url=self._open_url,
+                                  on_sign_in_needed=None if self.interactive
+                                  else self._note_sign_in_needed)
 
         # create_mcp_http_client applies the SDK's own timeouts and
         # follow_redirects; a header or an auth flow are the two supported ways
         # to authenticate this transport. Because we build the client rather
         # than letting the transport build one, we own its lifecycle — hence
         # entering it on the stack ourselves.
-        client = await self._stack.enter_async_context(
+        client = await stack.enter_async_context(
             create_mcp_http_client(headers=headers, auth=auth)
         )
-        return await self._stack.enter_async_context(
+        return await stack.enter_async_context(
             streamable_http_client(url, http_client=client)
         )
+
+    def _note_sign_in_needed(self, name: str) -> None:
+        if name not in self.needs_sign_in:
+            self.needs_sign_in.append(name)
 
     def _token_exists(self, spec: dict) -> bool:
         """Whether a sign-in has already produced a token for this server.
@@ -350,13 +363,26 @@ class MCPBridge:
 
         name = spec["name"]
         self._specs[name] = spec
-        read, write = await self._open_streams(spec)
-        info = types.Implementation(name=CLIENT_NAME, version=__version__)
-        session = await self._stack.enter_async_context(
-            ClientSession(read, write, client_info=info))
-        await session.initialize()
+        # One exit stack per server (spec 038). A server that fails while
+        # connecting is closed here, at once, in this task: its transport's
+        # task group otherwise stayed open on the shared stack and cancelled
+        # every server connected after it.
+        stack = AsyncExitStack()
+        try:
+            read, write = await self._open_streams(spec, stack)
+            info = types.Implementation(name=CLIENT_NAME, version=__version__)
+            session = await stack.enter_async_context(
+                ClientSession(read, write, client_info=info))
+            await session.initialize()
+            tools = (await session.list_tools()).tools
+        except BaseException:
+            try:
+                await stack.aclose()
+            except BaseException:
+                pass
+            raise
+        self._stack.push_async_callback(stack.aclose)
         self._sessions[name] = session
-        tools = (await session.list_tools()).tools
         # `input_schema` in the SDK's 2.x line; it was `inputSchema` in 1.x.
         # getattr covers both so a user on either pin gets a working connector
         # rather than an AttributeError reported as "failed to connect".
@@ -368,8 +394,24 @@ class MCPBridge:
         for spec in servers:
             name = spec["name"]
             had_token = self._token_exists(spec)
+            if not self.interactive and spec.get("oauth") and not had_token:
+                # Never signed in: there is nothing to refresh, so skip it
+                # without asking the server (spec 038).
+                self._note_sign_in_needed(name)
+                continue
             try:
                 listed[name] = await self._connect_one(spec)
+            except asyncio.CancelledError:
+                # Spec 038: a refused sign-in fails inside the transport's own
+                # task group, which cancels this task rather than raising. That
+                # cancelled the whole connect and every other server with it,
+                # so no agent could be built. Only that cancellation is
+                # absorbed; any other one (Waku closing) still propagates.
+                if name not in self.needs_sign_in:
+                    raise
+                asyncio.current_task().uncancel()
+                print(f"MCP server '{name}' needs a sign-in; left out of this turn")
+                continue
             except Exception as first_exc:  # one bad server shouldn't stop the rest
                 # Bound to a name of our own: Python unbinds an `except … as`
                 # variable at the end of the block, so the retry below cannot
@@ -390,6 +432,9 @@ class MCPBridge:
                     except Exception as retry_exc:
                         error = retry_exc
 
+                if name in self.needs_sign_in:
+                    print(f"MCP server '{name}' needs a sign-in; left out of this turn")
+                    continue
                 print(f"MCP server '{name}' failed to connect: {error}")
                 # ValueError is this module's own config refusal above; it
                 # already says exactly what is wrong, and adding an auth hint

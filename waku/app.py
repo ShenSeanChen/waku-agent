@@ -195,7 +195,8 @@ class Waku:
                     result = None
             if result is None:
                 result = self._run_full_turn(user_message, notify, stream)
-            result.notices = list(self._turn_notices)
+            result.sign_in_notices = self._sign_in_notices()
+            result.notices = list(self._turn_notices) + result.sign_in_notices
             if self._turn_context:
                 # consolidation must not keep the plugin's brief again as new facts
                 result.recalled = "\n".join(p for p in (result.recalled, self._turn_context) if p)
@@ -286,6 +287,20 @@ class Waku:
         return {"session_id": f"waku:{plugin_store.install_id(self.settings.home)}:{source}",
                 "turn_id": self.tracer.turn_id, "cwd": os.getenv("WAKU_HOOK_PROJECT", ""),
                 "prompt": user_message}
+
+    def _sign_in_notices(self) -> list[str]:
+        """Spec 038: the connectors this agent left out for a sign-in, as
+        lines under the reply, at most once a day each. Never raises."""
+        names = list(getattr(self.mcp_bridge, "needs_sign_in", None) or [])
+        if not names:
+            return []
+        try:
+            from waku.tools.connectors import sign_in_reminders
+
+            return sign_in_reminders(self.settings.home, names)
+        except Exception:
+            log.exception("could not read or write the sign-in reminders")
+            return []
 
     def _before_turn(self, user_message: str, source: str, notify) -> dict | None:
         """SessionStart on a gateway's first turn, then UserPromptSubmit.

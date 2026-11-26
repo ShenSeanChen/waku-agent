@@ -102,6 +102,7 @@ from urllib.parse import parse_qs, urlparse
 from waku.app import Waku
 from waku.gateway.cli import _observer  # mirror gate/tool activity on the laptop terminal
 from waku.integrations import IntegrationState, IntegrationStatus
+from waku.loop.agent import text_with_sign_in
 
 
 def _send_message(token: str, phone_number_id: str, to: str, text: str) -> bool:
@@ -228,7 +229,8 @@ def _build_handler(
                         print(f"waku › {result.reply}")
 
                         _send_message(
-                            token, phone_number_id, sender, result.reply or "(no reply)"
+                            token, phone_number_id, sender,
+                            text_with_sign_in(result) or "(no reply)"
                         )
 
     return Handler

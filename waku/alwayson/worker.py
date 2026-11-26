@@ -43,6 +43,7 @@ from typing import Any
 
 from waku.alwayson import approvals, events, outbox, runs, timers
 from waku.alwayson.events import Event
+from waku.loop.agent import text_with_sign_in
 from waku.memory import tool_note
 
 BATCH_WAIT_SECONDS = 3.0
@@ -473,8 +474,9 @@ class AgentRun:
         self._log(f"waku › {result.reply}")
         from waku.tools import connectors
 
-        reply = connectors.without_dead_links(self._agent.settings.home, result.reply)
-        if reply != result.reply:
+        sent = text_with_sign_in(result)
+        reply = connectors.without_dead_links(self._agent.settings.home, sent)
+        if reply != sent:
             self._log("(serve) took a sign-in link that nothing waits for out of the reply")
         return runs.Outcome(reply, turn_id=(result.receipt or {}).get("turn_id", ""))
 
