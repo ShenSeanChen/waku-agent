@@ -36,8 +36,8 @@ cp .env.example .env
 ```
 
 Set `WAKU_PROVIDER=` and paste that provider's key. Anthropic is the default;
-OpenAI, Gemini, DeepSeek, MiniMax, Kimi, GLM, OpenRouter, OpenCode Zen and
-OpenCode Go work the same way. You can also paste a key in the dashboard
+OpenAI, Gemini, DeepSeek, MiniMax, Kimi, GLM, xAI, OpenRouter, Groq, Amazon
+Bedrock, OpenCode Zen and OpenCode Go work the same way. You can also paste a key in the dashboard
 later. Either way the key stays in a `.env` on your machine and is never sent
 to the browser.
 
@@ -69,6 +69,26 @@ the same way: set `WAKU_LOCAL_BASE_URL` to the server's address, for example
 `http://localhost:1234/v1` for LM Studio. The model must support tool calls,
 because every Waku turn offers tools; `llama3` does not, and the server
 refuses the turn.
+
+### Run it on open models in the cloud
+
+Groq and Amazon Bedrock run open-weight models such as gpt-oss-120b and
+Qwen3 on their own hardware, and the Models page lists both under "Inference
+platforms". Groq reads `GROQ_API_KEY`. Bedrock reads a Bedrock API key from
+`AWS_BEARER_TOKEN_BEDROCK`, the variable AWS's own tools read, so a key you
+already exported for the AWS CLI works unchanged:
+
+```bash
+WAKU_PROVIDER=bedrock waku
+```
+
+Bedrock answers from us-east-1 by default. Set `WAKU_BEDROCK_BASE_URL` to
+another region's address, for example
+`https://bedrock-runtime.us-west-2.amazonaws.com/openai/v1`. Waku starts on
+`openai.gpt-oss-120b-1:0`; `deepseek.v3.2`, `qwen.qwen3-32b-v1:0`,
+`nvidia.nemotron-super-3-120b` and `mistral.devstral-2-123b` each called a
+tool on 2026-11-24 and are one pick away in the Models page. A model has to be
+enabled in your AWS account before Bedrock answers for it.
 
 ## 3. Open the dashboard
 

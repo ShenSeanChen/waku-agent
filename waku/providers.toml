@@ -235,6 +235,30 @@ claims_families = false
 key_url = "https://console.groq.com/keys"
 price = [0.15, 0.6]
 
+# Amazon Bedrock runs open-weight models on AWS, so it is a platform. It uses
+# Bedrock's OpenAI-compatible runtime address and a Bedrock API key, under the
+# variable name AWS's own SDKs read, so one exported key serves both. No boto3
+# and no request signing (spec 036). WAKU_BEDROCK_BASE_URL picks another
+# region. Checked live on 2026-11-24 in us-west-2 and us-east-1: gpt-oss-120b,
+# deepseek.v3.2, qwen3-32b, nemotron-super-3-120b and devstral-2-123b each
+# called a tool through scripts/provider_smoke.py. gpt-oss writes its
+# reasoning into the answer as <reasoning>...</reasoning>; the openai adapter
+# moves that block out of the reply. Per-model prices are in waku/ops/pricing.py.
+[bedrock]
+kind = "openai"
+tier = "platform"
+label = "Amazon Bedrock"
+key_env = "AWS_BEARER_TOKEN_BEDROCK"
+base_url = "https://bedrock-runtime.us-east-1.amazonaws.com/openai/v1"
+base_url_env = "WAKU_BEDROCK_BASE_URL"
+model = "openai.gpt-oss-120b-1:0"
+small_model = "qwen.qwen3-32b-v1:0"
+flagship = "openai.gpt-oss-120b-1:0"
+fast = "qwen.qwen3-32b-v1:0"
+claims_families = false
+key_url = "https://us-east-1.console.aws.amazon.com/bedrock/home?region=us-east-1#/api-keys"
+price = [0.15, 0.6]
+
 [opencode_zen]
 kind = "openai"
 tier = "platform"

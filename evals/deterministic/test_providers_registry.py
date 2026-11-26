@@ -113,4 +113,20 @@ def test_the_models_page_gets_each_providers_tier():
     tiers = {view.key: view.tier for view in list_providers()}
     assert tiers.get("local") == "local"
     assert tiers.get("groq") == "platform"
+    assert tiers.get("bedrock") == "platform"
     assert tiers.get("anthropic") == "maker"
+
+
+def test_bedrock_is_a_platform_with_awss_own_key_name():
+    """Spec 036. Bedrock runs other makers' models, so the Models page lists
+    it under inference platforms. Its key variable is the one AWS's SDKs read,
+    so a key already exported for the AWS tools works unchanged."""
+    row = REGISTRY["bedrock"]
+    assert row["tier"] == "platform"
+    assert row["kind"] == "openai"
+    assert row["claims_families"] is False
+    assert row["key_env"] == "AWS_BEARER_TOKEN_BEDROCK"
+    assert row["base_url_env"] == "WAKU_BEDROCK_BASE_URL"
+    assert row["base_url"] == "https://bedrock-runtime.us-east-1.amazonaws.com/openai/v1"
+    assert (row["model"], row["small_model"]) == ("openai.gpt-oss-120b-1:0", "qwen.qwen3-32b-v1:0")
+    assert (LOGOS / "bedrock.svg").exists()

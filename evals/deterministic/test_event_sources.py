@@ -477,8 +477,9 @@ def test_github_webhook_refuses_a_signed_body_it_cannot_read(inbox):
 class _FakeGh:
     """Stands in for the `gh` CLI: records every argv and answers from a table."""
 
-    def __init__(self, issues=(), comments=(), ok=True):
+    def __init__(self, issues=(), comments=(), ok=True, prs=()):
         self.calls, self.issues, self.comments, self.ok = [], list(issues), list(comments), ok
+        self.prs = list(prs)
 
     def __call__(self, argv):
         import json
@@ -486,6 +487,8 @@ class _FakeGh:
         self.calls.append(argv)
         if not self.ok:
             return False, "gh is not authenticated. Run `gh auth login`."
+        if argv[1] == "pr":
+            return True, json.dumps(self.prs)
         return True, json.dumps(self.issues if argv[1] == "issue" else self.comments)
 
 
@@ -548,7 +551,7 @@ def test_github_poller_reads_mentions_since_the_last_poll(inbox):
 def test_github_poller_without_a_login_never_reads_comments(inbox):
     gh = _FakeGh(issues=[_LISTED])
     _poller(inbox, gh, login="").poll_once()
-    assert [argv[1] for argv in gh.calls] == ["issue"]
+    assert [argv[1] for argv in gh.calls] == ["issue", "pr"]
 
 
 def test_github_poller_survives_a_failing_gh(inbox):
@@ -574,7 +577,64 @@ def test_github_poller_waits_60_seconds_between_polls(inbox):
 
     poller.run_forever(wait=wait)
     assert waits == [60, 60]
-    assert len(gh.calls) == 2
+    assert len(gh.calls) == 4, "two polls, each lists issues and pull requests"
+
+
+# ---- spec 035: every new pull request, as a quiet row ------------------------
+
+_PR_URL = "https://github.com/acme/app/pull/428"
+_PR_TEXT = 'Pull request acme/app#428 "check full fact table for duplicates" by contributor, +140/-15.'
+_PR_PAYLOAD = {
+    "text": _PR_TEXT, "quiet": True, "sender": {"login": "contributor"}, "url": _PR_URL,
+    "pr": {"repo": "acme/app", "number": 428, "title": "check full fact table for duplicates",
+           "author": "contributor", "url": _PR_URL, "additions": 140, "deletions": 15,
+           "body": "Checks every store for duplicate facts."}}
+_PR_LISTED = {"number": 428, "title": "check full fact table for duplicates",
+              "body": "Checks every store for duplicate facts.", "author": {"login": "contributor"},
+              "url": _PR_URL, "isDraft": False, "additions": 140, "deletions": 15}
+
+
+def _pull_request(action="opened", number=428, draft=False):
+    return {"action": action, "number": number,
+            "pull_request": {"number": number, "title": "check full fact table for duplicates",
+                             "body": "Checks every store for duplicate facts.",
+                             "user": {"login": "contributor"},
+                             "html_url": f"https://github.com/acme/app/pull/{number}",
+                             "draft": draft, "additions": 140, "deletions": 15},
+            "repository": {"full_name": "acme/app"}, "sender": {"login": "contributor"}}
+
+
+def test_github_source_sees_new_prs(inbox):
+    """A contributor opens PR #428. Anyone may open a pull request, so no
+    trust check applies: the row is quiet, stored `done`, and only the PR
+    desk's morning run reads it. A draft waits until it is marked ready."""
+    for action, number, draft, delivery in (
+            ("opened", 428, False, "d-1"),
+            ("ready_for_review", 429, False, "d-2"),
+            ("opened", 430, True, "d-3"),            # a draft is not recorded
+            ("synchronize", 431, False, "d-4"),      # a push is not a new pull request
+            ("opened", 428, False, "d-1"),           # GitHub redelivers d-1
+            ("ready_for_review", 428, False, "d-5")):  # the same PR again
+        assert _post(inbox, _pull_request(action, number, draft), event="pull_request",
+                     delivery=delivery) == 200
+
+    rows = _rows(inbox)
+    assert [(row[1], row[2], row[4]) for row in rows] == [
+        ("pr:acme/app#428", "github:acme/app#428", "done"),
+        ("pr:acme/app#429", "github:acme/app#429", "done")]
+    assert rows[0][0] == "github" and rows[0][3] == _PR_PAYLOAD
+
+    # The poller writes the same row, so a laptop and a server agree.
+    polled = Inbox(inbox.home / "polled")
+    polled.home.mkdir()
+    gh = _FakeGh(prs=[_PR_LISTED, {**_PR_LISTED, "number": 430, "isDraft": True}])
+    poller = _poller(polled, gh)
+    assert poller.poll_once() == 1
+    assert poller.poll_once() == 0, "the same open pull request on the next poll is a no-op"
+    assert ["gh", "pr", "list", "--repo", "acme/app", "--state", "open", "--limit", "50",
+            "--json", "number,title,body,author,url,isDraft,additions,deletions"] in gh.calls
+    assert [(row[1], row[3], row[4]) for row in _rows(polled)] == [
+        ("pr:acme/app#428", _PR_PAYLOAD, "done")]
 
 
 def test_github_repos_are_validated_before_any_process_exists(monkeypatch, capsys):

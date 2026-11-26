@@ -6,7 +6,7 @@
 Read this before opening a PR or filing an issue: most of what is already
 known-broken is below, and half of it already has a fix in flight.
 
-**Last updated:** 2026-11-23
+**Last updated:** 2026-11-24
 
 ---
 
@@ -77,9 +77,9 @@ Nothing here is a surprise. If you hit one of these, the issue exists.
 | Google Calendar sign-in has no bundled OAuth client, so `waku connect google` needs your own `~/.waku/credentials.json` | — | — |
 
 **Providers are the recurring theme.** `scripts/provider_smoke.py` sends one
-tool turn to each provider you have a key for and prints which answered. A
-model server on your own machine works through the `local` row (spec 034): no
-key, Ollama's address by default, and a model that supports tool calls.
+tool turn to each provider you have a key for. The `local` row reaches a model
+server on this machine (spec 034). Groq and Amazon Bedrock (spec 036) are the
+platform rows, and Waku moves a leading `<reasoning>` block out of the reply.
 
 ## What is deliberately not built
 
