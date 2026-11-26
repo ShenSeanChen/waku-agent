@@ -112,3 +112,43 @@ def test_any_other_failure_still_sends_failed(conn):
                   payload={"text": "hi", "reply_to": {"chat_id": 42}})
     Worker(conn, broken, wait=lambda s: None, now=lambda: NOON, log=lambda line: None).step()
     assert [r["body"] for r in conn.execute("SELECT body FROM outbox")] == [FAILED]
+
+
+# ---- web chat: the dashboard's chat and the hosted embedded chat -------------
+
+def test_web_chat_gets_the_notice_with_its_address_as_a_link():
+    from waku.ops.dashboard import failure_event
+
+    link = "https://www.waku.one/settings/plan"
+    assert failure_event(OutOfCredits()) == {"notice": NOTICE.replace(
+        link, f"[{link}]({link})")}
+    # A sentence that ends with its address and a full stop keeps the stop outside.
+    assert failure_event(OutOfCredits(message=f"Pay at {link}.")) == {
+        "notice": f"Pay at [{link}]({link})."}
+
+
+def test_web_chat_still_shows_any_other_failure_as_an_error():
+    from waku.ops.dashboard import failure_event
+
+    assert failure_event(RuntimeError("model is down")) == {
+        "error": "RuntimeError: model is down"}
+
+
+def test_a_streamed_turn_that_runs_out_of_credits_ends_with_the_notice(monkeypatch):
+    """chat_stream lets the refusal reach /api/chat/stream's own catch, which
+    sends failure_event's answer as the "done" event."""
+    from waku.ops import dashboard
+
+    class Refusing:
+        def respond(self, *args, **kwargs):
+            raise OutOfCredits()
+
+    monkeypatch.setattr(dashboard, "get_agent", lambda: Refusing())
+    monkeypatch.setattr(dashboard, "maybe_rotate_session", lambda agent: None)
+    monkeypatch.setattr(dashboard.browser_agent, "follow_connectors", lambda: None)
+    done = {}
+    try:
+        dashboard.chat_stream("hello", lambda kind, ev: None)
+    except Exception as exc:
+        done = dashboard.failure_event(exc)
+    assert "notice" in done and "error" not in done
