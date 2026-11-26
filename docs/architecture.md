@@ -268,8 +268,8 @@ no.'
   is `ask` when it matches the entry's `writes`; a tool of any other server
   is `ask` unless the server declares `readOnlyHint` for it. The owner can
   store one rule per connector in the `approvals` table, which makes every
-  tool of that connector `allow`. `connect_tool` and `disconnect_tool` are
-  `ask` whatever the environment says.
+  tool of that connector `allow`. `connect_tool`, `disconnect_tool` and
+  `github_review` are `ask` whatever the environment says.
 - **A reply other people read is a write.** The worker stores a run's reply
   to a GitHub issue, a Slack channel or a group chat as a `send_message`
   call, and the owner reads the exact text in the request. A reply to the
@@ -305,9 +305,15 @@ no.'
   one by its id (`t3`, `r7`, `m12`). `waku waiting`, the tools `list_waiting`
   and `cancel_waiting`, and the dashboard's "Waiting" card all call it. A
   cancelled row keeps its record with the status `cancelled`.
-- **Only the owner approves.** `who_may_approve` in `approvals.py` is the one
-  function that decides, and it answers with `WAKU_OWNER`. The yes counts in
-  a private Telegram chat, where one person writes.
+- **Who approves depends on the call.** `who_may_approve` in `approvals.py`
+  is the one function that decides. Every call names the owner in
+  `WAKU_OWNER`, and the yes counts in a private Telegram chat, where one
+  person writes. A review the PR desk drafts (`github_review`, spec 035)
+  waits in the Slack channel `WAKU_DIGEST_CHANNEL` instead, in a thread under
+  that morning's digest. A click on Approve or Reject there counts when
+  `WAKU_APPROVERS` maps the person who clicked to a GitHub login and GitHub
+  says, at that moment, that the login may write to the repository. A typed
+  yes in a channel never counts.
 - **Only `waku serve` parks a call.** In `waku` and the dashboard nothing can
   bring a parked call back, so `send_message` to a third party is refused
   there.
