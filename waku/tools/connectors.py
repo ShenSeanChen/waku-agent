@@ -630,6 +630,52 @@ def _free_name(home: Path, name: str) -> str:
     return next(f"{name[:29]}_{n}" for n in range(2, 100) if f"{name[:29]}_{n}" not in taken)
 
 
+# ---- spec 038: a lapsed sign-in is a reminder, not a browser ----------------
+
+REMIND_EVERY_HOURS = 24
+_REMINDED = "reminded.json"
+
+
+def sign_in_line(name: str) -> str:
+    """The line under a reply when a connector was left out for its sign-in.
+    "connect <name>" is what the chat already answers with a sign-in link, in
+    the dashboard and on a phone alike."""
+    return (f"'{name}' needs you to sign in again, so its tools were left out of this "
+            f"reply. Say \"connect {name}\" when you want the sign-in link.")
+
+
+def sign_in_reminders(home: Path, names: list[str], now=None) -> list[str]:
+    """One line per connector that needs a sign-in, at most once a day each.
+
+    The first turn after a sign-in lapses says so; the next ones within
+    REMIND_EVERY_HOURS stay quiet, so an unused connector does not nag. The
+    times are kept in mcp-auth/reminded.json, beside the tokens they are
+    about, and a name that no longer needs a sign-in is dropped from it."""
+    from datetime import UTC, datetime, timedelta
+
+    now = now or datetime.now(UTC)
+    path = Path(home) / "mcp-auth" / _REMINDED
+    try:
+        seen = json.loads(path.read_text(encoding="utf-8"))
+        seen = seen if isinstance(seen, dict) else {}
+    except (FileNotFoundError, json.JSONDecodeError):
+        seen = {}
+    lines, kept = [], {}
+    for name in names:
+        try:
+            last = datetime.fromisoformat(str(seen.get(name)))
+        except ValueError:
+            last = None
+        if last is None or now - last >= timedelta(hours=REMIND_EVERY_HOURS):
+            lines.append(sign_in_line(name))
+            last = now
+        kept[name] = last.isoformat(timespec="seconds")
+    if kept != seen:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(kept), encoding="utf-8")
+    return lines
+
+
 def tell_owner(home: Path, flow: SignIn) -> None:
     """One message to the owner when a sign-in that chat started ends: the
     server is connected, or the link they were sent no longer works. A

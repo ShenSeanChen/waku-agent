@@ -881,6 +881,10 @@ def _mcp_row(home: Path, spec: dict, live, tools: list) -> dict:
         "tools": (sum(1 for t in tools if t.name.startswith(f"{name}_"))
                   if bridge is not None else None),
         "account": account,
+        # Spec 038: the agent left it out of its turns because its sign-in
+        # lapsed, though a token is still on disk.
+        "needs_sign_in": bool(bridge is not None
+                              and name in (getattr(bridge, "needs_sign_in", None) or [])),
     }
 
 

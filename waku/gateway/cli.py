@@ -14,6 +14,7 @@ from rich.panel import Panel
 from rich.text import Text
 
 from waku.app import Waku
+from waku.loop.agent import text_with_sign_in
 
 console = Console()
 
@@ -89,7 +90,7 @@ def main() -> None:
             )
             continue
         result = waku.respond(user_message, observer=_observer, source="cli")
-        console.print(f"[bold green]waku ›[/bold green] {result.reply}\n")
+        console.print(f"[bold green]waku ›[/bold green] {text_with_sign_in(result)}\n")
     waku.close()   # spec 021: lets the last turn's Stop hook finish
     console.print("[dim]bye — your memory stays in state.db[/dim]")
 

@@ -168,8 +168,8 @@ def treg_card(card: dict) -> dict:
 
 def _server_state(row: dict, waiting: dict | None) -> tuple[str, str]:
     account = str(row.get("account") or "")
-    if (waiting or {}).get("name") == row["name"] or account.startswith(("not signed in",
-                                                                         "unreadable")):
+    if (row.get("needs_sign_in") or (waiting or {}).get("name") == row["name"]
+            or account.startswith(("not signed in", "unreadable"))):
         return "needs-setup", NEEDS_SIGN_IN
     if row.get("connected") is False:
         return "not-configured", STATES["not-configured"]

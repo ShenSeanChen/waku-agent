@@ -124,19 +124,13 @@ def build_registry(conn: sqlite3.Connection, settings: Settings, memory=None,
             # Spec 020: "Keep local only" leaves Waku Memory unconnected even
             # when mcp.json or a plugin names it, and touches no other server.
             memory_off = getattr(settings, "memory_mode", "") == "off"
-            # Spec 025: the always-on agent runs where nobody may be looking,
-            # so a server that still needs its sign-in is left out there and
-            # no browser opens. The owner signs in through the link.
-            wait_for_sign_in = getattr(settings, "mcp_sign_in", True)
-
-            def left_out(spec: dict) -> bool:
-                return ((memory_off and is_waku_memory(spec))
-                        or (not wait_for_sign_in
-                            and connectors.needs_sign_in(settings.home, spec)))
-
-            # None when neither rule applies: every server is connected.
-            skip = left_out if memory_off or not wait_for_sign_in else None
-            bridge = MCPBridge(mcp_config, skip=skip, extra_servers=plugin_servers)
+            # Spec 038: no turn opens a browser, here or under `waku serve`.
+            # A server that needs a sign-in is left out and named in
+            # bridge.needs_sign_in, and the person signs in when they choose
+            # ("connect <name>" in chat, or `waku mcp login <name>`).
+            skip = is_waku_memory if memory_off else None
+            bridge = MCPBridge(mcp_config, skip=skip, extra_servers=plugin_servers,
+                               interactive=False)
             for t in bridge.start():
                 registry.register(t)
             registry.mcp_bridge = bridge  # so Waku.close() can stop the servers

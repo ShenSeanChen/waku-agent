@@ -243,8 +243,16 @@ def check_port(storage: FileTokenStorage) -> None:
             f"{sign_in_minutes()} minutes if another sign-in is still open, and ask again.")
 
 
+class SignInNeeded(RuntimeError):
+    """A server asked for a sign-in while a turn was connecting (spec 038).
+
+    A turn never opens a browser: the sign-in it would start blocks the whole
+    turn for up to SIGN_IN_TIMEOUT, on a page nobody asked for. The server is
+    left out of that turn instead, and the person signs in when they choose."""
+
+
 def build_provider(server_url: str, server_name: str, home: Path,
-                   open_url=None) -> OAuthClientProvider:
+                   open_url=None, on_sign_in_needed=None) -> OAuthClientProvider:
     """The provider the HTTP client authenticates with.
 
     `OAuthClientProvider` is an httpx auth flow, so it attaches to the client
@@ -255,6 +263,11 @@ def build_provider(server_url: str, server_name: str, home: Path,
     `open_url`, when given, is handed the sign-in link in place of the
     browser this machine would open (spec 025): a chat reply or the dashboard
     shows the link, and the person opens it on the computer Waku runs on.
+
+    `on_sign_in_needed`, when given, means a turn is connecting (spec 038): a
+    sign-in is reported to it by server name and refused, and nothing opens.
+    A refresh of an existing token still happens silently, since the SDK
+    calls this handler only when no token can be refreshed.
     """
     storage = FileTokenStorage(home, server_name, server_url)
     port = callback_port(storage)
@@ -269,6 +282,11 @@ def build_provider(server_url: str, server_name: str, home: Path,
     )
 
     async def redirect_handler(authorization_url: str) -> None:
+        if on_sign_in_needed is not None:
+            # A turn is connecting (spec 038): say so and stop, before any
+            # browser opens or any callback port is held.
+            on_sign_in_needed(server_name)
+            raise SignInNeeded(f"'{server_name}' needs a sign-in")
         if open_url is not None:
             open_url(authorization_url)
             return

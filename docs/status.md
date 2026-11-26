@@ -41,7 +41,7 @@ handlers, all three senders and the approval path have run against fake
 events, fake answers and a fake `gh` only, never against a live chat,
 workspace or repository.
 
-A person connects an MCP server of their own in one step (spec 025): `waku mcp add`, a card on the Connections page, or "connect Linear" in chat under `waku serve`, which asks the owner first. The starter list holds Linear, Notion and GitHub, and `waku connections` checks the Slack tokens and names a missing scope. The sign-in to a vendor's server, the three starter servers and a Slack app made from the manifest have run against a stub sign-in and a fake Slack only, never against the live services.
+A connector whose sign-in has lapsed is left out of a turn instead of blocking it, and the reply names it once a day with a Sign in button (spec 038). A person connects an MCP server of their own in one step (spec 025): `waku mcp add`, a card on the Connections page, or "connect Linear" in chat under `waku serve`, which asks the owner first. The starter list holds Linear, Notion and GitHub, and `waku connections` checks the Slack tokens and names a missing scope. The sign-in to a vendor's server, the three starter servers and a Slack app made from the manifest have run against a stub sign-in and a fake Slack only, never against the live services.
 
 **4,739 deterministic evals pass offline**, with no API key; 60 more are live
 evals that skip without one. CI runs the offline tier on every PR along with

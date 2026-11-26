@@ -336,7 +336,18 @@ const chatTurnCard = t => uiCard(`
   ${keptList(t.consolidation)}
   ${teleFooter(t)}
   ${receiptBlock(t.receipt)}
-  ${(t.notices || []).map(n => `<div class="meta plugin-notice">${esc(n)}</div>`).join("")}`, {cls: "reply"});
+  ${(t.notices || []).map(noticeLine).join("")}`, {cls: "reply"});
+
+// A line under a reply (spec 021), with a Sign in button when it is a
+// connector left out for its sign-in (spec 038). The button sends the same
+// "connect <name>" a person would type, and only then does a link appear.
+function noticeLine(n){
+  const m = /Say "connect ([\w.-]+)"/.exec(n || "");
+  const button = m ? " " + uiButton("Sign in", {level: "secondary", size: "sm",
+    onclick: "sendChat({value: this.dataset.say, focus(){}})",
+    attrs: `data-say="connect ${esc(m[1])}"`}) : "";
+  return `<div class="meta plugin-notice">${esc(n)}${button}</div>`;
+}
 
 // While a turn runs we stream it live: stages light up as the harness reaches
 // them, and the reply text appears token by token (with a blinking caret).

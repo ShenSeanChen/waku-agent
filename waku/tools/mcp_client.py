@@ -179,8 +179,13 @@ def _auth_hint(spec: dict, auth_dir: Path) -> str:
 class MCPBridge:
     def __init__(self, config_path: Path, timeout: float = 30.0,
                  call_timeout: float | None = None, skip=None, extra_servers=(),
-                 open_url=None):
+                 open_url=None, interactive: bool = True):
         self.config_path = config_path
+        # Spec 038: False when a turn is connecting. A server that would need
+        # a sign-in is then left out and named in `needs_sign_in`, and no
+        # browser opens. `waku mcp login` and the chat's connect keep True.
+        self.interactive = interactive
+        self.needs_sign_in: list[str] = []
         # Spec 025: what receives a sign-in link in place of this machine's
         # browser. None opens the browser, as `waku mcp login` does.
         self._open_url = open_url
@@ -231,6 +236,8 @@ class MCPBridge:
         """
         from waku.tools.mcp_oauth import SIGN_IN_TIMEOUT
 
+        if not self.interactive:
+            return self.timeout * 2
         if any(s.get("oauth") and not self._token_exists(s) for s in servers):
             return SIGN_IN_TIMEOUT + 60.0
         return self.timeout * 2
@@ -316,7 +323,9 @@ class MCPBridge:
             # discovery and the refresh itself, so this is handed to the
             # client once and never thought about again.
             auth = build_provider(url, spec["name"], self.config_path.parent,
-                                  open_url=self._open_url)
+                                  open_url=self._open_url,
+                                  on_sign_in_needed=None if self.interactive
+                                  else self._note_sign_in_needed)
 
         # create_mcp_http_client applies the SDK's own timeouts and
         # follow_redirects; a header or an auth flow are the two supported ways
@@ -329,6 +338,10 @@ class MCPBridge:
         return await self._stack.enter_async_context(
             streamable_http_client(url, http_client=client)
         )
+
+    def _note_sign_in_needed(self, name: str) -> None:
+        if name not in self.needs_sign_in:
+            self.needs_sign_in.append(name)
 
     def _token_exists(self, spec: dict) -> bool:
         """Whether a sign-in has already produced a token for this server.
@@ -368,6 +381,11 @@ class MCPBridge:
         for spec in servers:
             name = spec["name"]
             had_token = self._token_exists(spec)
+            if not self.interactive and spec.get("oauth") and not had_token:
+                # Never signed in: there is nothing to refresh, so skip it
+                # without asking the server (spec 038).
+                self._note_sign_in_needed(name)
+                continue
             try:
                 listed[name] = await self._connect_one(spec)
             except Exception as first_exc:  # one bad server shouldn't stop the rest
@@ -390,6 +408,9 @@ class MCPBridge:
                     except Exception as retry_exc:
                         error = retry_exc
 
+                if name in self.needs_sign_in:
+                    print(f"MCP server '{name}' needs a sign-in; left out of this turn")
+                    continue
                 print(f"MCP server '{name}' failed to connect: {error}")
                 # ValueError is this module's own config refusal above; it
                 # already says exactly what is wrong, and adding an auth hint
