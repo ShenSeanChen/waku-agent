@@ -341,13 +341,19 @@ const chatTurnCard = t => uiCard(`
 // Spec 038 G: one card above the chat per connector whose sign-in lapsed.
 // Sign in sends "connect <name>", the same words a person would type; Not
 // now quiets it for a day. Nothing opens a browser until Sign in is pressed.
+// What a pressed Sign in said, by name, kept so the page's refresh, which
+// redraws the cards every few seconds, does not wipe it.
+const signInSaid = {};
 function renderSignInCards(names){
   const box = document.getElementById("docksignin");
   if (!box) return;
+  for (const name of Object.keys(signInSaid)) if (!(names || []).includes(name)) delete signInSaid[name];
   // The buttons sit under the sentence, not in the notice's side slot: the
   // chat column is narrow, and beside two buttons the words wrapped a letter
   // to a line.
-  box.innerHTML = (names || []).map(name => uiNotice("note",
+  box.innerHTML = (names || []).map(name => signInSaid[name]
+    ? uiNotice(signInSaid[name].level, esc(signInSaid[name].text))
+    : uiNotice("note",
     `<b>${esc(name)}</b> needs you to sign in again. Its tools are left out until you do.
      <div style="display:flex;gap:var(--space-2);margin-top:var(--space-2)">${
       uiButton("Sign in", {level: "primary", size: "sm",
@@ -361,9 +367,11 @@ async function signInTo(name, button){
   if (button) button.disabled = true;
   const r = await postJSON("/api/connectors/sign_in", {name});
   if (r && r.link) window.open(r.link, "_blank", "noopener");
-  const box = document.getElementById("docksignin");
-  if (box) box.innerHTML = uiNotice(r && r.error ? "failed" : "note",
-    esc((r && (r.error || r.message)) || "The sign-in did not start."));
+  signInSaid[name] = r && r.link
+    ? {level: "note", text: `The ${name} sign-in page is open in a new tab. Finish it there; this card goes away once you have.`}
+    : {level: r && r.error ? "failed" : "note",
+       text: (r && (r.error || r.message)) || "The sign-in did not start."};
+  renderSignInCards((D && D.sign_in) || [name]);
 }
 async function snoozeSignIn(name){
   const r = await postJSON("/api/connectors/snooze", {name});
