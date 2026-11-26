@@ -602,3 +602,24 @@ def test_a_review_that_waits_is_reminded_and_expires_in_its_thread(home, conn, m
     assert said[f"expired:{run_id}"][1].startswith(
         "I stopped waiting for your answer on: Review on acme/app#428")
     assert conn.execute("SELECT COUNT(*) FROM events WHERE source = 'approval'").fetchone()[0] == 0
+
+
+def test_a_request_waits_while_its_run_is_still_working(home, conn, monkeypatch):
+    """Found in the live check (2026-11-26): the dispatcher runs beside the
+    worker, and the request reached Slack 2 seconds before the digest, because
+    the digest is the run's last reply and had no row yet. While the run is
+    working, the request waits; once the run is over, it goes as before."""
+    from waku.alwayson import events
+
+    _desk_env(monkeypatch)
+    event_id = events.insert(conn, source="timer", external_id="timer:1:2026-11-30",
+                             session_id="pr-desk:1", payload={"text": NOTE})
+    run = runs.start(conn, "pr-desk:1", [event_id])
+    asked = outbox.insert(conn, run_id=str(run.id), channel="slack",
+                          target={"channel": "C0DEV", "under_digest": True}, body="asked",
+                          idempotency_key=f"{run.id}:ask")
+    message = outbox.get(conn, asked)
+
+    assert outbox.resolve_target(conn, message) is None, "the digest is still being written"
+    conn.execute("UPDATE runs SET status = 'parked' WHERE id = ?", (run.id,))
+    assert outbox.resolve_target(conn, message) == {"channel": "C0DEV"}
