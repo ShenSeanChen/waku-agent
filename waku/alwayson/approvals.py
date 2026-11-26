@@ -15,8 +15,10 @@ Each tool has a mode. `allow` runs. `ask` does not run under `waku serve`:
 The model is not asked again after a yes, so it cannot change the arguments.
 One call waits per conversation, and it waits 72 hours.
 
-Who answers is one function, `who_may_approve`. This package ships one answer,
-the owner in WAKU_OWNER.
+Who answers is one function, `who_may_approve`. For every call it names the
+owner in WAKU_OWNER. A drafted pull request review is asked first in the
+digest channel, where a click counts from a person WAKU_APPROVERS maps to a
+GitHub login with write access (spec 035).
 """
 
 from __future__ import annotations
@@ -107,6 +109,66 @@ def digest_address() -> Address | None:
     marks the row, so a drafted review can wait in a thread under it."""
     channel = digest_channel()
     return ("slack", {"channel": channel, "digest": True}) if channel else None
+
+
+# ---- who approves a drafted review (spec 035, decision 1) -------------------
+
+# The repository roles that may approve. GitHub's `role_name` says maintain
+# and triage; its older `permission` field folds them into write and read.
+WRITE_ROLES = frozenset({"write", "maintain", "admin"})
+_LOGIN_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$")
+_SLACK_USER_RE = re.compile(r"^[UW][A-Z0-9]+$")
+# The calls asked in the digest channel when approvers are mapped. A review
+# names its repository, so GitHub can say who may approve it.
+SLACK_APPROVED = frozenset({"github_review"})
+
+
+def approvers(env=None) -> dict[str, str]:
+    """WAKU_APPROVERS, `<slack user id>:<github login>,...`, as a mapping. A
+    pair of another shape is dropped here, so no value reaches `gh` unchecked."""
+    env = os.environ if env is None else env
+    found: dict[str, str] = {}
+    for pair in env.get("WAKU_APPROVERS", "").split(","):
+        slack_id, _, login = (part.strip() for part in pair.partition(":"))
+        if _SLACK_USER_RE.match(slack_id) and _LOGIN_RE.match(login):
+            found[slack_id] = login
+    return found
+
+
+def permission(repo: str, login: str, run=None) -> str:
+    """The login's role on the repository, as GitHub says it now, or "" when
+    `gh` could not say. It is asked at every click and never kept, so a person
+    removed from the repository loses approval at once."""
+    from waku.tools import github
+
+    if not github._REPO_RE.match(repo or "") or not _LOGIN_RE.match(login or ""):
+        return ""
+    ok, text = (run or github._run)(
+        ["gh", "api", f"repos/{repo}/collaborators/{login}/permission"])
+    if not ok:
+        return ""
+    try:
+        answer = json.loads(text or "{}")
+    except ValueError:
+        return ""
+    if not isinstance(answer, dict):
+        return ""
+    return str(answer.get("role_name") or answer.get("permission") or "").lower()
+
+
+def may_approve(slack_id: str, repo: str, run=None) -> bool:
+    """Whether a click from this Slack user counts for a review of this
+    repository: WAKU_APPROVERS maps the user to a login, and GitHub says the
+    login may write to the repository."""
+    login = approvers().get(slack_id)
+    return login is not None and permission(repo, login, run) in WRITE_ROLES
+
+
+def approval_place() -> Address | None:
+    """The Slack channel where a drafted review waits for a click: the digest
+    channel, once WAKU_APPROVERS maps at least one person."""
+    channel = digest_channel()
+    return ("slack", {"channel": channel}) if channel and approvers() else None
 
 
 def _send_message(args: dict, address: Address | None) -> str:
@@ -288,11 +350,14 @@ def mode(tool: str, args: dict, address: Address | None = None,
 
 
 def who_may_approve(tool: str, args: dict) -> list[Address]:
-    """Where the people who may approve this call are reached. v1 has one
-    answer for every call: the owner, at each address WAKU_OWNER names. A team
-    layer with several approvers replaces this function; nothing else in this
-    package decides who approves."""
-    return outbox.owner_addresses()
+    """Where the people who may approve this call are reached. A drafted
+    review (spec 035) is asked first in the digest channel, where a click
+    counts from a person WAKU_APPROVERS maps to a GitHub login with write
+    access (`may_approve`). Every call also names the owner, at each address
+    WAKU_OWNER names. A team layer replaces this function; nothing else in
+    this package decides who approves."""
+    place = approval_place() if tool in SLACK_APPROVED else None
+    return ([place] if place else []) + outbox.owner_addresses()
 
 
 # ---- what a call says about itself -----------------------------------------
@@ -371,12 +436,18 @@ def call_hash(tool: str, args: dict) -> str:
 
 
 def can_answer(address: Address) -> bool:
-    """Whether a yes from this address names one person and reaches `waku
-    serve`. A Telegram chat with a positive id is a private chat. A group
-    chat, a Slack channel and a GitHub issue are read by several people, so no
-    yes counts there. A Slack direct message has one person, but the Slack
-    source hears mentions in channels only, so an answer there never arrives."""
+    """Whether an answer from this address names one person and reaches
+    `waku serve`. A Telegram chat with a positive id is a private chat. The
+    digest channel counts once approvers are mapped, because there a button
+    names the person who pressed it (spec 035); a typed yes there still does
+    not count. A group chat, any other Slack channel and a GitHub issue are
+    read by several people, so no yes counts there. A Slack direct message has
+    one person, but the Slack source hears mentions in channels only, so an
+    answer there never arrives."""
     channel, target = address
+    if channel == "slack":
+        place = approval_place()
+        return place is not None and target.get("channel") == place[1]["channel"]
     chat_id = target.get("chat_id")
     return channel == "telegram" and isinstance(chat_id, int) and chat_id > 0
 

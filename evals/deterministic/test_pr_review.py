@@ -220,3 +220,83 @@ def test_a_tool_without_words_of_its_own_asks_exactly_as_before():
     assert request.text("telegram") == ('Send to telegram:77: "hi"\n\n'
                                         'Approve? Reply yes or no. [bbbbbbbb]')
     assert request.fields()["title"] == 'Send to telegram:77: "hi"'
+
+
+# ---- D1: who approves ---------------------------------------------------------
+
+APPROVERS = "U0SEAN:ShenSeanChen, U0IAN:yangzhao"
+
+
+class PermissionGh:
+    """Stands in for `gh api repos/<repo>/collaborators/<login>/permission`.
+    `roles` maps a login to its role; a login without one answers 404."""
+
+    def __init__(self, roles) -> None:
+        self.roles, self.calls = dict(roles), []
+
+    def __call__(self, argv, **kwargs):
+        self.calls.append(argv)
+        role = self.roles.get(argv[2].split("/")[4])
+        if role is None:
+            return False, "HTTP 404: Not Found"
+        legacy = {"maintain": "write", "triage": "read"}.get(role, role)
+        return True, json.dumps({"permission": legacy, "role_name": role})
+
+
+@pytest.mark.parametrize("role, may", [
+    ("admin", True), ("maintain", True), ("write", True),
+    ("triage", False), ("read", False), (None, False),   # None: gh answered an error
+])
+def test_approver_follows_github_permission(monkeypatch, role, may):
+    """Decision 1: GitHub decides, at the moment of the click."""
+    monkeypatch.setenv("WAKU_APPROVERS", APPROVERS)
+    gh = PermissionGh({"ShenSeanChen": role} if role else {})
+    assert approvals.may_approve("U0SEAN", "acme/app", run=gh) is may
+    assert gh.calls == [["gh", "api", "repos/acme/app/collaborators/ShenSeanChen/permission"]]
+
+
+def test_permission_is_asked_at_every_click_and_never_kept(monkeypatch):
+    """Someone removed from the repository loses approval at once."""
+    monkeypatch.setenv("WAKU_APPROVERS", APPROVERS)
+    gh = PermissionGh({"ShenSeanChen": "write"})
+    assert approvals.may_approve("U0SEAN", "acme/app", run=gh) is True
+    gh.roles["ShenSeanChen"] = "read"
+    assert approvals.may_approve("U0SEAN", "acme/app", run=gh) is False
+    assert len(gh.calls) == 2
+
+
+def test_an_unmapped_person_or_a_bad_value_never_reaches_gh(monkeypatch):
+    monkeypatch.setenv("WAKU_APPROVERS",
+                       "U0SEAN:ShenSeanChen, U0EVIL:-flag, notanid:someone, U0X:a/b, U0IAN:yangzhao")
+    assert approvals.approvers() == {"U0SEAN": "ShenSeanChen", "U0IAN": "yangzhao"}
+    gh = PermissionGh({"ShenSeanChen": "admin"})
+    assert approvals.may_approve("U0EVE", "acme/app", run=gh) is False
+    assert approvals.may_approve("U0SEAN", "acme/app; rm -rf ~", run=gh) is False
+    assert gh.calls == []
+
+
+def test_a_review_is_asked_in_the_digest_channel(home, monkeypatch):
+    monkeypatch.setenv("WAKU_DIGEST_CHANNEL", "C0DEV")
+    assert approvals.who_may_approve("github_review", REVIEW) == [("telegram", {"chat_id": 42})], (
+        "without approvers the owner is asked, as before")
+    monkeypatch.setenv("WAKU_APPROVERS", APPROVERS)
+    assert approvals.who_may_approve("github_review", REVIEW) == [
+        ("slack", {"channel": "C0DEV"}), ("telegram", {"chat_id": 42})]
+    assert approvals.who_may_approve("send_message", {"to": "telegram:77", "body": "hi"}) == [
+        ("telegram", {"chat_id": 42})], "every other call is asked as before"
+    assert approvals.can_answer(("slack", {"channel": "C0DEV"})) is True
+    assert approvals.can_answer(("slack", {"channel": "C1"})) is False
+
+
+def test_waku_connections_names_each_approvers_role():
+    from waku import integrations
+
+    gh = PermissionGh({"ShenSeanChen": "admin", "yangzhao": "read"})
+    env = {"WAKU_APPROVERS": APPROVERS, "WAKU_DIGEST_CHANNEL": "C0DEV",
+           "WAKU_GITHUB_REPOS": "acme/app"}
+    assert integrations.approvers_status(env, run=gh) == (
+        True, "2 mapped · ShenSeanChen admin on acme/app, yangzhao read on acme/app")
+    assert integrations.approvers_status({}, run=gh)[0] is None
+    assert integrations.approvers_status({**env, "WAKU_DIGEST_CHANNEL": ""}, run=gh)[0] is False
+    nobody = PermissionGh({"ShenSeanChen": "read", "yangzhao": "read"})
+    assert integrations.approvers_status(env, run=nobody)[0] is False
