@@ -296,3 +296,22 @@ def test_another_command_still_fails_on_a_non_zero_exit(monkeypatch):
     monkeypatch.setattr(github.subprocess, "run", lambda *a, **k: subprocess.CompletedProcess(
         a[0], 1, stdout="[]", stderr="HTTP 404"))
     assert github.gh_read("pr view", number=428) == "HTTP 404"
+
+
+def test_pr_list_reports_each_pull_requests_size(capture):
+    """The PR desk's digest gives a size per pull request. Before this, pr list
+    asked gh for no size, and the digest left sizes out on the live test
+    (2026-11-25). Issues have no size, and gh rejects a field the type lacks."""
+    capture["stdout"] = json.dumps([{
+        "number": 428, "title": "check full fact table for duplicates",
+        "author": {"login": "someone"}, "updatedAt": "2026-11-24T10:00:00Z",
+        "url": "u", "additions": 140, "deletions": 15, "changedFiles": 3,
+        "isDraft": False}])
+    out = github.gh_read("pr list", repo="acme/app")
+    fields = capture["argv"][capture["argv"].index("--json") + 1].split(",")
+    assert {"additions", "deletions", "changedFiles"} <= set(fields)
+    assert "+140/-15 in 3 files" in out
+
+    github.gh_read("issue list", repo="acme/app")
+    fields = capture["argv"][capture["argv"].index("--json") + 1].split(",")
+    assert "additions" not in fields

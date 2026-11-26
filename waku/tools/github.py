@@ -63,6 +63,9 @@ _ALLOWED: dict[str, list[str]] = {
 _NEEDS_NUMBER = {"pr view", "pr diff", "pr checks", "issue view"}
 _IS_LIST = {"pr list", "issue list"}
 _JSON_FIELDS = "number,title,author,updatedAt,url"
+# A pull request also carries its size, which the PR desk's digest reports.
+# Issues have no such fields, and gh rejects a field the type lacks.
+_PR_LIST_FIELDS = _JSON_FIELDS + ",additions,deletions,changedFiles,isDraft"
 _CHECK_FIELDS = "name,state,bucket,workflow"
 # `gh pr checks` exits 1 when a check failed and 8 when one is pending, and
 # prints its JSON either way.
@@ -131,7 +134,7 @@ def _argv(command: str, number: int, repo: str, limit: int) -> tuple[bool, list[
         except (TypeError, ValueError, OverflowError):
             return False, f"'{command}' needs an integer limit."
         argv += ["--limit", str(max(1, min(row_limit, 50)))]
-        argv += ["--json", _JSON_FIELDS]
+        argv += ["--json", _PR_LIST_FIELDS if command == "pr list" else _JSON_FIELDS]
     if command == "pr checks":
         argv += ["--json", _CHECK_FIELDS]
     return True, argv
@@ -162,8 +165,11 @@ def _format(rows: list[dict]) -> str:
     lines = []
     for r in rows:
         who = (r.get("author") or {}).get("login", "?")
+        size = (f" · +{r['additions']}/-{r['deletions']} in {r.get('changedFiles', '?')} files"
+                if "additions" in r and "deletions" in r else "")
+        draft = " · draft" if r.get("isDraft") else ""
         lines.append(f"#{r.get('number')} {r.get('title', '')} — @{who} "
-                     f"(updated {(r.get('updatedAt') or '')[:10]})")
+                     f"(updated {(r.get('updatedAt') or '')[:10]}){size}{draft}")
     return "\n".join(lines)
 
 
