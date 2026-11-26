@@ -17,6 +17,7 @@ import time
 import uuid
 from collections import defaultdict, deque
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from typing import Protocol
 
 from aiohttp import web
@@ -24,15 +25,15 @@ from aiohttp import web
 from hosted import jsonsock, log
 from hosted.core.quota import utc_month
 from hosted.ports.upstream import Upstream
-from hosted.proxy import prices
+from hosted.proxy import credits, prices
 from hosted.proxy.admission import Refused, admit, forward_headers
 from hosted.proxy.config import ProxyConfig
 from hosted.proxy.ledger import Ledger
 from hosted.proxy.turns import TurnCharges, turn_id
+from hosted.proxy.wallet import Balance
 
 _LOG = log.get(__name__)
 
-FREE_USED_UP = "Free tier used up. Add your own key in Models."
 SIGN_IN_AGAIN = "This key is not valid. Sign in to Waku again."
 QUEUE_SECONDS = 30.0
 # Where the treg relay answers (spec 004 E). Here rather than in treg.py, which
@@ -65,45 +66,65 @@ Handler = Callable[[web.Request], Awaitable[web.StreamResponse]]
 class Wallet(Protocol):
     """The person's Waku Memory credits (spec 004 D; hosted/proxy/wallet.py)."""
 
-    async def balance(self, key: str) -> tuple[str, int] | None: ...
+    async def balance(self, key: str) -> Balance | None: ...
     # A future that answers the credits the charge took, or None (turns.py).
     def charge(self, key: str, *, turn_id: str, model: str,
                usd: float) -> asyncio.Future | None: ...
 
 
-# What the person's Waku Memory balance says about a call (spec 004 D).
-OUT_OF_CREDITS = "out"      # a Free person at zero: refused
+# What the person's Waku Memory balance says about a call (spec 004 D, spec 042).
+OUT_OF_CREDITS = "out"      # Waku Memory says no: refused, on any plan
 CREDITS_GOVERN = "credits"  # a balance answered: credits are the limit
 NO_BALANCE = "unknown"      # no key yet, or Waku Memory unreachable: the dollar cap
 
 
-async def wallet_verdict(wallet: Wallet | None, key: str) -> str:
-    """Spec 004 D: one wallet, and "the dollar cap gives way to the person's
-    credit balance". A Free person with no credits left is OUT_OF_CREDITS; a
-    Pro person may go negative, as everywhere else in Waku Memory. Only when
-    no balance can be read does the monthly dollar cap stand in for it.
+@dataclass(frozen=True)
+class Verdict:
+    kind: str                # OUT_OF_CREDITS, CREDITS_GOVERN or NO_BALANCE
+    notice: str = ""         # what to tell the person when kind is OUT_OF_CREDITS
+    state: str | None = None  # "ok", "low" or "empty", when Waku Memory said
 
-    Until 2026-10-02 the cap was applied to everyone first: a Pro person
-    with 746k credits was refused "Free tier used up" after one research turn
-    on agent.waku.one had spent $1."""
+
+async def wallet_verdict(wallet: Wallet | None, key: str, at: float) -> Verdict:
+    """Spec 042: Waku Memory decides, and the proxy obeys. A balance with
+    `allowed: false` is refused on any plan, with Waku Memory's own `notice`.
+    A balance from an older Waku Memory, without `allowed`, keeps the rule
+    from before: a Free person at zero is refused, and a Pro person may go
+    negative. Only when no balance can be read does the monthly dollar cap
+    stand in for it (spec 004 D).
+
+    Until 2026-11-26 the proxy held the rule itself, "Free at zero", and a Pro
+    account reached -132,565 credits because nothing refused it."""
     if not key or wallet is None:
-        return NO_BALANCE
+        return Verdict(NO_BALANCE)
     try:
         balance = await wallet.balance(key)
     except Exception as exc:
         _LOG.info("credits balance unavailable: %s", exc)
-        return NO_BALANCE
+        return Verdict(NO_BALANCE)
     if balance is None:
-        return NO_BALANCE
-    if balance[0] == "free" and balance[1] <= 0:
-        return OUT_OF_CREDITS
-    return CREDITS_GOVERN
+        return Verdict(NO_BALANCE)
+    if balance.allowed is None:
+        refused = balance.plan == "free" and balance.credits_left <= 0
+    else:
+        refused = not balance.allowed
+    if refused:
+        notice = balance.notice or credits.used_up_notice(balance.plan, at)
+        return Verdict(OUT_OF_CREDITS, notice, balance.state)
+    return Verdict(CREDITS_GOVERN, state=balance.state)
 
 
-async def out_of_free_credits(wallet: Wallet | None, key: str) -> bool:
-    """True for a Free person with no credits left. Shared by model calls and
-    treg calls (spec 004 E)."""
-    return await wallet_verdict(wallet, key) == OUT_OF_CREDITS
+def credits_used_up(notice: str) -> Refused:
+    """The one refusal for a person out of credits, for model calls and treg
+    calls alike: Anthropic's 403 shape, the code credits_used_up, and the
+    sentence the person reads."""
+    return Refused(403, "permission_error", notice, code=credits.CREDITS_USED_UP)
+
+
+async def credits_refusal(wallet: Wallet | None, key: str, at: float) -> Refused | None:
+    """The refusal for a person Waku Memory says is out of credits, or None."""
+    verdict = await wallet_verdict(wallet, key, at)
+    return credits_used_up(verdict.notice) if verdict.kind == OUT_OF_CREDITS else None
 
 
 def _answer(refused: Refused) -> web.Response:
@@ -250,13 +271,13 @@ class MeteringProxy:
         # cap only when it cannot (spec 004 D).
         month = utc_month(at)
         key = self._memory_key(token) if self._memory_key is not None else ""
-        verdict = await wallet_verdict(self._wallet, key)
-        if verdict == OUT_OF_CREDITS:
-            raise Refused(403, "permission_error", FREE_USED_UP)
-        capped = verdict == NO_BALANCE
+        verdict = await wallet_verdict(self._wallet, key, at)
+        if verdict.kind == OUT_OF_CREDITS:
+            raise credits_used_up(verdict.notice)
+        capped = verdict.kind == NO_BALANCE
         settled, reserved = self._ledger.spend(tenant, month)
         if capped and settled + reserved >= self._config.monthly_cap_usd:
-            raise Refused(403, "permission_error", FREE_USED_UP)
+            raise self._cap_reached(at)
 
         # --- step 6: the tenant's slots and rate ----------------------------
         self._take_rate(tenant)
@@ -268,6 +289,12 @@ class MeteringProxy:
             return await self._reserved_call(request, tenant, month, body, key, capped, turn)
         finally:
             self._in_flight[tenant] -= 1
+
+    def _cap_reached(self, at: float) -> Refused:
+        # With no balance to read, the plan is not known either. The dollar cap
+        # is the Free tier's limit and resets with the UTC month, which is what
+        # the Free sentence says.
+        return credits_used_up(credits.used_up_notice("free", at))
 
     def _take_rate(self, tenant: str) -> None:
         now = self._monotonic()
@@ -292,7 +319,7 @@ class MeteringProxy:
         worst = prices.worst_case(model, input_tokens=counted, max_tokens=body["max_tokens"])
         settled, reserved = self._ledger.spend(tenant, month)
         if capped and settled + reserved + worst > self._config.monthly_cap_usd:
-            raise Refused(403, "permission_error", FREE_USED_UP)
+            raise self._cap_reached(self._now())
         self._ledger.reserve(tenant, month, worst)
 
         # --- step 8: the global queue ---------------------------------------

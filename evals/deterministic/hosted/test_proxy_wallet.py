@@ -13,7 +13,7 @@ import aiohttp
 from aiohttp import web
 
 from hosted.proxy import wallet as wallet_module
-from hosted.proxy.wallet import WakuMemoryWallet
+from hosted.proxy.wallet import Balance, WakuMemoryWallet
 
 KEY = "mem_sk_" + "w" * 43
 
@@ -55,8 +55,31 @@ def test_the_balance_is_read_with_the_persons_key_and_cached_a_minute():
         return first, second, third
 
     answers = _serve({("GET", "/agent-usage/balance"): balance}, test)
-    assert answers == (("free", 420),) * 3
+    assert answers == (Balance("free", 420),) * 3
     assert seen == [f"Bearer {KEY}"] * 2
+
+
+def test_the_balance_carries_waku_memorys_verdict_and_ignores_malformed_fields():
+    """Spec 042: `allowed`, `notice` and `state` from waku-memory spec 106. A field
+    that is missing or the wrong shape is None, never a guess."""
+    answers = iter([
+        {"plan": "pro", "credits_left": -3, "allowed": False, "state": "empty",
+         "notice": "Add 250,000 credits."},
+        {"plan": "free", "credits_left": 9, "allowed": "no", "state": "full", "notice": " "},
+    ])
+
+    async def balance(request):
+        return web.json_response(next(answers))
+
+    async def test(wallet, clock):
+        first = await wallet.balance(KEY)
+        clock[0] += 61
+        return first, await wallet.balance(KEY)
+
+    first, second = _serve({("GET", "/agent-usage/balance"): balance}, test)
+    assert first == Balance("pro", -3, allowed=False, notice="Add 250,000 credits.",
+                            state="empty")
+    assert second == Balance("free", 9)
 
 
 def test_a_charge_is_retried_after_a_5xx_and_not_after_a_4xx(monkeypatch):

@@ -40,6 +40,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import time
 from collections.abc import Callable
 
 import aiohttp
@@ -47,7 +48,7 @@ from aiohttp import web
 
 from hosted import jsonsock, log
 from hosted.proxy.admission import Refused
-from hosted.proxy.app import SIGN_IN_AGAIN, Resolve, Wallet, out_of_free_credits
+from hosted.proxy.app import OUT_OF_CREDITS, SIGN_IN_AGAIN, Resolve, Wallet, wallet_verdict
 from hosted.proxy.turns import TurnCharges
 
 _LOG = log.get(__name__)
@@ -250,7 +251,8 @@ class TregRelay:
         key = self._memory_key(token)
         if not key or self._wallet is None:
             raise Refused(403, "permission_error", NO_WALLET)
-        if await out_of_free_credits(self._wallet, key):
+        verdict = await wallet_verdict(self._wallet, key, time.time())
+        if verdict.kind == OUT_OF_CREDITS:
             raise Refused(403, "permission_error", NO_CREDITS)
 
         # --- 3: what --------------------------------------------------------

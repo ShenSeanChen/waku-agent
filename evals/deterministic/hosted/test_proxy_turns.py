@@ -32,6 +32,7 @@ from hosted.proxy.config import ProxyConfig
 from hosted.proxy.ledger import Ledger
 from hosted.proxy.treg import TregRelay
 from hosted.proxy.turns import KEEP_SECONDS, TurnCharges
+from hosted.proxy.wallet import Balance
 
 TOKEN, TENANT = "t" * 43, "k3fq7x2mza4b"
 OTHER_TOKEN, OTHER = "o" * 43, "zq8w2v1nb3xc"
@@ -56,7 +57,7 @@ class FakeWallet:
         self.charges: list[dict] = []
 
     async def balance(self, key):
-        return "pro", 500_000
+        return Balance("pro", 500_000)
 
     def charge(self, key, *, turn_id, model, usd):
         self.charges.append({"model": model, "usd": usd})

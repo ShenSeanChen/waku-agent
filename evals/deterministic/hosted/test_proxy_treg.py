@@ -28,6 +28,7 @@ from hosted.proxy.treg import (
     TregRelay,
     treg_cost,
 )
+from hosted.proxy.wallet import Balance
 
 TOKEN, TENANT = "t" * 43, "k3fq7x2mza4b"
 DISABLED_TOKEN = "d" * 43
@@ -54,7 +55,7 @@ class FakeWallet:
     async def balance(self, key):
         if self.raises:
             raise OSError("api.waku.one unreachable")
-        return self.plan, self.left
+        return Balance(self.plan, self.left)
 
     def charge(self, key, *, turn_id, model, usd):
         self.charges.append({"key": key, "turn_id": turn_id, "model": model, "usd": usd})
