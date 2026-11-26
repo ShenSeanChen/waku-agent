@@ -920,6 +920,16 @@ def test_manifest_ships_inside_the_package_and_holds_no_token():
     assert text.isascii()
 
 
+
+def test_manifest_turns_interactivity_on_for_the_review_buttons():
+    """Spec 035: Approve and Reject arrive over the same Socket Mode
+    connection, so interactivity is on and needs no request URL or scope."""
+    from waku.alwayson.sources import slack
+
+    manifest = _yaml(slack.MANIFEST.read_text(encoding="utf-8"))
+    assert manifest["settings"]["interactivity"] == {"is_enabled": True}
+    assert set(manifest["oauth_config"]["scopes"]["bot"]) == set(slack.BOT_SCOPES)
+
 def test_manifest_reader_refuses_a_file_that_is_not_the_shape_it_reads():
     import pytest as _pytest
 

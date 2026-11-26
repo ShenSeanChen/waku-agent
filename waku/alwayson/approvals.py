@@ -672,6 +672,12 @@ BROKEN = ("Approved, and not run: {what} The stored call no longer matches its h
 REMINDER = ("Still waiting for your answer on: {what}\n\nIt expires in 24 hours. "
             "Approve? Reply yes or no. [{code}]")
 STOPPED = "I stopped waiting for your answer on: {what} Nothing was posted."
+# The reminder where the request has buttons (spec 035).
+REMINDER_BUTTONS = ("Still waiting for an answer on: {what}\n\nIt expires in 24 hours. "
+                    "Approve or Reject with the buttons above. [{code}]")
+# What the thread reads after a click (spec 035). The outcome names nobody, so
+# the person who clicked is named here.
+ANSWERED = "{who} chose {choice}. {outcome}"
 EXPIRED = ("Expired and discarded: {what} Nobody answered in 72 hours, so the call did "
            "not run.")
 WHICH = "Several calls wait for your answer. Reply yes or no with the code of one:\n{calls}"
@@ -688,12 +694,15 @@ def read_answer(text: str) -> tuple[bool, str] | None:
 
 def is_approver(event, run: runs.Run) -> bool:
     """Whether this event is an answer to this parked run's request from a
-    person who may approve it: it came in at the address the request went to,
-    that address is still one `who_may_approve` names, and its sender is the
-    one person a chat at that address holds."""
+    person who may approve it. Asked in Telegram: it came in at the address
+    the request went to, that address is still one `who_may_approve` names,
+    and its sender is the one person a chat at that address holds. Asked in
+    Slack: `_clicked_by_approver`."""
     call = run.pending_call or {}
     asked = call.get("asked") or {}
     address = (asked.get("channel"), asked.get("target"))
+    if address[0] == "slack":
+        return _clicked_by_approver(event, address, call)
     if (event.source, event.payload.get("reply_to")) != address or not can_answer(address):
         return False
     if address not in who_may_approve(call.get("tool", ""), call.get("args") or {}):
@@ -701,6 +710,21 @@ def is_approver(event, run: runs.Run) -> bool:
     # In a private Telegram chat the chat's id is the person's id.
     sender = str((event.payload.get("sender") or {}).get("id", ""))
     return sender == str(address[1].get("chat_id"))
+
+
+def _clicked_by_approver(event, address: Address, call: dict) -> bool:
+    """A click on Approve or Reject in the channel the request went to, by a
+    person WAKU_APPROVERS maps to a GitHub login that may write to the
+    review's repository right now (spec 035). A typed yes in Slack never
+    counts: several people read a channel, and only a button names the person
+    who pressed it. The GitHub check runs last, so a typed answer or another
+    channel never reaches `gh`."""
+    target = address[1] if isinstance(address[1], dict) else {}
+    reply_to = event.payload.get("reply_to") or {}
+    sender = str((event.payload.get("sender") or {}).get("id", ""))
+    return (event.source == "slack" and event.payload.get("clicked") in ("yes", "no")
+            and can_answer(address) and reply_to.get("channel") == target.get("channel")
+            and may_approve(sender, str((call.get("args") or {}).get("repo", ""))))
 
 
 def waiting_for(conn: sqlite3.Connection, event, now: datetime) -> list[runs.Run]:
@@ -728,6 +752,12 @@ def outcome(run: runs.Run, approved: bool, output: str = "") -> str:
         return (NOT_POSTED.format(what=what, output=output) if refused
                 else POSTED.format(what=what))
     return APPROVED.format(what=what, output=output)
+
+
+def answered(run: runs.Run, approved: bool, output: str, who: str) -> str:
+    """The line in the thread after a click on a request asked in Slack."""
+    return ANSWERED.format(who=who or "An approver", choice="Approve" if approved else "Reject",
+                           outcome=outcome(run, approved, output))
 
 
 def asked_address(run: runs.Run) -> Address | None:

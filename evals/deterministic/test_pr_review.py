@@ -424,3 +424,181 @@ def test_the_slack_sender_draws_a_request_with_two_buttons():
          "text": {"type": "plain_text", "text": "Approve"}, "value": REVIEW_HASH[:8]},
         {"type": "button", "action_id": "waku_reject", "style": "danger",
          "text": {"type": "plain_text", "text": "Reject"}, "value": REVIEW_HASH[:8]}]}
+
+
+# ---- D2b: the click is the answer ---------------------------------------------
+
+def _click(home, user="U0SEAN", action="waku_approve", code=None, action_ts="1800.0100"):
+    """Sean clicks a button on the request, which sits in the digest's thread."""
+    from waku.alwayson.events import Inbox
+    from waku.alwayson.sources import slack
+
+    return slack.record_click(Inbox(home), {
+        "type": "block_actions", "team": {"id": "T1"},
+        "user": {"id": user, "team_id": "T1"}, "channel": {"id": "C0DEV"},
+        "message": {"ts": "1800.0002", "thread_ts": "1800.0001"},
+        "actions": [{"action_id": action, "value": code or REVIEW_HASH[:8],
+                     "action_ts": action_ts}]},
+        team_id="T1", channels={"C0DEV"})
+
+
+def _executor(home):
+    """What AgentRun.execute does for an approved call, without a model: the
+    stored call runs through the real tool under the approved key."""
+    tool = github.make_review_tool(home)
+
+    def execute(run, address):
+        with outbox.running(home, str(run.id), address,
+                            approved_key=f"{run.id}:{run.pending_hash}"):
+            return tool.fn(**run.pending_call["args"])
+
+    return execute
+
+
+class NoModel:
+    """A run that must never be called: a click starts no model run."""
+
+    def __init__(self) -> None:
+        self.runs = []
+
+    def __call__(self, session_id, batch):
+        self.runs.append(session_id)
+        return "SILENT"
+
+
+def _answer(home, conn, clock, monkeypatch, roles, **click):
+    """Park the review, post the digest and the request, click, and let the
+    worker and the dispatcher act. Returns (run id, gh, Slack, the model,
+    the permission check)."""
+    from waku.alwayson.worker import Worker
+
+    _desk_env(monkeypatch)
+    permissions = PermissionGh(roles)
+    monkeypatch.setattr(github, "_run", permissions)
+    run_id = _park_review(home, conn, clock)
+    gh, slack = ReviewGh(), FakeSlack()
+    dispatcher = Dispatcher(conn, {"github": github_sender.make(run=gh), "slack": slack},
+                            now=clock, log=lambda line: None)
+    dispatcher.step()
+    dispatcher.step()
+    assert _click(home, **click) is True
+    model = NoModel()
+    worker = Worker(conn, model, execute=_executor(home), wait=lambda s: None, now=clock,
+                    log=lambda line: None)
+    while worker.step():
+        pass
+    dispatcher.step()
+    return run_id, gh, slack, model, permissions
+
+
+def test_slack_button_answers_the_parked_call(home, conn, monkeypatch):
+    """A mapped approver with write access clicks Approve: the stored body is
+    posted unchanged, and the thread says who approved."""
+    clock = Clock()
+    run_id, gh, slack, model, permissions = _answer(home, conn, clock, monkeypatch,
+                                                    {"ShenSeanChen": "admin"})
+
+    ((argv, stdin),) = gh.posted
+    assert argv == ["gh", "pr", "review", "428", "--repo", "acme/app", "--comment",
+                    "--body-file", "-"]
+    assert stdin == f"{REVIEW['body']}\n\n<!-- waku:{run_id}:{REVIEW_HASH} -->"
+    assert runs.get(conn, run_id).status == "done"
+    assert model.runs == [], "the click starts no model run"
+    assert permissions.calls == [
+        ["gh", "api", "repos/acme/app/collaborators/ShenSeanChen/permission"]]
+    (said,) = [m for m in slack.sent if m.idempotency_key == f"answered:{run_id}"]
+    assert said.target == {"channel": "C0DEV", "thread_ts": "1800.0001"}
+    assert said.body.startswith(
+        "ShenSeanChen chose Approve. Approved and done: Review on acme/app#428, as a comment:")
+
+
+def test_slack_reject_discards_the_call(home, conn, monkeypatch):
+    run_id, gh, slack, model, _ = _answer(home, conn, Clock(), monkeypatch,
+                                          {"ShenSeanChen": "write"}, action="waku_reject")
+    assert gh.posted == []
+    assert runs.get(conn, run_id).status == "done"
+    (said,) = [m for m in slack.sent if m.idempotency_key == f"answered:{run_id}"]
+    assert said.body.startswith("ShenSeanChen chose Reject. Declined and discarded:")
+    assert model.runs == []
+
+
+@pytest.mark.parametrize("roles, user, asks_github, why", [
+    ({"ShenSeanChen": "admin"}, "U0EVE", False, "nobody mapped U0EVE"),
+    ({"ShenSeanChen": "read"}, "U0SEAN", True, "GitHub says read"),
+    ({"ShenSeanChen": "triage"}, "U0SEAN", True, "GitHub says triage"),
+])
+def test_a_click_from_anyone_else_changes_nothing(home, conn, monkeypatch, roles, user,
+                                                  asks_github, why):
+    run_id, gh, _slack, model, permissions = _answer(home, conn, Clock(), monkeypatch, roles,
+                                                    user=user)
+    assert gh.posted == [], why
+    assert runs.get(conn, run_id).status == "parked", why
+    assert model.runs == [], "an ignored click starts no run either"
+    assert {r["status"] for r in conn.execute("SELECT status FROM events")} == {"done"}
+    assert bool(permissions.calls) is asks_github
+
+
+def test_a_typed_yes_does_not_answer_a_review_asked_in_slack(home, conn, monkeypatch):
+    """The owner's Telegram yes answers the owner's calls. A review asked in
+    the channel is answered with a button there."""
+    from waku.alwayson import events
+    from waku.alwayson.worker import Worker
+
+    _desk_env(monkeypatch)
+    monkeypatch.setattr(github, "_run", PermissionGh({"ShenSeanChen": "admin"}))
+    clock = Clock()
+    run_id = _park_review(home, conn, clock)
+    events.insert(conn, source="telegram", external_id="900", session_id="telegram:42",
+                  payload={"text": f"yes {REVIEW_HASH[:8]}", "sender": {"id": "42"},
+                           "reply_to": {"chat_id": 42}})
+    worker = Worker(conn, NoModel(), execute=_executor(home), wait=lambda s: None, now=clock,
+                    log=lambda line: None)
+    while worker.step():
+        pass
+    assert runs.get(conn, run_id).status == "parked"
+
+
+def test_a_redelivered_click_is_one_event(home):
+    assert _click(home) is True
+    assert _click(home) is False
+
+
+@pytest.mark.parametrize("change, why", [
+    ({"type": "view_submission"}, "not a button"),
+    ({"team": {"id": "T2"}}, "another workspace"),
+    ({"channel": {"id": "C9"}}, "a channel nobody allowed"),
+    ({"actions": [{"action_id": "other", "value": "abcd1234"}]}, "another button"),
+    ({"actions": [{"action_id": "waku_approve", "value": "--approve"}]}, "not a code"),
+])
+def test_a_click_that_is_not_an_answer_is_not_stored(home, change, why):
+    from waku.alwayson.events import Inbox
+    from waku.alwayson.sources import slack
+
+    payload = {"type": "block_actions", "team": {"id": "T1"},
+               "user": {"id": "U0SEAN", "team_id": "T1"}, "channel": {"id": "C0DEV"},
+               "message": {"ts": "1800.0002", "thread_ts": "1800.0001"},
+               "actions": [{"action_id": "waku_approve", "value": "abcd1234",
+                            "action_ts": "1800.0100"}], **change}
+    assert slack.record_click(Inbox(home), payload, team_id="T1", channels={"C0DEV"}) is False, why
+
+
+def test_a_review_that_waits_is_reminded_and_expires_in_its_thread(home, conn, monkeypatch):
+    from waku.alwayson.worker import Worker
+
+    _desk_env(monkeypatch)
+    clock = Clock()
+    run_id = _park_review(home, conn, clock)
+    worker = Worker(conn, NoModel(), wait=lambda s: None, now=clock, log=lambda line: None)
+    clock.advance(hours=49)
+    worker.step()
+    clock.advance(hours=24)
+    worker.step()
+
+    said = {r["idempotency_key"]: (json.loads(r["target"]), r["body"])
+            for r in conn.execute("SELECT * FROM outbox")}
+    target, body = said[f"remind:{run_id}"]
+    assert target == {"channel": "C0DEV", "under_digest": True}
+    assert body.endswith(f"Approve or Reject with the buttons above. [{REVIEW_HASH[:8]}]")
+    assert said[f"expired:{run_id}"][1].startswith(
+        "I stopped waiting for your answer on: Review on acme/app#428")
+    assert conn.execute("SELECT COUNT(*) FROM events WHERE source = 'approval'").fetchone()[0] == 0

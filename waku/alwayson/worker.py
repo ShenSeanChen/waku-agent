@@ -584,9 +584,11 @@ class Worker:
             self._tell_asked(run, approvals.STOPPED, f"expired:{run.id}")
             asked_in = [e for e in (events.get(self.conn, i) for i in run.event_ids) if e]
             address = reply_address(asked_in)
-            # The owner's own chat has read it, and a reply that waited has no
-            # conversation to tell.
-            if (address == approvals.asked_address(run)
+            asked = approvals.asked_address(run)
+            # The owner's own chat has read it, a reply that waited has no
+            # conversation to tell, and a request asked in Slack is answered
+            # in its own thread (spec 035).
+            if (address == asked or (asked is not None and asked[0] == "slack")
                     or (run.pending_call or {}).get("reply")):
                 continue
             payload: dict = {"text": approvals.said(run, approvals.EXPIRED)}
@@ -598,10 +600,16 @@ class Worker:
 
     def _tell_asked(self, run: runs.Run, words: str, key: str) -> None:
         asked = approvals.asked_address(run)
-        if asked is not None:
-            outbox.insert(self.conn, run_id=str(run.id), channel=asked[0], target=asked[1],
-                          body=approvals.said(run, words), idempotency_key=key,
-                          now=self._now())
+        if asked is None:
+            return
+        channel, target = asked
+        if channel == "slack":
+            # In the thread under the digest, where the buttons are (spec 035).
+            target = {**target, "under_digest": True}
+            if words == approvals.REMINDER:
+                words = approvals.REMINDER_BUTTONS
+        outbox.insert(self.conn, run_id=str(run.id), channel=channel, target=target,
+                      body=approvals.said(run, words), idempotency_key=key, now=self._now())
 
     def _read_answers(self, batch: list[Event]) -> list[Event]:
         """Take the owner's answers out of a batch and act on each (spec 023,
@@ -614,6 +622,14 @@ class Worker:
             nothing_waits = bool(answer) and not waiting and to_owner([event])
             if answer and answer[1]:
                 waiting = [run for run in waiting if run.pending_hash.startswith(answer[1])]
+            if event.payload.get("clicked") and (
+                    len(waiting) != 1 or (answer[0] and self._execute is None)):
+                # A click that answers no waiting call, or from a person who
+                # may not approve it, is kept as a row and starts no run.
+                events.mark(self.conn, [event.id], "done")
+                self._log("(serve) ignored a Slack click: it answers no call that person "
+                          "may approve")
+                continue
             if not waiting or (answer[0] and self._execute is None):
                 # The run reads that the owner's yes or no has nothing to
                 # answer, so the model does not make up a call that it met.
@@ -627,11 +643,19 @@ class Worker:
                               target=target, body=approvals.which(waiting),
                               idempotency_key=f"which:{event.id}", now=self._now())
             else:
-                self._resolve(waiting[0], answer[0])
+                self._resolve(waiting[0], answer[0], by=self._clicker(event))
             events.mark(self.conn, [event.id], "done")
         return ordinary
 
-    def _resolve(self, run: runs.Run, approved: bool) -> None:
+    @staticmethod
+    def _clicker(event: Event) -> str:
+        """The GitHub login of the person who clicked, or "" for a typed answer."""
+        if not event.payload.get("clicked"):
+            return ""
+        sender = str((event.payload.get("sender") or {}).get("id", ""))
+        return approvals.approvers().get(sender, "")
+
+    def _resolve(self, run: runs.Run, approved: bool, by: str = "") -> None:
         """Run the stored call on a yes, discard it on a no, and write the
         outcome as an event in the conversation that parked. Each step can
         happen twice without a second effect: the call's row has one key, the
@@ -649,9 +673,17 @@ class Worker:
                 self._log(f"(serve) the approved call of run {run.id} failed: "
                           f"{safe_exception(exc)}")
                 output, raised = CALL_FAILED, True
+        asked = approvals.asked_address(run)
+        if asked is not None and asked[0] == "slack":
+            # Asked in Slack (spec 035): the thread reads who chose what, and
+            # the conversation that parked starts no run to repeat it there.
+            outbox.insert(self.conn, run_id=str(run.id), channel="slack",
+                          target={**asked[1], "under_digest": True},
+                          body=approvals.answered(run, approved, output, by),
+                          idempotency_key=f"answered:{run.id}", now=self._now())
         # A reply that waited is the end of its run: once it is posted or
         # dropped, the conversation has nothing to hear about the approval.
-        if not (run.pending_call or {}).get("reply"):
+        elif not (run.pending_call or {}).get("reply"):
             payload: dict = {"text": approvals.outcome(run, approved, output)}
             if address:
                 payload["channel"], payload["reply_to"] = address
