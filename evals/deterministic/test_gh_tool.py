@@ -271,7 +271,7 @@ def test_github_read_pr_checks(capture):
     out = github.gh_read("pr checks", number=428, repo="acme/app")
     assert capture["argv"] == ["gh", "pr", "checks", "428", "--repo", "acme/app",
                                "--json", "name,state,bucket,workflow"]
-    assert out == ("1 passed, 1 failed, 1 pending\n"
+    assert out == ("checks: 1 pass, 1 fail, 1 pending\n"
                    "pass: validate / skills-and-evals\n"
                    "fail: hosted / hosted-docker\n"
                    "pending: lint")
@@ -283,7 +283,7 @@ def test_pr_checks_reads_json_when_gh_exits_for_a_red_or_pending_check(monkeypat
     and prints the JSON all the same. A red CI is an answer, not an error."""
     monkeypatch.setattr(github.subprocess, "run", lambda *a, **k: subprocess.CompletedProcess(
         a[0], code, stdout=_CHECKS, stderr=""))
-    assert github.gh_read("pr checks", number=428).startswith("1 passed, 1 failed")
+    assert github.gh_read("pr checks", number=428).startswith("checks: 1 pass, 1 fail")
 
 
 def test_pr_checks_with_no_checks_says_so(monkeypatch):
@@ -315,3 +315,13 @@ def test_pr_list_reports_each_pull_requests_size(capture):
     github.gh_read("issue list", repo="acme/app")
     fields = capture["argv"][capture["argv"].index("--json") + 1].split(",")
     assert "additions" not in fields
+
+
+def test_a_green_checks_summary_does_not_read_as_a_tool_error(capture):
+    """The dashboard marks a tool call red when its output says "failed". The
+    first summary read "2 passed, 0 failed", so every green pr checks call
+    showed as an error on the live test (2026-11-25)."""
+    from waku.ops.dashboard import _tool_status
+
+    capture["stdout"] = _CHECKS
+    assert _tool_status(github.gh_read("pr checks", number=428, repo="acme/app")) == "ok"

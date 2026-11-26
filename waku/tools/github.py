@@ -184,7 +184,7 @@ def _checks(out: str) -> str:
     if not rows:
         return "No CI checks are reported on this pull request."
     count = {b: sum(1 for row in rows if row.get("bucket") == b) for b in ("pass", "fail", "pending")}
-    lines = [f"{count['pass']} passed, {count['fail']} failed, {count['pending']} pending"]
+    lines = [f"checks: {count['pass']} pass, {count['fail']} fail, {count['pending']} pending"]
     for row in rows:
         workflow = f"{row['workflow']} / " if row.get("workflow") else ""
         lines.append(f"{row.get('bucket', '?')}: {workflow}{row.get('name', '')}")
