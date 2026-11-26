@@ -10,9 +10,12 @@ is an allowlist), and keeps, per tenant and turn, for one hour in memory:
              and for the treg calls the relay charged during the turn
 
 `GET /v1/turns/<turn_id>/charges`, with the container's own platform token,
-answers `{"model_usd", "calls", "credits"}` for that tenant's turn and 404
-for any other. `credits` is null while a charge is still pending or when one
-failed, never short.
+answers `{"model_usd", "calls", "credits", "credits_state"}` for that
+tenant's turn and 404 for any other. `credits` is null while a charge is
+still pending or when one failed, never short. `credits_state` is "ok", "low"
+or "empty" from the latest Waku Memory balance the proxy read for the turn
+(spec 042), and null when Waku Memory did not say; the container adds the 80%
+line to a reply from it.
 
 The relay learns the turn from the latest `X-Waku-Turn` that tenant sent. A
 container runs one turn at a time, and every turn calls the model before any
@@ -50,6 +53,7 @@ class _Turn:
     # one entry per charge sent to Waku Memory: a future that answers the
     # credits it took, or None for a charge that could not be sent
     charges: list[asyncio.Future | None] = field(default_factory=list)
+    credits_state: str | None = None
 
 
 class TurnCharges:
@@ -72,6 +76,14 @@ class TurnCharges:
         self._prune()
         self._turns.setdefault((tenant, turn), _Turn(at=self._now())).at = self._now()
         self._latest[tenant] = turn
+
+    def credits_state(self, tenant: str, turn: str, state: str | None) -> None:
+        """What the person's balance read before one of this turn's model
+        calls. The latest read wins, and a read that said nothing changes
+        nothing."""
+        record = self._turns.get((tenant, turn)) if turn else None
+        if record is not None and state is not None:
+            record.credits_state = state
 
     def model_call(self, tenant: str, turn: str, usd: float,
                    charge: asyncio.Future | None) -> None:
@@ -104,7 +116,7 @@ class TurnCharges:
         if pending:
             await asyncio.wait(pending, timeout=wait)
         return {"model_usd": round(record.model_usd, 6), "calls": record.calls,
-                "credits": _credits(record.charges)}
+                "credits": _credits(record.charges), "credits_state": record.credits_state}
 
 
 def _credits(charges: list[asyncio.Future | None]) -> int | None:

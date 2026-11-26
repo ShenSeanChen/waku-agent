@@ -218,3 +218,82 @@ def test_the_terminal_prints_the_notice_and_exits_non_zero(tmp_path, monkeypatch
     assert stopped.value.code == 1
     assert NOTICE in out and "Traceback" not in out and "Error code" not in out
     assert agent.closed
+
+
+# ---- the 80% line, once a calendar month ------------------------------------
+
+LOW = "You have used 80% of this month's Waku credits. https://www.waku.one/settings/plan"
+OWNER = ("telegram", {"chat_id": 42})
+
+
+def test_the_first_low_turn_of_a_month_gets_the_line_and_the_second_does_not(conn, tmp_path):
+    from waku.alwayson.worker import with_low_credits_line
+
+    first = with_low_credits_line(tmp_path, "Lunch is at 1.", "low", OWNER, NOON)
+    second = with_low_credits_line(tmp_path, "Dinner is at 7.", "low", OWNER, NOON)
+    next_month = with_low_credits_line(tmp_path, "Breakfast is at 8.", "low", OWNER,
+                                       datetime(2026, 12, 1, 0, 5, tzinfo=UTC))
+    assert first == "Lunch is at 1.\n\n" + LOW
+    assert second == "Dinner is at 7."
+    assert next_month == "Breakfast is at 8.\n\n" + LOW
+
+
+@pytest.mark.parametrize("state,reply,address", [
+    ("ok", "Lunch is at 1.", OWNER),
+    (None, "Lunch is at 1.", OWNER),
+    ("low", "SILENT", OWNER),
+    ("low", "Lunch is at 1.", ("telegram", {"chat_id": -1001})),
+])
+def test_the_line_waits_when_it_is_not_low_or_the_reply_is_not_private(
+        conn, tmp_path, state, reply, address):
+    """Each case leaves the line for the next private low turn."""
+    from waku.alwayson.worker import with_low_credits_line
+
+    assert with_low_credits_line(tmp_path, reply, state, address, NOON) == reply
+    assert with_low_credits_line(tmp_path, "Later.", "low", OWNER, NOON) == "Later.\n\n" + LOW
+
+
+def test_a_low_turn_reaches_the_person_with_the_line(conn, tmp_path):
+    """AgentRun, the worker's real run: the turn's credits_state comes from
+    the proxy's charges answer (Waku._receipt) and the reply carries the line."""
+    from waku.alwayson.worker import AgentRun
+
+    class Session:
+        session_id = "telegram:42"
+
+    class Agent:
+        settings = SimpleNamespace(home=tmp_path)
+        session, conn = Session(), None
+
+        def __init__(self, connection):
+            self.conn = connection
+
+        def respond(self, text, **kwargs):
+            return SimpleNamespace(reply="Lunch is at 1.", credits_state="low",
+                                   receipt=None, sign_in_notices=[])
+
+    run = AgentRun(lambda: Agent(conn), log=lambda line: None)
+    events.insert(conn, source="telegram", external_id="1", session_id="telegram:42",
+                  payload={"text": "When is lunch?", "reply_to": {"chat_id": 42}})
+    Worker(conn, run, wait=lambda s: None, now=lambda: NOON, log=lambda line: None).step()
+    assert [r["body"] for r in conn.execute("SELECT body FROM outbox")] == [
+        "Lunch is at 1.\n\n" + LOW]
+
+
+@pytest.mark.parametrize("answer,state", [
+    ({"model_usd": 0.01, "calls": 1, "credits": 250, "credits_state": "low"}, "low"),
+    ({"model_usd": 0.01, "calls": 1, "credits": 250, "credits_state": "full"}, None),
+    ({"model_usd": 0.01, "calls": 1, "credits": 250}, None),
+    (None, None),
+])
+def test_a_turn_reads_its_credits_state_from_the_charges_answer(tmp_path, answer, state):
+    from evals.helpers import ScriptedClient, make_waku, response, text_block
+
+    client = ScriptedClient([response([text_block("Lunch is at 1.")])] * 3)
+    client.charges = lambda turn_id: answer
+    waku = make_waku(tmp_path, client=client)
+    try:
+        result = waku.respond("When is lunch?")
+    finally:
+        waku.close()
+    assert result.reply == "Lunch is at 1." and result.credits_state == state

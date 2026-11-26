@@ -112,6 +112,10 @@ class LoopResult:
     # `notices` too; this copy is what a text gateway adds to its reply,
     # since a phone has no place under the reply to draw them.
     sign_in_notices: list[str] = field(default_factory=list)
+    # Spec 042: "ok", "low" or "empty", what the hosted proxy's charges
+    # answer said about the person's Waku credits after this turn. None
+    # off the hosted platform, or when the proxy did not say.
+    credits_state: str | None = None
 
 
 def text_with_sign_in(result) -> str:

@@ -272,6 +272,7 @@ class MeteringProxy:
         month = utc_month(at)
         key = self._memory_key(token) if self._memory_key is not None else ""
         verdict = await wallet_verdict(self._wallet, key, at)
+        self._turns.credits_state(tenant, turn, verdict.state)
         if verdict.kind == OUT_OF_CREDITS:
             raise credits_used_up(verdict.notice)
         capped = verdict.kind == NO_BALANCE
