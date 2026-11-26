@@ -23,7 +23,7 @@ def home(tmp_path, monkeypatch):
 
 
 def _save(home, specs):
-    (home / "models.json").write_text(json.dumps({"pinned": specs}))
+    (home / "models.json").write_text(json.dumps({"pinned": specs}), encoding="utf-8")
 
 
 def test_a_newly_keyed_platform_appears_after_curation(home, monkeypatch):
@@ -65,4 +65,4 @@ def test_the_defaults_are_not_written_to_models_json(home, monkeypatch):
     monkeypatch.setenv("AWS_BEARER_TOKEN_BEDROCK", "test-not-a-key")
     catalog.pinned_specs()
 
-    assert json.loads((home / "models.json").read_text())["pinned"] == ["anthropic:claude-opus-4-8"]
+    assert json.loads((home / "models.json").read_text(encoding="utf-8"))["pinned"] == ["anthropic:claude-opus-4-8"]
