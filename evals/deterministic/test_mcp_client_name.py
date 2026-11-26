@@ -41,7 +41,7 @@ def test_every_session_introduces_itself_with_the_name_and_version(tmp_path, mon
         async def __aexit__(self, *exc):
             return False
 
-    async def no_streams(self, spec):
+    async def no_streams(self, spec, stack):
         return None, None
 
     monkeypatch.setattr(mcp, "ClientSession", FakeSession)

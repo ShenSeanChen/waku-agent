@@ -1207,8 +1207,7 @@ def chat_state() -> dict:
     return {"ok": True, "sessions": session_list(conn),
             "current_session": live.session.session_id if live is not None else dash_session(),
             "settings": {k: info.get(k) for k in
-                         ("provider", "model", "small_model", "pinned", "disabled_providers")},
-            "sign_in": sign_in_cards()}
+                         ("provider", "model", "small_model", "pinned", "disabled_providers")}}
 
 
 def session_action(payload: dict) -> dict:
