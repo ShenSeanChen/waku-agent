@@ -555,6 +555,10 @@ class Worker:
             status = self._ended(run.id, "done")
             if status == "parked":
                 self._queue_asked(run.id, batch)
+                if digest_reply(batch, reply_address(batch)):
+                    # The PR desk's digest is posted even when the run drafted
+                    # a review: the review waits in a thread under it.
+                    self._queue_reply(run.id, batch, outcome.reply)
             else:
                 self._queue_reply(run.id, batch, outcome.reply)
                 status = self._ended(run.id, "done")   # the reply itself may wait
@@ -711,6 +715,8 @@ class Worker:
         asked = (runs.get(self.conn, run_id).pending_call or {}).get("asked") or {}
         if address is None or address == (asked.get("channel"), asked.get("target")):
             return
+        if address == approvals.digest_address():
+            return   # the request is in a thread under the digest itself
         if address[0] == "github":
             return   # a comment is under the owner's name, so nothing is posted unasked
         channel, target = address

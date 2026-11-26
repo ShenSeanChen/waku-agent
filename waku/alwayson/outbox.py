@@ -91,6 +91,7 @@ class Message:
     attempts: int
     next_attempt_at: str   # UTC, ISO 8601
     last_error: str
+    receipt: str = ""      # what the channel answered: a Slack message's ts
 
 
 def utc_now() -> datetime:
@@ -105,7 +106,7 @@ def _stamp(moment: datetime) -> str:
 def _message(row: sqlite3.Row) -> Message:
     return Message(row["id"], row["run_id"], row["channel"], json.loads(row["target"]),
                    row["body"], row["idempotency_key"], row["status"], row["attempts"],
-                   row["next_attempt_at"], row["last_error"])
+                   row["next_attempt_at"], row["last_error"], row["receipt"])
 
 
 def insert(conn: sqlite3.Connection, *, run_id: str, channel: str, target: dict, body: str,
@@ -144,9 +145,12 @@ def due(conn: sqlite3.Connection, now: datetime) -> list[Message]:
     return [_message(row) for row in rows]
 
 
-def mark_sent(conn: sqlite3.Connection, message_id: int) -> None:
-    conn.execute("UPDATE outbox SET status = 'sent', last_error = '' WHERE id = ?",
-                 (message_id,))
+def mark_sent(conn: sqlite3.Connection, message_id: int, receipt: str = "") -> None:
+    """Mark a row delivered, and keep what the channel answered (spec 035):
+    the ts of a Slack message, so a drafted review can wait in a thread under
+    that morning's digest."""
+    conn.execute("UPDATE outbox SET status = 'sent', last_error = '', receipt = ? WHERE id = ?",
+                 (receipt, message_id))
     conn.commit()
 
 
@@ -166,6 +170,40 @@ def record_failure(conn: sqlite3.Connection, message_id: int, error: str,
         "WHERE id = ?", (status, attempts, next_attempt, error[:_MAX_ERROR_CHARS], message_id))
     conn.commit()
     return status
+
+
+# ---- a request in a thread under its digest (spec 035) ----------------------
+
+def digest_thread(conn: sqlite3.Connection, channel: str) -> str:
+    """The Slack ts of the newest digest sent to this channel, or ""."""
+    row = conn.execute(
+        "SELECT receipt FROM outbox WHERE channel = 'slack' AND status = 'sent' "
+        "AND receipt != '' AND json_extract(target, '$.digest') = 1 "
+        "AND json_extract(target, '$.channel') = ? ORDER BY id DESC LIMIT 1",
+        (channel,)).fetchone()
+    return row["receipt"] if row else ""
+
+
+def resolve_target(conn: sqlite3.Connection, message: Message) -> dict | None:
+    """Where a row goes now. A row marked `under_digest` goes into the thread
+    of its run's digest once that digest is sent, or else under the newest
+    digest in the channel, or else into the channel itself. None means the
+    run's own digest is still pending: the request is written first, while
+    the run is in flight, and waits one step so the digest is posted above it."""
+    target = message.target
+    if not target.get("under_digest"):
+        return target
+    own = conn.execute(
+        "SELECT status, receipt FROM outbox WHERE idempotency_key = ? "
+        "AND json_extract(target, '$.digest') = 1", (f"{message.run_id}:0",)).fetchone()
+    if own is not None and own["status"] == "pending":
+        return None
+    thread = (own["receipt"] if own is not None and own["status"] == "sent" and own["receipt"]
+              else digest_thread(conn, str(target.get("channel", ""))))
+    resolved = {key: value for key, value in target.items() if key != "under_digest"}
+    if thread:
+        resolved["thread_ts"] = thread
+    return resolved
 
 
 # ---- the run in flight -----------------------------------------------------

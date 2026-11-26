@@ -538,6 +538,11 @@ WAITS_YOU = ("This call waits for approval and has not run. The person you are t
              "message this needs. Do not make the call again, and do not describe the "
              "request: reply with the single word SILENT. When they answer, this "
              "conversation is told what happened.")
+# The same, in the PR desk's morning run (spec 035). Its reply is the digest
+# and is still posted, and the review waits in a thread under it.
+WAITS_DESK = ("This review waits for a maintainer's approval and has not been posted. It is "
+              "shown in a thread under your digest, with Approve and Reject. Do not draft it "
+              "again. Finish the digest: your reply is still posted.")
 # What a conversation other than the owner's chat reads when its run parked.
 # Code writes this line; the model's own reply is not sent.
 ASKED = "I asked {owner} to approve this. I will say here what {owner} decides."
@@ -637,10 +642,16 @@ def park(conn: sqlite3.Connection, run_id: int, tool: str, args: dict, now: date
     if reply:
         call["reply"] = True
     runs.set_pending(conn, run.id, call, digest)
-    # One request per run: a replayed run asks with the same key.
     asked_with = request(tool, args, digest, ran_before(conn, digest, now, tz))
-    outbox.insert(conn, run_id=str(run.id), channel=channel, target=target,
+    row_target = target
+    if channel == "slack":
+        # Drawn with buttons, in a thread under the digest (outbox.resolve_target).
+        row_target = {**target, "under_digest": True, "request": asked_with.fields()}
+    # One request per run: a replayed run asks with the same key.
+    outbox.insert(conn, run_id=str(run.id), channel=channel, target=row_target,
                   body=asked_with.text(channel), idempotency_key=f"{run.id}:ask", now=now)
+    if address is not None and address == digest_address():
+        return WAITS_DESK
     return WAITS_YOU if asked == address else WAITS
 
 

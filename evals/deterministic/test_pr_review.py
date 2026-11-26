@@ -300,3 +300,127 @@ def test_waku_connections_names_each_approvers_role():
     assert integrations.approvers_status({**env, "WAKU_DIGEST_CHANNEL": ""}, run=gh)[0] is False
     nobody = PermissionGh({"ShenSeanChen": "read", "yangzhao": "read"})
     assert integrations.approvers_status(env, run=nobody)[0] is False
+
+
+# ---- D2a: the request waits in a thread under its digest ---------------------
+
+DIGEST = "#428 check full fact table for duplicates · new · CI green · +140/-15 · memory"
+NOTE = "PR desk: acme/app"
+
+
+def _desk_env(monkeypatch):
+    monkeypatch.setenv("WAKU_DIGEST_CHANNEL", "C0DEV")
+    monkeypatch.setenv("WAKU_APPROVERS", APPROVERS)
+
+
+def _park_review(home, conn, clock):
+    """Monday's PR desk run: it drafts a review of PR #428, which parks, and
+    replies with the digest. Returns the run's id."""
+    from waku.alwayson import events
+    from waku.alwayson.worker import Worker, reply_address
+
+    event_id = events.insert(conn, source="timer", external_id="timer:1:2026-11-30",
+                             session_id="pr-desk:1",
+                             payload={"text": NOTE, "set_at": "2026-11-29T17:00:00+00:00",
+                                      "channel": "telegram", "reply_to": {"chat_id": 42}})
+
+    def desk_run(session_id, batch):
+        run = runs.find(conn, session_id, batch[0].id)
+        with outbox.running(home, str(run.id), reply_address(batch)):
+            said, _ = approvals.Gate(home, conn, now=clock)("github_review", REVIEW)
+        assert "under your digest" in said, "the model is told to finish the digest"
+        return DIGEST
+
+    Worker(conn, desk_run, wait=lambda s: None, now=clock, log=lambda line: None).step()
+    return runs.find(conn, "pr-desk:1", event_id).id
+
+
+class FakeSlack:
+    """Stands in for the Slack sender: records each message and answers with
+    the next ts, the way chat.postMessage does."""
+
+    def __init__(self) -> None:
+        self.sent = []
+
+    def __call__(self, message):
+        self.sent.append(message)
+        return f"1800.000{len(self.sent)}"
+
+
+def test_a_drafted_review_waits_in_a_thread_under_its_digest(home, conn, monkeypatch):
+    _desk_env(monkeypatch)
+    clock = Clock()
+    run_id = _park_review(home, conn, clock)
+    assert runs.get(conn, run_id).status == "parked"
+    assert json.loads(conn.execute("SELECT pending_call FROM runs").fetchone()[0])["asked"] == {
+        "channel": "slack", "target": {"channel": "C0DEV"}}
+
+    slack = FakeSlack()
+    dispatcher = Dispatcher(conn, {"slack": slack}, now=clock, log=lambda line: None)
+    dispatcher.step()
+    dispatcher.step()
+
+    digest, asked = slack.sent
+    assert (digest.target, digest.body) == ({"channel": "C0DEV", "digest": True}, DIGEST)
+    assert asked.target == {
+        "channel": "C0DEV", "thread_ts": "1800.0001",
+        "request": approvals.request("github_review", REVIEW, REVIEW_HASH).fields()}
+    assert asked.body.endswith(f"Approve or Reject with the buttons below. [{REVIEW_HASH[:8]}]")
+    assert REVIEW["body"] in asked.body
+    assert [r["receipt"] for r in conn.execute("SELECT receipt FROM outbox ORDER BY id")] == [
+        "1800.0002", "1800.0001"], "the request row, then the digest row"
+
+
+def test_a_request_without_its_own_digest_goes_under_the_newest_one(home, conn, monkeypatch):
+    """A review asked for in a mention, not by the morning run, waits under
+    the newest digest in the channel, or in the channel when there is none."""
+    _desk_env(monkeypatch)
+    lone = outbox.insert(conn, run_id="9", channel="slack",
+                         target={"channel": "C0DEV", "under_digest": True}, body="asked",
+                         idempotency_key="9:ask")
+    message = outbox.get(conn, lone)
+    assert outbox.resolve_target(conn, message) == {"channel": "C0DEV"}
+
+    old = outbox.insert(conn, run_id="3", channel="slack",
+                        target={"channel": "C0DEV", "digest": True}, body="Friday",
+                        idempotency_key="3:0")
+    outbox.mark_sent(conn, old, "1799.0001")
+    assert outbox.resolve_target(conn, message) == {"channel": "C0DEV", "thread_ts": "1799.0001"}
+    assert outbox.digest_thread(conn, "C0DEV") == "1799.0001"
+    assert outbox.digest_thread(conn, "C1") == ""
+
+
+def test_the_slack_sender_draws_a_request_with_two_buttons():
+    from waku.alwayson.senders import slack
+
+    calls = []
+
+    def post(url, payload, headers):
+        calls.append(payload)
+        return {"ok": True, "ts": "1800.0002"}
+
+    long_review = {**REVIEW, "body": "x" * 3500}
+    fields = approvals.request("github_review", long_review, REVIEW_HASH).fields()
+    message = outbox.Message(1, "1", "slack", {"channel": "C0DEV", "thread_ts": "1800.0001",
+                                               "request": fields},
+                             "fallback text", "1:ask", "pending", 0,
+                             "2026-11-30T17:00:00+00:00", "")
+
+    assert slack.make("xoxb-test", post=post)(message) == "1800.0002"
+
+    (payload,) = calls
+    assert (payload["channel"], payload["thread_ts"], payload["text"]) == (
+        "C0DEV", "1800.0001", "fallback text")
+    blocks = payload["blocks"]
+    assert blocks[0] == {"type": "section", "text": {"type": "mrkdwn", "text": (
+        "*Review PR #428*\nA drafted review of acme/app#428. Approve posts it on the pull "
+        "request as a comment, and Reject discards it.\n<https://github.com/acme/app/pull/428>")}}
+    assert "".join(block["text"]["text"] for block in blocks[1:-1]) == "x" * 3500
+    assert all(block["text"]["type"] == "plain_text" and len(block["text"]["text"]) <= 3000
+               for block in blocks[1:-1])
+    assert blocks[-1] == {"type": "actions", "block_id": f"waku_approval_{REVIEW_HASH[:8]}",
+                          "elements": [
+        {"type": "button", "action_id": "waku_approve", "style": "primary",
+         "text": {"type": "plain_text", "text": "Approve"}, "value": REVIEW_HASH[:8]},
+        {"type": "button", "action_id": "waku_reject", "style": "danger",
+         "text": {"type": "plain_text", "text": "Reject"}, "value": REVIEW_HASH[:8]}]}
