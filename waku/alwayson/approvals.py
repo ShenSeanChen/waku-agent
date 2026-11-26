@@ -27,6 +27,7 @@ import os
 import re
 import sqlite3
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import datetime, timedelta, tzinfo
 from fnmatch import fnmatchcase
 from pathlib import Path
@@ -395,6 +396,57 @@ def asked_line() -> str:
 # ---- park ------------------------------------------------------------------
 
 REQUEST = "{what}\n\n{before}Approve? Reply yes or no. [{code}]"
+# The same request where it is answered with buttons (spec 035).
+REQUEST_BUTTONS = "{what}\n\n{before}Approve or Reject with the buttons below. [{code}]"
+
+
+@dataclass(frozen=True)
+class Request:
+    """What a person is asked to approve (spec 035, decision 5). The five
+    fields are the same for every channel: the Slack sender draws them as
+    blocks with two buttons, Telegram reads them as text, and a later sender
+    for the Waku board can draw a `decide` message from the same fields."""
+    title: str
+    why: str
+    link: str
+    body: str
+    code: str
+    before: str = ""
+    choices: tuple[str, str] = ("Approve", "Reject")
+
+    def what(self) -> str:
+        head = "\n".join(part for part in (self.title, self.why, self.link) if part)
+        return f"{head}\n\n{self.body}" if self.body else head
+
+    def text(self, channel: str = "telegram") -> str:
+        words = REQUEST_BUTTONS if channel == "slack" else REQUEST
+        return words.format(what=self.what(), before=self.before, code=self.code)
+
+    def fields(self) -> dict:
+        return {"title": self.title, "why": self.why, "link": self.link, "body": self.body,
+                "choices": list(self.choices), "code": self.code}
+
+
+def _request_github_review(args: dict) -> tuple[str, str, str, str]:
+    repo, number = str(args.get("repo", "")), args.get("number")
+    return (f"Review PR #{number}",
+            (f"A drafted review of {repo}#{number}. Approve posts it on the pull request "
+             "as a comment, and Reject discards it."),
+            f"https://github.com/{repo}/pull/{number}", str(args.get("body", "")))
+
+
+# Tools whose request has a title, a reason, a link and a body of its own.
+REQUESTS: dict[str, Callable[[dict], tuple[str, str, str, str]]] = {
+    "github_review": _request_github_review,
+}
+
+
+def request(tool: str, args: dict, digest: str, before: str = "") -> Request:
+    """The request for one call. A tool without words of its own is asked
+    with its description as the title, as before spec 035."""
+    words = REQUESTS.get(tool)
+    title, why, link, body = words(args) if words else (describe(tool, args), "", "", "")
+    return Request(title, why, link, body, digest[:8], before)
 # One more line in a request for a call the owner approved in the last 24
 # hours (spec 024, decision 4). The owner still decides: the same request can
 # be meant twice, and it can be a mistake.
@@ -515,10 +567,9 @@ def park(conn: sqlite3.Connection, run_id: int, tool: str, args: dict, now: date
         call["reply"] = True
     runs.set_pending(conn, run.id, call, digest)
     # One request per run: a replayed run asks with the same key.
+    asked_with = request(tool, args, digest, ran_before(conn, digest, now, tz))
     outbox.insert(conn, run_id=str(run.id), channel=channel, target=target,
-                  body=REQUEST.format(what=describe(tool, args), code=digest[:8],
-                                      before=ran_before(conn, digest, now, tz)),
-                  idempotency_key=f"{run.id}:ask", now=now)
+                  body=asked_with.text(channel), idempotency_key=f"{run.id}:ask", now=now)
     return WAITS_YOU if asked == address else WAITS
 
 

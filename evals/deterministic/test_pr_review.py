@@ -192,3 +192,31 @@ def test_github_review_parks_under_the_gate(home, conn):
     row = conn.execute("SELECT pending_call, pending_hash FROM runs").fetchone()
     assert json.loads(row["pending_call"])["args"] == REVIEW
     assert row["pending_hash"] == REVIEW_HASH
+
+
+# ---- E1: one request shape ----------------------------------------------------
+
+def test_request_has_one_shape_for_every_channel():
+    """Decision 5: title, why, link, body and choices, whatever channel draws
+    them. A board sender can render the same five later."""
+    request = approvals.request("github_review", REVIEW, REVIEW_HASH)
+    assert request.fields() == {
+        "title": "Review PR #428",
+        "why": ("A drafted review of acme/app#428. Approve posts it on the pull request as a "
+                "comment, and Reject discards it."),
+        "link": "https://github.com/acme/app/pull/428",
+        "body": REVIEW["body"],
+        "choices": ["Approve", "Reject"],
+        "code": REVIEW_HASH[:8]}
+    assert request.text("telegram").endswith(
+        f"{REVIEW['body']}\n\nApprove? Reply yes or no. [{REVIEW_HASH[:8]}]")
+    assert request.text("slack").endswith(
+        f"Approve or Reject with the buttons below. [{REVIEW_HASH[:8]}]")
+
+
+def test_a_tool_without_words_of_its_own_asks_exactly_as_before():
+    """The Telegram request for a message is unchanged, character for character."""
+    request = approvals.request("send_message", {"to": "telegram:77", "body": "hi"}, "b" * 64)
+    assert request.text("telegram") == ('Send to telegram:77: "hi"\n\n'
+                                        'Approve? Reply yes or no. [bbbbbbbb]')
+    assert request.fields()["title"] == 'Send to telegram:77: "hi"'
