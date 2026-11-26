@@ -15,8 +15,10 @@ Each tool has a mode. `allow` runs. `ask` does not run under `waku serve`:
 The model is not asked again after a yes, so it cannot change the arguments.
 One call waits per conversation, and it waits 72 hours.
 
-Who answers is one function, `who_may_approve`. This package ships one answer,
-the owner in WAKU_OWNER.
+Who answers is one function, `who_may_approve`. For every call it names the
+owner in WAKU_OWNER. A drafted pull request review is asked first in the
+digest channel, where a click counts from a person WAKU_APPROVERS maps to a
+GitHub login with write access (spec 035).
 """
 
 from __future__ import annotations
@@ -27,6 +29,7 @@ import os
 import re
 import sqlite3
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import datetime, timedelta, tzinfo
 from fnmatch import fnmatchcase
 from pathlib import Path
@@ -108,6 +111,66 @@ def digest_address() -> Address | None:
     return ("slack", {"channel": channel, "digest": True}) if channel else None
 
 
+# ---- who approves a drafted review (spec 035, decision 1) -------------------
+
+# The repository roles that may approve. GitHub's `role_name` says maintain
+# and triage; its older `permission` field folds them into write and read.
+WRITE_ROLES = frozenset({"write", "maintain", "admin"})
+_LOGIN_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$")
+_SLACK_USER_RE = re.compile(r"^[UW][A-Z0-9]+$")
+# The calls asked in the digest channel when approvers are mapped. A review
+# names its repository, so GitHub can say who may approve it.
+SLACK_APPROVED = frozenset({"github_review"})
+
+
+def approvers(env=None) -> dict[str, str]:
+    """WAKU_APPROVERS, `<slack user id>:<github login>,...`, as a mapping. A
+    pair of another shape is dropped here, so no value reaches `gh` unchecked."""
+    env = os.environ if env is None else env
+    found: dict[str, str] = {}
+    for pair in env.get("WAKU_APPROVERS", "").split(","):
+        slack_id, _, login = (part.strip() for part in pair.partition(":"))
+        if _SLACK_USER_RE.match(slack_id) and _LOGIN_RE.match(login):
+            found[slack_id] = login
+    return found
+
+
+def permission(repo: str, login: str, run=None) -> str:
+    """The login's role on the repository, as GitHub says it now, or "" when
+    `gh` could not say. It is asked at every click and never kept, so a person
+    removed from the repository loses approval at once."""
+    from waku.tools import github
+
+    if not github._REPO_RE.match(repo or "") or not _LOGIN_RE.match(login or ""):
+        return ""
+    ok, text = (run or github._run)(
+        ["gh", "api", f"repos/{repo}/collaborators/{login}/permission"])
+    if not ok:
+        return ""
+    try:
+        answer = json.loads(text or "{}")
+    except ValueError:
+        return ""
+    if not isinstance(answer, dict):
+        return ""
+    return str(answer.get("role_name") or answer.get("permission") or "").lower()
+
+
+def may_approve(slack_id: str, repo: str, run=None) -> bool:
+    """Whether a click from this Slack user counts for a review of this
+    repository: WAKU_APPROVERS maps the user to a login, and GitHub says the
+    login may write to the repository."""
+    login = approvers().get(slack_id)
+    return login is not None and permission(repo, login, run) in WRITE_ROLES
+
+
+def approval_place() -> Address | None:
+    """The Slack channel where a drafted review waits for a click: the digest
+    channel, once WAKU_APPROVERS maps at least one person."""
+    channel = digest_channel()
+    return ("slack", {"channel": channel}) if channel and approvers() else None
+
+
 def _send_message(args: dict, address: Address | None) -> str:
     """A message to the owner is a reply. So is a message back into the
     conversation the run came from, when the run's own reply would go there
@@ -161,9 +224,10 @@ def _disconnect_tool(args: dict, address: Address | None) -> str:
     return ALLOW if connectors.hosted() else ASK
 
 
-# The tools whose mode nothing in the environment changes (spec 025, decision
-# 1): adding or removing a server always takes the owner's yes.
-ALWAYS_ASK = frozenset({"connect_tool", "disconnect_tool"})
+# The tools whose mode nothing in the environment changes. Adding or removing
+# a server always takes the owner's yes (spec 025, decision 1), and a drafted
+# review always waits for a maintainer (spec 035, decision 2).
+ALWAYS_ASK = frozenset({"connect_tool", "disconnect_tool", "github_review"})
 
 # The built-in table. A tool that reads, or that writes only to the person's
 # own machine and accounts, is `allow`. A tool that writes to a third party is
@@ -180,6 +244,10 @@ MODES: dict[str, str | Callable[[dict, Address | None], str]] = {
     "update_soul": ALLOW,
     "create_skill": ALLOW,
     "github_read": ALLOW,
+    # A review posted on a pull request, as a comment (spec 035). In
+    # ALWAYS_ASK too, so WAKU_APPROVE_ALLOW cannot turn it into a write that
+    # runs unasked.
+    "github_review": ASK,
     "delegate_task": ALLOW,
     "run_command": ALLOW,      # a skeleton: it runs nothing yet
     "browse_web": ALLOW,       # a skeleton: it opens nothing yet
@@ -233,7 +301,7 @@ def mode(tool: str, args: dict, address: Address | None = None,
          allowed: tuple[str, ...] = ()) -> str:
     """`allow` or `ask` for one call, decided in this order:
 
-      1. connect_tool and disconnect_tool ask, whatever comes next.
+      1. connect_tool, disconnect_tool and github_review ask, whatever comes next.
       2. WAKU_APPROVE_ASK or WAKU_APPROVE_ALLOW names the tool: that wins, and
          `ask` wins when a tool is in both.
       3. The built-in table knows the tool.
@@ -282,11 +350,14 @@ def mode(tool: str, args: dict, address: Address | None = None,
 
 
 def who_may_approve(tool: str, args: dict) -> list[Address]:
-    """Where the people who may approve this call are reached. v1 has one
-    answer for every call: the owner, at each address WAKU_OWNER names. A team
-    layer with several approvers replaces this function; nothing else in this
-    package decides who approves."""
-    return outbox.owner_addresses()
+    """Where the people who may approve this call are reached. A drafted
+    review (spec 035) is asked first in the digest channel, where a click
+    counts from a person WAKU_APPROVERS maps to a GitHub login with write
+    access (`may_approve`). Every call also names the owner, at each address
+    WAKU_OWNER names. A team layer replaces this function; nothing else in
+    this package decides who approves."""
+    place = approval_place() if tool in SLACK_APPROVED else None
+    return ([place] if place else []) + outbox.owner_addresses()
 
 
 # ---- what a call says about itself -----------------------------------------
@@ -336,11 +407,18 @@ def _describe_any(tool: str, args: dict) -> str:
     return "\n".join(lines)
 
 
+def _describe_github_review(args: dict) -> str:
+    body = str(args.get("body", "")).strip()
+    short = body if len(body) <= 200 else body[:200] + "…"
+    return f'Review on {args.get("repo")}#{args.get("number")}, as a comment: "{short}"'
+
+
 # What a call will do, in the tool's own words. The owner reads this.
 DESCRIBE: dict[str, Callable[[dict], str]] = {
     "send_message": _describe_send_message,
     "connect_tool": _describe_connect_tool,
     "disconnect_tool": _describe_disconnect_tool,
+    "github_review": _describe_github_review,
 }
 _MAX_DESCRIPTION_CHARS = 1500
 
@@ -358,12 +436,18 @@ def call_hash(tool: str, args: dict) -> str:
 
 
 def can_answer(address: Address) -> bool:
-    """Whether a yes from this address names one person and reaches `waku
-    serve`. A Telegram chat with a positive id is a private chat. A group
-    chat, a Slack channel and a GitHub issue are read by several people, so no
-    yes counts there. A Slack direct message has one person, but the Slack
-    source hears mentions in channels only, so an answer there never arrives."""
+    """Whether an answer from this address names one person and reaches
+    `waku serve`. A Telegram chat with a positive id is a private chat. The
+    digest channel counts once approvers are mapped, because there a button
+    names the person who pressed it (spec 035); a typed yes there still does
+    not count. A group chat, any other Slack channel and a GitHub issue are
+    read by several people, so no yes counts there. A Slack direct message has
+    one person, but the Slack source hears mentions in channels only, so an
+    answer there never arrives."""
     channel, target = address
+    if channel == "slack":
+        place = approval_place()
+        return place is not None and target.get("channel") == place[1]["channel"]
     chat_id = target.get("chat_id")
     return channel == "telegram" and isinstance(chat_id, int) and chat_id > 0
 
@@ -383,6 +467,57 @@ def asked_line() -> str:
 # ---- park ------------------------------------------------------------------
 
 REQUEST = "{what}\n\n{before}Approve? Reply yes or no. [{code}]"
+# The same request where it is answered with buttons (spec 035).
+REQUEST_BUTTONS = "{what}\n\n{before}Approve or Reject with the buttons below. [{code}]"
+
+
+@dataclass(frozen=True)
+class Request:
+    """What a person is asked to approve (spec 035, decision 5). The five
+    fields are the same for every channel: the Slack sender draws them as
+    blocks with two buttons, Telegram reads them as text, and a later sender
+    for the Waku board can draw a `decide` message from the same fields."""
+    title: str
+    why: str
+    link: str
+    body: str
+    code: str
+    before: str = ""
+    choices: tuple[str, str] = ("Approve", "Reject")
+
+    def what(self) -> str:
+        head = "\n".join(part for part in (self.title, self.why, self.link) if part)
+        return f"{head}\n\n{self.body}" if self.body else head
+
+    def text(self, channel: str = "telegram") -> str:
+        words = REQUEST_BUTTONS if channel == "slack" else REQUEST
+        return words.format(what=self.what(), before=self.before, code=self.code)
+
+    def fields(self) -> dict:
+        return {"title": self.title, "why": self.why, "link": self.link, "body": self.body,
+                "choices": list(self.choices), "code": self.code}
+
+
+def _request_github_review(args: dict) -> tuple[str, str, str, str]:
+    repo, number = str(args.get("repo", "")), args.get("number")
+    return (f"Review PR #{number}",
+            (f"A drafted review of {repo}#{number}. Approve posts it on the pull request "
+             "as a comment, and Reject discards it."),
+            f"https://github.com/{repo}/pull/{number}", str(args.get("body", "")))
+
+
+# Tools whose request has a title, a reason, a link and a body of its own.
+REQUESTS: dict[str, Callable[[dict], tuple[str, str, str, str]]] = {
+    "github_review": _request_github_review,
+}
+
+
+def request(tool: str, args: dict, digest: str, before: str = "") -> Request:
+    """The request for one call. A tool without words of its own is asked
+    with its description as the title, as before spec 035."""
+    words = REQUESTS.get(tool)
+    title, why, link, body = words(args) if words else (describe(tool, args), "", "", "")
+    return Request(title, why, link, body, digest[:8], before)
 # One more line in a request for a call the owner approved in the last 24
 # hours (spec 024, decision 4). The owner still decides: the same request can
 # be meant twice, and it can be a mistake.
@@ -403,6 +538,11 @@ WAITS_YOU = ("This call waits for approval and has not run. The person you are t
              "message this needs. Do not make the call again, and do not describe the "
              "request: reply with the single word SILENT. When they answer, this "
              "conversation is told what happened.")
+# The same, in the PR desk's morning run (spec 035). Its reply is the digest
+# and is still posted, and the review waits in a thread under it.
+WAITS_DESK = ("This review waits for a maintainer's approval and has not been posted. It is "
+              "shown in a thread under your digest, with Approve and Reject. Do not draft it "
+              "again. Finish the digest: your reply is still posted.")
 # What a conversation other than the owner's chat reads when its run parked.
 # Code writes this line; the model's own reply is not sent.
 ASKED = "I asked {owner} to approve this. I will say here what {owner} decides."
@@ -502,11 +642,16 @@ def park(conn: sqlite3.Connection, run_id: int, tool: str, args: dict, now: date
     if reply:
         call["reply"] = True
     runs.set_pending(conn, run.id, call, digest)
+    asked_with = request(tool, args, digest, ran_before(conn, digest, now, tz))
+    row_target = target
+    if channel == "slack":
+        # Drawn with buttons, in a thread under the digest (outbox.resolve_target).
+        row_target = {**target, "under_digest": True, "request": asked_with.fields()}
     # One request per run: a replayed run asks with the same key.
-    outbox.insert(conn, run_id=str(run.id), channel=channel, target=target,
-                  body=REQUEST.format(what=describe(tool, args), code=digest[:8],
-                                      before=ran_before(conn, digest, now, tz)),
-                  idempotency_key=f"{run.id}:ask", now=now)
+    outbox.insert(conn, run_id=str(run.id), channel=channel, target=row_target,
+                  body=asked_with.text(channel), idempotency_key=f"{run.id}:ask", now=now)
+    if address is not None and address == digest_address():
+        return WAITS_DESK
     return WAITS_YOU if asked == address else WAITS
 
 
@@ -527,6 +672,12 @@ BROKEN = ("Approved, and not run: {what} The stored call no longer matches its h
 REMINDER = ("Still waiting for your answer on: {what}\n\nIt expires in 24 hours. "
             "Approve? Reply yes or no. [{code}]")
 STOPPED = "I stopped waiting for your answer on: {what} Nothing was posted."
+# The reminder where the request has buttons (spec 035).
+REMINDER_BUTTONS = ("Still waiting for an answer on: {what}\n\nIt expires in 24 hours. "
+                    "Approve or Reject with the buttons above. [{code}]")
+# What the thread reads after a click (spec 035). The outcome names nobody, so
+# the person who clicked is named here.
+ANSWERED = "{who} chose {choice}. {outcome}"
 EXPIRED = ("Expired and discarded: {what} Nobody answered in 72 hours, so the call did "
            "not run.")
 WHICH = "Several calls wait for your answer. Reply yes or no with the code of one:\n{calls}"
@@ -543,12 +694,15 @@ def read_answer(text: str) -> tuple[bool, str] | None:
 
 def is_approver(event, run: runs.Run) -> bool:
     """Whether this event is an answer to this parked run's request from a
-    person who may approve it: it came in at the address the request went to,
-    that address is still one `who_may_approve` names, and its sender is the
-    one person a chat at that address holds."""
+    person who may approve it. Asked in Telegram: it came in at the address
+    the request went to, that address is still one `who_may_approve` names,
+    and its sender is the one person a chat at that address holds. Asked in
+    Slack: `_clicked_by_approver`."""
     call = run.pending_call or {}
     asked = call.get("asked") or {}
     address = (asked.get("channel"), asked.get("target"))
+    if address[0] == "slack":
+        return _clicked_by_approver(event, address, call)
     if (event.source, event.payload.get("reply_to")) != address or not can_answer(address):
         return False
     if address not in who_may_approve(call.get("tool", ""), call.get("args") or {}):
@@ -556,6 +710,21 @@ def is_approver(event, run: runs.Run) -> bool:
     # In a private Telegram chat the chat's id is the person's id.
     sender = str((event.payload.get("sender") or {}).get("id", ""))
     return sender == str(address[1].get("chat_id"))
+
+
+def _clicked_by_approver(event, address: Address, call: dict) -> bool:
+    """A click on Approve or Reject in the channel the request went to, by a
+    person WAKU_APPROVERS maps to a GitHub login that may write to the
+    review's repository right now (spec 035). A typed yes in Slack never
+    counts: several people read a channel, and only a button names the person
+    who pressed it. The GitHub check runs last, so a typed answer or another
+    channel never reaches `gh`."""
+    target = address[1] if isinstance(address[1], dict) else {}
+    reply_to = event.payload.get("reply_to") or {}
+    sender = str((event.payload.get("sender") or {}).get("id", ""))
+    return (event.source == "slack" and event.payload.get("clicked") in ("yes", "no")
+            and can_answer(address) and reply_to.get("channel") == target.get("channel")
+            and may_approve(sender, str((call.get("args") or {}).get("repo", ""))))
 
 
 def waiting_for(conn: sqlite3.Connection, event, now: datetime) -> list[runs.Run]:
@@ -583,6 +752,12 @@ def outcome(run: runs.Run, approved: bool, output: str = "") -> str:
         return (NOT_POSTED.format(what=what, output=output) if refused
                 else POSTED.format(what=what))
     return APPROVED.format(what=what, output=output)
+
+
+def answered(run: runs.Run, approved: bool, output: str, who: str) -> str:
+    """The line in the thread after a click on a request asked in Slack."""
+    return ANSWERED.format(who=who or "An approver", choice="Approve" if approved else "Reject",
+                           outcome=outcome(run, approved, output))
 
 
 def asked_address(run: runs.Run) -> Address | None:

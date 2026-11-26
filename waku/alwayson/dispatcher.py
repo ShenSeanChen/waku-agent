@@ -15,6 +15,7 @@ chat messages.
 
 from __future__ import annotations
 
+import dataclasses
 import sqlite3
 import threading
 from collections.abc import Callable, Mapping, Sequence
@@ -27,8 +28,10 @@ IDLE_SECONDS = 1.0
 NOTICE_PREFIX = "dead:"
 _NOTICE_BODY_CHARS = 200
 
-# A sender delivers one message and returns, or raises when it could not.
-Sender = Callable[[Message], None]
+# A sender delivers one message and returns, or raises when it could not. It
+# may return what the channel answered, a Slack message's ts, and the row
+# keeps it (spec 035).
+Sender = Callable[[Message], "str | None"]
 
 
 class Dispatcher:
@@ -41,10 +44,14 @@ class Dispatcher:
         self.stop = threading.Event()
 
     def step(self) -> int:
-        """Try every due row once. Returns how many rows were tried."""
+        """Try every due row once. Returns how many rows were tried. A row
+        that waits for its digest is left for the next step (spec 035)."""
         rows = outbox.due(self.conn, self._now())
         for message in rows:
-            self._deliver(message)
+            target = outbox.resolve_target(self.conn, message)
+            if target is None:
+                continue
+            self._deliver(dataclasses.replace(message, target=target))
         return len(rows)
 
     def _deliver(self, message: Message) -> None:
@@ -52,7 +59,7 @@ class Dispatcher:
             sender = self._senders.get(message.channel)
             if sender is None:
                 raise RuntimeError(f"no sender is configured for {message.channel}")
-            sender(message)
+            receipt = sender(message)
         except Exception as exc:
             from waku.gateway.runner import safe_exception
 
@@ -63,7 +70,7 @@ class Dispatcher:
                           f"{outbox.MAX_ATTEMPTS} attempts: {error}")
                 self._notify_owner(message, error)
         else:
-            outbox.mark_sent(self.conn, message.id)
+            outbox.mark_sent(self.conn, message.id, receipt if isinstance(receipt, str) else "")
 
     def _notify_owner(self, dead: Message, error: str) -> None:
         """One notice on a channel other than the one that failed. A notice

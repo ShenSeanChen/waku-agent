@@ -17,6 +17,11 @@ Who is heard: an `app_mention`, written by a person, in the workspace the bot
 token belongs to, in a channel on the allowlist. Everything else is dropped.
 The allowlist is a closed set, so an empty SLACK_ALLOWED_CHANNELS hears nobody.
 
+A click on Approve or Reject (spec 035) in an allowed channel of the same
+workspace becomes the same "yes <code>" or "no <code>" a person types in
+Telegram, marked as a click. Whether that person may approve is decided when
+the worker reads it, not here.
+
   external_id   Slack's event_id, so a resent event is a no-op
   session_id    slack:<channel>:<thread>, so each thread keeps its own history
 
@@ -27,9 +32,11 @@ library's classes and against fake envelopes, never against a live workspace.
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 
 from waku.alwayson.events import Inbox
+from waku.alwayson.senders.slack import APPROVE_ACTION, REJECT_ACTION
 from waku.alwayson.sources import MissingExtra
 
 # The app manifest a person creates their Slack app from. It ships in the
@@ -41,6 +48,9 @@ BOT_SCOPES = ("app_mentions:read", "chat:write")
 BOT_EVENT = "app_mention"
 # What the app-level token (xapp-) needs to open a Socket Mode connection.
 APP_SCOPE = "connections:write"
+# A button says yes or no, and its value is the request's 8-character code.
+CHOICES = {APPROVE_ACTION: "yes", REJECT_ACTION: "no"}
+_CODE_RE = re.compile(r"^[0-9a-f]{8}$")
 
 
 def allowed_channels() -> set[str]:
@@ -74,6 +84,36 @@ def record(inbox: Inbox, envelope: dict, *, team_id: str, channels: set[str]) ->
     )
 
 
+def record_click(inbox: Inbox, payload: dict, *, team_id: str, channels: set[str]) -> bool:
+    """Write one Approve or Reject click into the inbox (spec 035, decision
+    4). The click becomes `yes <code>` or `no <code>`, the row a typed
+    Telegram answer writes, so the worker resolves it unchanged. `clicked`
+    marks it, because a typed yes in a channel never counts. True when a row
+    was written."""
+    if payload.get("type") != "block_actions":
+        return False
+    actions = payload.get("actions") or []
+    action = actions[0] if actions and isinstance(actions[0], dict) else {}
+    choice, code = CHOICES.get(action.get("action_id")), str(action.get("value") or "")
+    user = payload.get("user") or {}
+    channel = (payload.get("channel") or {}).get("id") or ""
+    message = payload.get("message") or {}
+    ts = message.get("ts") or ""
+    if not choice or not _CODE_RE.match(code) or not user.get("id") or not ts:
+        return False
+    if (payload.get("team") or {}).get("id") != team_id or user.get("team_id", team_id) != team_id:
+        return False
+    if channel not in channels:
+        return False
+    thread = message.get("thread_ts") or ts
+    return inbox.add(
+        source="slack",
+        external_id=f"click:{channel}:{ts}:{user['id']}:{action.get('action_ts') or ''}",
+        session_id=f"slack:{channel}:{thread}",
+        payload={"text": f"{choice} {code}", "clicked": choice, "sender": {"id": user["id"]},
+                 "reply_to": {"channel": channel, "thread_ts": thread}})
+
+
 class Handle:
     def __init__(self, client) -> None:
         self.client = client
@@ -102,9 +142,11 @@ def start(inbox: Inbox) -> Handle | None:
 
     def listener(client, request) -> None:
         # Store, then acknowledge. Slack resends what was not acknowledged, and
-        # the event_id makes that second delivery a no-op.
+        # the event_id, or the click's own id, makes that second delivery a no-op.
         if request.type == "events_api":
             record(inbox, request.payload, team_id=team_id, channels=channels)
+        elif request.type == "interactive":
+            record_click(inbox, request.payload, team_id=team_id, channels=channels)
         client.send_socket_mode_response(SocketModeResponse(envelope_id=request.envelope_id))
 
     client.socket_mode_request_listeners.append(listener)

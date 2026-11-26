@@ -71,28 +71,48 @@ It listens to whichever of these three you configure in `.env`:
 Slack uses Socket Mode and GitHub is polled through the `gh` CLI every 60
 seconds, so a laptop needs no public address. On a server, set
 `GITHUB_WEBHOOK_SECRET` and point the repository's webhook at
-`POST /webhooks/github`: `waku serve` then listens on `127.0.0.1:7780`, checks
+`POST /webhooks/github` with the events "Issues", "Issue comments" and "Pull
+requests": `waku serve` then listens on `127.0.0.1:7780`, checks
 GitHub's signature on every delivery, and stops polling.
 
 ### The PR desk
 
+The PR desk posts one digest of new pull requests to a Slack channel every
+weekday morning, and drafts a review that a maintainer approves with a button.
+For PR #428, "check full fact table for duplicates", the digest in `#dev`
+reads `#428 check full fact table for duplicates · new · CI green · +140/-15 ·
+memory`, and the drafted review waits in a thread under it with Approve and
+Reject.
+
+1. Set `WAKU_GITHUB_REPOS` and `WAKU_GH_TOOL=1`, and sign `gh` in as the
+   account the reviews post as.
+2. Set `WAKU_DIGEST_CHANNEL` to the channel id, and add the same id to
+   `SLACK_ALLOWED_CHANNELS`, so clicks in it are heard.
+3. Set `WAKU_APPROVERS` to `<slack user id>:<github login>` pairs,
+   comma-separated. A click counts only when GitHub says, at that moment,
+   that the login has write, maintain or admin permission on the repository.
+4. Ask Waku for "the morning PR digest for owner/name, weekdays at 9am". The
+   `pr-desk` skill sets one repeating timer whose note starts with "PR desk".
+
 Every pull request that is opened or marked ready for review in
-`WAKU_GITHUB_REPOS` is recorded, whoever opened it, but it starts no run.
-Ask Waku for "a morning PR digest" and the `pr-desk` skill sets a weekday
-timer whose note starts with "PR desk". Each morning that run lists the pull
-requests recorded since the last digest, reads their CI with `github_read`
-(set `WAKU_GH_TOOL=1`), and posts one digest to the Slack channel id in
-`WAKU_DIGEST_CHANNEL`. That post does not ask first, because the run can only
-read GitHub: a pull request's title and description come from whoever opened
-it, so the run reads them as data and cannot call any other tool. With the
-webhook, add the event "Pull requests".
+`WAKU_GITHUB_REPOS` is recorded, whoever opened it, but it starts no run: it
+waits for the next digest, so forty pull requests in a day cost one run. Each
+morning that run lists the pull requests recorded since the last digest and
+reads their CI with `github_read`. The digest goes to that one channel without
+a yes. A pull request's title and description come from whoever opened it, so
+the run reads them as data and can call only `github_read` and
+`github_review`. A review is posted as a comment, never as an approval or a
+request for changes, and only after a click on Approve. Waku never merges.
+`waku connections` prints each approver's role on each repository.
 
 ### Slack from a manifest
 
 You create your own Slack app once, from
 [`waku/alwayson/sources/slack-app-manifest.yaml`](../waku/alwayson/sources/slack-app-manifest.yaml).
-The manifest turns Socket Mode on and asks for two bot scopes,
-`app_mentions:read` and `chat:write`, and one event, `app_mention`.
+The manifest turns Socket Mode and interactivity on, and asks for two bot
+scopes, `app_mentions:read` and `chat:write`, and one event, `app_mention`.
+Interactivity carries the PR desk's Approve and Reject buttons over the same
+Socket Mode connection, so it needs no request URL and no other scope.
 
 1. **Create the app.** At <https://api.slack.com/apps> choose "Create New
    App", then "From a manifest", pick your workspace and paste the file.

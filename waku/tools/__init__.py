@@ -110,6 +110,13 @@ def build_registry(conn: sqlite3.Connection, settings: Settings, memory=None,
 
         registry.register(github.make_tool(default_repo=getattr(settings, "gh_repo", "")))
 
+    # A drafted pull request review (spec 035): only for the repositories
+    # Waku watches, and it always waits for a maintainer's approval.
+    if os.getenv("WAKU_GITHUB_REPOS", "").strip():
+        from waku.tools import github
+
+        registry.register(github.make_review_tool(settings.home))
+
     # MCP servers (opt-in via .waku/mcp.json, or an installed plugin's own,
     # spec 021). Either one is enough to start the bridge.
     from waku.plugins import store

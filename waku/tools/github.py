@@ -1,4 +1,5 @@
-"""GitHub, read-only, through the `gh` CLI you already signed into.
+"""GitHub through the `gh` CLI you already signed into: `github_read` reads,
+and `github_review` drafts one review that waits for a maintainer's yes.
 
 Waku stores no GitHub token. It shells out to `gh`, which keeps its own
 credentials in the system keychain — so nothing sensitive lands in `.env`, in
@@ -31,6 +32,7 @@ from __future__ import annotations
 import json
 import re
 import subprocess
+from pathlib import Path
 
 from waku.tools.registry import Tool
 
@@ -78,16 +80,18 @@ _REFUSAL = (
 )
 
 
-def _run(argv: list[str], timeout: int = _TIMEOUT,
-         ok_codes: tuple[int, ...] = (0,)) -> tuple[bool, str]:
+def _run(argv: list[str], timeout: int = _TIMEOUT, ok_codes: tuple[int, ...] = (0,),
+         input_text: str | None = None) -> tuple[bool, str]:
     """One `gh` invocation. Returns (ok, text); the text is an explanation when
     ok is False. Mirrors apple.py::_osa — same contract, different binary.
-    `ok_codes` names the exit codes that still carry an answer on stdout."""
+    `ok_codes` names the exit codes that still carry an answer on stdout.
+    `input_text` goes to gh on standard input, so a review's text never
+    becomes an argument."""
     try:
         # gh emits UTF-8 even when the Windows locale uses a legacy encoding.
         r = subprocess.run(
-            argv, capture_output=True, text=True, encoding="utf-8", errors="replace",
-            timeout=timeout, check=False,
+            argv, input=input_text, capture_output=True, text=True, encoding="utf-8",
+            errors="replace", timeout=timeout, check=False,
         )
     except FileNotFoundError:
         return False, ("The gh CLI is not installed. Install it (brew install gh) "
@@ -249,4 +253,73 @@ def make_tool(default_repo: str = "") -> Tool:
             "required": ["command"],
         },
         fn=run,
+    )
+
+
+# ---- github_review: the one write, and it always waits (spec 035) ----------
+#
+# This tool never runs `gh`. Under the always-on mode the approval gate stores the
+# call, and a maintainer approves the exact text with a button in Slack
+# (waku/alwayson/approvals.py). Only then does the tool run, and it queues one
+# row that the GitHub sender posts with `gh pr review <n> --comment
+# --body-file -`. A review is always a comment: an approval from the agent
+# would count toward branch protection on a repository that requires one.
+
+REVIEW_MAX_CHARS = 65000
+
+
+def make_review_tool(home: Path) -> Tool:
+    def github_review(repo: str, number: int, body: str) -> str:
+        from waku.alwayson import outbox
+        from waku.alwayson.sources.github import repos
+        from waku.db import connect
+
+        repo = (repo or "").strip() if isinstance(repo, str) else ""
+        if repo not in repos():
+            return (f"Not posted: {repo or 'that repository'} is not in WAKU_GITHUB_REPOS, "
+                    "so Waku does not review it.")
+        try:
+            n = int(number)
+        except (TypeError, ValueError):
+            return "Not posted: `number` is the pull request's number."
+        if n <= 0:
+            return "Not posted: `number` is the pull request's number."
+        if not isinstance(body, str) or not body.strip():
+            return "Not posted: the review is empty."
+        if len(body) > REVIEW_MAX_CHARS:
+            return f"Not posted: a review is at most {REVIEW_MAX_CHARS} characters."
+        run = outbox.current_run(Path(home))
+        if run is None or run.approved_key is None:
+            return ("Not posted: a review is posted only after a maintainer approves its "
+                    "exact text, and this chat cannot ask for that.")
+        conn = connect(Path(home))
+        try:
+            written = outbox.insert(conn, run_id=run.run_id, channel="github",
+                                    target={"repo": repo, "number": n, "review": True},
+                                    body=body, idempotency_key=run.next_key())
+        finally:
+            conn.close()
+        if written is None:
+            return f"The review on {repo}#{n} was already queued by an earlier attempt."
+        return f"The review on {repo}#{n} is on its way, as a comment."
+
+    return Tool(
+        name="github_review",
+        description=(
+            "Draft a review of one pull request in a repository Waku watches. The review "
+            "is posted on GitHub as a comment, never as an approval or a request for "
+            "changes, and only after a maintainer approves its exact text. Use it in the "
+            "PR desk's morning run for the one pull request that most needs a reviewer."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "repo": {"type": "string", "description": "owner/name"},
+                "number": {"type": "integer", "description": "the pull request's number"},
+                "body": {"type": "string",
+                         "description": "The review exactly as it should be posted"},
+            },
+            "required": ["repo", "number", "body"],
+        },
+        fn=github_review,
     )

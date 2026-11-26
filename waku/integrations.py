@@ -586,6 +586,34 @@ def slack_status(env: Mapping[str, str] | None = None, fetch=None,
                   f"hears {len(channels)} channel{'' if len(channels) == 1 else 's'}")
 
 
+
+def approvers_status(env: Mapping[str, str] | None = None,
+                     run=None) -> tuple[bool | None, str]:
+    """The PR desk's approvers for `waku connections` (spec 035): who is
+    mapped, and the role GitHub gives each login on each repository right
+    now. None means approvals in Slack are not set up, which is not a failure.
+    The line names logins and roles, never a token."""
+    from waku.alwayson import approvals
+    from waku.tools import github
+
+    env = os.environ if env is None else env
+    if not env.get("WAKU_APPROVERS", "").strip():
+        return None, "not configured · set WAKU_APPROVERS=<slack user id>:<github login>"
+    mapped = approvals.approvers(env)
+    if not mapped:
+        return False, "WAKU_APPROVERS holds no <slack user id>:<github login> pair"
+    if not env.get("WAKU_DIGEST_CHANNEL", "").strip():
+        return False, "WAKU_DIGEST_CHANNEL is not set, so no review is asked in Slack"
+    repos = [r.strip() for r in env.get("WAKU_GITHUB_REPOS", "").split(",")
+             if github._REPO_RE.match(r.strip())]
+    if not repos:
+        return False, "WAKU_GITHUB_REPOS is not set, so there is no repository to review"
+    roles = [(login, repo, approvals.permission(repo, login, run))
+             for login in mapped.values() for repo in repos]
+    said = ", ".join(f"{login} {role or 'unknown'} on {repo}" for login, repo, role in roles)
+    ok = any(role in approvals.WRITE_ROLES for _, _, role in roles)
+    return ok, f"{len(mapped)} mapped · {said}"
+
 def cli_main() -> int:
     """Print the current Connections surface and return a meaningful exit code."""
     from rich.console import Console
@@ -644,7 +672,11 @@ def cli_main() -> int:
     slack_ok, slack_line = slack_status()
     console.print("\n[bold]Always-on[/bold]")
     console.print(f"  {'Slack':<20} {slack_line}", markup=False)
-    return int(failed or slack_ok is False)
+    # The PR desk (spec 035): who may approve a drafted review, as GitHub
+    # says now.
+    approvers_ok, approvers_line = approvers_status()
+    console.print(f"  {'PR approvers':<20} {approvers_line}", markup=False)
+    return int(failed or slack_ok is False or approvers_ok is False)
 
 
 def _find_integration(key: str) -> Integration | None:

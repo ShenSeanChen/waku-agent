@@ -106,7 +106,8 @@ CREATE TABLE IF NOT EXISTS outbox (
     status TEXT NOT NULL DEFAULT 'pending',  -- pending | sent | dead | cancelled
     attempts INTEGER NOT NULL DEFAULT 0,     -- failed deliveries so far
     next_attempt_at TEXT NOT NULL,           -- UTC, ISO 8601
-    last_error TEXT NOT NULL DEFAULT ''
+    last_error TEXT NOT NULL DEFAULT '',
+    receipt TEXT NOT NULL DEFAULT ''         -- spec 035: what the channel answered, a Slack message's ts
 );
 CREATE INDEX IF NOT EXISTS outbox_due ON outbox(status, next_attempt_at);
 
@@ -189,6 +190,11 @@ def _migrate(conn: sqlite3.Connection) -> None:
         if column not in timer_cols:
             conn.execute(f"ALTER TABLE timers ADD COLUMN {column} TEXT NOT NULL DEFAULT ''")
             conn.commit()
+    # Spec 035. A row sent before this column existed has no receipt.
+    outbox_cols = {r[1] for r in conn.execute("PRAGMA table_info(outbox)").fetchall()}
+    if "receipt" not in outbox_cols:
+        conn.execute("ALTER TABLE outbox ADD COLUMN receipt TEXT NOT NULL DEFAULT ''")
+        conn.commit()
 
 
 def connect(home: Path, check_same_thread: bool = True) -> sqlite3.Connection:

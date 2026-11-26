@@ -8,11 +8,14 @@
 #   app_mentions:read   to hear a message that mentions the bot
 #   chat:write          to answer in the thread
 #   app_mention         the one event it is sent
+#   interactivity       the Approve and Reject buttons of a drafted review
+#                       (spec 035), which arrive over Socket Mode: no request
+#                       URL, no new scope
 # Socket Mode means your machine calls Slack, so it needs no public address.
 
 display_information:
   name: Waku Agent
-  description: Answers when it is mentioned, from an agent you run yourself.
+  description: Answers when it is mentioned, and asks maintainers to approve drafted reviews.
 features:
   bot_user:
     display_name: waku
@@ -27,7 +30,7 @@ settings:
     bot_events:
       - app_mention
   interactivity:
-    is_enabled: false
+    is_enabled: true
   org_deploy_enabled: false
   socket_mode_enabled: true
   token_rotation_enabled: false

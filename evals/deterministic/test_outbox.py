@@ -768,3 +768,24 @@ def test_silent_reply_from_the_model_reaches_no_sender(tmp_path):
         conn.close()
 
     assert sender.delivered == [({"chat_id": 42}, "Issue 12 is still open.")]
+
+
+def test_an_outbox_made_before_spec_035_gets_the_receipt_column(tmp_path):
+    """A state.db from an older release has no `receipt` column; connecting
+    adds it, and every old row reads as no receipt."""
+    old = sqlite3.connect(tmp_path / "state.db")
+    old.execute("CREATE TABLE outbox (id INTEGER PRIMARY KEY, run_id TEXT NOT NULL, "
+                "channel TEXT NOT NULL, target TEXT NOT NULL, body TEXT NOT NULL, "
+                "idempotency_key TEXT NOT NULL UNIQUE, status TEXT NOT NULL DEFAULT 'pending', "
+                "attempts INTEGER NOT NULL DEFAULT 0, next_attempt_at TEXT NOT NULL, "
+                "last_error TEXT NOT NULL DEFAULT '')")
+    old.execute("INSERT INTO outbox (run_id, channel, target, body, idempotency_key, "
+                "next_attempt_at) VALUES ('1', 'telegram', '{}', 'hi', '1:0', '2026-11-30')")
+    old.commit()
+    old.close()
+
+    conn = connect(tmp_path)
+    try:
+        assert outbox.get(conn, 1).receipt == ""
+    finally:
+        conn.close()

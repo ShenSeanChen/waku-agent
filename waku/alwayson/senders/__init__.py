@@ -1,8 +1,10 @@
 """One sender per channel. A sender delivers one outbox row and returns, or
 raises SendFailed. Only the dispatcher calls a sender (spec 023, decision 5).
+The Slack sender returns the posted message's ts, and the dispatcher keeps it
+as the row's receipt (spec 035).
 
 Telegram and Slack are one HTTP request each through the standard library.
-GitHub is one `gh issue comment`. On hosted Waku the Slack request goes to
+GitHub is one `gh issue comment`, or one `gh pr review --comment` for a review. On hosted Waku the Slack request goes to
 the platform, which holds the workspace's token (senders/slack.py).
 """
 
