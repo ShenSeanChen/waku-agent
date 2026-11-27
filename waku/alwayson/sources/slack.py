@@ -61,9 +61,13 @@ APP_SCOPE = "connections:write"
 CHOICES = {APPROVE_ACTION: "yes", REJECT_ACTION: "no"}
 _CODE_RE = re.compile(r"^[0-9a-f]{8}$")
 # How often the watchdog looks at the connection, and how long it may go
-# without Slack answering a ping. slack_sdk pings every 5 seconds.
-WATCH_SECONDS = 10.0
-STALE_SECONDS = 60.0
+# without Slack answering a ping. slack_sdk pings every 5 seconds, so 15 is
+# three missed pongs. The live check (2026-11-26) lost a click during a drop
+# of a few seconds that the first values, 10 and 60, never noticed. A click
+# Slack could not deliver is not sent again: its buttons stay on the message,
+# and that is the sign to click once more.
+WATCH_SECONDS = 3.0
+STALE_SECONDS = 15.0
 
 
 def allowed_channels() -> set[str]:

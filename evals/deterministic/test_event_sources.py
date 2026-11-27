@@ -346,17 +346,20 @@ def test_slack_watchdog_reconnects_after_a_drop_and_says_so():
 
 def test_slack_watchdog_replaces_a_connection_that_stopped_answering():
     """A socket can stay open after the network under it went away. Slack
-    answers a ping every few seconds, so a minute of silence means it is gone."""
+    answers a ping every 5 seconds, so three missed answers mean it is gone.
+    The live check (2026-11-26) lost a click in a drop of a few seconds that a
+    one-minute limit never noticed."""
     from waku.alwayson.sources import slack
 
     client, lines = DroppingClient(last_pong=1000.0), []
-    watchdog = slack.Watchdog(client, log=lines.append, clock=lambda: 1000.0 + 30)
+    watchdog = slack.Watchdog(client, log=lines.append, clock=lambda: 1000.0 + 10)
     watchdog.check()
     assert lines == [] and client.connects == 0
     watchdog.clock = lambda: 1000.0 + slack.STALE_SECONDS + 1
     watchdog.check()
     assert client.connects == 1 and client.connected
     assert lines == ["(slack) connection lost; reconnecting", "(slack) reconnected"]
+    assert slack.STALE_SECONDS <= 15 and slack.WATCH_SECONDS <= 3
 
 
 def test_slack_source_starts_a_watchdog_and_stops_it(monkeypatch, inbox):
