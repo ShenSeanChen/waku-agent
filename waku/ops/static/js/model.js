@@ -1,4 +1,4 @@
-// The Model page (spec 046): how a model works, on your own Mac. Overview
+// The LLM page (spec 046; the code keeps the name "model"): how a model works, on your own Mac. Overview
 // draws how the harness runs; this page draws how the model inside it runs.
 // Three tabs, all from the model file Ollama keeps and the Ollama on this
 // machine, through /api/weights/* (waku/ops/weights.py):
@@ -91,7 +91,7 @@ VIEWS.model = function(d, sub){
         <div class="mw-body"><div id="mw-s-text" class="mw-s-text"></div></div></div>
       ${mwArrow}
       <div class="mw-st"><header><svg class="mw-ic" viewBox="0 0 40 40"><rect x="4" y="14" width="9" height="12" rx="2"/><rect x="15.5" y="14" width="9" height="12" rx="2"/><rect x="27" y="14" width="9" height="12" rx="2"/></svg><h4>pieces</h4></header>
-        <div class="mw-body"><b class="mw-big" id="mw-s-pieces">&ndash;</b><div class="mw-sq" id="mw-s-sq"></div><span class="mw-soft">pieces in, counted by Ollama (includes the chat wrapper)</span></div></div>
+        <div class="mw-body"><b class="mw-big" id="mw-s-pieces">&ndash;</b><div class="mw-sq" id="mw-s-sq"></div><span class="mw-soft">pieces in</span></div></div>
       ${mwArrow}
       <div class="mw-st"><header><svg class="mw-ic" viewBox="0 0 40 40"><rect x="7" y="6" width="26" height="7" rx="1.5"/><rect x="7" y="16.5" width="26" height="7" rx="1.5"/><rect x="7" y="27" width="26" height="7" rx="1.5"/></svg><h4 id="mw-s-blocks-l">blocks</h4></header>
         <div class="mw-body"><svg class="mw-stack" id="mw-stack" viewBox="0 0 120 252"></svg></div></div>
@@ -124,25 +124,25 @@ VIEWS.model = function(d, sub){
       <div><b id="mw-c-load">&ndash;</b><span>of it: getting the model ready</span></div>
     </div>
     <div id="mw-run-err"></div>
-    <p class="mw-soft mw-foot">The lighting shows the order of the steps, slowed down; the real computation takes milliseconds per piece. Only the top 5 of every candidate are shown. Ollama has no way to list the prompt's pieces, so only their count is drawn.</p>
+    <p class="mw-soft mw-foot">The lighting shows the order of the steps, slowed down. The piece count includes the chat wrapper Ollama adds.</p>
   </section>
 
   <section class="mw-pane" id="mw-p-lives">
     <div class="mw-panels">
       <div class="mw-pn"><svg class="mw-ic mw-ic-lg" viewBox="0 0 80 80"><rect x="10" y="16" width="60" height="48" rx="6"/><path d="M10 46h60"/><circle cx="58" cy="55" r="2.5"/><path d="M20 55h18"/><path d="M22 26h36M22 34h24"/></svg>
-        <h3>Storage</h3><span class="mw-soft">SSD (Solid State Drive): keeps the file when the power is off</span>
+        <h3>Storage</h3><span class="mw-soft">keeps the file when the power is off</span>
         <b class="mw-huge" id="mw-st-size">&ndash;</b><span class="mw-soft">one file, on disk</span><code class="mw-path" id="mw-st-path"></code></div>
       <div class="mw-flow" id="mw-flow"><svg viewBox="0 0 130 80"><path class="shaft" d="M6 40h108"/><path d="M96 20l22 20-22 20"/></svg></div>
       <div class="mw-pn"><svg class="mw-ic mw-ic-lg" viewBox="0 0 80 80"><path d="M6 24h68v30H46l-3-4h-6l-3 4H6z"/><rect x="14" y="31" width="10" height="14" rx="1.5"/><rect x="28" y="31" width="10" height="14" rx="1.5"/><rect x="42" y="31" width="10" height="14" rx="1.5"/><rect x="56" y="31" width="10" height="14" rx="1.5"/><path d="M12 54v6M20 54v6M28 54v6M52 54v6M60 54v6M68 54v6"/></svg>
-        <h3>Memory</h3><span class="mw-soft">RAM (Random Access Memory): where the numbers must be to compute</span>
+        <h3>Memory</h3><span class="mw-soft">where the numbers must be to compute</span>
         <b class="mw-huge off" id="mw-memstate">&ndash;</b>
         <div class="mw-membar" id="mw-membar"><i></i></div>
         <div class="mw-scale"><span>0</span><span id="mw-memtotal"></span></div>
         <span class="mw-memsub" id="mw-memsub"></span></div>
       <div class="mw-pn"><svg class="mw-ic mw-ic-lg" viewBox="0 0 80 80"><rect x="20" y="20" width="40" height="40" rx="5"/><rect x="31" y="31" width="18" height="18" rx="2"/><path d="M28 20v-9M40 20v-9M52 20v-9M28 69v-9M40 69v-9M52 69v-9M20 28h-9M20 40h-9M20 52h-9M69 28h-9M69 40h-9M69 52h-9"/></svg>
-        <h3>Chip</h3><span class="mw-soft" id="mw-gpu-l">GPU (Graphics Processing Unit): does the multiplying</span>
+        <h3>Chip</h3><span class="mw-soft" id="mw-gpu-l">does the multiplying</span>
         <b class="mw-chip" id="mw-chipname">&ndash;</b>
-        <b class="mw-huge" id="mw-ch-tps">&ndash;</b><span class="mw-soft" id="mw-ch-tps-l">pieces per second: run a prompt in Press Enter to measure</span></div>
+        <b class="mw-huge" id="mw-ch-tps">&ndash;</b><span class="mw-soft" id="mw-ch-tps-l">pieces per second, after a run</span></div>
     </div>
     <div class="mw-actions">
       ${uiButton("Load into memory", {level: "primary", onclick: "mwLoadUnload(true)", cls: "mw-b-load"})}
@@ -298,7 +298,7 @@ function mwRenderList(){
   }).join("");
   mwEl("mw-list").innerHTML = html || `<p class="mw-soft">No table matches.</p>`;
   mwEl("mw-hint").textContent = q ? shown + " of " + mwModel.tensors.length + " tables" :
-    mwModel.tensors.length + " tables, grouped by block. The bar is the size.";
+    mwModel.tensors.length + " tables, grouped by block";
 }
 function mwListClick(e){ const b = e.target.closest(".mw-row"); if (b) mwSelectTensor(b.dataset.name); }
 
@@ -344,11 +344,11 @@ function mwRenderTensor(){
         : `<td style="${mwCellStyle(v, max)}">${v === null ? "n/a" : v.toFixed(4)}</td>`).join("") + `</tr>`).join("") +
       `</tbody></table></div>`;
     h += `<p class="mw-meaning">One table is one grid of numbers. This model is <b>${mwCommas(mwModel.totals.tensor_count)}</b> of them.</p>`;
-    if (!showCodes) h += `<p>Blue is negative, red is positive, darker is larger. One cell means nothing alone; what the model knows is spread across all of them. ${uiLink("See it used &rarr;", "#model/run")}</p>`;
+    if (!showCodes) h += `<p>${uiLink("See it used &rarr;", "#model/run")}</p>`;
     h += `<p class="mw-soft">Showing the top-left <b>${d.rows} &times; ${d.cols}</b> of <b>${mwCommas(R)} &times; ${mwCommas(C)}</b>` +
-      (oneD ? " (a single row of numbers)" : "") + `. ${esc(d.note)}</p>`;
+      `.</p>`;
     if (showCodes && !d.values) h += uiNotice("warn", "These are the raw stored codes, not decoded numbers.");
-    else if (showCodes) h += `<p class="mw-soft">Each cell is one of <b>${d.code_levels} levels</b> (0 to ${d.code_levels - 1}): that is all the file stores per number. Untick to see the real values they stand for.</p>`;
+    else if (showCodes) h += `<p class="mw-soft">Each cell is one of <b>${d.code_levels} levels</b>: that is all the file stores per number.</p>`;
   } else {
     h += uiNotice("note", esc(d.note || "No numbers available for this table."));
   }
@@ -371,7 +371,7 @@ async function mwLoadTokens(){
   try {
     const d = await mwGet("tokens", {name: mwModel.name, start, count: MW_TOKENS_PER_PAGE});
     mwEl("mw-tstart").value = d.start;
-    mwEl("mw-vocab-l").textContent = mwCommas(d.total) + " word-pieces, stored as readable text at the top of the file. Ġ marks a leading space.";
+    mwEl("mw-vocab-l").textContent = mwCommas(d.total) + " word-pieces. Ġ marks a leading space.";
     mwEl("mw-tokens").innerHTML = d.tokens.map(t => `<span class="mw-tok"><i>${t.id}</i>${esc(t.text)}</span>`).join("") ||
       `<span class="mw-soft">This file has no word-piece list.</span>`;
   } catch (e){ mwEl("mw-tokens").innerHTML = `<span class="mw-soft">${esc(e.message)}</span>`; }
@@ -642,14 +642,13 @@ function mwRenderChip(){
   mwEl("mw-chipname").textContent = (mwMachine && mwMachine.chip) || "–";
   if (mwLastTps){
     mwEl("mw-ch-tps").textContent = mwLastTps.tps.toFixed(1);
-    mwEl("mw-ch-tps-l").textContent = "pieces per second, last run on this page, " + mwLastTps.n + " pieces" + (mwModel && mwLastTps.model !== mwModel.name ? " (" + mwLastTps.model + ")" : "");
+    mwEl("mw-ch-tps-l").textContent = "pieces per second, last run, " + mwLastTps.n + " pieces" + (mwModel && mwLastTps.model !== mwModel.name ? " (" + mwLastTps.model + ")" : "");
   }
 }
 function mwRenderFoot(){
   const m = mwMachine, el = mwEl("mw-foot3");
   if (!m || !el) return;
-  el.textContent = "Memory is counted in units of 1,073,741,824 bytes, the unit behind the “16 GB” on the box (" +
-    (m.memory_bytes ? mwCommas(m.memory_bytes) + " bytes in this machine" : "size unknown") + "); the file size uses 1 GB = 1,000,000,000 bytes, as Finder does." +
+  el.textContent = "Memory in units of 1,073,741,824 bytes; file size in units of 1,000,000,000, as Finder shows it." +
     (m.ollama_version ? " Ollama " + m.ollama_version + "." : "");
 }
 function mwRenderMem(){
@@ -659,7 +658,7 @@ function mwRenderMem(){
   const m = mwPs && mwModel ? (mwPs.models || []).find(x => x.name === mwModel.name || x.model === mwModel.name) : null;
   const state = mwEl("mw-memstate"), bar = mwEl("mw-membar").firstElementChild;
   mwEl("mw-flow").className = "mw-flow" + (mwLoading ? " loading" : m ? " loaded" : "");
-  const gpu = "GPU (Graphics Processing Unit): does the multiplying";
+  const gpu = "does the multiplying";
   if (mwPsErr){ state.className = "mw-huge off"; state.textContent = "Ollama is off"; bar.style.width = "0"; mwEl("mw-memsub").textContent = ""; return; }
   if (!m){
     state.className = "mw-huge off"; state.textContent = mwLoading ? "loading…" : "not loaded";
@@ -677,7 +676,7 @@ function mwRenderMem(){
     else sub = "unloading…";
   }
   mwEl("mw-memsub").textContent = sub;
-  if (m.size) mwEl("mw-gpu-l").textContent = "GPU (Graphics Processing Unit): holds " + (100 * (m.size_vram || 0) / m.size).toFixed(0) + "% of the loaded model";
+  if (m.size) mwEl("mw-gpu-l").textContent = "holds " + (100 * (m.size_vram || 0) / m.size).toFixed(0) + "% of the loaded model";
 }
 async function mwPollPs(background){
   if (!mwEl("mw")) return;

@@ -50,20 +50,9 @@ integrations registry.
 **0.1.8 is on PyPI and on GitHub Releases.** Pushing a `v*` tag publishes to
 both, so the repo's "Latest" release always matches `pip install waku-agent`.
 
-**The dashboard uses the Waku Memory design system**, and
-`test_design_system.py` keeps it from drifting. See
-[context/design-system.md](context/design-system.md).
+**The dashboard uses the Waku Memory design system**, and `test_design_system.py` keeps it from drifting. See [context/design-system.md](context/design-system.md).
 
-**The dashboard's Model page looks inside a local model** (spec 046). For a
-model Ollama keeps on this computer it shows the file (every table of numbers,
-a 16 x 16 corner as real values or as the stored 4-bit codes, the vocabulary),
-one run piece by piece with the top 5 candidates and their probabilities, and
-how much memory the model holds now, with Load and Unload. The Models page
-links to it from "On this computer". It reads Ollama's own folder and talks
-to the Ollama on this machine only; hosted Waku blocks it. It reads GGUF
-files from Ollama, not LM Studio's or MLX's, and decodes F32, F16, Q4_0, Q4_K
-and Q6_K tables; any other type shows a notice instead of numbers. It has
-run on one Mac with two models (`qwen3:8b`, `llama3`) and Ollama 0.40.17.
+**The dashboard's LLM page looks inside a local model** (spec 046). For a model Ollama keeps on this computer it shows the file (every table of numbers, a 16 x 16 corner as real values or as the stored 4-bit codes, the vocabulary), one run piece by piece with the top 5 candidates and their probabilities, and the memory the model holds now, with Load and Unload. The Models page links to it. It reads Ollama's own folder and talks to the Ollama on this machine only, and hosted Waku blocks it. It reads GGUF files from Ollama, not LM Studio's or MLX's, and decodes F32, F16, Q4_0, Q4_K and Q6_K tables; another type shows a notice instead of numbers. It has run on one Mac with two models (`qwen3:8b`, `llama3`) and Ollama 0.40.17.
 
 ## Known broken
 

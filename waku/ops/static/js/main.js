@@ -19,7 +19,7 @@ const TITLES = {chat:"Chat & watch",
                 compare:"Arena — race models and memory through the same loop",
                 "compare/models":"Model race — ten brains, one harness",
                 "compare/memory":"Memory race — one brain, five places to put facts",
-                model:"Model — how a model works, on your own computer",
+                model:"LLM — how a model works, on your own computer",
                 settings:"Behaviour — how a turn runs",
                 sql:"SQL console — read-only questions over state.db"};
 function render(){
