@@ -204,6 +204,10 @@ class Settings:
     # can't be disabled (guarded in integrations.apply_provider_disabled).
     disabled_providers: frozenset[str] = field(default_factory=lambda: frozenset(
         p.strip() for p in os.getenv("WAKU_DISABLED_PROVIDERS", "").split(",") if p.strip()))
+    # Backup providers tried in order when the primary hits a rate limit (429),
+    # server outage (5xx), or connection failure. Off by default.
+    fallback_providers: tuple[str, ...] = field(default_factory=lambda: tuple(
+        p.strip() for p in os.getenv("WAKU_FALLBACK_PROVIDERS", "").split(",") if p.strip()))
 
     # --- Home: where Waku keeps its state (memory DB, calendar, outbox, traces).
     # ~/.waku by default, so the same assistant answers from every folder; a
