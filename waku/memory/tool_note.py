@@ -77,6 +77,20 @@ def clip(record: str) -> str:
     return record[:i] + _short(record[i:], NOTE_MAX - 1) + "]"
 
 
+def cap_reply(record: str, limit: int) -> str:
+    """A history record whose reply is held to `limit` characters, its note
+    kept whole (spec 039 A3). The note is what stops the model running a tool
+    again, so it is never the part that is cut. The chat log keeps the
+    whole answer; only the copy re-sent to the model is cut."""
+    i = (record or "").find(PREFIX)
+    reply, rest = (record, "") if i < 0 else (record[:i], record[i:])
+    body = reply.rstrip()
+    if limit <= 0 or len(body) <= limit:
+        return record
+    cut = f"{body[:limit]} ... [{len(body) - limit} more characters in the chat log]"
+    return f"{cut}\n{rest}" if rest else cut
+
+
 def claimed(reply: str) -> list[str]:
     """The tools a note in a reply names, in order. [] without a note."""
     i = (reply or "").find(PREFIX)

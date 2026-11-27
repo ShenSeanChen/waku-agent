@@ -430,7 +430,14 @@ class Waku:
         # how long the conversation runs. Older turns live in state.db and
         # come back via the retrieval gate + episodic memory when relevant.
         window = self.settings.history_turns * 2
-        messages = self.session.history[-window:] + [
+        history = self.session.history[-window:]
+        # Spec 039 A3: a long earlier answer is re-sent cut, on every call of
+        # every later turn; the chat log keeps it whole. Off (0) by default.
+        if cap := self.settings.history_answer_chars:
+            history = [{**m, "content": tool_note.cap_reply(m["content"], cap)}
+                       if m["role"] == "assistant" and isinstance(m["content"], str) else m
+                       for m in history]
+        messages = history + [
             {"role": "user", "content": with_context(user_message, self._turn_context)}]
 
         # Spec 009 A: research starts from what the company brain already

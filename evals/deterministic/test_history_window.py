@@ -46,3 +46,61 @@ def test_default_window_is_generous_but_finite(tmp_path, monkeypatch):
     monkeypatch.delenv("WAKU_HISTORY_TURNS", raising=False)
     app = make_waku(tmp_path / "home", client=ScriptedClient([]))
     assert app.settings.history_turns == 12
+
+
+# --- spec 039 A3: each earlier answer is capped in the window --------------------------
+
+LONG = "Pricing notes. " * 400          # 6,000 characters
+
+
+def _two_turns(tmp_path, monkeypatch, cap: str | None):
+    if cap is None:
+        monkeypatch.delenv("WAKU_HISTORY_ANSWER_CHARS", raising=False)
+    else:
+        monkeypatch.setenv("WAKU_HISTORY_ANSWER_CHARS", cap)
+    sent = []
+
+    class Recorder(ScriptedClient):
+        def _create(self, **kwargs):
+            if kwargs.get("tools"):
+                sent.append(list(kwargs.get("messages", [])))
+            return self._script.pop(0)
+
+    script = [_gate_skip(), response([text_block(LONG)]),
+              _gate_skip(), response([text_block("ok")])]
+    app = make_waku(tmp_path / "home", client=Recorder(script))
+    app.respond("what did I decide about pricing?")
+    app.respond("and last week?")
+    earlier = [m["content"] for m in sent[-1] if m["role"] == "assistant"]
+    logged = [r[0] for r in app.conn.execute(
+        "SELECT content FROM chat_log WHERE role = 'assistant' ORDER BY id")]
+    return earlier, logged
+
+
+def test_an_earlier_long_answer_enters_the_window_cut_and_the_chat_log_keeps_it_whole(
+        tmp_path, monkeypatch):
+    earlier, logged = _two_turns(tmp_path, monkeypatch, "1500")
+    assert len(earlier) == 1
+    assert len(earlier[0]) < 1700
+    assert earlier[0].startswith("Pricing notes.")
+    assert "more characters in the chat log" in earlier[0]
+    assert logged[0] == LONG.strip() or logged[0] == LONG
+
+
+def test_without_a_cap_an_earlier_answer_enters_whole(tmp_path, monkeypatch):
+    """A laptop's default: no cap, as before spec 039."""
+    earlier, _ = _two_turns(tmp_path, monkeypatch, None)
+    assert earlier == [LONG] or earlier == [LONG.strip()]
+
+
+def test_the_cap_keeps_the_tools_used_note():
+    """The note says a tool already ran; cutting it would let the model run
+    the tool again (the triple-booked meeting)."""
+    from waku.memory import tool_note
+
+    note = tool_note.note([{"tool": "create_event", "args": {"title": "X"}, "output": "Created X"}])
+    capped = tool_note.cap_reply(f"{'a' * 3000}\n{note}", 1500)
+    assert capped.endswith(note)
+    assert capped.startswith("a" * 1500)
+    assert "a" * 1501 not in capped
+    assert tool_note.cap_reply("short\n" + note, 1500) == "short\n" + note

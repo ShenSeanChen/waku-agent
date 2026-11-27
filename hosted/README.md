@@ -1236,6 +1236,13 @@ one more call with tools off and answers from what the turn gathered. Like
 the line above, a running tenant gets it on its next start; `upgrade.sh --now`
 restarts every tenant onto it at once.
 
+**A tenant turn re-sends six earlier turns.** Every tenant container starts
+with `WAKU_HISTORY_TURNS=6` and `WAKU_HISTORY_ANSWER_CHARS=1500`
+(`TENANT_HISTORY_TURNS` and `TENANT_HISTORY_ANSWER_CHARS` in
+`spawner/template.py`). Each model call of a turn sends the six turns before
+it, with each earlier answer cut to 1,500 characters; the chat log keeps every
+answer whole. A laptop keeps twelve turns, uncut (spec 039).
+
 ### A second fence: treg's per-customer daily budget
 
 Every call is tagged `customer=<tenant id>`, so treg can cap each tenant per

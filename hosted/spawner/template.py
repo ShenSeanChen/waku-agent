@@ -39,6 +39,11 @@ from hosted.core.tenant import (
 DASHBOARD_PORT = 7777
 # The most model calls with tools one tenant turn may make (WAKU_MAX_ITERATIONS).
 TENANT_MAX_ITERATIONS = 15
+# Spec 039 A3: the earlier turns a tenant turn re-sends (WAKU_HISTORY_TURNS),
+# and the characters each earlier answer is cut to there
+# (WAKU_HISTORY_ANSWER_CHARS). A laptop keeps 12 whole turns.
+TENANT_HISTORY_TURNS = 6
+TENANT_HISTORY_ANSWER_CHARS = 1500
 
 # Spec, the container template table. Every number is the spec's, spelled with
 # its unit beside it so the next reader does not have to divide.
@@ -358,6 +363,10 @@ def tenant_container(config: SpawnerConfig, *, tenant_id: str, project_id: int,
             # may spend. A research turn with a failed lookup or two needs
             # more than ten; at the limit the loop still answers, tools off.
             f"WAKU_MAX_ITERATIONS={TENANT_MAX_ITERATIONS}",
+            # Every model call of a turn re-sends this window (spec 039 F4,
+            # F7): six turns, each earlier answer cut, the chat log whole.
+            f"WAKU_HISTORY_TURNS={TENANT_HISTORY_TURNS}",
+            f"WAKU_HISTORY_ANSWER_CHARS={TENANT_HISTORY_ANSWER_CHARS}",
             # Spec 026: stock waku's dashboard starts the always-on worker,
             # timer loop and dispatcher, and answers the gateway's hand-over
             # routes, only when this is set. An inspect container does not
