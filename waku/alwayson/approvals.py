@@ -678,6 +678,8 @@ REMINDER_BUTTONS = ("Still waiting for an answer on: {what}\n\nIt expires in 24 
 # What the thread reads after a click (spec 035). The outcome names nobody, so
 # the person who clicked is named here.
 ANSWERED = "{who} chose {choice}. {outcome}"
+# What the request itself says once it is answered, in place of its buttons.
+DECIDED = "{choice} by {who}"
 EXPIRED = ("Expired and discarded: {what} Nobody answered in 72 hours, so the call did "
            "not run.")
 WHICH = "Several calls wait for your answer. Reply yes or no with the code of one:\n{calls}"
@@ -758,6 +760,12 @@ def answered(run: runs.Run, approved: bool, output: str, who: str) -> str:
     """The line in the thread after a click on a request asked in Slack."""
     return ANSWERED.format(who=who or "An approver", choice="Approve" if approved else "Reject",
                            outcome=outcome(run, approved, output))
+
+
+def decided(approved: bool, who: str) -> str:
+    """The line that replaces the buttons on a request answered in Slack."""
+    return DECIDED.format(choice="Approved" if approved else "Rejected",
+                          who=who or "an approver")
 
 
 def asked_address(run: runs.Run) -> Address | None:
