@@ -32,6 +32,7 @@ The worker never sends. The dispatcher sends what the outbox holds.
 from __future__ import annotations
 
 import dataclasses
+import json
 import os
 import re
 import sqlite3
@@ -643,7 +644,8 @@ class Worker:
                               target=target, body=approvals.which(waiting),
                               idempotency_key=f"which:{event.id}", now=self._now())
             else:
-                self._resolve(waiting[0], answer[0], by=self._clicker(event))
+                self._resolve(waiting[0], answer[0], by=self._clicker(event),
+                              message_ts=str(event.payload.get("message_ts") or ""))
             events.mark(self.conn, [event.id], "done")
         return ordinary
 
@@ -655,7 +657,8 @@ class Worker:
         sender = str((event.payload.get("sender") or {}).get("id", ""))
         return approvals.approvers().get(sender, "")
 
-    def _resolve(self, run: runs.Run, approved: bool, by: str = "") -> None:
+    def _resolve(self, run: runs.Run, approved: bool, by: str = "",
+                 message_ts: str = "") -> None:
         """Run the stored call on a yes, discard it on a no, and write the
         outcome as an event in the conversation that parked. Each step can
         happen twice without a second effect: the call's row has one key, the
@@ -681,6 +684,7 @@ class Worker:
                           target={**asked[1], "under_digest": True},
                           body=approvals.answered(run, approved, output, by),
                           idempotency_key=f"answered:{run.id}", now=self._now())
+            self._replace_buttons(run, asked[1], approved, by, message_ts)
         # A reply that waited is the end of its run: once it is posted or
         # dropped, the conversation has nothing to hear about the approval.
         elif not (run.pending_call or {}).get("reply"):
@@ -693,6 +697,25 @@ class Worker:
         ran = approved and approvals.intact(run) and not raised
         runs.resolve(self.conn, run.id, "failed" if approved and not ran else "done",
                      approved=ran, now=self._now())
+
+    def _replace_buttons(self, run: runs.Run, asked: dict, approved: bool, by: str,
+                         message_ts: str) -> None:
+        """Edit the request in Slack so its buttons become one line saying who
+        decided (found in the live check, 2026-11-26: after a click the
+        buttons stayed and the click looked lost). It edits the message the
+        click came from, or else the request as it was posted."""
+        row = self.conn.execute(
+            "SELECT target, receipt FROM outbox WHERE idempotency_key = ? AND status = 'sent'",
+            (f"{run.id}:ask",)).fetchone()
+        fields = (json.loads(row["target"]).get("request") if row is not None else None) or {}
+        ts = message_ts or (row["receipt"] if row is not None else "")
+        if not ts or not fields:
+            return
+        line = approvals.decided(approved, by)
+        outbox.insert(self.conn, run_id=str(run.id), channel="slack",
+                      target={"channel": asked.get("channel"), "update_ts": ts,
+                              "request": {**fields, "decided": line}},
+                      body=line, idempotency_key=f"decided:{run.id}", now=self._now())
 
     def _ended(self, run_id: int, status: str) -> str:
         """`parked` when the run left a call waiting for the owner's yes."""

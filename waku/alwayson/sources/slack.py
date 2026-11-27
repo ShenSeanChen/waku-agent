@@ -132,7 +132,8 @@ def record_click(inbox: Inbox, payload: dict, *, team_id: str,
         external_id=f"click:{channel}:{ts}:{user['id']}:{action.get('action_ts') or ''}",
         session_id=f"slack:{channel}:{thread}",
         payload={"text": f"{choice} {code}", "clicked": choice, "sender": {"id": user["id"]},
-                 "reply_to": {"channel": channel, "thread_ts": thread}})
+                 "reply_to": {"channel": channel, "thread_ts": thread},
+                 "message_ts": ts})
     return None if stored else "Slack delivered the same click twice"
 
 

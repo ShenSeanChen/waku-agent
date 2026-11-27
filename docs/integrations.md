@@ -112,7 +112,10 @@ You create your own Slack app once, from
 The manifest turns Socket Mode and interactivity on, and asks for two bot
 scopes, `app_mentions:read` and `chat:write`, and one event, `app_mention`.
 Interactivity carries the PR desk's Approve and Reject buttons over the same
-Socket Mode connection, so it needs no request URL and no other scope.
+Socket Mode connection, so it needs no request URL and no other scope. After
+a click, the bot edits the request so its buttons become one line, such as
+"Rejected by ShenSeanChen", and `chat:write` already lets it edit its own
+messages.
 
 1. **Create the app.** At <https://api.slack.com/apps> choose "Create New
    App", then "From a manifest", pick your workspace and paste the file.
