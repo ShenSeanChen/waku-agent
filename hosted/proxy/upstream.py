@@ -46,7 +46,10 @@ class AnthropicUpstream:
                 headers=self._headers(),
                 timeout=aiohttp.ClientTimeout(total=COUNT_TIMEOUT_SECONDS)) as response:
             if response.status != 200:
-                raise RuntimeError(f"count_tokens answered {response.status}")
+                # The error body says why (a bad field, an unknown model, a
+                # billing problem); it holds no key, so the log keeps it.
+                detail = (await response.text())[:300]
+                raise RuntimeError(f"count_tokens answered {response.status}: {detail}")
             answer = await response.json()
         tokens = answer.get("input_tokens")
         if not isinstance(tokens, int) or tokens < 0:
