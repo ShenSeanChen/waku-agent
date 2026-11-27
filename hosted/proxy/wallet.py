@@ -3,8 +3,10 @@
 Two calls, both made with the PERSON'S OWN Waku Memory key, so they can only
 ever read or charge that person (waku-memory spec 040 D1):
 
-  balance  GET  <api>/agent-usage/balance, cached 60 seconds per key. A Free
-           person at zero is refused before their call reaches Anthropic.
+  balance  GET  <api>/agent-usage/balance, cached 60 seconds per key. It
+           answers whether the person may still call (`allowed`) and what
+           to tell them (`notice`); app.wallet_verdict obeys it before the
+           call reaches Anthropic (spec 042).
   charge   POST <api>/agent-usage after a call settles, in the background,
            retried; idempotent on turn_id, so a retry never bills twice.
            The task it returns answers the credits Waku Memory took
@@ -20,6 +22,7 @@ from __future__ import annotations
 import asyncio
 import time
 from collections.abc import Callable
+from dataclasses import dataclass
 
 import aiohttp
 
@@ -29,6 +32,22 @@ _LOG = log.get(__name__)
 BALANCE_CACHE_SECONDS = 60.0
 TIMEOUT_SECONDS = 10
 RETRY_DELAYS = (1.0, 4.0, 15.0)
+CREDIT_STATES = frozenset({"ok", "low", "empty"})
+
+
+@dataclass(frozen=True)
+class Balance:
+    """One answer from /agent-usage/balance.
+
+    `allowed`, `notice` and `state` arrived with waku-memory spec 106. An older
+    Waku Memory sends none of them, and each is then None, so the proxy can
+    tell "not allowed" from "not said"."""
+
+    plan: str
+    credits_left: int
+    allowed: bool | None = None
+    notice: str | None = None
+    state: str | None = None
 
 
 class WakuMemoryWallet:
@@ -37,10 +56,10 @@ class WakuMemoryWallet:
         self._session = session
         self._api = api_url.rstrip("/")
         self._now = now
-        self._balances: dict[str, tuple[float, tuple[str, int]]] = {}
+        self._balances: dict[str, tuple[float, Balance]] = {}
         self._pending: set[asyncio.Task] = set()
 
-    async def balance(self, key: str) -> tuple[str, int] | None:
+    async def balance(self, key: str) -> Balance | None:
         cached = self._balances.get(key)
         if cached is not None and self._now() - cached[0] < BALANCE_CACHE_SECONDS:
             return cached[1]
@@ -51,11 +70,22 @@ class WakuMemoryWallet:
             if response.status != 200:
                 return None
             body = await response.json()
-        plan, left = body.get("plan"), body.get("credits_left")
-        if not isinstance(plan, str) or not isinstance(left, int):
+        if not isinstance(body, dict):
             return None
-        self._balances[key] = (self._now(), (plan, left))
-        return plan, left
+        plan, left = body.get("plan"), body.get("credits_left")
+        if not isinstance(plan, str) or not isinstance(left, int) or isinstance(left, bool):
+            return None
+        allowed, notice, state = body.get("allowed"), body.get("notice"), body.get("state")
+        balance = Balance(
+            plan=plan, credits_left=left,
+            allowed=allowed if isinstance(allowed, bool) else None,
+            notice=notice if isinstance(notice, str) and notice.strip() else None,
+            state=state if state in CREDIT_STATES else None)
+        # A refusal is not cached: a person who just bought credits must not
+        # stay refused for the rest of the cache window (review, 2026-11-26).
+        if balance.allowed is not False:
+            self._balances[key] = (self._now(), balance)
+        return balance
 
     def charge(self, key: str, *, turn_id: str, model: str, usd: float) -> asyncio.Task:
         task = asyncio.get_running_loop().create_task(

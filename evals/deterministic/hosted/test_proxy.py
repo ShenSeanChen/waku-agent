@@ -20,14 +20,22 @@ from hosted import jsonsock
 from hosted.core.quota import utc_month
 from hosted.ports.upstream import UpstreamResponse
 from hosted.proxy import prices
-from hosted.proxy.app import FREE_USED_UP, MeteringProxy
+from hosted.proxy.app import MeteringProxy
 from hosted.proxy.config import ProxyConfig
 from hosted.proxy.ledger import Ledger
 from hosted.proxy.upstream import AnthropicUpstream
+from hosted.proxy.wallet import Balance
 
 TOKEN, TENANT = "t" * 43, "k3fq7x2mza4b"
 NOW = 1_790_000_000.0
 MONTH = utc_month(NOW)
+# What a person reads when refused at zero (spec 042). NOW is in September, so
+# the Free sentence names the first of October.
+FREE_EMPTY = ("You've used this month's free Waku credits, so Waku Agent is paused until "
+              "1 Oct. Pro gives you 500,000 credits a month for $20: "
+              "https://www.waku.one/settings/plan")
+PRO_EMPTY = ("You've used this month's Waku credits, so Waku Agent is paused. "
+             "Add 250,000 credits for $10 to carry on: https://www.waku.one/settings/plan")
 SONNET = "claude-sonnet-5-5"
 USAGE = {"input_tokens": 1000, "output_tokens": 200}
 
@@ -212,7 +220,9 @@ def test_a_tenant_at_their_dollar_never_reaches_anthropic(tmp_path):
             return status, json.loads(body), rig.upstream.bodies
 
     status, body, sent = _run(go())
-    assert status == 403 and body["error"]["message"] == FREE_USED_UP and sent == []
+    assert status == 403 and body["error"] == {
+        "type": "permission_error", "code": "credits_used_up", "message": FREE_EMPTY}
+    assert sent == []
 
 
 def test_a_call_whose_worst_case_would_pass_the_cap_is_refused_before_anthropic(tmp_path):
@@ -336,14 +346,17 @@ MEMORY_KEY = "mem_sk_" + "w" * 43
 
 
 class FakeWallet:
-    def __init__(self, plan="free", left=1000, raises=False):
+    """`allowed` and `notice` are None for an older Waku Memory that sends neither."""
+
+    def __init__(self, plan="free", left=1000, raises=False, allowed=None, notice=None):
         self.plan, self.left, self.raises = plan, left, raises
+        self.allowed, self.notice = allowed, notice
         self.charges: list[tuple[str, str, float]] = []
 
     async def balance(self, key):
         if self.raises:
             raise OSError("api.waku.one unreachable")
-        return self.plan, self.left
+        return Balance(self.plan, self.left, allowed=self.allowed, notice=self.notice)
 
     def charge(self, key, *, turn_id, model, usd):
         self.charges.append((key, model, usd))
@@ -378,7 +391,9 @@ def test_a_free_person_at_zero_credits_never_reaches_anthropic(tmp_path):
             return status, json.loads(body), rig.upstream.bodies
 
     status, body, sent = _run(go())
-    assert status == 403 and body["error"]["message"] == FREE_USED_UP and sent == []
+    assert status == 403 and body["error"] == {
+        "type": "permission_error", "code": "credits_used_up", "message": FREE_EMPTY}
+    assert sent == []
 
 
 def test_a_pro_person_below_zero_is_still_served(tmp_path):
@@ -435,7 +450,9 @@ def test_past_the_dollar_a_free_person_at_zero_is_refused(tmp_path):
             return status, json.loads(body), rig.upstream.bodies
 
     status, body, sent = _run(go())
-    assert status == 403 and body["error"]["message"] == FREE_USED_UP and sent == []
+    assert status == 403 and body["error"] == {
+        "type": "permission_error", "code": "credits_used_up", "message": FREE_EMPTY}
+    assert sent == []
 
 
 @pytest.mark.parametrize("wallet,key", [(FakeWallet(raises=True), MEMORY_KEY), (FakeWallet(), "")])
@@ -446,3 +463,56 @@ def test_with_no_balance_to_read_the_dollar_cap_still_holds(tmp_path, wallet, ke
             return (await rig.call())[0], rig.upstream.bodies
 
     assert _run(go()) == (403, [])
+
+
+# --- spec 042: Waku Memory decides who is out of credits ----------------------
+# 2026-11-26: a Pro account reached -132,565 credits because the proxy refused
+# only Free. Waku Memory now answers `allowed` and `notice`; the proxy obeys.
+
+
+def _refused(wallet, tmp_path, *, past_the_dollar=False):
+    async def go():
+        async with WalletRig(tmp_path, FakeUpstream(), wallet) as rig:
+            if past_the_dollar:
+                _past_the_dollar(rig)
+            status, body = await rig.call()
+            return status, json.loads(body), rig.upstream.bodies
+
+    return _run(go())
+
+
+@pytest.mark.parametrize("plan", ["pro", "free"])
+def test_not_allowed_is_refused_on_any_plan_with_waku_memorys_notice(tmp_path, plan):
+    notice = f"The {plan} sentence Waku Memory wrote."
+    status, body, sent = _refused(
+        FakeWallet(plan=plan, left=-10, allowed=False, notice=notice), tmp_path)
+    assert status == 403 and sent == []
+    assert body == {"type": "error", "error": {
+        "type": "permission_error", "code": "credits_used_up", "message": notice}}
+
+
+@pytest.mark.parametrize("plan,sentence", [("pro", PRO_EMPTY), ("free", FREE_EMPTY)])
+def test_not_allowed_without_a_notice_gets_the_plans_sentence(tmp_path, plan, sentence):
+    status, body, _ = _refused(FakeWallet(plan=plan, left=0, allowed=False), tmp_path)
+    assert status == 403 and body["error"]["message"] == sentence
+
+
+def test_allowed_is_served_even_at_zero(tmp_path):
+    status, _, sent = _refused(FakeWallet(plan="free", left=0, allowed=True), tmp_path)
+    assert status == 200 and len(sent) == 1
+
+
+def test_an_older_waku_memory_keeps_the_free_at_zero_rule(tmp_path):
+    status, body, sent = _refused(FakeWallet(plan="free", left=0), tmp_path)
+    assert status == 403 and sent == []
+    assert body["error"]["code"] == "credits_used_up"
+    assert body["error"]["message"] == FREE_EMPTY
+    (tmp_path / "pro").mkdir()
+    assert _refused(FakeWallet(plan="pro", left=-50), tmp_path / "pro")[0] == 200
+
+
+def test_an_unreadable_balance_falls_back_to_the_dollar_cap_with_the_same_code(tmp_path):
+    status, body, sent = _refused(FakeWallet(raises=True), tmp_path, past_the_dollar=True)
+    assert status == 403 and sent == []
+    assert body["error"] == {
+        "type": "permission_error", "code": "credits_used_up", "message": FREE_EMPTY}

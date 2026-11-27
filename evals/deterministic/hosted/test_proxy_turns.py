@@ -32,6 +32,7 @@ from hosted.proxy.config import ProxyConfig
 from hosted.proxy.ledger import Ledger
 from hosted.proxy.treg import TregRelay
 from hosted.proxy.turns import KEEP_SECONDS, TurnCharges
+from hosted.proxy.wallet import Balance
 
 TOKEN, TENANT = "t" * 43, "k3fq7x2mza4b"
 OTHER_TOKEN, OTHER = "o" * 43, "zq8w2v1nb3xc"
@@ -43,20 +44,22 @@ ENDPOINT = "tomba.email.find"
 
 
 def credits_for(usd: float) -> int:
-    """Waku Memory's own rule (waku_api/agent_usage.py): 25,000 a dollar, rounded up."""
-    return math.ceil(usd * 25_000)
+    """Waku Memory's own rule (waku_api/agent_usage.py): 37,500 a dollar since spec 106, rounded up."""
+    return math.ceil(usd * 37_500)
 
 
 class FakeWallet:
     """Waku Memory's /agent-usage. `answer` decides each charge's future:
     "ok" answers the credits, "pending" never answers, "failed" answers None."""
 
-    def __init__(self, answers=()):
+    def __init__(self, answers=(), states=()):
         self.answers = list(answers)
+        self.states = list(states)   # spec 042: what each balance read says
         self.charges: list[dict] = []
 
     async def balance(self, key):
-        return "pro", 500_000
+        state = self.states.pop(0) if self.states else None
+        return Balance("pro", 500_000, allowed=True if state else None, state=state)
 
     def charge(self, key, *, turn_id, model, usd):
         self.charges.append({"model": model, "usd": usd})
@@ -193,8 +196,23 @@ def test_the_route_sums_only_that_turns_calls(tmp_path):
 
     (status_a, a), (status_b, b) = _run(go())
     assert status_a == status_b == 200
-    assert a == {"model_usd": 2 * CALL_USD, "calls": 2, "credits": 2 * credits_for(CALL_USD)}
-    assert b == {"model_usd": CALL_USD, "calls": 1, "credits": credits_for(CALL_USD)}
+    assert a == {"model_usd": 2 * CALL_USD, "calls": 2, "credits": 2 * credits_for(CALL_USD),
+                 "credits_state": None}
+    assert b == {"model_usd": CALL_USD, "calls": 1, "credits": credits_for(CALL_USD),
+                 "credits_state": None}
+
+
+def test_the_answer_carries_the_latest_credits_state_of_the_turn(tmp_path):
+    """Spec 042: the container adds the 80% line from this. The latest
+    balance read for the turn wins; one that says nothing changes nothing."""
+    async def go():
+        async with Rig(tmp_path, FakeWallet(states=["ok", "low", None, "ok"])) as rig:
+            for turn in ("t_a", "t_a", "t_a", "t_b"):
+                assert await rig.model_call(turn) == 200
+            return (await rig.charges("t_a"))[1], (await rig.charges("t_b"))[1]
+
+    a, b = _run(go())
+    assert a["credits_state"] == "low" and b["credits_state"] == "ok"
 
 
 def test_another_tenants_turn_and_an_unknown_turn_answer_404(tmp_path):
@@ -229,7 +247,8 @@ def test_credits_add_the_turns_model_calls_and_its_treg_calls(tmp_path):
     (status, answer), charged = _run(go())
     assert status == 200 and [c["model"] for c in charged] == [SONNET, f"treg:{ENDPOINT}", SONNET]
     assert answer == {"model_usd": 2 * CALL_USD, "calls": 2,
-                      "credits": 2 * credits_for(CALL_USD) + credits_for(0.01)}
+                      "credits": 2 * credits_for(CALL_USD) + credits_for(0.01),
+                      "credits_state": None}
 
 
 def test_a_pending_or_failed_charge_makes_credits_null_not_short(tmp_path):

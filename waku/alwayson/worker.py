@@ -43,7 +43,7 @@ from typing import Any
 
 from waku.alwayson import approvals, events, outbox, runs, timers
 from waku.alwayson.events import Event
-from waku.loop.agent import text_with_sign_in
+from waku.loop.agent import credits_notice, text_with_sign_in
 from waku.memory import tool_note
 
 BATCH_WAIT_SECONDS = 3.0
@@ -360,6 +360,15 @@ FAILED_AFTER = ("Something went wrong on my side after that, so I cannot say mor
                 "it. Ask me again if you need more.")
 NOT_ANSWERED = ("Something went wrong on my side and I could not answer in {where}. "
                 "Nothing was posted there.")
+# The same, when the reason is the person's Waku credits (spec 042). The
+# notice is the hosted proxy's sentence, with the price and the link.
+NOT_ANSWERED_CREDITS = "I could not answer in {where}. Nothing was posted there. {notice}"
+# Spec 042: the line a reply gets the first time in a calendar month that the
+# person's Waku credits read "low" (80% used). The month it was last added is
+# kept in LOW_CREDITS_FILE in the agent's home, so a restart does not repeat it.
+LOW_CREDITS = ("You have used 80% of this month's Waku credits. "
+               "https://www.waku.one/settings/plan")
+LOW_CREDITS_FILE = "credits_low_warned"
 # What the conversation reads as the result of an approved call that raised.
 CALL_FAILED = "Error: the call did not finish. Something went wrong on my side."
 
@@ -421,6 +430,31 @@ def in_chat(batch: list[Event]) -> bool:
     return address is not None and address[0] in CHATS
 
 
+def with_low_credits_line(home: Path, reply: str, state: str | None,
+                          address: tuple[str, dict] | None, now: datetime) -> str:
+    """The reply, with LOW_CREDITS added on the first turn of a calendar
+    month (UTC) whose credits read "low". The line is about the owner's
+    account, so it is added only to a reply only the owner reads; a reply in
+    a shared place waits for the next private one. A silent reply sends
+    nothing, so it carries nothing and the line waits too."""
+    if state != "low" or is_silent(reply) or address is None:
+        return reply
+    if not approvals.is_private(address):
+        return reply
+    month = now.strftime("%Y-%m")
+    path = home / LOW_CREDITS_FILE
+    try:
+        if path.read_text(encoding="utf-8").strip() == month:
+            return reply
+    except OSError:
+        pass   # never warned yet
+    try:
+        path.write_text(month + "\n", encoding="utf-8")
+    except OSError:
+        return reply   # a warning must never cost the person their reply
+    return f"{reply}\n\n{LOW_CREDITS}"
+
+
 def render(batch: list[Event]) -> str:
     """The one user message a run starts with: each event's text, oldest first."""
     text = "\n\n".join(_text(e) for e in batch).strip()
@@ -478,6 +512,9 @@ class AgentRun:
         reply = connectors.without_dead_links(self._agent.settings.home, sent)
         if reply != sent:
             self._log("(serve) took a sign-in link that nothing waits for out of the reply")
+        reply = with_low_credits_line(self._agent.settings.home, reply,
+                                      getattr(result, "credits_state", None),
+                                      reply_address(batch), outbox.utc_now())
         return runs.Outcome(reply, turn_id=(result.receipt or {}).get("turn_id", ""))
 
     def execute(self, run: runs.Run, address: tuple[str, dict] | None) -> str:
@@ -548,7 +585,7 @@ class Worker:
             runs.finish(self.conn, run.id, self._ended(run.id, "failed"), now=self._now())
             events.mark(self.conn, ids, "failed")
             self._log(f"(serve) the run for {first.session_id} failed: {safe_exception(exc)}")
-            self._queue_failed(run.id, batch)
+            self._queue_failed(run.id, batch, credits_notice(exc))
         else:
             if not isinstance(outcome, runs.Outcome):
                 outcome = runs.Outcome(outcome)
@@ -715,17 +752,25 @@ class Worker:
                       body="\n".join(f"{what}. {did}" for what in arrived),
                       idempotency_key=f"{run_id}:note", now=self._now())
 
-    def _queue_failed(self, run_id: int, batch: list[Event]) -> None:
+    def _queue_failed(self, run_id: int, batch: list[Event],
+                      notice: str | None = None) -> None:
         """A run that raised still says one plain sentence: what did not work
         and what to do. The reason stays in the log. When the batch held the
         outcome of a call the owner approved, the sentence follows it, so the
         person reads what the call answered. A place other people read gets
-        nothing, and the owner is told there was no answer there."""
+        nothing, and the owner is told there was no answer there.
+
+        `notice` is set when the hosted proxy refused the turn because the
+        person's Waku credits ran out (spec 042). The person then reads that
+        sentence, which names the price and the link, instead of FAILED, which
+        told them to restart a computer they do not have. In a shared place
+        the owner pays, so the owner reads it, privately."""
         address = reply_address(batch)
         if address is None:
             return
         outcomes = [e.payload.get("text", "") for e in batch if e.source == approvals.SOURCE]
-        body = "\n\n".join([*outcomes, FAILED_AFTER if outcomes else FAILED])
+        sorry = notice or (FAILED_AFTER if outcomes else FAILED)
+        body = "\n\n".join([*outcomes, sorry])
         if not approvals.reply_is_free(address):
             owner = next(iter(outbox.owner_addresses()), None)
             if owner is None:
@@ -733,7 +778,9 @@ class Worker:
             channel, target = address
             where = (f"{target.get('repo')}#{target.get('number')}" if channel == "github"
                      else channel.capitalize())
-            address, body = owner, NOT_ANSWERED.format(where=where)
+            body = (NOT_ANSWERED_CREDITS.format(where=where, notice=notice) if notice
+                    else NOT_ANSWERED.format(where=where))
+            address = owner
         outbox.insert(self.conn, run_id=str(run_id), channel=address[0], target=address[1],
                       body=without_chat_ids(body, address),
                       idempotency_key=f"{run_id}:failed", now=self._now())

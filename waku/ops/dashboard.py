@@ -44,7 +44,7 @@ from waku.integrations import (
     test_integration,
 )
 from waku.key_locations import model_key_locations
-from waku.loop.agent import error_text
+from waku.loop.agent import credits_notice, error_text
 from waku.loop.models import models_for
 from waku.memory import tool_note
 from waku.memory_choice import card as memory_choice_card
@@ -68,6 +68,23 @@ PORT = 7777
 # served as-is by this stdlib server — no build step, no framework. Edit those
 # to change the UI; edit this file to change the server/API.
 STATIC = Path(__file__).resolve().parent / "static"
+
+
+_URL = re.compile(r"https?://[^\s)\]]*[^\s)\].,;:!?]")
+
+
+def failure_event(exc: BaseException) -> dict:
+    """The "done" event for a turn that raised.
+
+    A refusal because the person's Waku credits ran out (spec 042) is not an
+    error to them: it is a sentence that says what to do, with the address
+    to do it at. It arrives as `notice`, its address written as a Markdown
+    link so the chat draws one, and the chat shows it as the reply instead of
+    "Error: ...". Anything else stays `error`."""
+    notice = credits_notice(exc)
+    if notice:
+        return {"notice": _URL.sub(lambda m: f"[{m.group(0)}]({m.group(0)})", notice)}
+    return {"error": error_text(exc)}
 
 
 def chat(message: str) -> dict:
@@ -201,7 +218,7 @@ def graph_stream(payload: dict, emit) -> None:
     except Exception as exc:
         # Includes GraphStateCollision, which run_graph raises OUT (unlike node
         # errors) — better shown in the card than dropped on the floor.
-        emit("done", {"error": error_text(exc)})
+        emit("done", failure_event(exc))
 
 
 def _run_command(command: tuple[str, str], emit) -> None:
@@ -1703,7 +1720,7 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 chat_stream(message, emit)
             except Exception as exc:  # surface as a terminal event, don't 500
-                emit("done", {"error": error_text(exc)})
+                emit("done", failure_event(exc))
             return
         # /api/compare/stream races several models, emitting each result as it lands.
         if self.path == "/api/compare/stream":

@@ -1037,7 +1037,8 @@ which holds the platform key and nothing else does:
   Memory key yet, or Waku Memory unreachable
   (`hosted/proxy/prices.py`). Each call reserves its worst case first, from
   Anthropic's `count_tokens`, and is settled from the usage Anthropic reports.
-  A person at their dollar never reaches Anthropic.
+  A person at their dollar never reaches Anthropic, and is refused with the
+  same `credits_used_up` answer as below, in the Free sentence.
 - **The limits.** 4 calls at once and 60 a minute per person, 16 at once
   across the VM, `max_tokens` at most 8192.
 - **What it refuses.** Images, documents, server tools, `cache_control` and any
@@ -1045,17 +1046,26 @@ which holds the platform key and nothing else does:
   back, because Waku sends them on the next call.
 
 - **One wallet.** Each settled call is also charged to the person's waku.one
-  credits, at 25,000 credits a dollar, with their own Waku Memory key (spec
-  004 D; `POST /agent-usage`). A Free person with no credits left is refused
-  before their call reaches Anthropic. When Waku Memory cannot be reached, the
-  $1 cap is the only limit.
+  credits, at 37,500 credits a dollar (1.5× model cost), with their own Waku Memory key (spec
+  004 D; `POST /agent-usage`). Waku Memory decides who may still call: its
+  `GET /agent-usage/balance` answers `allowed` and `notice` (spec 042), read
+  once a minute per person. A person with `allowed: false`, on any plan, is
+  refused before their call reaches Anthropic with a 403 whose body is
+  `{"type": "error", "error": {"type": "permission_error", "code":
+  "credits_used_up", "message": "<notice>"}}`. The notice names the price and
+  links to `https://www.waku.one/settings/plan`, and every channel shows it to
+  the person in place of an error. An older Waku Memory that sends no
+  `allowed` keeps the earlier rule: a Free person at zero is refused, and a Pro
+  person may go below zero. When Waku Memory cannot be reached, the $1 cap is
+  the only limit.
 - **What a turn cost.** Each model call from a container carries
   `X-Waku-Turn: <turn_id>`, which the proxy reads and never forwards to
   Anthropic. For one hour, in memory, the proxy keeps each turn's settled
   dollars, its call count, and the credits Waku Memory answered as `charged`
   for those calls and for the treg calls the relay charged during the turn.
   `GET /v1/turns/<turn_id>/charges`, with the container's own platform token,
-  answers `{"model_usd": 0.0712, "calls": 5, "credits": 2400}`; another
+  answers `{"model_usd": 0.0712, "calls": 5, "credits": 2400,
+  "credits_state": "low"}`; another
   tenant's turn and a turn the proxy never saw answer 404. `credits` is null
   while a charge is pending or after one failed. The chat's receipt line
   shows these numbers (waku-agent spec 011; `hosted/proxy/turns.py`).
@@ -1100,7 +1110,8 @@ container's own platform token, and the proxy (`hosted/proxy/treg.py`):
   disabled is a 401.
 - **refuses who cannot pay.** treg is charged to the person's waku.one credits
   with their own Waku Memory key, so a tenant with no key yet is refused, and
-  so is a Free person at zero credits. When Waku Memory cannot be reached, the
+  so is a person Waku Memory says is out of credits, with the model call's
+  own `credits_used_up` answer. When Waku Memory cannot be reached, the
   call goes ahead and the two fences below still hold.
 - **forwards to `https://treg.to/mcp/v2/`**, treg's catalog-only surface, with
   the platform token, `X-Treg-Meta: customer=<tenant id>` and the per-call
