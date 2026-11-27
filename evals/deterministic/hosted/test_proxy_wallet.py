@@ -13,7 +13,7 @@ import aiohttp
 from aiohttp import web
 
 from hosted.proxy import wallet as wallet_module
-from hosted.proxy.wallet import WakuMemoryWallet
+from hosted.proxy.wallet import Balance, WakuMemoryWallet
 
 KEY = "mem_sk_" + "w" * 43
 
@@ -55,8 +55,31 @@ def test_the_balance_is_read_with_the_persons_key_and_cached_a_minute():
         return first, second, third
 
     answers = _serve({("GET", "/agent-usage/balance"): balance}, test)
-    assert answers == (("free", 420),) * 3
+    assert answers == (Balance("free", 420),) * 3
     assert seen == [f"Bearer {KEY}"] * 2
+
+
+def test_the_balance_carries_waku_memorys_verdict_and_ignores_malformed_fields():
+    """Spec 042: `allowed`, `notice` and `state` from waku-memory spec 106. A field
+    that is missing or the wrong shape is None, never a guess."""
+    answers = iter([
+        {"plan": "pro", "credits_left": -3, "allowed": False, "state": "empty",
+         "notice": "Add 250,000 credits."},
+        {"plan": "free", "credits_left": 9, "allowed": "no", "state": "full", "notice": " "},
+    ])
+
+    async def balance(request):
+        return web.json_response(next(answers))
+
+    async def test(wallet, clock):
+        first = await wallet.balance(KEY)
+        clock[0] += 61
+        return first, await wallet.balance(KEY)
+
+    first, second = _serve({("GET", "/agent-usage/balance"): balance}, test)
+    assert first == Balance("pro", -3, allowed=False, notice="Add 250,000 credits.",
+                            state="empty")
+    assert second == Balance("free", 9)
 
 
 def test_a_charge_is_retried_after_a_5xx_and_not_after_a_4xx(monkeypatch):
@@ -79,3 +102,40 @@ def test_a_charge_is_retried_after_a_5xx_and_not_after_a_4xx(monkeypatch):
     assert [r["turn_id"] for r in reports].count("turn-a") == 2
     assert [r["turn_id"] for r in reports].count("turn-b") == 1
     assert reports[0]["usd"] == 0.012346
+
+
+def test_a_refusal_is_not_cached_so_buying_credits_takes_effect_at_once():
+    """Review, 2026-11-26: a cached refusal kept a person who had just bought a
+    pack refused for up to a minute. An allowed answer is still cached."""
+    answers = iter([
+        {"plan": "pro", "credits_left": -5, "allowed": False, "state": "empty", "notice": "Add."},
+        {"plan": "pro", "credits_left": 249_995, "allowed": True, "state": "ok"},
+    ])
+    seen: list[int] = []
+
+    async def balance(request):
+        seen.append(1)
+        return web.json_response(next(answers))
+
+    async def test(wallet, clock):
+        refused = await wallet.balance(KEY)
+        after_buying = await wallet.balance(KEY)
+        cached = await wallet.balance(KEY)
+        return refused.allowed, after_buying.allowed, cached.allowed
+
+    assert _serve({("GET", "/agent-usage/balance"): balance}, test) == (False, True, True)
+    assert len(seen) == 2
+
+
+def test_an_unknown_plan_is_an_unread_balance_so_the_dollar_cap_applies():
+    """Review, 2026-11-26: a Waku Memory that could not read the balance once
+    answered 200 with plan "unknown"; read as a balance, that switched the $1
+    monthly cap off. It is NO_BALANCE, like any unreadable answer."""
+    from hosted.proxy import app
+
+    class Unknown:
+        async def balance(self, key):
+            return Balance("unknown", 0, allowed=True)
+
+    verdict = asyncio.run(app.wallet_verdict(Unknown(), KEY, 0.0))
+    assert verdict.kind == app.NO_BALANCE

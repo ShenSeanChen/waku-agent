@@ -3,10 +3,9 @@
 **What is true right now.** Rewritten whole when it changes, never appended to
 — a status file that grows is a changelog, and git already is one.
 
-Read this before opening a PR or filing an issue: most of what is already
-known-broken is below, and half of it already has a fix in flight.
+Read this before opening a PR or filing an issue: most of what is already known-broken is below, and half of it already has a fix in flight.
 
-**Last updated:** 2026-11-24
+**Last updated:** 2026-11-26
 
 ---
 
@@ -74,6 +73,7 @@ Nothing here is a surprise. If you hit one of these, the issue exists.
 | The model reads a call that waits for a yes as "A plugin hook stopped this call before it ran", followed by the real reason | — | — |
 | A timer `schedule_task` sets fires only while `waku serve` runs, or in a hosted container; `waku` and `waku dashboard` on your own machine do not fire it. A repeating timer and the daily brief have run against a fake clock and no model only: no live morning, no live Slack, and no brief a model wrote has been read. On hosted waku a stopped container is started for a timer or a Slack mention, and nothing else wakes it yet: no chat or embed message is stored as an event (spec 026, group B). A hosted container sends to Slack only, so a run a timer starts outside a Slack thread sends nothing. This path has run against a fake spawner, a fake clock and a fake Slack only, never on the VM. The same is true of the restart that moves a running hosted container to a new image between two turns after an upgrade: it has never compared image ids on a real Docker daemon | — | — |
 | The public Waku Slack app ("Add to Slack" on hosted waku) is built and has never run against Slack: the Slack app itself is not created, and `config/gateway.env` on the VM has none of its four values. One workspace maps to one tenant, and the hosted app has no channel allowlist. That tenant is a person, or the home of a team space's agent (spec 032, group A: `POST` and `GET /v1/team-homes` for waku.one, a team's Waku Memory key sealed in `control.db`, and a container that saves into the team's space). A team home has run against a fake Slack and a fake spawner only: `WAKU_AGENT_PLATFORM_SECRET` is set nowhere, `DELETE` answers 405, and a workspace a person's install holds is not moved. A direct message to the bot is answered for the person who added the app and for nobody else (spec 032, version A): it has run against a fake Slack only, and the live app has neither `im:history`, `message.im` nor its Messages tab yet. The Slack card on a hosted dashboard has been drawn from a stub answer only, and it has no Disconnect | — | — |
+| On hosted waku, a person out of Waku credits is refused on any plan only once Waku Memory answers `allowed` on its balance (waku-memory spec 106); until then the proxy keeps the old rule, so a Free person at zero is refused and a Pro person can go below zero. Every channel shows the refusal as one sentence with the price and `https://www.waku.one/settings/plan`, and a private reply carries the 80% line once a month (spec 042). This has run against a fake Waku Memory only | — | — |
 | Google Calendar sign-in has no bundled OAuth client, so `waku connect google` needs your own `~/.waku/credentials.json` | — | — |
 
 **Providers are the recurring theme.** `scripts/provider_smoke.py` sends one

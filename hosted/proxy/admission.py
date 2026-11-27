@@ -30,14 +30,20 @@ MODEL_REFUSED = "This model is not in the free tier. Add your own key in Models.
 class Refused(Exception):
     """An answer in Anthropic's error shape, so the tenant's SDK reads it."""
 
-    def __init__(self, status: int, error_type: str, message: str) -> None:
+    def __init__(self, status: int, error_type: str, message: str, code: str = "") -> None:
         super().__init__(message)
         self.status = status
         self.error_type = error_type
         self.message = message
+        # A stable name for this refusal, beside Anthropic's own fields, so a
+        # caller need not match the English message (spec 042: credits_used_up).
+        self.code = code
 
     def body(self) -> dict:
-        return {"type": "error", "error": {"type": self.error_type, "message": self.message}}
+        error = {"type": self.error_type, "message": self.message}
+        if self.code:
+            error["code"] = self.code
+        return {"type": "error", "error": error}
 
 
 def _bad(message: str) -> Refused:

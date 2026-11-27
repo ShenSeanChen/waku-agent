@@ -15,7 +15,7 @@ from collections.abc import Awaitable, Callable
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
-from waku.loop.agent import text_with_sign_in
+from waku.loop.agent import credits_notice, text_with_sign_in
 
 GATEWAY_ERROR_REPLY = "Waku couldn't process that message. Check the dashboard terminal."
 
@@ -122,8 +122,10 @@ async def run_gateway_turn(
         result = await runner.respond(text)
     except Exception as exc:
         logger(f"({runner.source}) message handling failed: {safe_exception(exc)}")
+        # Out of Waku credits (spec 042): the person reads where to pay, not
+        # a pointer to a terminal they may not have.
         try:
-            await send(GATEWAY_ERROR_REPLY)
+            await send(credits_notice(exc) or GATEWAY_ERROR_REPLY)
         except Exception as send_exc:
             detail = runner.record_error(send_exc, action="error reply delivery")
             logger(f"({runner.source}) error reply delivery failed: {detail}")
