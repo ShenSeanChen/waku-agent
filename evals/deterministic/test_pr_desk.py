@@ -289,3 +289,18 @@ def test_the_skill_asks_for_slack_lines_and_skips_a_pr_it_reviewed():
     for printed in ("reviews: none yet", "(drafted by this agent)", "last commit:"):
         assert printed in skill, printed
         assert printed in source, printed
+
+
+def test_the_skill_says_ci_orders_the_choice_and_does_not_gate_it():
+    """Live check, 2026-11-26, on Devstral 2: the skill said "new, CI green, and
+    not reviewed yet", the model read it as three conditions, and on a
+    repository with no CI it drafted no review at all. It also wrapped the
+    digest in a greeting and offered to set the timer from the timer's run."""
+    from pathlib import Path
+
+    text = (Path(__file__).resolve().parents[2] / "skills" / "pr-desk" / "SKILL.md").read_text(
+        encoding="utf-8")
+    assert "CI green, and not reviewed yet" not in text
+    assert "CI only orders the choice" in text
+    assert "no greeting before it and no question after it" in text
+    assert "never offers to set the timer" in text

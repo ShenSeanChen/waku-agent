@@ -43,11 +43,15 @@ table, a `#` heading or a horizontal rule.
 
 If nothing is new and nothing waits, reply with one line that says so.
 
+Reply with the digest itself: no greeting before it and no question after it.
+A run the timer woke never offers to set the timer.
+
 ## Draft one review
 
-In the morning run, pick the one pull request that most needs a reviewer: new,
-CI green, and not reviewed yet. `pr view` ends with a `reviews:` list and the
-`last commit:` date. A review marked "(drafted by this agent)" is one this
+In the morning run, draft one review unless every pull request is skipped.
+Call `pr view` on each open pull request first: it ends with a `reviews:` list
+and the `last commit:` date. CI only orders the choice: a pull request with no
+CI, or CI still pending, can still be reviewed, and a red one goes last. A review marked "(drafted by this agent)" is one this
 desk posted before. Skip a pull request this agent has reviewed unless its
 last commit is newer than that review, and prefer a pull request whose list
 says `reviews: none yet`. When every pull request is skipped, draft no review
