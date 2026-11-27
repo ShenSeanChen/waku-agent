@@ -43,7 +43,7 @@ async function mwPost(route, body){
 }
 
 /* ------------------------------------------------------------ the page */
-const MW_TABS = [["file", "The file"], ["run", "Press Enter"], ["lives", "Where it lives"]];
+const MW_TABS = [["file", "Open weights"], ["run", "Press Enter"], ["lives", "Where it lives"]];
 const mwArrow = `<div class="mw-arr" aria-hidden="true"><svg class="mw-ic" viewBox="0 0 34 34"><path d="M4 17h24M20 9l8 8-8 8"/></svg></div>`;
 
 VIEWS.model = function(d, sub){
@@ -86,22 +86,23 @@ VIEWS.model = function(d, sub){
       ${uiButton(`<span id="mw-run-l">Run</span>`, {level: "primary", onclick: "mwStartRun()", title: "Run (Enter)"})}
     </div>
     <div class="mw-stations" id="mw-stations" onclick="mwStationClick(event)">
-      <div class="mw-st"><header><svg class="mw-ic" viewBox="0 0 40 40"><path d="M6 8h28v18H18l-8 7v-7H6z"/><path d="M12 14h16M12 20h10"/></svg><h4>text</h4></header>
+      <div class="mw-st"><header><svg class="mw-ic" viewBox="0 0 40 40"><path d="M6 8h28v18H18l-8 7v-7H6z"/><path d="M12 14h16M12 20h10"/></svg><h4>1 · text</h4></header>
         <div class="mw-body"><div id="mw-s-text" class="mw-s-text"></div></div></div>
       ${mwArrow}
-      <div class="mw-st"><header><svg class="mw-ic" viewBox="0 0 40 40"><rect x="4" y="14" width="9" height="12" rx="2"/><rect x="15.5" y="14" width="9" height="12" rx="2"/><rect x="27" y="14" width="9" height="12" rx="2"/></svg><h4>tokens</h4></header>
+      <div class="mw-st"><header><svg class="mw-ic" viewBox="0 0 40 40"><rect x="4" y="14" width="9" height="12" rx="2"/><rect x="15.5" y="14" width="9" height="12" rx="2"/><rect x="27" y="14" width="9" height="12" rx="2"/></svg><h4>2 · tokens</h4></header>
         <div class="mw-body"><b class="mw-big" id="mw-s-pieces">&ndash;</b><div class="mw-sq" id="mw-s-sq"></div><span class="mw-soft">tokens in: your words, plus the chat format around them</span></div></div>
       ${mwArrow}
-      <div class="mw-st"><header><svg class="mw-ic" viewBox="0 0 40 40"><rect x="7" y="6" width="26" height="7" rx="1.5"/><rect x="7" y="16.5" width="26" height="7" rx="1.5"/><rect x="7" y="27" width="26" height="7" rx="1.5"/></svg><h4 id="mw-s-blocks-l">blocks</h4></header>
+      <div class="mw-st"><header><svg class="mw-ic" viewBox="0 0 40 40"><rect x="7" y="6" width="26" height="7" rx="1.5"/><rect x="7" y="16.5" width="26" height="7" rx="1.5"/><rect x="7" y="27" width="26" height="7" rx="1.5"/></svg><h4 id="mw-s-blocks-l">3 · blocks</h4></header>
         <div class="mw-body"><svg class="mw-stack" id="mw-stack" viewBox="0 0 120 252"></svg>${uiButton("open a block", {level: "tertiary", size: "sm", onclick: "mwOpenBlock(event)", title: "See the tables inside one block"})}</div></div>
       ${mwArrow}
-      <div class="mw-st mw-st-wide"><header><svg class="mw-ic" viewBox="0 0 40 40"><path d="M6 9h28M6 17h18M6 25h10M6 33h5"/></svg><h4>candidates</h4><span class="mw-soft mw-right">top 5</span></header>
+      <div class="mw-st mw-st-wide"><header><svg class="mw-ic" viewBox="0 0 40 40"><path d="M6 9h28M6 17h18M6 25h10M6 33h5"/></svg><h4>4 · candidates</h4><span class="mw-soft mw-right">top 5</span></header>
         <div class="mw-body"><div class="mw-cands" id="mw-cands"></div></div></div>
       ${mwArrow}
-      <div class="mw-st"><header><svg class="mw-ic" viewBox="0 0 40 40"><circle cx="20" cy="20" r="14"/><path d="M13 20.5l5 5 9-10"/></svg><h4>chosen</h4></header>
+      <div class="mw-st"><header><svg class="mw-ic" viewBox="0 0 40 40"><circle cx="20" cy="20" r="14"/><path d="M13 20.5l5 5 9-10"/></svg><h4>5 · chosen</h4></header>
         <div class="mw-body"><div id="mw-chosen" class="mw-chosen none">&ndash;</div><div class="mw-chosen-p" id="mw-chosen-p">&nbsp;</div></div></div>
       <div class="mw-loop"><span>again, with one more token</span></div>
     </div>
+    <div class="lbl-mono mw-caps-l">what each of the five boxes does. The one working now is marked.</div>
     <ol class="mw-caps" id="mw-caps"></ol>
     <div class="mw-answer" id="mw-answer"></div>
     <div class="mw-ctl">
@@ -548,7 +549,7 @@ function mwResetRun(){
 function mwBuildStack(){
   const n = (mwModel && mwModel.metadata.block_count) || 0;
   if (!mwEl("mw-stack")) return;
-  mwEl("mw-s-blocks-l").textContent = n ? n + " blocks" : "blocks";
+  mwEl("mw-s-blocks-l").textContent = n ? "3 · " + n + " blocks" : "3 · blocks";
   const h = 252, pitch = n ? h / n : h, bh = Math.max(1.5, pitch - 2);
   let s = "";
   for (let i = 0; i < n; i++) s += `<rect style="--i:${i}" x="1" y="${(i * pitch + 1).toFixed(2)}" width="118" height="${bh.toFixed(2)}" rx="1.5"/>`;
@@ -590,7 +591,9 @@ function mwRender2(){
 
   // the answer so far: the picked pieces' bytes, decoded as one stream
   const dec = new TextDecoder("utf-8");
-  let a = mwRun.prompt ? `<span class="pr">${esc(mwRun.prompt)}</span>\n` : "";
+  // Two lines, each named: a chat model often starts its answer by repeating
+  // the question, and unlabelled that reads as the page printing it twice.
+  let a = mwRun.prompt ? `<span class="who">you typed</span><span class="pr">${esc(mwRun.prompt)}</span>\n<span class="who">the model wrote</span>` : "";
   for (let i = 0; i <= shown && i < n; i++){
     const piece = dec.decode(new Uint8Array(toks[i].bytes), {stream: true});
     if (i === shown) a += `<span class="cur">${esc(piece).replace(/\n/g, '<span class="ws">↵</span>\n') || "&nbsp;"}</span>`;
