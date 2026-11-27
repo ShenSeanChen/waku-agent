@@ -1334,7 +1334,17 @@ main h3{font-family:var(--face-mono);font-size:var(--text-xs);color:var(--text-f
 .mw-counters b{display:block;font-family:var(--face-mono);font-size:var(--text-xl);font-weight:var(--font-weight-medium);line-height:var(--leading-tight);white-space:nowrap}
 .mw-counters span{font-size:var(--text-sm);color:var(--text-muted)}
 
-/* 3. where it lives */
+/* where it lives: a strip at the top of Run */
+.mw-lives{margin-bottom:var(--space-6);padding-bottom:var(--space-4);border-bottom:var(--rule-width) solid var(--rule)}
+.mw-lives .mw-ic-lg{display:none}
+.mw-lives .mw-panels{margin-top:var(--space-2)}
+.mw-lives .mw-pn{padding:var(--space-3);gap:var(--spacing)}
+.mw-lives .mw-huge{font-size:var(--text-xl);margin-top:0}
+.mw-lives .mw-huge.off{font-size:var(--text-lg)}
+.mw-lives .mw-membar{height:22px}
+.mw-lives .mw-point{font-size:var(--text-base);margin-top:var(--space-3)}
+.mw-lives .mw-actions{margin-top:var(--space-3)}
+.mw-lives .mw-foot{display:none}
 .mw-panels{display:grid;grid-template-columns:minmax(0,1fr) 64px minmax(0,1.3fr) minmax(0,1fr);gap:var(--space-4);align-items:stretch}
 @media (max-width:900px){.mw-panels{grid-template-columns:minmax(0,1fr)}.mw-flow{display:none}}
 .mw-pn{background:var(--surface-paper);border:var(--rule-width) solid var(--rule);border-radius:var(--radius);padding:var(--space-4);display:flex;flex-direction:column;gap:var(--space-2);min-width:0}

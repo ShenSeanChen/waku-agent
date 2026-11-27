@@ -1,6 +1,6 @@
 // The LLM page (spec 046; the code keeps the name "model"): how a model works, on your own Mac. Overview
 // draws how the harness runs; this page draws how the model inside it runs.
-// Three tabs, all from the model file Ollama keeps and the Ollama on this
+// Two tabs, both from the model file Ollama keeps and the Ollama on this
 // machine, through /api/weights/* (waku/ops/weights.py):
 //
 //   #model/file   the file, as a map: the whole model (way in, every block,
@@ -8,12 +8,12 @@
 //                 then a 16 x 16 corner of one table as real values or as
 //                 the 4-bit codes it is stored as; the full list of tables
 //                 and the vocabulary are folded below
-//   #model/run    press Enter: one prompt, and for every piece of the answer
-//                 five stations light in order (text, pieces, blocks, top 5
+//   #model/run    run: first where the model lives (the file on disk, the
+//                 share of memory it holds now, the chip and the last
+//                 measured speed; Load and Unload are Ollama's keep_alive),
+//                 then one prompt, and for every token of the answer five
+//                 boxes light in order (text, tokens, blocks, top 5
 //                 candidates, chosen), played back slow, live or step by step
-//   #model/lives  where it lives: the file on disk, the share of memory it
-//                 holds now, the chip and the last measured speed; Load and
-//                 Unload are Ollama's own keep_alive
 //
 // Ported from the open-models video's standalone page. The page keeps its own
 // state in the mw* globals below, so the 5s refresh does not redraw it (see
@@ -43,12 +43,14 @@ async function mwPost(route, body){
 }
 
 /* ------------------------------------------------------------ the page */
-const MW_TABS = [["file", "Open weights"], ["run", "Press Enter"], ["lives", "Where it lives"]];
+const MW_TABS = [["file", "Open weights"], ["run", "Run"]];
+// "Where it lives" was a third tab until Sean folded it into Run; its old link still opens Run.
+function mwTabOf(sub){ return sub === "lives" ? "run" : MW_TABS.some(t => t[0] === sub) ? sub : "file"; }
 const mwArrow = `<div class="mw-arr" aria-hidden="true"><svg class="mw-ic" viewBox="0 0 34 34"><path d="M4 17h24M20 9l8 8-8 8"/></svg></div>`;
 
 VIEWS.model = function(d, sub){
   if (d && d.hosted) return uiNotice("note", "Looking inside a model only works on your own machine, with Ollama installed.");
-  mwTab = MW_TABS.some(t => t[0] === sub) ? sub : "file";
+  mwTab = mwTabOf(sub);
   setTimeout(mwMount, 0);
   const tabs = uiTabs(MW_TABS.map(([k, label]) => ({label, href: "#model/" + k, on: k === mwTab})));
   return `<div class="mw" id="mw">
@@ -80,6 +82,32 @@ VIEWS.model = function(d, sub){
   </section>
 
   <section class="mw-pane" id="mw-p-run">
+    <div class="mw-lives">
+      <div class="lbl-mono">before it can answer, the file has to be in memory</div>
+    <div class="mw-panels">
+      <div class="mw-pn"><svg class="mw-ic mw-ic-lg" viewBox="0 0 80 80"><rect x="10" y="16" width="60" height="48" rx="6"/><path d="M10 46h60"/><circle cx="58" cy="55" r="2.5"/><path d="M20 55h18"/><path d="M22 26h36M22 34h24"/></svg>
+        <h3>Storage</h3><span class="mw-soft">keeps the file when the power is off</span>
+        <b class="mw-huge" id="mw-st-size">&ndash;</b><span class="mw-soft">one file, on disk</span><code class="mw-path" id="mw-st-path"></code></div>
+      <div class="mw-flow" id="mw-flow"><svg viewBox="0 0 130 80"><path class="shaft" d="M6 40h108"/><path d="M96 20l22 20-22 20"/></svg></div>
+      <div class="mw-pn"><svg class="mw-ic mw-ic-lg" viewBox="0 0 80 80"><path d="M6 24h68v30H46l-3-4h-6l-3 4H6z"/><rect x="14" y="31" width="10" height="14" rx="1.5"/><rect x="28" y="31" width="10" height="14" rx="1.5"/><rect x="42" y="31" width="10" height="14" rx="1.5"/><rect x="56" y="31" width="10" height="14" rx="1.5"/><path d="M12 54v6M20 54v6M28 54v6M52 54v6M60 54v6M68 54v6"/></svg>
+        <h3>Memory</h3><span class="mw-soft">where the numbers must be to compute</span>
+        <b class="mw-huge off" id="mw-memstate">&ndash;</b>
+        <div class="mw-membar" id="mw-membar"><i></i></div>
+        <div class="mw-scale"><span>0</span><span id="mw-memtotal"></span></div>
+        <span class="mw-memsub" id="mw-memsub"></span></div>
+      <div class="mw-pn"><svg class="mw-ic mw-ic-lg" viewBox="0 0 80 80"><rect x="20" y="20" width="40" height="40" rx="5"/><rect x="31" y="31" width="18" height="18" rx="2"/><path d="M28 20v-9M40 20v-9M52 20v-9M28 69v-9M40 69v-9M52 69v-9M20 28h-9M20 40h-9M20 52h-9M69 28h-9M69 40h-9M69 52h-9"/></svg>
+        <h3>Chip</h3><span class="mw-soft" id="mw-gpu-l">does the multiplying</span>
+        <b class="mw-chip" id="mw-chipname">&ndash;</b>
+        <b class="mw-huge" id="mw-ch-tps">&ndash;</b><span class="mw-soft" id="mw-ch-tps-l">tokens per second, after a run below</span></div>
+    </div>
+    <p class="mw-point" id="mw-point"></p>
+    <div class="mw-actions">
+      ${uiButton("Load into memory", {level: "primary", onclick: "mwLoadUnload(true)", cls: "mw-b-load"})}
+      ${uiButton("Unload", {onclick: "mwLoadUnload(false)", cls: "mw-b-unload"})}
+      <span class="mw-loadmsg" id="mw-loadmsg"></span>
+    </div>
+    <p class="mw-soft mw-foot" id="mw-foot3"></p>
+    </div>
     <div class="mw-prompt">
       <input id="mw-prompt" type="text" value="The capital of France is" autocomplete="off" spellcheck="false" aria-label="Prompt"
         onkeydown="if(event.key==='Enter'){event.preventDefault();mwStartRun()}" oninput="mwPromptInput()">
@@ -127,31 +155,6 @@ VIEWS.model = function(d, sub){
     <p class="mw-soft mw-foot">A token is a word or a piece of one. The lighting shows the order of the steps, slowed down.</p>
   </section>
 
-  <section class="mw-pane" id="mw-p-lives">
-    <div class="mw-panels">
-      <div class="mw-pn"><svg class="mw-ic mw-ic-lg" viewBox="0 0 80 80"><rect x="10" y="16" width="60" height="48" rx="6"/><path d="M10 46h60"/><circle cx="58" cy="55" r="2.5"/><path d="M20 55h18"/><path d="M22 26h36M22 34h24"/></svg>
-        <h3>Storage</h3><span class="mw-soft">keeps the file when the power is off</span>
-        <b class="mw-huge" id="mw-st-size">&ndash;</b><span class="mw-soft">one file, on disk</span><code class="mw-path" id="mw-st-path"></code></div>
-      <div class="mw-flow" id="mw-flow"><svg viewBox="0 0 130 80"><path class="shaft" d="M6 40h108"/><path d="M96 20l22 20-22 20"/></svg></div>
-      <div class="mw-pn"><svg class="mw-ic mw-ic-lg" viewBox="0 0 80 80"><path d="M6 24h68v30H46l-3-4h-6l-3 4H6z"/><rect x="14" y="31" width="10" height="14" rx="1.5"/><rect x="28" y="31" width="10" height="14" rx="1.5"/><rect x="42" y="31" width="10" height="14" rx="1.5"/><rect x="56" y="31" width="10" height="14" rx="1.5"/><path d="M12 54v6M20 54v6M28 54v6M52 54v6M60 54v6M68 54v6"/></svg>
-        <h3>Memory</h3><span class="mw-soft">where the numbers must be to compute</span>
-        <b class="mw-huge off" id="mw-memstate">&ndash;</b>
-        <div class="mw-membar" id="mw-membar"><i></i></div>
-        <div class="mw-scale"><span>0</span><span id="mw-memtotal"></span></div>
-        <span class="mw-memsub" id="mw-memsub"></span></div>
-      <div class="mw-pn"><svg class="mw-ic mw-ic-lg" viewBox="0 0 80 80"><rect x="20" y="20" width="40" height="40" rx="5"/><rect x="31" y="31" width="18" height="18" rx="2"/><path d="M28 20v-9M40 20v-9M52 20v-9M28 69v-9M40 69v-9M52 69v-9M20 28h-9M20 40h-9M20 52h-9M69 28h-9M69 40h-9M69 52h-9"/></svg>
-        <h3>Chip</h3><span class="mw-soft" id="mw-gpu-l">does the multiplying</span>
-        <b class="mw-chip" id="mw-chipname">&ndash;</b>
-        <b class="mw-huge" id="mw-ch-tps">&ndash;</b><span class="mw-soft" id="mw-ch-tps-l">tokens per second, after a run</span></div>
-    </div>
-    <p class="mw-point" id="mw-point"></p>
-    <div class="mw-actions">
-      ${uiButton("Load into memory", {level: "primary", onclick: "mwLoadUnload(true)", cls: "mw-b-load"})}
-      ${uiButton("Unload", {onclick: "mwLoadUnload(false)", cls: "mw-b-unload"})}
-      <span class="mw-loadmsg" id="mw-loadmsg"></span>
-    </div>
-    <p class="mw-soft mw-foot" id="mw-foot3"></p>
-  </section>
 </div>`;
 };
 
@@ -179,13 +182,13 @@ function mwMount(){
 // Show one tab without rebuilding the page: main.js calls this when only the
 // sub-tab of #model changed.
 function mwShowTab(sub){
-  mwTab = MW_TABS.some(t => t[0] === sub) ? sub : "file";
+  mwTab = mwTabOf(sub);
   document.querySelectorAll("#mw .tabs .tab").forEach(a => {
     const on = a.getAttribute("href") === "#model/" + mwTab;
     a.classList.toggle("on", on); a.setAttribute("aria-selected", on ? "true" : "false");
   });
   MW_TABS.forEach(([k]) => { const p = mwEl("mw-p-" + k); if (p) p.classList.toggle("on", k === mwTab); });
-  if (mwTab === "lives") mwPollPs();
+  if (mwTab === "run") mwPollPs();
 }
 // The Models page's "Look inside" link lands here with the model it named.
 function mwOpen(name){
@@ -742,7 +745,7 @@ function mwRenderPoint(){
   const el = mwEl("mw-point"), total = mwMachine && mwMachine.memory_bytes;
   if (!el || !mwModel || !total) return;
   const file = mwModel.totals.file_size / 1e9, gb = total / MW_GIB;
-  el.innerHTML = `A model can only run once all of its numbers are in memory. This file is <b>${file.toFixed(1)} GB</b> and this computer has <b>${gb.toFixed(0)} GB</b>, so it ${file < gb * 0.9 ? "fits" : "does not fit"}. That is why size decides where a model can run: press Load and watch the bar fill.`;
+  el.innerHTML = `A model can only run once all of its numbers are in memory. This file is <b>${file.toFixed(1)} GB</b> and this computer has <b>${gb.toFixed(0)} GB</b>, so it ${file < gb * 0.9 ? "fits" : "does not fit"}. Size decides where a model can run. Press Load and watch the bar fill, then run a prompt below.`;
 }
 function mwRenderMem(){
   if (!mwEl("mw-memstate")) return;
@@ -780,7 +783,7 @@ async function mwPollPs(background){
 // The two timers' callbacks. A timer's request is a poll, not a person, so it
 // is marked as background; leaving the page stops both.
 function mwPsTick(){ if (mwEl("mw")) mwPollPs(true); else mwStopPolling(); }
-function mwMemTick(){ if (mwTab === "lives" && mwEl("mw")) mwRenderMem(); }
+function mwMemTick(){ if (mwTab === "run" && mwEl("mw")) mwRenderMem(); }
 // Polls only while this page is open: Ollama every 2s for what is loaded,
 // and the countdown four times a second while "Where it lives" shows.
 function mwStartPolling(){
@@ -814,7 +817,7 @@ document.addEventListener("keydown", e => {
   const t = e.target;
   if (/^(INPUT|SELECT|TEXTAREA)$/.test(t.tagName) && t.type !== "range") return;
   if (t.closest && t.closest("#dock")) return;
-  if (e.key === "1" || e.key === "2" || e.key === "3"){ location.hash = "#model/" + MW_TABS[Number(e.key) - 1][0]; e.preventDefault(); return; }
+  if (e.key === "1" || e.key === "2"){ location.hash = "#model/" + MW_TABS[Number(e.key) - 1][0]; e.preventDefault(); return; }
   if (mwTab !== "run") return;
   if (e.key === "ArrowRight"){ mwStep(1); e.preventDefault(); }
   else if (e.key === "ArrowLeft"){ mwStep(-1); e.preventDefault(); }
