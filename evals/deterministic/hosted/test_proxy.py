@@ -35,7 +35,7 @@ FREE_EMPTY = ("You've used this month's free Waku credits, so Waku Agent is paus
               "1 Oct. Pro gives you 500,000 credits a month for $20: "
               "https://www.waku.one/settings/plan")
 PRO_EMPTY = ("You've used this month's Waku credits, so Waku Agent is paused. "
-             "Add 250,000 credits for $10 to carry on: https://www.waku.one/settings/plan")
+             "Add 200,000 credits for $10 to carry on: https://www.waku.one/settings/plan")
 SONNET = "claude-sonnet-5-5"
 USAGE = {"input_tokens": 1000, "output_tokens": 200}
 
