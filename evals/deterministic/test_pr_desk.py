@@ -270,3 +270,22 @@ def test_the_desk_run_loads_the_pr_desk_skill(home, conn):
     _fire(conn, clock)
     prompt = render([events.claim_next(conn)])
     assert [skill.name for skill in loader.match(prompt)][:1] == ["pr-desk"]
+
+
+def test_the_skill_asks_for_slack_lines_and_skips_a_pr_it_reviewed():
+    """Found in the live check (2026-11-26): the second digest came out as a
+    Markdown table, which Slack shows as raw pipes, and it drafted a second
+    review of PR #1 while PR #2 had none. The skill quotes the words `pr view`
+    prints, so the two cannot drift apart."""
+    import inspect
+    from pathlib import Path
+
+    from waku.tools import github
+
+    skill = (Path(__file__).resolve().parents[2] / "skills" / "pr-desk" / "SKILL.md"
+             ).read_text(encoding="utf-8")
+    assert "never a\ntable" in skill or "never a table" in skill
+    source = inspect.getsource(github._history)
+    for printed in ("reviews: none yet", "(drafted by this agent)", "last commit:"):
+        assert printed in skill, printed
+        assert printed in source, printed

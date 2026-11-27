@@ -325,3 +325,55 @@ def test_a_green_checks_summary_does_not_read_as_a_tool_error(capture):
 
     capture["stdout"] = _CHECKS
     assert _tool_status(github.gh_read("pr checks", number=428, repo="acme/app")) == "ok"
+
+
+# --- pr view says who reviewed it (spec 035) ---------------------------------
+
+_HISTORY = json.dumps({
+    "reviews": [{"author": {"login": "wakuagent"}, "state": "COMMENTED",
+                 "submittedAt": "2026-11-25T17:02:11Z",
+                 "body": "Looks fine.\n\n<!-- waku:12:abcdef -->"},
+                {"author": {"login": "ana"}, "state": "APPROVED",
+                 "submittedAt": "2026-11-25T18:00:00Z", "body": "LGTM"}],
+    "commits": [{"committedDate": "2026-11-20T09:00:00Z"},
+                {"committedDate": "2026-11-24T10:00:00Z"}]})
+
+
+def _view(monkeypatch, history, history_code=0):
+    calls = []
+
+    def fake(argv, **kwargs):
+        calls.append(argv)
+        if "--json" in argv:
+            return subprocess.CompletedProcess(argv, history_code, stdout=history, stderr="nope")
+        return subprocess.CompletedProcess(argv, 0, stdout="title:\tFix login\n\nThe body.",
+                                           stderr="")
+
+    monkeypatch.setattr(github.subprocess, "run", fake)
+    return github.gh_read("pr view", number=1, repo="acme/app"), calls
+
+
+def test_pr_view_says_who_reviewed_it_and_when_the_last_commit_came(monkeypatch):
+    """Found in the live check (2026-11-26): the desk drafted a second review
+    of PR #1, which wakuagent had reviewed already, because `pr view` did not
+    show reviews. It now ends with each review and the last commit's date."""
+    out, calls = _view(monkeypatch, _HISTORY)
+    assert out.startswith("title:\tFix login\n\nThe body.")
+    assert out.endswith(
+        "\n\nreviews:\n"
+        "  wakuagent COMMENTED 2026-11-25T17:02:11Z (drafted by this agent)\n"
+        "  ana APPROVED 2026-11-25T18:00:00Z\n"
+        "last commit: 2026-11-24T10:00:00Z")
+    assert calls[1] == ["gh", "pr", "view", "1", "--repo", "acme/app",
+                        "--json", "reviews,commits"]
+
+
+def test_pr_view_says_when_nobody_reviewed_it(monkeypatch):
+    out, _ = _view(monkeypatch, json.dumps({"reviews": [], "commits": []}))
+    assert out.endswith("\n\nreviews: none yet")
+
+
+@pytest.mark.parametrize("history, code", [("not json", 0), ("[]", 0), ("", 1)])
+def test_pr_view_without_its_review_history_is_still_the_view(monkeypatch, history, code):
+    out, _ = _view(monkeypatch, history, code)
+    assert out == "title:\tFix login\n\nThe body."
