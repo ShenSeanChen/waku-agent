@@ -1680,7 +1680,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def _weights_post(self, length: int) -> None:
         """Spec 046: run one prompt on the local model and relay Ollama's
-        stream line by line, or load / unload it. The run is relayed, not
+        stream line by line. It is the only action. The run is relayed, not
         buffered, so the page lights each piece as it arrives; closing the
         page's request closes the connection to Ollama, which stops the run."""
         from waku.ops import weights
@@ -1690,9 +1690,8 @@ class Handler(BaseHTTPRequestHandler):
         except ValueError:
             body = {}
         body = body if isinstance(body, dict) else {}
-        action = str(body.get("action") or "")
-        if action != "run":
-            self._send_json(*weights.answer_post(action, body))
+        if body.get("action") != "run":
+            self._send_json(404, {"error": "not found"})
             return
         name = str(body.get("model") or "")
         if name not in {m["name"] for m in weights.list_models()}:

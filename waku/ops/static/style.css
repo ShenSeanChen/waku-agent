@@ -1345,8 +1345,8 @@ main h3{font-family:var(--face-mono);font-size:var(--text-xs);color:var(--text-f
 .mw-status-t{flex:1;min-width:0;display:flex;flex-wrap:wrap;gap:var(--spacing) var(--space-4);font-family:var(--face-mono);font-size:var(--text-sm)}
 .mw-status-t b{font-weight:var(--font-weight-medium)}
 .mw-status-t span{color:var(--text-muted)}
-.mw-loadmsg{font-family:var(--face-mono);font-size:var(--text-sm)}
-.mw-loadmsg.good{color:var(--ok)}
-.mw-loadmsg.bad{color:var(--bad)}
+.mw-status .mw-membar{flex:2;min-width:160px;height:16px;border:var(--rule-width) solid var(--rule-hard);border-radius:var(--radius);overflow:hidden;background:repeating-linear-gradient(90deg,transparent 0 calc(6.25% - 1px),var(--rule) calc(6.25% - 1px) 6.25%)}
+.mw-membar i{display:block;height:100%;width:0;background:var(--accent);transition:width var(--motion-fast)}
+.mw-status-r{font-family:var(--face-mono);font-size:var(--text-xs);color:var(--text-muted)}
 /* the Models page's line of model files, each with a "Look inside" */
 .mw-inside{display:flex;flex-wrap:wrap;align-items:center;gap:var(--space-2);margin:var(--space-3) 0 0}

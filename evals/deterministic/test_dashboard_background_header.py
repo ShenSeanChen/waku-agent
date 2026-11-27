@@ -311,10 +311,9 @@ NETWORK_CALLERS = {
     ("views.js", "saveConnection"): "user",
     ("views.js", "testConnection"): "user",
     ("views.js", "saveProvider"): "user",
-    # spec 046, the Model page: its one GET wrapper (the 2s poll passes true),
-    # Load / Unload, and the Run button
+    # spec 046, the LLM page: its one GET wrapper (the 2s poll passes true)
+    # and the Run button
     ("model.js", "mwGet"): "background",
-    ("model.js", "mwPost"): "user",
     ("model.js", "mwStartRun"): "user",
 }
 
@@ -408,7 +407,6 @@ DECLARED_TIMERS = {
     # what Ollama holds in memory, every 2s while the page is open (mwPsTick
     # calls mwPollPs(true)), and the unload countdown's repaint
     ("model.js", "mwStartPolling", "setInterval"): {"mwPsTick", "mwMemTick"},
-    ("model.js", "mwLoadUnload", "setTimeout"): {"mwPsTick"},
 }
 
 

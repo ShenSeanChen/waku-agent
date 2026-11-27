@@ -16,8 +16,8 @@ page reads, and it does four things:
    (decision 3). F32, F16, Q4_0, Q4_K and Q6_K; any other type shows a notice
    instead of invented numbers.
 4. **Relay Ollama on this machine** (127.0.0.1:11434, never another host): one
-   streamed generation with the top 5 candidates per piece, what is loaded in
-   memory, and load / unload through Ollama's own ``keep_alive``.
+   streamed generation with the top 5 candidates per token, and what is loaded
+   in memory. A run loads the model and Ollama unloads it by itself.
 
 Ported from the open-models video's standalone viewer, where the decoders were
 cross-checked bit for bit against ``gguf.quants.dequantize`` (decision 4: a
@@ -35,7 +35,6 @@ import re
 import struct
 import subprocess
 import threading
-import time
 from pathlib import Path
 
 OLLAMA_HOST, OLLAMA_PORT = "127.0.0.1", 11434
@@ -462,13 +461,6 @@ def run_request(model: str, prompt: str) -> dict:
             "logprobs": True, "top_logprobs": 5, "options": {"temperature": 0.6}}
 
 
-def keep_alive_request(model: str, load: bool) -> dict:
-    """Load or unload with Ollama's own switch: an empty prompt that keeps the
-    model in memory for five minutes, or for none."""
-    return {"model": model, "prompt": "", "stream": False,
-            "keep_alive": "5m" if load else 0}
-
-
 def _sysctl(key: str) -> str | None:
     try:
         return subprocess.run(["/usr/sbin/sysctl", "-n", key], capture_output=True, check=False,
@@ -502,10 +494,9 @@ def public_models(root: Path | None = None) -> list[dict]:
 
 # ---------------------------------------------------------------- the routes' answers
 # dashboard.py serves these under /api/weights/: a GET names what to read in
-# its query (?what=tensor&name=...), a POST names its action in its body.
-# Each returns (status, body), so the HTTP handler only writes what it gets
-# back. The streamed run is the one action that needs the socket itself; it
-# is in dashboard.py, using run_request() and ollama() above.
+# its query (?what=tensor&name=...) and gets (status, body) back. The one
+# POST is the streamed run, which needs the socket itself; it is in
+# dashboard.py, using run_request() and ollama() above.
 
 def _int(q: dict, key: str, default: int) -> int:
     try:
@@ -540,25 +531,3 @@ def answer_get(route: str, q: dict) -> tuple[int, dict]:
         return 404, {"error": str(e.args[0])}
     except ValueError as e:
         return 400, {"error": str(e)}
-
-
-def answer_post(route: str, body: dict) -> tuple[int, dict]:
-    """POST /api/weights/do with action "load" or "unload": beside the run,
-    the only two actions, and they change only what Ollama holds in memory.
-    The model must be installed."""
-    if route not in ("load", "unload"):
-        return 404, {"error": "not found"}
-    name = str(body.get("model") or "")
-    if name not in {m["name"] for m in list_models()}:
-        return 404, {"error": f"model {name!r} is not installed in Ollama"}
-    load = route == "load"
-    t0 = time.monotonic()
-    try:
-        st, obj = ollama_json("POST", "/api/generate", keep_alive_request(name, load))
-    except OSError as e:
-        return 502, {"error": f"Ollama is not reachable: {e}"}
-    if load:
-        # Ollama returns no load_duration for an empty prompt, so this is the
-        # dashboard's own stopwatch around the call.
-        obj["wall_seconds"] = time.monotonic() - t0
-    return (200 if st == 200 else 502), obj

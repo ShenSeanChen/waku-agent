@@ -238,24 +238,15 @@ def test_the_folder_is_ollamas_and_no_setting_moves_it(monkeypatch, tmp_path):
     assert weights.models_root() == tmp_path / ".ollama" / "models"
 
 
-def test_load_refuses_a_model_that_is_not_installed(monkeypatch, tmp_path):
-    install(tmp_path)
-    monkeypatch.setattr(weights, "models_root", lambda: tmp_path)
-
-    def no_call(*a, **k):
-        raise AssertionError("Ollama must not be called for an unknown model")
-
-    monkeypatch.setattr(weights, "ollama_json", no_call)
-    status, body = weights.answer_post("load", {"model": "../../x"})
-    assert status == 404 and "not installed" in body["error"]
-    assert weights.answer_post("delete", {"model": "tiny:latest"})[0] == 404
-
-
-def test_load_and_unload_use_ollamas_keep_alive():
-    assert weights.keep_alive_request("tiny:latest", True)["keep_alive"] == "5m"
-    assert weights.keep_alive_request("tiny:latest", False)["keep_alive"] == 0
+def test_a_run_asks_for_the_top_five_candidates():
     run = weights.run_request("tiny:latest", "hi")
     assert run["logprobs"] is True and run["top_logprobs"] == 5 and run["stream"] is True
+
+
+def test_nothing_here_loads_unloads_or_deletes_a_model():
+    """The page reads, and runs a prompt. A run loads the model and Ollama
+    unloads it by itself, so the module has no other action to offer."""
+    assert not hasattr(weights, "answer_post") and not hasattr(weights, "keep_alive_request")
 
 
 def test_ollama_is_only_ever_this_machine():

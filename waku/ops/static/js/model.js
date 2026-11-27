@@ -8,11 +8,11 @@
 //                 then a 16 x 16 corner of one table as real values or as
 //                 the 4-bit codes it is stored as; the full list of tables
 //                 and the vocabulary are folded below
-//   #model/run    run: one line saying whether the model is in memory (Load
-//                 and Unload are Ollama's keep_alive), then one prompt, and
-//                 for every token of the answer five boxes light in order
-//                 (text, tokens, blocks, top 5 candidates, chosen), played
-//                 back slow, live or step by step
+//   #model/run    run: one row saying whether the model is in memory, with
+//                 a bar of this computer's memory and the model's share of
+//                 it, then one prompt, and for every token of the answer five
+//                 boxes light in order (text, tokens, blocks, top 5
+//                 candidates, chosen), played back slow, live or step by step
 //
 // Ported from the open-models video's standalone page. The page keeps its own
 // state in the mw* globals below, so the 5s refresh does not redraw it (see
@@ -22,7 +22,7 @@ const MW_GIB = 1073741824;
 const MW_TOKENS_PER_PAGE = 40;
 let mwModel = null, mwCurrent = null, mwTensor = null, mwAsCodes = false, mwReq = 0;
 let mwTab = "file", mwLastTps = null, mwMachine = null, mwModels = null, mwWanted = "";
-let mwPs = null, mwPsErr = "", mwLoading = false, mwPsTimer = null, mwMemTimer = null;
+let mwPs = null, mwPsErr = "", mwPsTimer = null, mwMemTimer = null;
 
 function mwEl(id){ return document.getElementById(id); }
 const mwCommas = n => Number(n).toLocaleString("en-US");
@@ -30,12 +30,6 @@ const mwShort = n => n >= 1e9 ? (n/1e9).toFixed(2)+"B" : n >= 1e6 ? (n/1e6).toFi
 async function mwGet(route, params, background){
   const r = await fetch("/api/weights/read?" + new URLSearchParams({what: route, ...(params || {})}),
                         background ? {headers: BG} : undefined);
-  const j = await r.json();
-  if (!r.ok) throw new Error(j.error || r.statusText);
-  return j;
-}
-async function mwPost(route, body){
-  const r = await fetch("/api/weights/do", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({action: route, ...body})});
   const j = await r.json();
   if (!r.ok) throw new Error(j.error || r.statusText);
   return j;
@@ -83,9 +77,8 @@ VIEWS.model = function(d, sub){
   <section class="mw-pane" id="mw-p-run">
     <div class="mw-status">
       <div class="mw-status-t" id="mw-status-t"></div>
-      ${uiButton("Load", {size: "sm", onclick: "mwLoadUnload(true)", cls: "mw-b-load", title: "Load the model into memory"})}
-      ${uiButton("Unload", {size: "sm", onclick: "mwLoadUnload(false)", cls: "mw-b-unload", title: "Free the memory the model holds"})}
-      <span class="mw-loadmsg" id="mw-loadmsg"></span>
+      <div class="mw-membar" id="mw-membar" role="img" aria-label="memory in use by the model"><i></i></div>
+      <span class="mw-status-r" id="mw-memtotal"></span>
     </div>
     <div class="mw-prompt">
       <input id="mw-prompt" type="text" value="The capital of France is" autocomplete="off" spellcheck="false" aria-label="Prompt"
@@ -726,7 +719,7 @@ function mwRenderMem(){
   const m = mwPs ? (mwPs.models || []).find(x => x.name === mwModel.name || x.model === mwModel.name) : null;
   const parts = [];
   if (mwPsErr) parts.push("Ollama is not running");
-  else if (!m) parts.push(mwLoading ? "loading into memory…" : "not in memory: the first run loads it, which takes a few seconds");
+  else if (!m) parts.push("not in memory: a run loads it, which takes a few seconds");
   else {
     parts.push("in memory: " + (m.size / MW_GIB).toFixed(1) + (total ? " of " + (total / MW_GIB).toFixed(0) : "") + " GB");
     const left = Date.parse(m.expires_at) - Date.now();
@@ -738,6 +731,10 @@ function mwRenderMem(){
   }
   if (mwLastTps) parts.push(mwLastTps.tps.toFixed(1) + " tokens/s");
   el.innerHTML = `<b>${esc(mwModel.name)}</b>` + parts.map(t => `<span>${esc(t)}</span>`).join("");
+  // the bar is this computer's memory, one segment per sixteenth; the amber part is the model
+  const bar = mwEl("mw-membar");
+  if (bar) bar.firstElementChild.style.width = m && total ? Math.min(100, 100 * m.size / total).toFixed(2) + "%" : "0";
+  if (mwEl("mw-memtotal")) mwEl("mw-memtotal").textContent = total ? (total / MW_GIB).toFixed(0) + " GB" : "";
 }
 async function mwPollPs(background){
   if (!mwEl("mw")) return;
@@ -757,22 +754,6 @@ function mwStartPolling(){
   mwMemTimer = setInterval(mwMemTick, 250);
 }
 function mwStopPolling(){ clearInterval(mwPsTimer); clearInterval(mwMemTimer); mwPsTimer = mwMemTimer = null; }
-
-async function mwLoadUnload(load){
-  if (mwLoading || !mwModel) return;
-  const msg = mwEl("mw-loadmsg");
-  const btns = [...document.querySelectorAll(".mw-b-load, .mw-b-unload")];
-  msg.className = "mw-loadmsg"; msg.textContent = "";
-  mwLoading = load; btns.forEach(b => b.disabled = true); mwRenderMem();
-  try {
-    const j = await mwPost(load ? "load" : "unload", {model: mwModel.name});
-    if (load){ msg.className = "mw-loadmsg good"; msg.textContent = typeof j.wall_seconds === "number" ? "load took " + j.wall_seconds.toFixed(2) + " s" : "loaded"; }
-    else msg.textContent = "unloaded";
-  } catch (e){ msg.className = "mw-loadmsg bad"; msg.textContent = e.message; }
-  mwLoading = false; btns.forEach(b => b.disabled = false);
-  await mwPollPs();
-  if (!load) setTimeout(mwPsTick, 600);
-}
 
 // Keys while the Model page is open: 1 2 3 switch tabs; on Press Enter the
 // arrows step, space pauses and Enter runs.
