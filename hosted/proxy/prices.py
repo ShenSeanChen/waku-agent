@@ -1,11 +1,11 @@
 """What a model call costs, in dollars. One table, so a price change is one edit.
 
-Rates are Anthropic's first-party list prices per million tokens, from the
-claude-api skill's model table (cached 2026-09-25). A five-minute cache write
-is 1.25x input and a cache read is 0.05x on Sonnet 5.5 ($0.10, spec 039 F14)
-and 0.1x on Haiku 4.5. The proxy accepts only the five-minute `cache_control`
-(admission.py), and every usage field is priced: a field left out is spend
-nobody pays for.
+Claude rates are Anthropic's first-party list prices per million tokens, from
+the claude-api skill's model table (cached 2026-09-25). A five-minute cache
+write is 1.25x input and a cache read is 0.05x on Sonnet 5.5 ($0.10, spec 039
+F14) and 0.1x on Haiku 4.5. The proxy accepts only the five-minute
+`cache_control` (admission.py), and every usage field is priced: a field left
+out is spend nobody pays for.
 """
 
 from __future__ import annotations
@@ -27,6 +27,10 @@ class Price(NamedTuple):
 PRICES: dict[str, Price] = {
     "claude-sonnet-5-5": Price(2.00, 10.00, 2.50, 0.10),
     "claude-haiku-4-5": Price(1.00, 5.00, 1.25, 0.10),
+    # Spec 043: the Bedrock fallback. List price from third-party price pages
+    # (spec 043, F6); Bedrock has no prompt cache for it, so both cache rates
+    # are the input rate rather than zero.
+    "zai.glm-5": Price(1.00, 3.20, 1.00, 1.00),
 }
 
 

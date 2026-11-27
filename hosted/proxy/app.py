@@ -398,6 +398,9 @@ class MeteringProxy:
             _LOG.warning("tenant=%s upstream unreachable: %s", tenant, exc)
             raise _overloaded("The free tier could not reach the model. Try again.") from None
 
+        # A turn Bedrock answered is priced and charged as the model that ran
+        # it, not the one the tenant asked for (spec 043).
+        model = upstream.model or model
         streaming = upstream.status < 300 and "text/event-stream" in upstream.content_type
         usage = _StreamUsage() if streaming else None
         response = web.StreamResponse(status=upstream.status)

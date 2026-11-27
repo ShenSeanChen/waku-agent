@@ -1,4 +1,4 @@
-"""The model API behind the meter. Anthropic now."""
+"""The model API behind the meter: Anthropic, and Bedrock when it cannot (spec 043)."""
 
 from __future__ import annotations
 
@@ -16,13 +16,16 @@ class UpstreamResponse:
     content_type: str
     chunks: AsyncIterator[bytes]
     release: object = field(default=None)   # called once the body is done with
+    # The model that answered, when it is not the one the tenant asked for: a
+    # turn GLM-5 ran on Bedrock is priced and charged as GLM-5 (spec 043).
+    model: str = ""
 
 
 class Upstream(Protocol):
     async def count_tokens(self, body: dict) -> int:
         """Input tokens for the request's model, messages, system, tools and
         tool_choice -- the only fields POST /v1/messages/count_tokens takes.
-        Raises on any failure; the proxy answers 529 and reserves nothing."""
+        Raises on any failure; the proxy then reserves an estimate (#445)."""
         ...
 
     async def messages(self, body: dict, headers: dict) -> UpstreamResponse:

@@ -36,6 +36,12 @@ REQUIRED_ENV_NAMES = (
     # Both in MAY_BE_ABSENT below.
     "WAKU_TREG_TOKEN",
     "WAKU_TREG_MAX_CALL_USD",
+    # Spec 043: Bedrock behind Anthropic. All four in MAY_BE_ABSENT below; with
+    # no key the proxy talks to Anthropic only, as before.
+    "WAKU_BEDROCK_BASE_URL",
+    "WAKU_BEDROCK_KEY",
+    "WAKU_BEDROCK_MODEL",
+    "WAKU_UPSTREAM_PRIMARY",
 )
 
 # WRITTEN BY install.sh, PINNED LIKE THE REST, AND STILL ALLOWED TO BE ABSENT.
@@ -45,11 +51,16 @@ REQUIRED_ENV_NAMES = (
 # them would take the free tier down on the upgrade that added treg. Absent or
 # empty, WAKU_TREG_TOKEN turns the relay off (its route answers 404) and
 # WAKU_TREG_MAX_CALL_USD falls back to DEFAULT_TREG_MAX_CALL_USD.
-MAY_BE_ABSENT = frozenset({"WAKU_TREG_TOKEN", "WAKU_TREG_MAX_CALL_USD"})
+MAY_BE_ABSENT = frozenset({"WAKU_TREG_TOKEN", "WAKU_TREG_MAX_CALL_USD",
+                           "WAKU_BEDROCK_BASE_URL", "WAKU_BEDROCK_KEY",
+                           "WAKU_BEDROCK_MODEL", "WAKU_UPSTREAM_PRIMARY"})
 DEFAULT_TREG_MAX_CALL_USD = 0.50
 # Waku Memory refuses a single usage report above $10 (POST /agent-usage), so a
 # ceiling above it would let a treg call cost more than could ever be charged.
 TREG_MAX_CALL_USD_LIMIT = 10.0
+DEFAULT_BEDROCK_BASE_URL = "https://bedrock-mantle.us-east-1.api.aws/v1"
+DEFAULT_BEDROCK_MODEL = "zai.glm-5"
+PRIMARIES = ("anthropic", "bedrock")
 
 
 @dataclass(frozen=True)
@@ -73,6 +84,11 @@ class ProxyConfig:
     # repr is the kind of thing that ends up in a log line.
     treg_token: str = field(default="", repr=False)
     treg_max_call_usd: float = DEFAULT_TREG_MAX_CALL_USD
+    # Spec 043. An empty key turns Bedrock off.
+    bedrock_base_url: str = DEFAULT_BEDROCK_BASE_URL
+    bedrock_key: str = field(default="", repr=False)
+    bedrock_model: str = DEFAULT_BEDROCK_MODEL
+    upstream_primary: str = "anthropic"
 
 
 def config_from_env(env: Mapping[str, str]) -> ProxyConfig:
@@ -95,6 +111,16 @@ def config_from_env(env: Mapping[str, str]) -> ProxyConfig:
     if not 0 < treg_max_call_usd <= TREG_MAX_CALL_USD_LIMIT:
         raise ValueError(f"WAKU_TREG_MAX_CALL_USD is {ceiling!r}: a price in dollars above 0 "
                          f"and at most {TREG_MAX_CALL_USD_LIMIT:g}, such as 0.50.")
+    bedrock_model = (env.get("WAKU_BEDROCK_MODEL") or DEFAULT_BEDROCK_MODEL).strip()
+    if bedrock_model not in PRICES:
+        raise ValueError(f"WAKU_BEDROCK_MODEL is {bedrock_model!r}, which hosted/proxy/prices.py "
+                         "does not price. Add a row there or pick a priced model.")
+    primary = (env.get("WAKU_UPSTREAM_PRIMARY") or "anthropic").strip()
+    if primary not in PRIMARIES:
+        raise ValueError(f"WAKU_UPSTREAM_PRIMARY is {primary!r}: anthropic or bedrock.")
+    bedrock_key = env.get("WAKU_BEDROCK_KEY", "").strip()
+    if primary == "bedrock" and not bedrock_key:
+        raise ValueError("WAKU_UPSTREAM_PRIMARY is bedrock but WAKU_BEDROCK_KEY is empty.")
     return ProxyConfig(
         bind_host=env["WAKU_PROXY_BIND"],
         port=int(env["WAKU_PROXY_PORT"]),
@@ -113,4 +139,8 @@ def config_from_env(env: Mapping[str, str]) -> ProxyConfig:
         memory_api_url=env["WAKU_MEMORY_API_URL"].rstrip("/"),
         treg_token=env.get("WAKU_TREG_TOKEN", "").strip(),
         treg_max_call_usd=treg_max_call_usd,
+        bedrock_base_url=(env.get("WAKU_BEDROCK_BASE_URL") or DEFAULT_BEDROCK_BASE_URL).rstrip("/"),
+        bedrock_key=bedrock_key,
+        bedrock_model=bedrock_model,
+        upstream_primary=primary,
     )
