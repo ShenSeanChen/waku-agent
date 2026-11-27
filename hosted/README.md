@@ -322,6 +322,9 @@ sign-in inside the container (spec 004):
    `waku-agent`, which Waku Memory labels as Origin `waku`.
    Company research goes to the project `Company brain`; everything else goes
    to scope `global`. A failed send is retried at the next turn.
+5. The agent is not offered any tool whose name on that server starts with
+   `ui.`. Those tools draw Waku Memory's own screens, and the hosted agent
+   draws none (spec 039).
 
 Provisioning creates `.env` only when it is missing. A tenant provisioned
 before spec 006 keeps the laptop default of 6 exchanges until
