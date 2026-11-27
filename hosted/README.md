@@ -350,7 +350,11 @@ curl -N https://agent.waku.one/v1/chat \
 The gateway verifies the token exactly as it does at sign-in, finds or creates
 that person's tenant, mints their Waku Memory key if they have none, and relays
 the container's own `/api/chat/stream`: Server-Sent Events, ending in a frame
-with `"kind": "done"`. The turn counts against the same hourly quota as a turn
+with `"kind": "done"`. The first frame is `{"kind": "thinking"}`, sent before
+the turn's first model call, and each tool call sends
+`{"kind": "tool_start", "tool": "<name>", "call_id": "<id>"}` before it runs
+and a `tool` frame with the same `call_id` after it (spec 039). A client
+ignores any kind it does not know. The turn counts against the same hourly quota as a turn
 typed into the dashboard. The container never sees the token. The route ignores
 cookies, so it does not check `Origin`; it still requires a JSON body.
 

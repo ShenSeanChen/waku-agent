@@ -144,3 +144,23 @@ def test_the_real_forwarder_delivers_the_message_and_never_the_token(wired):
     sent = {k.lower(): v for k, v in wired.container.headers[-1].items()}
     assert "authorization" not in sent
     assert token not in json.dumps(sent)
+
+
+def test_thinking_and_tool_start_reach_the_caller_unchanged(wired):
+    """Spec 039 E2: the gateway relays the container's stream as it is, so the
+    two new kinds reach the phone and waku.one in order and unaltered."""
+    frames = [{"kind": "thinking"},
+              {"kind": "tool_start", "tool": "waku_memory_memory_search", "call_id": "tu_1"},
+              {"kind": "tool", "tool": "waku_memory_memory_search", "call_id": "tu_1"},
+              {"kind": "done", "reply": "Emily is your designer."}]
+    wired.container.frames = frames
+
+    async def run():
+        await wired.start()
+        status, _, body = await _chat(wired, sign(wired.private, now=wired.clock.t))
+        await wired.stop()
+        return status, body
+
+    status, body = asyncio.run(run())
+    assert status == 200
+    assert body == "".join(f"data: {json.dumps(f)}\n\n" for f in frames).encode()
