@@ -1065,3 +1065,27 @@ def test_a_chat_that_does_not_know_a_kind_draws_the_same_answer():
     console.log(JSON.stringify({{plain: card(plain), told: card(told)}}));""")
     assert got["told"] == got["plain"]
     assert "Three findings. Report saved." in got["told"]
+
+
+@needs_node
+def test_the_waiting_card_says_what_the_agent_is_doing():
+    """Spec 039 E4: the waku.one sidebar embeds this chat. Before, it showed a
+    bare "thinking" for the whole wait; now it names the step, the way the
+    phone does (waku-mobile-frontend PR #14)."""
+    got = _node({"files": CHAT_FILES, "referrer": "", "origins": DEFAULT, "framed": False,
+                 "events": [], "state": 200}, """
+    const apply = vm.runInContext("applyStreamEvent", ctx);
+    const card = vm.runInContext("streamingCard", ctx);
+    const pending = {role: "waku", pending: true, stream: ""};
+    const seen = [];
+    apply(pending, {kind: "thinking"}); seen.push(card(pending));
+    apply(pending, {kind: "tool_start", tool: "waku_memory_memory_search", call_id: "t1"});
+    seen.push(card(pending));
+    apply(pending, {kind: "tool", tool: "waku_memory_memory_search", output: "2 facts"});
+    apply(pending, {kind: "tool_start", tool: "check_calendar", call_id: "t2"});
+    seen.push(card(pending));
+    console.log(JSON.stringify({seen}));""")
+    first, memory, other = got["seen"]
+    assert "Thinking&hellip;" in first
+    assert "Searching your memories&hellip;" in memory
+    assert "Using check calendar&hellip;" in other
