@@ -1044,6 +1044,10 @@ which holds the platform key and nothing else does:
   When `count_tokens` fails, the reservation uses an estimate of one token per
   two bytes of the request, which is always above the real count, and the call
   still runs.
+  A call with a cache breakpoint reserves the prompt-cache tokens the person's
+  last call on that model read or wrote, within the last five minutes, at the
+  cache read price ($0.10 a million on Sonnet 5.5); with no such call, it
+  reserves its input at the cache write price (spec 039).
   A person at their dollar never reaches Anthropic, and is refused with the
   same `credits_used_up` answer as below, in the Free sentence.
 - **The limits.** 4 calls at once and 60 a minute per person, 16 at once

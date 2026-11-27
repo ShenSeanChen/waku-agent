@@ -77,6 +77,17 @@ def _walk_for_refused_keys(value: object) -> None:
             _walk_for_refused_keys(item)
 
 
+def asks_cache(body: dict) -> bool:
+    """Whether an admitted body carries a cache breakpoint anywhere."""
+    def walk(value: object) -> bool:
+        if isinstance(value, dict):
+            return "cache_control" in value or any(walk(v) for v in value.values())
+        if isinstance(value, list):
+            return any(walk(v) for v in value)
+        return False
+    return walk(body)
+
+
 def strip_cache_control(body: dict) -> dict:
     """A copy of an admitted body with every `cache_control` removed.
 

@@ -526,3 +526,44 @@ def test_an_unreadable_balance_falls_back_to_the_dollar_cap_with_the_same_code(t
     assert status == 403 and sent == []
     assert body["error"] == {
         "type": "permission_error", "code": "credits_used_up", "message": FREE_EMPTY}
+
+
+# --- spec 039 B2: a warm prompt cache is reserved at the cache read price ----------------
+
+CACHED_BODY = {"model": SONNET, "max_tokens": 1000,
+               "system": [{"type": "text", "text": "You are Waku.",
+                           "cache_control": {"type": "ephemeral"}}],
+               "messages": [{"role": "user", "content": "hi"}]}
+WROTE = json.dumps({"type": "message", "content": [], "usage": {
+    "input_tokens": 5000, "cache_creation_input_tokens": 85_000, "output_tokens": 200}}).encode()
+
+
+def _near_the_cap(rig, at: float = 0.85) -> None:
+    settled, _ = rig.ledger.spend(TENANT, MONTH)
+    rig.ledger.reserve(TENANT, MONTH, 0.0)
+    rig.ledger.settle(TENANT, MONTH, reserved=0.0, actual=at - settled)
+
+
+@pytest.mark.parametrize("case,expected", [
+    ("warm", 200),             # the prefix was written a minute ago: reserved at $0.10/M
+    ("cold", 403),             # no call wrote a cache: all 90k at the full price
+    ("expired", 403),          # written six minutes ago: the five-minute cache is gone
+    ("no_breakpoint", 403),    # this call asks for no cache, so it reads none
+])
+def test_a_person_near_the_cap_is_not_refused_for_tokens_the_cache_serves(tmp_path, case, expected):
+    """90k counted tokens, 85k of them the prefix an earlier call wrote. At the
+    full price the worst case is $0.21 and $0.85 + $0.21 passes the $1 cap;
+    with the prefix at the cache read price it is $0.03."""
+    async def go():
+        upstream = FakeUpstream(count=90_000, parts=[WROTE])
+        async with Rig(tmp_path, upstream) as rig:
+            if case != "cold":
+                assert (await rig.call(CACHED_BODY))[0] == 200
+            rig.mono[0] += 360 if case == "expired" else 60
+            _near_the_cap(rig)
+            body = CACHED_BODY if case != "no_breakpoint" else {
+                **CACHED_BODY, "system": "You are Waku."}
+            status, _ = await rig.call(body)
+            return status
+
+    assert _run(go()) == expected
