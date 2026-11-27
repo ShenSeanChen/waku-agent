@@ -64,7 +64,7 @@ def test_the_balance_carries_waku_memorys_verdict_and_ignores_malformed_fields()
     that is missing or the wrong shape is None, never a guess."""
     answers = iter([
         {"plan": "pro", "credits_left": -3, "allowed": False, "state": "empty",
-         "notice": "Add 250,000 credits."},
+         "notice": "Add 200,000 credits."},
         {"plan": "free", "credits_left": 9, "allowed": "no", "state": "full", "notice": " "},
     ])
 
@@ -77,7 +77,7 @@ def test_the_balance_carries_waku_memorys_verdict_and_ignores_malformed_fields()
         return first, await wallet.balance(KEY)
 
     first, second = _serve({("GET", "/agent-usage/balance"): balance}, test)
-    assert first == Balance("pro", -3, allowed=False, notice="Add 250,000 credits.",
+    assert first == Balance("pro", -3, allowed=False, notice="Add 200,000 credits.",
                             state="empty")
     assert second == Balance("free", 9)
 

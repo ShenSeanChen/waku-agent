@@ -25,7 +25,7 @@ PLAN_URL = "https://www.waku.one/settings/plan"
 FREE_EMPTY = ("You've used this month's free Waku credits, so Waku Agent is paused until "
               "{reset}. Pro gives you 500,000 credits a month for $20: " + PLAN_URL)
 PRO_EMPTY = ("You've used this month's Waku credits, so Waku Agent is paused. "
-             "Add 250,000 credits for $10 to carry on: " + PLAN_URL)
+             "Add 200,000 credits for $10 to carry on: " + PLAN_URL)
 
 _MONTHS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun",
            "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")

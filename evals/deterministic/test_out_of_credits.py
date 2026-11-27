@@ -27,7 +27,7 @@ from waku.gateway.runner import GATEWAY_ERROR_REPLY
 from waku.loop.agent import credits_notice, error_text
 
 NOTICE = ("You've used this month's Waku credits, so Waku Agent is paused. "
-          "Add 250,000 credits for $10 to carry on: https://www.waku.one/settings/plan")
+          "Add 200,000 credits for $10 to carry on: https://www.waku.one/settings/plan")
 NOON = datetime(2026, 11, 26, 12, 0, 0, tzinfo=UTC)
 
 

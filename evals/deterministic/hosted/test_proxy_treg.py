@@ -238,7 +238,7 @@ def test_a_free_person_at_zero_credits_never_reaches_treg(tmp_path):
 
 
 def test_a_pro_person_waku_memory_refuses_never_reaches_treg(tmp_path):
-    notice = "Add 250,000 credits for $10 to carry on."
+    notice = "Add 200,000 credits for $10 to carry on."
 
     async def go():
         wallet = FakeWallet(plan="pro", left=-1, allowed=False, notice=notice)
