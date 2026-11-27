@@ -231,7 +231,7 @@ function wireChrome(){
   // and the collapse is not remembered: a rail that reopens closed hides the
   // navigation from someone coming back (Memory's rule).
   const dw = localStorage.getItem("dockW"); if (dw) document.documentElement.style.setProperty("--dock-w", dw+"px");
-  const rail = document.getElementById("nav"), btn = document.getElementById("nav-collapse");
+  const rail = document.getElementById("nav");
   // The handle stops where main would drop below --main-min: the same limit
   // the dock's CSS clamp holds, so a drag can never squeeze or cover the page.
   // A custom property reads back as its expression ("calc(480px + …)"), not
@@ -242,30 +242,37 @@ function wireChrome(){
   const dockMax = () => Math.min(680, window.innerWidth - rail.getBoundingClientRect().width
     - document.getElementById("dock-resizer").getBoundingClientRect().width - px("--main-min"));
   wireResizer("dock-resizer", "--dock-w", "dockW", true, 260, dockMax);
-  // Folded, the rail is off the page and the menu button in the page header
-  // opens it as a drawer (spec 048). The chevron folds it; inside the drawer
-  // the same chevron puts it back beside the page.
+  // One button, left of the page title, shows or hides the menu (spec 048).
+  // In a wide window the sidebar sits beside the page or is gone: two states.
+  // Below 768px there is no room beside the page, so "shown" is a drawer over
+  // it, closed again by a link, Escape or a click outside.
   const opener = document.getElementById("nav-open"), scrim = document.getElementById("nav-scrim");
+  const narrow = () => window.matchMedia("(max-width:767px)").matches;
+  const shown = () => narrow() ? rail.classList.contains("open") : !rail.classList.contains("collapsed");
+  const label = () => {
+    if (!opener) return;
+    opener.setAttribute("aria-expanded", String(shown()));
+    opener.setAttribute("aria-label", shown() ? "Hide the menu" : "Show the menu");
+  };
   const setDrawer = (open, refocus) => {
     rail.classList.toggle("open", open);
-    if (opener) opener.setAttribute("aria-expanded", String(open));
     if (open){ const first = rail.querySelector("a.on") || rail.querySelector("a[data-v]"); if (first) first.focus(); }
     else if (refocus && opener) opener.focus();
+    label();
   };
-  if (opener) opener.onclick = () => setDrawer(!rail.classList.contains("open"), true);
+  if (opener) opener.onclick = () => {
+    if (narrow()) setDrawer(!rail.classList.contains("open"), true);
+    else { rail.classList.toggle("collapsed"); label(); }
+  };
   if (scrim) scrim.onclick = () => setDrawer(false, true);
   // going to a page closes the drawer; the page is what the person asked for
-  rail.addEventListener("click", e => { if (e.target.closest("a[data-v]")) setDrawer(false, false); });
+  rail.addEventListener("click", e => { if (e.target.closest("a[data-v]") && rail.classList.contains("open")) setDrawer(false, false); });
   document.addEventListener("keydown", e => {
     if (e.key === "Escape" && rail.classList.contains("open")){ e.preventDefault(); setDrawer(false, true); }
   });
-  if (btn) btn.onclick = () => {
-    const c = rail.classList.toggle("collapsed");
-    setDrawer(false, c);
-    btn.setAttribute("aria-expanded", String(!c));
-    btn.setAttribute("aria-label", c ? "Keep the sidebar open" : "Collapse the sidebar");
-    btn.innerHTML = c ? "&#8250;" : "&#8249;";
-  };
+  // crossing 768px: a drawer left open has no meaning in a wide window
+  window.matchMedia("(max-width:767px)").addEventListener("change", () => { rail.classList.remove("open"); label(); });
+  label();
 }
 
 // --- voice on the dashboard: record in the browser, transcribe on the server
