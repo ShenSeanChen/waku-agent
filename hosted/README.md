@@ -1042,6 +1042,14 @@ which holds the platform key and nothing else does:
   still runs.
   A person at their dollar never reaches Anthropic, and is refused with the
   same `credits_used_up` answer as below, in the Free sentence.
+- **Bedrock behind Anthropic** (spec 043). With `WAKU_BEDROCK_KEY` set in
+  `config/proxy.env`, a turn Anthropic refuses (a usage limit, a bad key, an
+  outage, no connection) goes to `WAKU_BEDROCK_MODEL` (GLM-5 by default) on
+  Bedrock's chat-completions address, and Anthropic is skipped for ten
+  minutes. The proxy translates the Anthropic request and stream both ways,
+  so containers do not change, and charges the turn at GLM-5's price. The
+  switch happens only before anything has streamed. `WAKU_UPSTREAM_PRIMARY=bedrock`
+  sends every turn to Bedrock. Empty `WAKU_BEDROCK_KEY` turns Bedrock off.
 - **The limits.** 4 calls at once and 60 a minute per person, 16 at once
   across the VM, `max_tokens` at most 8192.
 - **What it refuses.** Images, documents, server tools, `cache_control` and any

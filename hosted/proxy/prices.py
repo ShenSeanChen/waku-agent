@@ -1,6 +1,6 @@
 """What a model call costs, in dollars. One table, so a price change is one edit.
 
-Rates are Anthropic's first-party list prices per million tokens, from the
+Claude rates are Anthropic's first-party list prices per million tokens, from the
 claude-api skill's model table (cached 2026-09-25). Cache writes are 1.25x
 input. The proxy refuses `cache_control`, so the two cache fields are normally
 zero, but every usage field is priced anyway: a field left out is spend nobody
@@ -26,6 +26,10 @@ class Price(NamedTuple):
 PRICES: dict[str, Price] = {
     "claude-sonnet-5-5": Price(2.00, 10.00, 2.50, 0.20),
     "claude-haiku-4-5": Price(1.00, 5.00, 1.25, 0.10),
+    # Spec 043: the Bedrock fallback. List price from third-party price pages
+    # (spec 043, F6); Bedrock has no prompt cache for it, so both cache rates
+    # are the input rate rather than zero.
+    "zai.glm-5": Price(1.00, 3.20, 1.00, 1.00),
 }
 
 

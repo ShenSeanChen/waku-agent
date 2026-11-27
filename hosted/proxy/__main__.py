@@ -51,7 +51,7 @@ from hosted.proxy.mail import MailDoor
 from hosted.proxy.slack import SlackHistory, SlackSend
 from hosted.proxy.treg import TregRelay
 from hosted.proxy.turns import TurnCharges
-from hosted.proxy.upstream import AnthropicUpstream
+from hosted.proxy.upstream import AnthropicUpstream, BedrockUpstream, FallbackUpstream
 from hosted.proxy.wallet import WakuMemoryWallet
 
 _LOG = log.get(__name__)
@@ -78,9 +78,16 @@ async def main() -> None:
         # connectors off answers connectors_not_configured.
         connectors = ConnectCalls(resolve=tokens.resolve,
                                   gateway_socket=config.gateway_socket)
+        upstream = AnthropicUpstream(session, config.upstream_base_url, config.platform_key)
+        if config.bedrock_key:
+            # Spec 043: Bedrock answers when Anthropic cannot, or every turn
+            # when the operator set WAKU_UPSTREAM_PRIMARY=bedrock.
+            upstream = FallbackUpstream(
+                upstream, BedrockUpstream(session, config.bedrock_base_url, config.bedrock_key,
+                                          config.bedrock_model),
+                primary=config.upstream_primary)
         proxy = MeteringProxy(
-            config=config, ledger=ledger, resolve=tokens.resolve,
-            upstream=AnthropicUpstream(session, config.upstream_base_url, config.platform_key),
+            config=config, ledger=ledger, resolve=tokens.resolve, upstream=upstream,
             memory_key=tokens.memory_key, wallet=wallet,
             treg=treg.handle if treg is not None else None, turns=turns,
             # Spec 026 C3: always on. A gateway with Slack off answers
@@ -100,6 +107,8 @@ async def main() -> None:
         await web.TCPSite(runner, config.bind_host, config.port).start()
         _LOG.info("metering proxy on %s:%s for %s", config.bind_host, config.port,
                   ", ".join(config.free_models))
+        _LOG.info("bedrock %s", f"{config.bedrock_model}, primary {config.upstream_primary}"
+                  if config.bedrock_key else "off: config/proxy.env has no WAKU_BEDROCK_KEY")
         _LOG.info("treg relay %s", f"on, at most ${config.treg_max_call_usd:g} a call"
                   if treg is not None else "off: config/proxy.env has no WAKU_TREG_TOKEN")
         try:

@@ -153,6 +153,10 @@ WAKU_UPSTREAM_BASE_URL=https://api.anthropic.com
 WAKU_MEMORY_API_URL=https://api.waku.one
 WAKU_TREG_TOKEN=
 WAKU_TREG_MAX_CALL_USD=0.50
+WAKU_BEDROCK_BASE_URL=https://bedrock-mantle.us-east-1.api.aws/v1
+WAKU_BEDROCK_KEY=
+WAKU_BEDROCK_MODEL=zai.glm-5
+WAKU_UPSTREAM_PRIMARY=anthropic
 EOF
 }
 
