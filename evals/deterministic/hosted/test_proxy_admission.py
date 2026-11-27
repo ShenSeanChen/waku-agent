@@ -14,7 +14,7 @@ import json
 
 import pytest
 
-from hosted.proxy.admission import Refused, admit, forward_headers
+from hosted.proxy.admission import Refused, admit, forward_headers, strip_cache_control
 
 MODELS = ("claude-sonnet-5-5", "claude-haiku-4-5")
 
@@ -73,8 +73,6 @@ def test_malformed_bodies_are_refused(body, needle):
     ({"betas": ["x"]}, "betas"),
     ({"service_tier": "priority"}, "service_tier"),
     ({"tools": [{"type": "web_search_20260209", "name": "web_search"}]}, "server tool"),
-    ({"system": [{"type": "text", "text": "x", "cache_control": {"type": "ephemeral"}}]},
-     "cache_control"),
     ({"messages": [{"role": "user", "content": [
         {"type": "image", "source": {"type": "url", "url": "https://x"}}]}]}, "image"),
     ({"messages": [{"role": "user", "content": [
@@ -110,3 +108,78 @@ def test_only_two_headers_go_upstream():
                             "x-api-key": "tenant-token", "anthropic-beta": "x",
                             "Authorization": "Bearer y"}) == {
         "anthropic-version": "2023-06-01", "content-type": "application/json"}
+
+
+# --- spec 039 B1: prompt caching -------------------------------------------------------
+
+EPHEMERAL = {"type": "ephemeral"}
+
+
+def test_a_cache_breakpoint_on_the_system_prompt_is_admitted_unchanged():
+    """Waku's hosted turn marks the end of its stable system prompt (spec 039
+    B3). The proxy refused every cache_control before (F5), which turned
+    prompt caching off for every tenant."""
+    body = _turn(system=[{"type": "text", "text": "You are Waku.", "cache_control": EPHEMERAL},
+                         {"type": "text", "text": "Right now it is Tuesday."}])
+    assert _admit(body) == body
+
+
+@pytest.mark.parametrize("where", ["tool", "message"])
+def test_a_cache_breakpoint_on_a_tool_or_a_message_block_is_admitted(where):
+    if where == "tool":
+        body = _turn(tools=[{"name": "remember", "description": "keep a fact",
+                             "input_schema": {"type": "object", "properties": {}},
+                             "cache_control": EPHEMERAL}])
+    else:
+        body = _turn(messages=[{"role": "user", "content": [
+            {"type": "text", "text": "hi", "cache_control": EPHEMERAL}]}])
+    assert _admit(body) == body
+
+
+@pytest.mark.parametrize("control", [
+    {"type": "ephemeral", "ttl": "1h"},          # a one-hour write costs twice the input price
+    {"type": "persistent"},
+    {"type": "ephemeral", "extra": 1},
+    "ephemeral",
+    None,
+])
+def test_only_the_five_minute_ephemeral_breakpoint_is_admitted(control):
+    body = _turn(system=[{"type": "text", "text": "x", "cache_control": control}])
+    with pytest.raises(Refused) as caught:
+        _admit(body)
+    assert caught.value.status == 400 and "cache_control" in caught.value.message
+
+
+def test_cache_control_does_not_open_any_other_refused_field():
+    """Every field the allowlist refused before is still refused when the
+    same body also carries a cache breakpoint."""
+    cached = [{"type": "text", "text": "x", "cache_control": EPHEMERAL}]
+    for extra, needle in [({"thinking": {"type": "enabled"}}, "thinking"),
+                          ({"betas": ["x"]}, "betas"),
+                          ({"service_tier": "priority"}, "service_tier"),
+                          ({"tools": [{"type": "web_search_20260209", "name": "web_search"}]},
+                           "server tool")]:
+        with pytest.raises(Refused) as caught:
+            _admit(_turn(system=cached, **extra))
+        assert needle in caught.value.message
+    with pytest.raises(Refused) as caught:
+        _admit(_turn(system=cached, messages=[{"role": "user", "content": [
+            {"type": "image", "source": {}, "cache_control": EPHEMERAL}]}]))
+    assert "image" in caught.value.message
+
+
+def test_strip_cache_control_leaves_everything_else():
+    """The seam for an upstream that does not take Anthropic's field (spec 039
+    F16): every breakpoint goes, and nothing else changes."""
+    body = _turn(system=[{"type": "text", "text": "You are Waku.", "cache_control": EPHEMERAL}],
+                 tools=[{"name": "remember", "description": "d",
+                         "input_schema": {"type": "object", "properties": {}},
+                         "cache_control": EPHEMERAL}],
+                 messages=[{"role": "user", "content": [
+                     {"type": "text", "text": "hi", "cache_control": EPHEMERAL}]}])
+    stripped = strip_cache_control(body)
+    assert "cache_control" not in json.dumps(stripped)
+    assert stripped["system"] == [{"type": "text", "text": "You are Waku."}]
+    assert stripped["tools"][0]["name"] == "remember"
+    assert stripped["messages"] == [{"role": "user", "content": [{"type": "text", "text": "hi"}]}]
+    assert "cache_control" in json.dumps(body), "the body it was given is not changed"

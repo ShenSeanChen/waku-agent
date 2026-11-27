@@ -1048,9 +1048,12 @@ which holds the platform key and nothing else does:
   same `credits_used_up` answer as below, in the Free sentence.
 - **The limits.** 4 calls at once and 60 a minute per person, 16 at once
   across the VM, `max_tokens` at most 8192.
-- **What it refuses.** Images, documents, server tools, `cache_control` and any
+- **What it refuses.** Images, documents, server tools, a `cache_control`
+  other than `{"type": "ephemeral"}` (the one-hour form included), and any
   body field outside the allowlist. Thinking blocks Sonnet returns are accepted
-  back, because Waku sends them on the next call.
+  back, because Waku sends them on the next call. The five-minute
+  `cache_control` is accepted (spec 039), so the calls of one turn read the
+  tools and system prompt from Anthropic's prompt cache.
 
 - **One wallet.** Each settled call is also charged to the person's waku.one
   credits, at 37,500 credits a dollar (1.5× model cost), with their own Waku Memory key (spec

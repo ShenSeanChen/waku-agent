@@ -11,6 +11,12 @@ default and Waku appends `response.content` to its history
 `redacted_thinking` blocks back on the next call. Anthropic produced and
 signed them; they carry no tool and no image. Refusing them would refuse the
 second call of every multi-step turn.
+
+Spec 039 B1 widened one more on purpose: `cache_control`, and only its
+five-minute form `{"type": "ephemeral"}`. Every model call of a turn sent the
+same tools and system prompt again at full price (spec 039 F4, F5); a cache
+read costs a twentieth of that. The one-hour form is refused, because its
+write costs twice the input price and `prices.py` does not price it.
 """
 
 from __future__ import annotations
@@ -25,6 +31,9 @@ USER_BLOCKS = frozenset({"text", "tool_result"})
 ASSISTANT_BLOCKS = frozenset({"text", "tool_use", "thinking", "redacted_thinking"})
 FORWARDED_HEADERS = ("anthropic-version", "content-type")
 MODEL_REFUSED = "This model is not in the free tier. Add your own key in Models."
+# The one cache breakpoint the free tier accepts: five minutes, priced in
+# prices.py as a cache write and then a cache read.
+CACHE_CONTROL = {"type": "ephemeral"}
 
 
 class Refused(Exception):
@@ -59,13 +68,30 @@ def _no_duplicates(pairs: list[tuple[str, object]]) -> dict:
 
 def _walk_for_refused_keys(value: object) -> None:
     if isinstance(value, dict):
-        if "cache_control" in value:
-            raise _bad("cache_control is not available on the free tier")
+        if "cache_control" in value and value["cache_control"] != CACHE_CONTROL:
+            raise _bad('cache_control may only be {"type": "ephemeral"} on the free tier')
         for item in value.values():
             _walk_for_refused_keys(item)
     elif isinstance(value, list):
         for item in value:
             _walk_for_refused_keys(item)
+
+
+def strip_cache_control(body: dict) -> dict:
+    """A copy of an admitted body with every `cache_control` removed.
+
+    `cache_control` is Anthropic's field. An upstream that is not Anthropic's
+    Messages API, such as the Bedrock upstream spec 039 F16 names (GLM-5 over
+    `/v1/chat/completions`), must be sent this copy before its translation:
+    no such upstream exists in hosted/proxy/ yet, and this is the one place
+    it calls."""
+    def walk(value: object) -> object:
+        if isinstance(value, dict):
+            return {k: walk(v) for k, v in value.items() if k != "cache_control"}
+        if isinstance(value, list):
+            return [walk(v) for v in value]
+        return value
+    return walk(body)
 
 
 def _check_blocks(role: str, content: object) -> None:
