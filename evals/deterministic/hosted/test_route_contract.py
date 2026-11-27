@@ -100,6 +100,8 @@ EXPECTED = {
     "/api/connectors/approve": "block",
     "/api/connectors/snooze": "block",
     "/api/connectors/sign_in": "block",
+    # spec 046: a model file on disk and the Ollama beside it; a container has neither
+    "/api/weights/": "block",
 }
 
 

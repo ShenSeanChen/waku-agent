@@ -19,6 +19,7 @@ const TITLES = {chat:"Chat & watch",
                 compare:"Arena — race models and memory through the same loop",
                 "compare/models":"Model race — ten brains, one harness",
                 "compare/memory":"Memory race — one brain, five places to put facts",
+                model:"Model — how a model works, on your own computer",
                 settings:"Behaviour — how a turn runs",
                 sql:"SQL console — read-only questions over state.db"};
 function render(){
@@ -70,7 +71,11 @@ function render(){
     a.dataset.v === view && (!a.dataset.sub || a.dataset.sub === effSub)));
   document.getElementById("title").textContent =
     TITLES[`${view}/${effSub}`] || TITLES[view] || view[0].toUpperCase()+view.slice(1);
-  if (view === "overview" || view === "graph"){
+  if (view === "model" && activeView === "model"){
+    // The Model page holds a run in flight and its own polling, so the 5s
+    // refresh never rebuilds it; a tab change only shows the other pane.
+    if (subChanged) mwShowTab(sub);
+  } else if (view === "overview" || view === "graph"){
     // don't rebuild mid-animation or the glowing SVG gets wiped
     if (activeView !== view || !animating){ document.getElementById("view").innerHTML = VIEWS[view](D); }
   } else if ((view === "memory" || view === "settings" || view === "sql" || view === "compare" || view === "models" || view === "connections" || view === "judgment") && editing && !subChanged){
