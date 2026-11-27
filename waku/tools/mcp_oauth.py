@@ -13,6 +13,23 @@ dynamically, open the browser, catch the redirect on loopback, exchange the
 code. The SDK does all of it; this file supplies the three things the SDK
 cannot know — where to keep the tokens, how to open a browser, and how to
 catch the callback.
+
+Keeping a sign-in alive is the part the SDK gets wrong on its own, and
+`_FileSharedProvider` below is the fix. An access token lasts an hour and a
+refresh token renews it. The SDK records when a token expires only in memory,
+at the moment it receives the token. A process that loads the token from the
+file again does not know when it was issued, so the SDK treats it as valid
+forever: it sends it expired, gets a 401, and answers the 401 with a full
+sign-in, never a refresh. A chat turn refuses a sign-in (spec 038), so on
+2026-11-25 Waku Memory said "needs a sign-in" a few hours after a fresh one,
+and the token file was never written again. The file now records the expiry
+time, and the provider reads it back.
+
+Several Waku processes share one token file: two dashboards, `waku serve`, a
+script. Waku Memory's authorization server rotates the refresh token on every
+refresh and refuses the old one, so two processes must not spend the same
+refresh token. The provider takes a lock on the file around a refresh, reads
+the file again first, and uses tokens another process already refreshed.
 """
 
 from __future__ import annotations
@@ -21,12 +38,18 @@ import asyncio
 import json
 import os
 import socket
+import time
 import webbrowser
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from threading import Thread
 from typing import ClassVar
 from urllib.parse import parse_qs, urlparse
+
+try:
+    import fcntl
+except ImportError:  # Windows has no fcntl: the refused-refresh re-read still helps
+    fcntl = None
 
 from mcp.client.auth import OAuthClientProvider, TokenStorage
 from mcp.shared.auth import (
@@ -60,6 +83,16 @@ CALLBACK_PATH = "/callback"
 # Every sentence that tells the person how long a link lasts reads it through
 # `sign_in_minutes`, so the words cannot drift from the wait.
 SIGN_IN_TIMEOUT = 900.0
+
+
+# A token is refreshed this many seconds before it expires, so a request that
+# sets out with it does not arrive at the server just after it lapsed.
+EXPIRY_MARGIN = 60.0
+
+# How long a process waits for another one to finish its refresh. A refresh is
+# one HTTP request; after this long the holder is presumed stuck, and this
+# process refreshes without the lock rather than stop the turn.
+LOCK_TIMEOUT = 30.0
 
 
 def sign_in_minutes() -> int:
@@ -130,10 +163,29 @@ class FileTokenStorage(TokenStorage):
         tmp.replace(self._path)
 
     async def get_tokens(self):
-        if not self.matches():
-            return None
-        raw = self._read().get("tokens")
-        return OAuthToken.model_validate(raw) if raw else None
+        return self.read_tokens()[0]
+
+    def read_tokens(self) -> tuple[OAuthToken | None, float | None]:
+        """The stored token and the moment the SDK should treat it as expired.
+
+        The SDK computes expiry from `expires_in` when a token arrives, and
+        forgets it when the process ends. `expires_at`, written beside the
+        token, is what survives. A file from before `expires_at` was kept
+        cannot say when its token was issued: one that can be refreshed is
+        treated as expired, which costs one refresh, and one that cannot keeps
+        the SDK's old reading, no expiry known.
+        """
+        data = self._read() if self.matches() else {}
+        raw = data.get("tokens")
+        if not raw:
+            return None, None
+        token = OAuthToken.model_validate(raw)
+        if isinstance(data.get("expires_at"), (int, float)):
+            return token, data["expires_at"] - EXPIRY_MARGIN
+        if token.refresh_token and token.expires_in is not None:
+            # Not 0: the SDK reads an expiry of 0 as "no expiry".
+            return token, 1.0
+        return token, None
 
     def _own(self) -> dict:
         """The file's data, or a fresh start when it belongs to another
@@ -146,7 +198,39 @@ class FileTokenStorage(TokenStorage):
     async def set_tokens(self, tokens) -> None:
         data = self._own()
         data["tokens"] = tokens.model_dump(mode="json", exclude_none=True)
+        # The absolute expiry, so the next process to load this file knows it.
+        data.pop("expires_at", None)
+        if tokens.expires_in is not None:
+            data["expires_at"] = time.time() + int(tokens.expires_in)
         self._write(data)
+
+    async def lock(self):
+        """An exclusive lock on this server's tokens across processes, or None.
+
+        A refresh spends the refresh token, so only one process may hold one
+        in flight. The lock is `flock` on a file beside the tokens, which the
+        operating system releases if the holder dies. This waits on the event
+        loop rather than blocking it, and gives up after LOCK_TIMEOUT."""
+        if fcntl is None:
+            return None
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(self._path.with_suffix(".lock"), os.O_RDWR | os.O_CREAT, 0o600)
+        deadline = time.monotonic() + LOCK_TIMEOUT
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                return fd
+            except BlockingIOError:
+                if time.monotonic() > deadline:
+                    os.close(fd)
+                    return None
+                await asyncio.sleep(0.05)
+
+    @staticmethod
+    def unlock(fd) -> None:
+        if fd is not None:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+            os.close(fd)
 
     async def get_client_info(self):
         if not self.matches():
@@ -251,6 +335,77 @@ class SignInNeeded(RuntimeError):
     left out of that turn instead, and the person signs in when they choose."""
 
 
+class _FileSharedProvider(OAuthClientProvider):
+    """The SDK's provider, made to share one token file with other processes.
+
+    It changes three moments of the SDK's flow, and nothing else:
+
+    - loading: the stored expiry is restored with the token, so an hour-old
+      token is refreshed instead of sent;
+    - before a refresh: the lock is taken and the file read again, and tokens
+      another process wrote are used, refreshed only if they expired too;
+    - after a refused refresh: the file is read once more, because a process
+      that takes no lock (an older Waku) may have rotated the token meanwhile.
+
+    These override private methods of `mcp`'s `OAuthClientProvider` (2.x);
+    `evals/deterministic/test_mcp_oauth_refresh.py` fails if they stop being
+    called.
+    """
+
+    def __init__(self, *, storage: FileTokenStorage, **kwargs) -> None:
+        super().__init__(storage=storage, **kwargs)
+        self._file = storage
+
+    async def _initialize(self) -> None:
+        await super()._initialize()
+        self.context.token_expiry_time = self._file.read_tokens()[1]
+
+    def _adopt_file_tokens(self) -> bool:
+        """Take the file's tokens when they differ from the ones in memory.
+
+        Tokens only move forward, so a file that differs was written by a
+        newer refresh or sign-in than the one this process holds."""
+        token, expiry = self._file.read_tokens()
+        mine = self.context.current_tokens
+        if token is None or (mine is not None and
+                             (token.access_token, token.refresh_token)
+                             == (mine.access_token, mine.refresh_token)):
+            return False
+        self.context.current_tokens = token
+        self.context.token_expiry_time = expiry
+        return True
+
+    async def _handle_refresh_response(self, response) -> bool:
+        if response.status_code != 200 and self._adopt_file_tokens() \
+                and self.context.is_token_valid():
+            return True
+        return await super()._handle_refresh_response(response)
+
+    async def _auth_flow(self, request):
+        if not self._initialized:
+            await self._initialize()
+        held = None
+        if not self.context.is_token_valid() and self.context.can_refresh_token():
+            held = await self._file.lock()
+            self._adopt_file_tokens()
+        flow = super()._auth_flow(request)
+        try:
+            outgoing = await flow.__anext__()
+            while True:
+                if outgoing is request and held is not None:
+                    # The refresh is over and written: the request itself, and
+                    # any sign-in after it, run without holding other processes.
+                    self._file.unlock(held)
+                    held = None
+                response = yield outgoing
+                outgoing = await flow.asend(response)
+        except StopAsyncIteration:
+            return
+        finally:
+            self._file.unlock(held)
+            await flow.aclose()
+
+
 def build_provider(server_url: str, server_name: str, home: Path,
                    open_url=None, on_sign_in_needed=None) -> OAuthClientProvider:
     """The provider the HTTP client authenticates with.
@@ -268,6 +423,9 @@ def build_provider(server_url: str, server_name: str, home: Path,
     sign-in is reported to it by server name and refused, and nothing opens.
     A refresh of an existing token still happens silently, since the SDK
     calls this handler only when no token can be refreshed.
+
+    The provider is `_FileSharedProvider`, which keeps a sign-in alive across
+    processes and restarts (the module docstring says why).
     """
     storage = FileTokenStorage(home, server_name, server_url)
     port = callback_port(storage)
@@ -331,7 +489,7 @@ def build_provider(server_url: str, server_name: str, home: Path,
             code=result["code"], state=result.get("state"), iss=result.get("iss")
         )
 
-    return OAuthClientProvider(
+    return _FileSharedProvider(
         server_url=server_url,
         client_metadata=metadata,
         storage=storage,
