@@ -184,6 +184,15 @@ def digest_thread(conn: sqlite3.Connection, channel: str) -> str:
     return row["receipt"] if row else ""
 
 
+def _still_running(conn: sqlite3.Connection, run_id: str) -> bool:
+    """Whether the run that wrote a row has not finished yet."""
+    try:
+        row = conn.execute("SELECT status FROM runs WHERE id = ?", (int(run_id),)).fetchone()
+    except (TypeError, ValueError, sqlite3.OperationalError):
+        return False
+    return row is not None and row["status"] == "running"
+
+
 def resolve_target(conn: sqlite3.Connection, message: Message) -> dict | None:
     """Where a row goes now. A row marked `under_digest` goes into the thread
     of its run's digest once that digest is sent, or else under the newest
@@ -197,6 +206,11 @@ def resolve_target(conn: sqlite3.Connection, message: Message) -> dict | None:
         "SELECT status, receipt FROM outbox WHERE idempotency_key = ? "
         "AND json_extract(target, '$.digest') = 1", (f"{message.run_id}:0",)).fetchone()
     if own is not None and own["status"] == "pending":
+        return None
+    if own is None and _still_running(conn, message.run_id):
+        # The digest is the run's last reply, so it does not exist while the
+        # run is working. Found in the live check (2026-11-26): the request
+        # was posted 2 seconds before its digest, alone in the channel.
         return None
     thread = (own["receipt"] if own is not None and own["status"] == "sent" and own["receipt"]
               else digest_thread(conn, str(target.get("channel", ""))))
