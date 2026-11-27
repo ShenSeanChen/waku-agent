@@ -1037,6 +1037,9 @@ which holds the platform key and nothing else does:
   Memory key yet, or Waku Memory unreachable
   (`hosted/proxy/prices.py`). Each call reserves its worst case first, from
   Anthropic's `count_tokens`, and is settled from the usage Anthropic reports.
+  When `count_tokens` fails, the reservation uses an estimate of one token per
+  two bytes of the request, which is always above the real count, and the call
+  still runs.
   A person at their dollar never reaches Anthropic, and is refused with the
   same `credits_used_up` answer as below, in the Free sentence.
 - **The limits.** 4 calls at once and 60 a minute per person, 16 at once

@@ -238,13 +238,23 @@ def test_a_call_whose_worst_case_would_pass_the_cap_is_refused_before_anthropic(
     assert status == 403 and sent == [] and reserved == 0
 
 
-def test_a_failed_count_is_a_529_and_reserves_nothing(tmp_path):
+def test_a_failed_count_still_runs_the_call_on_an_estimate(tmp_path):
+    # Sean, 2026-11-26: a failed count_tokens refused every chat turn with a 529.
     async def go():
         async with Rig(tmp_path, FakeUpstream(count_raises=True)) as rig:
             status, _ = await rig.call()
-            return status, rig.ledger.spend(TENANT, MONTH), rig.upstream.bodies
+            return status, len(rig.upstream.bodies)
 
-    assert _run(go()) == (529, (0.0, 0.0), [])
+    assert _run(go()) == (200, 1)
+
+
+def test_the_fallback_estimate_is_above_the_real_count():
+    from hosted.proxy.app import estimate_input_tokens
+    english = {"model": SONNET, "messages": [{"role": "user", "content": "What is waiting for me on the board? " * 50}]}
+    chinese = {"model": SONNET, "messages": [{"role": "user", "content": "手机说一句，每个AI都记得。" * 50}]}
+    # About 9 tokens per English sentence and about 12 per Chinese one.
+    assert estimate_input_tokens(english) > 9 * 50
+    assert estimate_input_tokens(chinese) > 12 * 50
 
 
 def test_a_fifth_call_at_once_is_a_429(tmp_path):
