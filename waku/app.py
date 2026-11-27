@@ -408,11 +408,13 @@ class Waku:
     def _receipt(self, result: LoopResult, events: list, meta: dict, row_id: int | None) -> None:
         charges = getattr(self.client, "charges", None)   # waku-platform only
         turn_id = self.tracer.turn_id
+        answer = charges(turn_id) if callable(charges) else None
         result.receipt = receipts.build(
             events, turn_id=turn_id, model=meta["model"] or "",
             provider=self.settings.provider, default_model=self.settings.model or "",
-            used=len(result.used),
-            charges=charges(turn_id) if callable(charges) else None)
+            used=len(result.used), charges=answer)
+        state = answer.get("credits_state") if isinstance(answer, dict) else None
+        result.credits_state = state if state in ("ok", "low", "empty") else None
         meta.update(turn_id=turn_id, receipt=result.receipt)
         if row_id is not None:
             self.memory.update_meta(row_id, meta)

@@ -11,7 +11,8 @@ PER REQUEST, IN ORDER:
      as the model path's x-api-key does. Unknown or disabled is a 401.
   2. Can they pay. treg is paid in the person's Waku Memory credits, so a
      tenant with no Waku Memory key yet is refused (nothing could be charged),
-     and a Free person at zero credits is refused (spec 004 D2's check). An
+     and a person Waku Memory says is out of credits is refused with the
+     model call's own refusal, code credits_used_up (spec 042). An
      unreachable Waku Memory fails open, as D2 does; the per-call ceiling and
      treg's own per-customer budget still hold.
   3. What. A JSON-RPC body is parsed, never passed through unread. tools/call
@@ -40,6 +41,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import time
 from collections.abc import Callable
 
 import aiohttp
@@ -47,7 +49,7 @@ from aiohttp import web
 
 from hosted import jsonsock, log
 from hosted.proxy.admission import Refused
-from hosted.proxy.app import SIGN_IN_AGAIN, Resolve, Wallet, out_of_free_credits
+from hosted.proxy.app import SIGN_IN_AGAIN, Resolve, Wallet, credits_refusal
 from hosted.proxy.turns import TurnCharges
 
 _LOG = log.get(__name__)
@@ -82,7 +84,6 @@ UPSTREAM_TIMEOUT = aiohttp.ClientTimeout(total=300, sock_connect=10)
 
 NO_WALLET = ("treg is paid in Waku credits, and this account has no Waku Memory key yet. "
              "Sign in to Waku again.")
-NO_CREDITS = "No Waku credits left for treg. Add credits at waku.one."
 
 
 def _refusal(refused: Refused) -> web.Response:
@@ -205,7 +206,8 @@ class TregRelay:
     def __init__(self, *, session: aiohttp.ClientSession, token: str, max_call_usd: float,
                  resolve: Resolve, memory_key: Callable[[str], str],
                  wallet: Wallet | None, upstream_url: str = TREG_MCP_URL,
-                 turns: TurnCharges | None = None) -> None:
+                 turns: TurnCharges | None = None,
+                 now: Callable[[], float] = time.time) -> None:
         if not token:
             raise ValueError("the treg relay needs WAKU_TREG_TOKEN; without one it is off")
         self._session = session
@@ -215,6 +217,7 @@ class TregRelay:
         self._memory_key = memory_key
         self._wallet = wallet
         self._upstream_url = upstream_url
+        self._now = now
         # Waku-agent spec 011 B1: each charge also counts toward the tenant's
         # latest chat turn, for that turn's receipt.
         self._turns = turns
@@ -250,8 +253,11 @@ class TregRelay:
         key = self._memory_key(token)
         if not key or self._wallet is None:
             raise Refused(403, "permission_error", NO_WALLET)
-        if await out_of_free_credits(self._wallet, key):
-            raise Refused(403, "permission_error", NO_CREDITS)
+        # The same refusal as a model call's (spec 042): code credits_used_up
+        # and the sentence Waku Memory wrote for this person's plan.
+        refused = await credits_refusal(self._wallet, key, self._now())
+        if refused is not None:
+            raise refused
 
         # --- 3: what --------------------------------------------------------
         body, calls = b"", {}

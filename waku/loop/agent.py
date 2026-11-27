@@ -43,6 +43,25 @@ LIMIT_NOTE = ("You have reached the step limit for this turn and cannot call any
 LIMIT_REPLY = "(I hit my iteration limit before finishing — try breaking the request into smaller steps.)"
 
 
+# The hosted proxy's code for a person whose Waku credits ran out (spec 042).
+# Its message is a sentence written for that person, with the link to pay.
+CREDITS_USED_UP = "credits_used_up"
+
+
+def credits_notice(exc: BaseException) -> str | None:
+    """The sentence to show when the provider refused the call because the
+    person is out of Waku credits, or None for any other failure.
+
+    The SDK keeps the refusal's JSON on `exc.body`. The code is read rather
+    than the English, so a copy edit on the platform never breaks this."""
+    body = getattr(exc, "body", None)
+    error = body.get("error") if isinstance(body, dict) else None
+    if not isinstance(error, dict) or error.get("code") != CREDITS_USED_UP:
+        return None
+    message = error.get("message")
+    return message.strip() if isinstance(message, str) and message.strip() else None
+
+
 def error_text(exc: BaseException) -> str:
     """What the user reads when a call fails.
 
@@ -55,6 +74,9 @@ def error_text(exc: BaseException) -> str:
     entry in a run's `errors` map — and two copies of this would drift the
     way the dashboard's two chat implementations once did.
     """
+    notice = credits_notice(exc)
+    if notice:
+        return notice
     message = getattr(exc, "message", "")
     if message and getattr(exc, "status_code", 0):
         return str(message)
@@ -90,6 +112,10 @@ class LoopResult:
     # `notices` too; this copy is what a text gateway adds to its reply,
     # since a phone has no place under the reply to draw them.
     sign_in_notices: list[str] = field(default_factory=list)
+    # Spec 042: "ok", "low" or "empty", what the hosted proxy's charges
+    # answer said about the person's Waku credits after this turn. None
+    # off the hosted platform, or when the proxy did not say.
+    credits_state: str | None = None
 
 
 def text_with_sign_in(result) -> str:

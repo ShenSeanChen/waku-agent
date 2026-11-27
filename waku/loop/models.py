@@ -398,7 +398,8 @@ class TurnTagged:
     `X-Waku-Turn: <turn_id>`, which the metering proxy reads and never
     forwards to Anthropic, and `charges()` asks the proxy what the turn was
     charged: `GET /v1/turns/<turn_id>/charges` answers
-    `{"model_usd", "calls", "credits"}`. It goes to the same proxy, with the
+    `{"model_usd", "calls", "credits", "credits_state"}`, the last one "ok",
+    "low" or "empty" for the person's Waku credits (spec 042). It goes to the same proxy, with the
     same platform token, as every model call; no other provider sends either.
     """
 

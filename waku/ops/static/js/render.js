@@ -477,7 +477,10 @@ function applyStreamEvent(pending, ev){
     pending.stream = "";   // a new assistant turn begins after the tool result
   } else if (ev.kind === "done"){
     pending.pending = false; pending.stream = "";
-    if (ev.error) pending.reply = "Error: " + ev.error;
+    // A notice (spec 042: the person's Waku credits ran out) is a sentence
+    // to act on, with its link already in Markdown, so it reads as the reply.
+    if (ev.notice) pending.reply = ev.notice;
+    else if (ev.error) pending.reply = "Error: " + ev.error;
     else Object.assign(pending, ev, {report: ev.report || pending.report,
                                      consolidation: ev.consolidation || pending.consolidation});
     // reply, tools, gate, iterations, latency_ms, consolidation, report
