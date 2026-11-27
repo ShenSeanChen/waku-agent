@@ -322,6 +322,9 @@ sign-in inside the container (spec 004):
    `waku-agent`, which Waku Memory labels as Origin `waku`.
    Company research goes to the project `Company brain`; everything else goes
    to scope `global`. A failed send is retried at the next turn.
+5. The agent is not offered any tool whose name on that server starts with
+   `ui.`. Those tools draw Waku Memory's own screens, and the hosted agent
+   draws none (spec 039).
 
 Provisioning creates `.env` only when it is missing. A tenant provisioned
 before spec 006 keeps the laptop default of 6 exchanges until
@@ -350,7 +353,11 @@ curl -N https://agent.waku.one/v1/chat \
 The gateway verifies the token exactly as it does at sign-in, finds or creates
 that person's tenant, mints their Waku Memory key if they have none, and relays
 the container's own `/api/chat/stream`: Server-Sent Events, ending in a frame
-with `"kind": "done"`. The turn counts against the same hourly quota as a turn
+with `"kind": "done"`. The first frame is `{"kind": "thinking"}`, sent before
+the turn's first model call, and each tool call sends
+`{"kind": "tool_start", "tool": "<name>", "call_id": "<id>"}` before it runs
+and a `tool` frame with the same `call_id` after it (spec 039). A client
+ignores any kind it does not know. The turn counts against the same hourly quota as a turn
 typed into the dashboard. The container never sees the token. The route ignores
 cookies, so it does not check `Origin`; it still requires a JSON body.
 
@@ -1040,6 +1047,10 @@ which holds the platform key and nothing else does:
   When `count_tokens` fails, the reservation uses an estimate of one token per
   two bytes of the request, which is always above the real count, and the call
   still runs.
+  A call with a cache breakpoint reserves the prompt-cache tokens the person's
+  last call on that model read or wrote, within the last five minutes, at the
+  cache read price ($0.10 a million on Sonnet 5.5); with no such call, it
+  reserves its input at the cache write price (spec 039).
   A person at their dollar never reaches Anthropic, and is refused with the
   same `credits_used_up` answer as below, in the Free sentence.
 - **Bedrock behind Anthropic** (spec 043). With `WAKU_BEDROCK_KEY` set in
@@ -1052,9 +1063,12 @@ which holds the platform key and nothing else does:
   sends every turn to Bedrock. Empty `WAKU_BEDROCK_KEY` turns Bedrock off.
 - **The limits.** 4 calls at once and 60 a minute per person, 16 at once
   across the VM, `max_tokens` at most 8192.
-- **What it refuses.** Images, documents, server tools, `cache_control` and any
+- **What it refuses.** Images, documents, server tools, a `cache_control`
+  other than `{"type": "ephemeral"}` (the one-hour form included), and any
   body field outside the allowlist. Thinking blocks Sonnet returns are accepted
-  back, because Waku sends them on the next call.
+  back, because Waku sends them on the next call. The five-minute
+  `cache_control` is accepted (spec 039), so the calls of one turn read the
+  tools and system prompt from Anthropic's prompt cache.
 
 - **One wallet.** Each settled call is also charged to the person's waku.one
   credits, at 37,500 credits a dollar (1.5× model cost), with their own Waku Memory key (spec
@@ -1229,6 +1243,13 @@ the most model calls with tools one turn may make. At the limit the loop makes
 one more call with tools off and answers from what the turn gathered. Like
 the line above, a running tenant gets it on its next start; `upgrade.sh --now`
 restarts every tenant onto it at once.
+
+**A tenant turn re-sends six earlier turns.** Every tenant container starts
+with `WAKU_HISTORY_TURNS=6` and `WAKU_HISTORY_ANSWER_CHARS=1500`
+(`TENANT_HISTORY_TURNS` and `TENANT_HISTORY_ANSWER_CHARS` in
+`spawner/template.py`). Each model call of a turn sends the six turns before
+it, with each earlier answer cut to 1,500 characters; the chat log keeps every
+answer whole. A laptop keeps twelve turns, uncut (spec 039).
 
 ### A second fence: treg's per-customer daily budget
 

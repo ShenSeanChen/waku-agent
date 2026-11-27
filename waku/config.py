@@ -229,6 +229,11 @@ class Settings:
     # gate when relevant. Without this cap a long thread (esp. the always-on
     # Telegram session) resends its whole history every turn until it explodes.
     history_turns: int = field(default_factory=lambda: int(os.getenv("WAKU_HISTORY_TURNS", "12")))
+    # Spec 039 A3: each earlier answer in that window is cut to this many
+    # characters; the chat log keeps it whole. 0, a laptop's default, cuts
+    # nothing. A hosted container is started with 1500.
+    history_answer_chars: int = field(
+        default_factory=lambda: int(os.getenv("WAKU_HISTORY_ANSWER_CHARS", "0")))
     # Tools a deployment does not offer, comma-separated as the model names
     # them (<server>_<tool> for MCP). The system prompt says not to call them.
     # Empty on a laptop; a hosted container is started with treg's balance and

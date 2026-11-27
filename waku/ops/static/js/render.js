@@ -411,7 +411,7 @@ const streamingCard = m => uiCard(`
   ${reportCard(m.report)}
   ${m.stream
      ? `<div class="r" style="margin-top:var(--space-2)">${renderMarkdown(m.stream)}<span class="caret"></span></div>`
-     : `<div class="meta" style="margin:0">thinking&hellip;${m.started?` ${Math.round((Date.now()-m.started)/1000)}s`:""}${
+     : `<div class="meta" style="margin:0">${esc(m.status || "thinking")}&hellip;${m.started?` ${Math.round((Date.now()-m.started)/1000)}s`:""}${
          m.started && Date.now()-m.started > 20000
          ? `<br>still waiting: slow models (free tiers especially) can queue for a while; this errors out at the WAKU_LLM_TIMEOUT limit instead of hanging forever`
          : ""}</div>`}`, {cls: "reply"});
@@ -443,6 +443,16 @@ function syncChatLogs(){
   });
 }
 
+// Spec 039 E4: the words the waiting card shows for a tool that has started.
+// The waku.one sidebar embeds this chat, and an empty "thinking" for fifteen
+// seconds was what people called slow. The phone uses the same words.
+function toolStatus(tool){
+  const t = String(tool || "");
+  if (/memory|recall|remember/i.test(t)) return "Searching your memories";
+  if (/board/i.test(t)) return "Checking the board";
+  return "Using " + t.replace(/_/g, " ");
+}
+
 // One streamed harness event updates the live card in place.
 function applyStreamEvent(pending, ev){
   // Graph events arrive here too when a workflow is called from the chat box.
@@ -461,6 +471,8 @@ function applyStreamEvent(pending, ev){
     (pending.nodes = pending.nodes || {})[ev.node] =
       {status: ev.error ? "error" : "done", ms: ev.ms};
   }
+  if (ev.kind === "thinking") pending.status = "Thinking";
+  else if (ev.kind === "tool_start") pending.status = toolStatus(ev.tool);
   if (ev.kind === "report") pending.report = ev;
   else if (ev.kind === "consolidation") pending.consolidation = ev;
   else if (ev.kind === "gate") pending.gate = {decision: ev.decision, reason: ev.reason};
@@ -475,6 +487,7 @@ function applyStreamEvent(pending, ev){
       status: (ev.output||"").toLowerCase().startsWith("error") ? "error" : "ok",
       summary: (ev.output || "").split(". ")[0].slice(0,120)});
     pending.stream = "";   // a new assistant turn begins after the tool result
+    pending.status = "Thinking";
   } else if (ev.kind === "done"){
     pending.pending = false; pending.stream = "";
     // A notice (spec 042: the person's Waku credits ran out) is a sentence

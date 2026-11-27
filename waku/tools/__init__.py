@@ -21,6 +21,10 @@ from waku.tools import (
 )
 from waku.tools.registry import ToolRegistry
 
+# Spec 039 A2: MCP tools a hosted agent is not offered, by the server's own
+# name for them (`ui.memories`, `ui.state`, ...).
+HOSTED_LEFT_OUT_PREFIX = "ui."
+
 
 def build_registry(conn: sqlite3.Connection, settings: Settings, memory=None,
                    session_id: Callable[[], str] | None = None) -> ToolRegistry:
@@ -138,7 +142,13 @@ def build_registry(conn: sqlite3.Connection, settings: Settings, memory=None,
             skip = is_waku_memory if memory_off else None
             bridge = MCPBridge(mcp_config, skip=skip, extra_servers=plugin_servers,
                                interactive=False)
+            hosted = os.getenv("WAKU_HOSTED", "") == "1"
             for t in bridge.start():
+                # Spec 039 A2: Waku Memory's ui.* tools draw Waku's own
+                # screens, and a hosted agent draws none. Their schemas were
+                # about 5,100 tokens on every model call of every turn.
+                if hosted and t.mcp and t.mcp[1].startswith(HOSTED_LEFT_OUT_PREFIX):
+                    continue
                 registry.register(t)
             registry.mcp_bridge = bridge  # so Waku.close() can stop the servers
         except ImportError:

@@ -66,15 +66,21 @@ def test_a_free_model_without_a_price_is_refused_at_startup():
 
 
 def test_prices_are_the_published_rates():
-    """claude-api skill table, cached 2026-09-25: $/M tokens."""
-    assert prices.PRICES["claude-sonnet-5-5"] == prices.Price(2.00, 10.00, 2.50, 0.20)
+    """claude-api skill table, cached 2026-09-25: $/M tokens. A Sonnet 5.5
+    cache read is $0.10, the list price (spec 039 F14); it read $0.20."""
+    assert prices.PRICES["claude-sonnet-5-5"] == prices.Price(2.00, 10.00, 2.50, 0.10)
     assert prices.PRICES["claude-haiku-4-5"] == prices.Price(1.00, 5.00, 1.25, 0.10)
 
 
 def test_a_calls_cost_prices_all_four_usage_fields():
     usage = {"input_tokens": 1_000_000, "output_tokens": 100_000,
              "cache_creation_input_tokens": 1_000_000, "cache_read_input_tokens": 1_000_000}
-    assert prices.cost("claude-sonnet-5-5", usage) == pytest.approx(2.0 + 1.0 + 2.5 + 0.2)
+    assert prices.cost("claude-sonnet-5-5", usage) == pytest.approx(2.0 + 1.0 + 2.5 + 0.1)
+
+
+def test_a_million_cache_read_tokens_on_sonnet_cost_ten_cents():
+    assert prices.cost("claude-sonnet-5-5",
+                       {"cache_read_input_tokens": 1_000_000}) == pytest.approx(0.10)
 
 
 def test_a_missing_usage_field_counts_as_zero():
@@ -84,6 +90,24 @@ def test_a_missing_usage_field_counts_as_zero():
 def test_the_worst_case_is_ten_percent_more_input_and_every_output_token():
     assert prices.worst_case("claude-sonnet-5-5", input_tokens=1_000_000,
                              max_tokens=100_000) == pytest.approx(1.1 * 2.0 + 1.0)
+
+
+def test_the_worst_case_counts_cached_tokens_at_the_cache_read_price():
+    """Spec 039 B2: tokens a warm cache will serve are reserved at $0.10/M,
+    so a person near the end of their credits is not refused too early."""
+    assert prices.worst_case("claude-sonnet-5-5", input_tokens=1_000_000, max_tokens=0,
+                             cached_tokens=800_000) == pytest.approx(
+        0.8 * 0.10 + 0.2 * 1.1 * 2.0)
+    # never more cached tokens than the call has
+    assert prices.worst_case("claude-sonnet-5-5", input_tokens=100, max_tokens=0,
+                             cached_tokens=1_000_000) == pytest.approx(100 * 0.10 / 1e6)
+
+
+def test_a_call_that_may_write_the_cache_reserves_the_write_price():
+    """A cache write costs 1.25x input, more than the 10% margin: a call with
+    a breakpoint and no warm cache reserves its input at the write price."""
+    assert prices.worst_case("claude-sonnet-5-5", input_tokens=1_000_000, max_tokens=0,
+                             writes_cache=True) == pytest.approx(2.50)
 
 
 def test_no_price_is_ever_written_as_a_literal_outside_the_table():

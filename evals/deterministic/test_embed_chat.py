@@ -987,3 +987,105 @@ def test_the_dashboard_is_reached_from_the_more_menu():
     since 2026-10-11, and still runs openDashboard()."""
     assert 'onclick="toggleMoreMenu(event)"' in EMBED
     assert 'onclick: "closeMenu();openDashboard()"' in (JS / "dock.js").read_text(encoding="utf-8")
+
+
+# --- spec 039 E2: `thinking` first, `tool_start` before each tool ---------------------
+
+
+def test_the_stream_says_thinking_before_the_first_model_call_and_names_each_tool(
+        home, monkeypatch):
+    """A person waited about 15 seconds on an empty screen (spec 039). The
+    stream now opens with `thinking`, before the turn's first model call, and
+    says `tool_start` before each tool runs, with the call id its `tool`
+    event repeats."""
+    from evals.helpers import response, text_block, tool_block
+
+    home.client = ScriptedClient([
+        response([text_block('{"retrieve": false, "query": "", "reason": "t"}')]),
+        response([tool_block("save_note", {"subject": "Emily", "content": "designer"}, "tu_9")],
+                 "tool_use"),
+        response([text_block("Saved.")]),
+    ])
+    home.memory.client = home.client
+    monkeypatch.setattr(dashboard, "get_agent", lambda: home)
+    monkeypatch.setattr(dashboard, "maybe_rotate_session", lambda agent: None)
+    frames: list[dict] = []
+    dashboard.chat_stream("remember that Emily is a designer",
+                          lambda kind, ev: frames.append({"kind": kind, **ev}))
+    kinds = [f["kind"] for f in frames]
+    assert kinds[0] == "thinking"
+    start = kinds.index("tool_start")
+    assert frames[start] == {"kind": "tool_start", "tool": "save_note", "call_id": "tu_9"}
+    tool = next(f for f in frames if f["kind"] == "tool")
+    assert tool["call_id"] == "tu_9" and start < kinds.index("tool")
+    assert kinds[-1] == "done", frames[-1]
+    assert frames[-1].get("reply") == "Saved.", frames[-1]
+
+
+def test_thinking_is_sent_before_the_agent_is_built_or_called(monkeypatch):
+    """The first frame must not wait for the turn: it goes out before
+    get_agent (which may connect MCP servers) and before the agent lock."""
+    from types import SimpleNamespace
+
+    order: list[str] = []
+
+    class FakeAgent:
+        settings = SimpleNamespace(model="m", small_model="s", provider="p")
+
+        def respond(self, message, observer, source, stream):
+            order.append("respond")
+            return SimpleNamespace(reply="hi", tool_calls=[], iterations=1)
+
+    def build():
+        order.append("get_agent")
+        return FakeAgent()
+
+    monkeypatch.setattr(dashboard, "get_agent", build)
+    monkeypatch.setattr(dashboard, "maybe_rotate_session", lambda agent: None)
+    dashboard.chat_stream("hello", lambda kind, ev: order.append(kind))
+    assert order[:3] == ["thinking", "get_agent", "respond"]
+    assert order[-1] == "done"
+
+
+@needs_node
+def test_a_chat_that_does_not_know_a_kind_draws_the_same_answer():
+    """An older client must still render every answer: the chat's reducer
+    ignores `thinking`, `tool_start` and any kind it has never seen."""
+    got = _node({"files": CHAT_FILES, "referrer": "", "origins": DEFAULT, "framed": False,
+                 "events": [], "state": 200}, f"""
+    const apply = vm.runInContext("applyStreamEvent", ctx);
+    const plain = {{role: "waku", pending: true, stream: ""}};
+    for (const ev of {json.dumps([REPORT, KEPT, DONE])}) apply(plain, ev);
+    const told = {{role: "waku", pending: true, stream: ""}};
+    for (const ev of {json.dumps([{"kind": "thinking"}, REPORT,
+                                  {"kind": "tool_start", "tool": "save_note", "call_id": "tu_1"},
+                                  {"kind": "a_kind_from_the_future", "x": 1}, KEPT, DONE])})
+      apply(told, ev);
+    const card = vm.runInContext("chatTurnCard", ctx);
+    console.log(JSON.stringify({{plain: card(plain), told: card(told)}}));""")
+    assert got["told"] == got["plain"]
+    assert "Three findings. Report saved." in got["told"]
+
+
+@needs_node
+def test_the_waiting_card_says_what_the_agent_is_doing():
+    """Spec 039 E4: the waku.one sidebar embeds this chat. Before, it showed a
+    bare "thinking" for the whole wait; now it names the step, the way the
+    phone does (waku-mobile-frontend PR #14)."""
+    got = _node({"files": CHAT_FILES, "referrer": "", "origins": DEFAULT, "framed": False,
+                 "events": [], "state": 200}, """
+    const apply = vm.runInContext("applyStreamEvent", ctx);
+    const card = vm.runInContext("streamingCard", ctx);
+    const pending = {role: "waku", pending: true, stream: ""};
+    const seen = [];
+    apply(pending, {kind: "thinking"}); seen.push(card(pending));
+    apply(pending, {kind: "tool_start", tool: "waku_memory_memory_search", call_id: "t1"});
+    seen.push(card(pending));
+    apply(pending, {kind: "tool", tool: "waku_memory_memory_search", output: "2 facts"});
+    apply(pending, {kind: "tool_start", tool: "check_calendar", call_id: "t2"});
+    seen.push(card(pending));
+    console.log(JSON.stringify({seen}));""")
+    first, memory, other = got["seen"]
+    assert "Thinking&hellip;" in first
+    assert "Searching your memories&hellip;" in memory
+    assert "Using check calendar&hellip;" in other

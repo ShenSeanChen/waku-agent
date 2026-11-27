@@ -26,7 +26,7 @@ from hosted import jsonsock, log
 from hosted.core.quota import utc_month
 from hosted.ports.upstream import Upstream
 from hosted.proxy import credits, prices
-from hosted.proxy.admission import Refused, admit, forward_headers
+from hosted.proxy.admission import Refused, admit, asks_cache, forward_headers
 from hosted.proxy.config import ProxyConfig
 from hosted.proxy.ledger import Ledger
 from hosted.proxy.turns import TurnCharges, turn_id
@@ -52,6 +52,10 @@ CONNECT_LINK_PATH = "/connect/link"
 # The three actions are the whole route: /mail/send matches nothing.
 MAIL_PATH = "/mail/{action:search|read|draft}"
 RATE_WINDOW_SECONDS = 60.0
+# How long Anthropic keeps a five-minute cache entry after its last read or
+# write (spec 039 B2). A prefix seen within this window is reserved at the
+# cache read price.
+CACHE_SECONDS = 300.0
 # Waku-agent spec 011 B1: what one chat turn was charged.
 CHARGES_PATH = re.compile(r"/v1/turns/([^/]+)/charges")
 TURN_HEADER = "X-Waku-Turn"
@@ -215,6 +219,9 @@ class MeteringProxy:
         self._turns = turns if turns is not None else TurnCharges(monotonic)
         self._in_flight: dict[str, int] = defaultdict(int)
         self._recent: dict[str, deque[float]] = defaultdict(deque)
+        # (tenant, model) -> (prompt-cache tokens the last call read or wrote,
+        # when). Held in memory: a restart costs one call reserved at full price.
+        self._cached: dict[tuple[str, str], tuple[int, float]] = {}
         self._global = asyncio.Semaphore(config.global_concurrent_calls)
 
     def build(self) -> web.Application:
@@ -337,7 +344,8 @@ class MeteringProxy:
             counted = estimate_input_tokens(body)
             _LOG.warning("tenant=%s count_tokens failed, reserving an estimate of %d: %s",
                          tenant, counted, exc)
-        worst = prices.worst_case(model, input_tokens=counted, max_tokens=body["max_tokens"])
+        worst = prices.worst_case(model, input_tokens=counted, max_tokens=body["max_tokens"],
+                                  **self._cache_terms(tenant, model, body))
         settled, reserved = self._ledger.spend(tenant, month)
         if capped and settled + reserved + worst > self._config.monthly_cap_usd:
             raise self._cap_reached(self._now())
@@ -354,6 +362,29 @@ class MeteringProxy:
             return await self._forward(request, tenant, month, body, worst, key, turn)
         finally:
             self._global.release()
+
+    def _cache_terms(self, tenant: str, model: str, body: dict) -> dict:
+        """What the reservation may count as served by the prompt cache.
+
+        A call with a breakpoint reads the prefix the tenant's last call on
+        this model read or wrote, if that was within CACHE_SECONDS; with none
+        known, it may write the cache. A call without a breakpoint reads
+        nothing from it."""
+        if not asks_cache(body):
+            return {}
+        seen = self._cached.get((tenant, model))
+        if seen is not None and self._monotonic() - seen[1] < CACHE_SECONDS:
+            return {"cached_tokens": seen[0]}
+        return {"writes_cache": True}
+
+    def _remember_cache(self, tenant: str, model: str, usage: dict) -> None:
+        def tokens(name: str) -> int:
+            value = usage.get(name, 0)
+            return value if isinstance(value, int) and value > 0 else 0
+
+        prefix = tokens("cache_read_input_tokens") + tokens("cache_creation_input_tokens")
+        if prefix:
+            self._cached[(tenant, model)] = (prefix, self._monotonic())
 
     async def _forward(self, request: web.Request, tenant: str, month: str,
                        body: dict, worst: float, key: str,
@@ -417,6 +448,7 @@ class MeteringProxy:
         if usage is not None:
             if usage.final:
                 actual = prices.cost(model, usage.usage)
+                self._remember_cache(tenant, model, usage.usage)
             else:
                 actual = worst        # a cut stream: the call may have been billed
                 _LOG.warning("tenant=%s stream ended without usage; charged %.6f", tenant, worst)
@@ -427,6 +459,7 @@ class MeteringProxy:
                 reported = None
             if isinstance(reported, dict):
                 actual = prices.cost(model, reported)
+                self._remember_cache(tenant, model, reported)
             elif status >= 300:
                 self._ledger.release(tenant, month, worst)   # refused, not billed
                 return 0.0

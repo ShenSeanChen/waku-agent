@@ -14,7 +14,7 @@ from waku.config import Settings, load_settings
 from waku.db import connect
 from waku.loop import trim
 from waku.loop.agent import LoopResult, Observer, run_loop
-from waku.loop.models import get_client
+from waku.loop.models import PLATFORM, get_client
 from waku.memory import brain, reports, tool_note
 from waku.ops import receipt as receipts
 from waku.ops.tracing import Tracer, compose, metered
@@ -430,7 +430,14 @@ class Waku:
         # how long the conversation runs. Older turns live in state.db and
         # come back via the retrieval gate + episodic memory when relevant.
         window = self.settings.history_turns * 2
-        messages = self.session.history[-window:] + [
+        history = self.session.history[-window:]
+        # Spec 039 A3: a long earlier answer is re-sent cut, on every call of
+        # every later turn; the chat log keeps it whole. Off (0) by default.
+        if cap := self.settings.history_answer_chars:
+            history = [{**m, "content": tool_note.cap_reply(m["content"], cap)}
+                       if m["role"] == "assistant" and isinstance(m["content"], str) else m
+                       for m in history]
+        messages = history + [
             {"role": "user", "content": with_context(user_message, self._turn_context)}]
 
         # Spec 009 A: research starts from what the company brain already
@@ -460,6 +467,13 @@ class Waku:
                 # read is cut to its opening (waku/loop/trim.py)
                 trim=trim.chain(reports.shrink_read, trim.shrink_seen),
                 before_tool=self._before_tool(notify),
+                # Spec 039 B3: the hosted free tier's proxy takes one prompt-
+                # cache breakpoint, after the part of the system prompt that
+                # does not change. Every other provider gets one string, as
+                # before: not every endpoint that speaks Anthropic's format
+                # accepts cache_control.
+                cache_prefix=(self.session.stable_prefix
+                              if self.settings.provider == PLATFORM else ""),
             )
 
         result = loop()

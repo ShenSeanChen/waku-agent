@@ -147,13 +147,18 @@ def test_the_address_is_the_one_the_project_id_derives():
 def test_the_environment_is_the_specs_nine_variables_the_step_limit_and_the_hosted_mark():
     names = [entry.split("=", 1)[0] for entry in _tenant_body()["Env"]]
     assert names == ["WAKU_HOME", "WAKU_DASHBOARD_HOST", "WAKU_DASHBOARD_PORT",
-                     "TZ", "HOME", "WAKU_MAX_ITERATIONS", "WAKU_HOSTED",
+                     "TZ", "HOME", "WAKU_MAX_ITERATIONS", "WAKU_HISTORY_TURNS",
+                     "WAKU_HISTORY_ANSWER_CHARS", "WAKU_HOSTED",
                      "WAKU_PLATFORM_BASE_URL", "WAKU_PLATFORM_TOKEN",
                      "WAKU_PLATFORM_MODEL", "WAKU_PLATFORM_SMALL_MODEL"]
     assert "TZ=Asia/Shanghai" in _tenant_body()["Env"]
     # a hosted turn gets fifteen steps (2026-10-05: ten was not enough for a
     # research turn whose first lookups failed)
     assert "WAKU_MAX_ITERATIONS=15" in _tenant_body()["Env"]
+    # spec 039 A3: six earlier turns, each earlier answer cut to 1,500
+    # characters, where a laptop keeps twelve whole
+    assert "WAKU_HISTORY_TURNS=6" in _tenant_body()["Env"]
+    assert "WAKU_HISTORY_ANSWER_CHARS=1500" in _tenant_body()["Env"]
     # spec 026: the dashboard in a tenant container runs the always-on worker
     # and answers the gateway's two routes only when this is exactly "1"
     assert "WAKU_HOSTED=1" in _tenant_body()["Env"]

@@ -591,6 +591,9 @@ class FakeContainer:
         # before the container had written frame three", which is the whole
         # of what "unbuffered" means and is not a timing assertion.
         self.frame_delay = 0.0
+        # What /api/chat/stream sends, one dict per SSE frame. Three numbered
+        # frames unless a test sets the events a real turn streams.
+        self.frames: list[dict] = [{"n": index} for index in range(3)]
         self.finished = threading.Event()
         # Extra bytes to CLAIM in Content-Length and then not send, before
         # hanging up. A container killed for memory halfway through a
@@ -630,10 +633,10 @@ class FakeContainer:
                     self.send_header("Content-Type", "text/event-stream")
                     self.send_header("Set-Cookie", "evil=1")
                     self.end_headers()
-                    for index in range(3):
+                    for index, frame in enumerate(recorder.frames):
                         if index and recorder.frame_delay:
                             time.sleep(recorder.frame_delay)
-                        self.wfile.write(f"data: {{\"n\": {index}}}\n\n".encode())
+                        self.wfile.write(f"data: {json.dumps(frame)}\n\n".encode())
                         self.wfile.flush()
                     recorder.finished.set()
                     return

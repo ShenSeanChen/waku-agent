@@ -109,15 +109,22 @@ class Session:
         # MCP bridge is up; while it is set, one line steers the model to
         # save_note, so one turn does not save the same fact with both tools.
         self.remember_tool: str | None = None
+        # Spec 039 B3: the part of the latest build_system that does not
+        # change from turn to turn, which the hosted loop caches.
+        self.stable_prefix = ""
 
     def build_system(self, user_message: str, notify=None) -> str:
+        """The system prompt for one turn, in two parts (spec 039 B3).
+
+        First what does not change from turn to turn: SOUL.md, the model
+        line and the harness rules. It is kept as `self.stable_prefix`, and on
+        the hosted free tier the loop marks its end as a prompt-cache
+        breakpoint. Then what does: the current time, the retrieved memory
+        and the matched skills. The time used to be the second line, so every
+        byte after it changed once a minute and nothing could be cached."""
         from datetime import datetime
 
-        # The agent runs on your laptop, so it should know your laptop's clock.
-        # Local time WITH the timezone name — enough to resolve "in 30 minutes".
-        now = datetime.now().astimezone()
         parts = [load_soul(self.settings),
-                 f"\nRight now it is {now:%A, %Y-%m-%d %H:%M} ({now:%Z}, UTC{now:%z}).",
                  # the agent should know its own brain — "what model are you?"
                  # is the first question every curious user asks
                  (f"Your model: you are running on '{self.settings.model}' via the "
@@ -135,6 +142,12 @@ class Session:
 
         if self.remember_tool:
             parts.append(one_tool_line(self.remember_tool))
+        self.stable_prefix = "\n".join(parts)
+
+        # The agent runs on your laptop, so it should know your laptop's clock.
+        # Local time WITH the timezone name — enough to resolve "in 30 minutes".
+        now = datetime.now().astimezone()
+        parts.append(f"\nRight now it is {now:%A, %Y-%m-%d %H:%M} ({now:%Z}, UTC{now:%z}).")
 
         if self.memory is not None:
             # Hero moment #1: a cheap judge decides IF we retrieve at all —

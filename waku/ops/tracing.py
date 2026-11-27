@@ -149,8 +149,11 @@ class Tracer:
 
     # ---- the Observer: called by the loop for every llm/tool/gate/... event
     def event(self, kind: str, event: dict) -> None:
-        if kind == "text":
-            return  # streaming token deltas are for the live UI, not the trace
+        if kind in ("text", "tool_start"):
+            # streaming token deltas and "a tool has started" (spec 039 E1)
+            # are for the live UI, not the trace: the `tool` event that ends
+            # the call carries everything the trace keeps
+            return
         if kind == "llm":
             self._record_usage(event)
             # stamp WHICH brain answered — in a multi-model world (shootouts,

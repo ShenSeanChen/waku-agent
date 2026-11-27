@@ -115,7 +115,13 @@ def chat_stream(message: str, emit) -> None:
 
     A leading slash calls a graph workflow BY NAME instead of running a turn.
     Both doors end in the same 'done' event, so the chat renders the answer the
-    same way whether the harness routed it or you named the shape yourself."""
+    same way whether the harness routed it or you named the shape yourself.
+
+    Spec 039 E2: the first event is `thinking`, sent before the agent is
+    built or the agent lock is taken, so a client can draw a status line
+    within a second of sending. A client that does not know the kind
+    ignores it."""
+    emit("thinking", {})
     command = commands.parse(message)
     if command is not None:
         _run_command(command, emit)

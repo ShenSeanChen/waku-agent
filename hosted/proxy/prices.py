@@ -1,10 +1,11 @@
 """What a model call costs, in dollars. One table, so a price change is one edit.
 
-Claude rates are Anthropic's first-party list prices per million tokens, from the
-claude-api skill's model table (cached 2026-09-25). Cache writes are 1.25x
-input. The proxy refuses `cache_control`, so the two cache fields are normally
-zero, but every usage field is priced anyway: a field left out is spend nobody
-pays for.
+Claude rates are Anthropic's first-party list prices per million tokens, from
+the claude-api skill's model table (cached 2026-09-25). A five-minute cache
+write is 1.25x input and a cache read is 0.05x on Sonnet 5.5 ($0.10, spec 039
+F14) and 0.1x on Haiku 4.5. The proxy accepts only the five-minute
+`cache_control` (admission.py), and every usage field is priced: a field left
+out is spend nobody pays for.
 """
 
 from __future__ import annotations
@@ -24,7 +25,7 @@ class Price(NamedTuple):
 
 
 PRICES: dict[str, Price] = {
-    "claude-sonnet-5-5": Price(2.00, 10.00, 2.50, 0.20),
+    "claude-sonnet-5-5": Price(2.00, 10.00, 2.50, 0.10),
     "claude-haiku-4-5": Price(1.00, 5.00, 1.25, 0.10),
     # Spec 043: the Bedrock fallback. List price from third-party price pages
     # (spec 043, F6); Bedrock has no prompt cache for it, so both cache rates
@@ -47,7 +48,20 @@ def cost(model: str, usage: dict) -> float:
             + tokens("cache_read_input_tokens") * price.cache_read) / PER_MILLION
 
 
-def worst_case(model: str, *, input_tokens: int, max_tokens: int) -> float:
-    """The reservation: counted input plus the margin, and every output token."""
+def worst_case(model: str, *, input_tokens: int, max_tokens: int,
+               cached_tokens: int = 0, writes_cache: bool = False) -> float:
+    """The reservation: counted input plus the margin, and every output token.
+
+    Spec 039 B2. `cached_tokens` are the input tokens a warm prompt cache will
+    serve, reserved at the cache read price, so a person near their limit is
+    not refused for tokens that cost a twentieth of the input price. When the
+    call carries a breakpoint and no warm cache is known (`writes_cache`), the
+    rest may be written to the cache at 1.25x input, above the 10% margin, so
+    it is reserved at the write price."""
     price = PRICES[model]
-    return (input_tokens * INPUT_MARGIN * price.input + max_tokens * price.output) / PER_MILLION
+    cached = max(0, min(cached_tokens, input_tokens))
+    rest_rate = INPUT_MARGIN * price.input
+    if writes_cache:
+        rest_rate = max(rest_rate, price.cache_write)
+    return (cached * price.cache_read + (input_tokens - cached) * rest_rate
+            + max_tokens * price.output) / PER_MILLION
