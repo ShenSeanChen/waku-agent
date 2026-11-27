@@ -97,14 +97,16 @@ def record(inbox: Inbox, envelope: dict, *, team_id: str, channels: set[str]) ->
     )
 
 
-def record_click(inbox: Inbox, payload: dict, *, team_id: str, channels: set[str]) -> bool:
+def record_click(inbox: Inbox, payload: dict, *, team_id: str,
+                 channels: set[str]) -> str | None:
     """Write one Approve or Reject click into the inbox (spec 035, decision
     4). The click becomes `yes <code>` or `no <code>`, the row a typed
     Telegram answer writes, so the worker resolves it unchanged. `clicked`
-    marks it, because a typed yes in a channel never counts. True when a row
-    was written."""
+    marks it, because a typed yes in a channel never counts. Returns None
+    when a row was written, else the reason it was not, for the log. A
+    reason names no token and quotes no message."""
     if payload.get("type") != "block_actions":
-        return False
+        return "it is not a button click"
     actions = payload.get("actions") or []
     action = actions[0] if actions and isinstance(actions[0], dict) else {}
     choice, code = CHOICES.get(action.get("action_id")), str(action.get("value") or "")
@@ -112,19 +114,26 @@ def record_click(inbox: Inbox, payload: dict, *, team_id: str, channels: set[str
     channel = (payload.get("channel") or {}).get("id") or ""
     message = payload.get("message") or {}
     ts = message.get("ts") or ""
-    if not choice or not _CODE_RE.match(code) or not user.get("id") or not ts:
-        return False
+    if not choice:
+        return "the button is not Approve or Reject"
+    if not _CODE_RE.match(code):
+        return "the button carries no request code"
+    if not user.get("id"):
+        return "it names no person"
+    if not ts:
+        return "it names no message"
     if (payload.get("team") or {}).get("id") != team_id or user.get("team_id", team_id) != team_id:
-        return False
+        return "it comes from another workspace"
     if channel not in channels:
-        return False
+        return f"channel {channel or '(none)'} is not in SLACK_ALLOWED_CHANNELS"
     thread = message.get("thread_ts") or ts
-    return inbox.add(
+    stored = inbox.add(
         source="slack",
         external_id=f"click:{channel}:{ts}:{user['id']}:{action.get('action_ts') or ''}",
         session_id=f"slack:{channel}:{thread}",
         payload={"text": f"{choice} {code}", "clicked": choice, "sender": {"id": user["id"]},
                  "reply_to": {"channel": channel, "thread_ts": thread}})
+    return None if stored else "Slack delivered the same click twice"
 
 
 class Watchdog:
@@ -213,7 +222,9 @@ def start(inbox: Inbox, log: Callable[[str], None] = print) -> Handle | None:
         if request.type == "events_api":
             record(inbox, request.payload, team_id=team_id, channels=channels)
         elif request.type == "interactive":
-            record_click(inbox, request.payload, team_id=team_id, channels=channels)
+            refused = record_click(inbox, request.payload, team_id=team_id, channels=channels)
+            if refused:
+                log(f"(slack) ignored a click: {refused}")
         client.send_socket_mode_response(SocketModeResponse(envelope_id=request.envelope_id))
 
     client.socket_mode_request_listeners.append(listener)

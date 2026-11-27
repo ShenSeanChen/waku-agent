@@ -439,7 +439,7 @@ def _click(home, user="U0SEAN", action="waku_approve", code=None, action_ts="180
         "message": {"ts": "1800.0002", "thread_ts": "1800.0001"},
         "actions": [{"action_id": action, "value": code or REVIEW_HASH[:8],
                      "action_ts": action_ts}]},
-        team_id="T1", channels={"C0DEV"})
+        team_id="T1", channels={"C0DEV"}) is None
 
 
 def _executor(home):
@@ -563,14 +563,21 @@ def test_a_redelivered_click_is_one_event(home):
     assert _click(home) is False
 
 
-@pytest.mark.parametrize("change, why", [
-    ({"type": "view_submission"}, "not a button"),
-    ({"team": {"id": "T2"}}, "another workspace"),
-    ({"channel": {"id": "C9"}}, "a channel nobody allowed"),
-    ({"actions": [{"action_id": "other", "value": "abcd1234"}]}, "another button"),
-    ({"actions": [{"action_id": "waku_approve", "value": "--approve"}]}, "not a code"),
+@pytest.mark.parametrize("change, reason", [
+    ({"type": "view_submission"}, "it is not a button click"),
+    ({"team": {"id": "T2"}}, "it comes from another workspace"),
+    ({"channel": {"id": "C9"}}, "channel C9 is not in SLACK_ALLOWED_CHANNELS"),
+    ({"actions": [{"action_id": "other", "value": "abcd1234"}]},
+     "the button is not Approve or Reject"),
+    ({"actions": [{"action_id": "waku_approve", "value": "--approve"}]},
+     "the button carries no request code"),
+    ({"user": {}}, "it names no person"),
+    ({"message": {}}, "it names no message"),
 ])
-def test_a_click_that_is_not_an_answer_is_not_stored(home, change, why):
+def test_a_click_that_is_not_an_answer_is_not_stored(home, change, reason):
+    """Found in the live check (2026-11-26): a refused click said nothing, so
+    nobody could tell a wrong channel from a click that never arrived. The
+    reason names no token and quotes no message."""
     from waku.alwayson.events import Inbox
     from waku.alwayson.sources import slack
 
@@ -579,7 +586,53 @@ def test_a_click_that_is_not_an_answer_is_not_stored(home, change, why):
                "message": {"ts": "1800.0002", "thread_ts": "1800.0001"},
                "actions": [{"action_id": "waku_approve", "value": "abcd1234",
                             "action_ts": "1800.0100"}], **change}
-    assert slack.record_click(Inbox(home), payload, team_id="T1", channels={"C0DEV"}) is False, why
+    assert slack.record_click(Inbox(home), payload, team_id="T1", channels={"C0DEV"}) == reason
+
+
+def test_the_listener_logs_why_it_ignored_a_click(home, monkeypatch):
+    import sys
+    from types import SimpleNamespace
+
+    from waku.alwayson.events import Inbox
+    from waku.alwayson.sources import slack
+
+    class Client:
+        def __init__(self, app_token, web_client):
+            self.socket_mode_request_listeners = []
+
+        def connect(self):
+            pass
+
+        def is_connected(self):
+            return True
+
+        def close(self):
+            pass
+
+        def send_socket_mode_response(self, response):
+            pass
+
+    web = SimpleNamespace(auth_test=lambda: {"team_id": "T1"})
+    monkeypatch.setitem(sys.modules, "slack_sdk", SimpleNamespace())
+    monkeypatch.setitem(sys.modules, "slack_sdk.socket_mode",
+                        SimpleNamespace(SocketModeClient=Client))
+    monkeypatch.setitem(sys.modules, "slack_sdk.socket_mode.response",
+                        SimpleNamespace(SocketModeResponse=lambda envelope_id: envelope_id))
+    monkeypatch.setitem(sys.modules, "slack_sdk.web",
+                        SimpleNamespace(WebClient=lambda token: web))
+    monkeypatch.setenv("SLACK_APP_TOKEN", "xapp-fake")
+    monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-fake")
+    monkeypatch.setenv("SLACK_ALLOWED_CHANNELS", "C0DEV")
+    lines = []
+    handle = slack.start(Inbox(home), log=lines.append)
+    (listener,) = handle.client.socket_mode_request_listeners
+    click = {"type": "block_actions", "team": {"id": "T1"},
+             "user": {"id": "U0SEAN", "team_id": "T1"}, "channel": {"id": "C123"},
+             "message": {"ts": "1800.0002", "text": "secret words"},
+             "actions": [{"action_id": "waku_approve", "value": "abcd1234"}]}
+    listener(handle.client, SimpleNamespace(type="interactive", envelope_id="e1", payload=click))
+    handle.stop()
+    assert lines[-1] == "(slack) ignored a click: channel C123 is not in SLACK_ALLOWED_CHANNELS"
 
 
 def test_a_review_that_waits_is_reminded_and_expires_in_its_thread(home, conn, monkeypatch):
