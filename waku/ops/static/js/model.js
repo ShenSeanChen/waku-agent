@@ -3,9 +3,11 @@
 // Three tabs, all from the model file Ollama keeps and the Ollama on this
 // machine, through /api/weights/* (waku/ops/weights.py):
 //
-//   #model/file   the file: every table of numbers, a 16 x 16 corner of one
-//                 as real values or as the 4-bit codes it is stored as, and
-//                 the vocabulary
+//   #model/file   the file, as a map: the whole model (way in, every block,
+//                 way out), then the clicked part's tables by what they do,
+//                 then a 16 x 16 corner of one table as real values or as
+//                 the 4-bit codes it is stored as; the full list of tables
+//                 and the vocabulary are folded below
 //   #model/run    press Enter: one prompt, and for every piece of the answer
 //                 five stations light in order (text, pieces, blocks, top 5
 //                 candidates, chosen), played back slow, live or step by step
@@ -60,24 +62,21 @@ VIEWS.model = function(d, sub){
       <div class="mw-fact"><b id="mw-f-tables">&ndash;</b><span>tables of numbers</span></div>
       <div class="mw-fact"><b id="mw-f-bits">&ndash;</b><span id="mw-f-bits-l">bits per number, on average</span></div>
     </div>
-    <div class="mw-file">
-      <aside class="mw-side">
-        <div id="mw-where"></div>
-        <input id="mw-q" type="text" placeholder="Search tables, e.g. attn_q or blk.12" autocomplete="off" spellcheck="false" oninput="mwRenderList()">
-        <div class="mw-hint" id="mw-hint"></div>
-        <div class="mw-list" id="mw-list" onclick="mwListClick(event)"></div>
-      </aside>
-      <div class="mw-panel">
-        <div id="mw-tensor"><p class="mw-soft">Reading the file header&hellip;</p></div>
-        <details class="mw-vocab"><summary>The vocabulary: every token this model knows</summary>
+    <div class="mw-map" id="mw-map"></div>
+    <div class="mw-block" id="mw-block"></div>
+    <div class="mw-panel"><div id="mw-tensor"><p class="mw-soft">Reading the file header&hellip;</p></div></div>
+    <details class="mw-all"><summary>All <span id="mw-all-n"></span> tables, by name</summary>
+      <input id="mw-q" type="text" placeholder="Search tables, e.g. attn_q or blk.12" autocomplete="off" spellcheck="false" oninput="mwRenderList()">
+      <div class="mw-hint" id="mw-hint"></div>
+      <div class="mw-list" id="mw-list" onclick="mwListClick(event)"></div>
+    </details>
+    <details class="mw-vocab"><summary>The vocabulary: every token this model knows</summary>
           <div class="mw-vocab-head"><span class="mw-soft" id="mw-vocab-l"></span>
             <span class="mw-grow"></span><span class="mw-soft">from id</span>
             <input id="mw-tstart" type="number" min="0" value="1000" onchange="mwLoadTokens()">
             ${uiButton("&larr;", {size: "sm", onclick: "mwPageTokens(-1)", title: "Previous page"})}${uiButton("&rarr;", {size: "sm", onclick: "mwPageTokens(1)", title: "Next page"})}</div>
           <div class="mw-tokens" id="mw-tokens"></div>
         </details>
-      </div>
-    </div>
   </section>
 
   <section class="mw-pane" id="mw-p-run">
@@ -94,7 +93,7 @@ VIEWS.model = function(d, sub){
         <div class="mw-body"><b class="mw-big" id="mw-s-pieces">&ndash;</b><div class="mw-sq" id="mw-s-sq"></div><span class="mw-soft">tokens in: your words, plus the chat format around them</span></div></div>
       ${mwArrow}
       <div class="mw-st"><header><svg class="mw-ic" viewBox="0 0 40 40"><rect x="7" y="6" width="26" height="7" rx="1.5"/><rect x="7" y="16.5" width="26" height="7" rx="1.5"/><rect x="7" y="27" width="26" height="7" rx="1.5"/></svg><h4 id="mw-s-blocks-l">blocks</h4></header>
-        <div class="mw-body"><svg class="mw-stack" id="mw-stack" viewBox="0 0 120 252"></svg></div></div>
+        <div class="mw-body"><svg class="mw-stack" id="mw-stack" viewBox="0 0 120 252"></svg>${uiButton("open a block", {level: "tertiary", size: "sm", onclick: "mwOpenBlock(event)", title: "See the tables inside one block"})}</div></div>
       ${mwArrow}
       <div class="mw-st mw-st-wide"><header><svg class="mw-ic" viewBox="0 0 40 40"><path d="M6 9h28M6 17h18M6 25h10M6 33h5"/></svg><h4>candidates</h4><span class="mw-soft mw-right">top 5</span></header>
         <div class="mw-body"><div class="mw-cands" id="mw-cands"></div></div></div>
@@ -259,25 +258,91 @@ function mwRenderFacts(){
   mwEl("mw-f-bits").textContent = t.bits_per_weight ? t.bits_per_weight.toFixed(2) : "–";
   mwEl("mw-f-bits-l").textContent = "bits per number, on average" + (m.quantization ? " (" + m.quantization + ")" : "");
 }
+// What one table does, as a short name and one line. Read from the table's
+// own name; "norm" is checked first because attn_q_norm also contains attn_q.
+function mwRole(name){
+  const n = name.toLowerCase();
+  if (n.startsWith("token_embd")) return ["token rows", "one row of numbers for every token"];
+  if (n === "output.weight") return ["scores", "a score for every token it knows"];
+  if (n.includes("attn_q_norm")) return ["steady the query", "keeps its numbers in range"];
+  if (n.includes("attn_k_norm")) return ["steady the key", "keeps its numbers in range"];
+  if (n.includes("norm")) return ["steady", "keeps the numbers in range first"];
+  if (n.includes("attn_q")) return ["query", "what am I looking for?"];
+  if (n.includes("attn_k")) return ["key", "what do I offer?"];
+  if (n.includes("attn_v")) return ["value", "what I pass on"];
+  if (n.includes("attn_output")) return ["result", "mix it back in"];
+  if (n.includes("ffn_up")) return ["widen", "spread into more numbers"];
+  if (n.includes("ffn_gate")) return ["gate", "decide what matters"];
+  if (n.includes("ffn_down")) return ["narrow", "fold back down"];
+  return ["table", "one of the model's tables"];
+}
+// The part of the model on screen: "emb", "out", or a block's number.
+function mwPartKey(name){
+  const p = name ? mwPartOf(name) : {part: "emb"};
+  return p.blk !== undefined ? p.blk : p.part === "out" ? "out" : p.part === "emb" ? "emb" : "other";
+}
+// Inside a block the file lists tables by name; a person reads them in the
+// order they are used.
+const MW_ORDER = ["attn_norm", "attn_q.", "attn_q_norm", "attn_k.", "attn_k_norm", "attn_v", "attn_output",
+                  "ffn_norm", "ffn_gate", "ffn_up", "ffn_down", "token_embd", "output_norm", "output."];
+function mwOrder(name){ const i = MW_ORDER.findIndex(k => name.includes(k)); return i < 0 ? MW_ORDER.length : i; }
+function mwTablesOf(key){
+  return mwModel.tensors.filter(t => mwPartKey(t.name) === key).sort((a, b) => mwOrder(a.name) - mwOrder(b.name));
+}
+// A click on the map: open that part on its most telling table.
+function mwPickPart(key){
+  const k = /^\d+$/.test(String(key)) ? Number(key) : key;
+  const tables = mwTablesOf(k);
+  if (!tables.length) return;
+  const want = k === "emb" ? /^token_embd\.weight$/ : k === "out" ? /^output\.weight$/ : /attn_q\.weight$/;
+  mwSelectTensor((tables.find(t => want.test(t.name)) || tables[0]).name);
+}
+// From the "36 blocks" station: the map, opened on a block.
+function mwOpenBlock(e){
+  if (e) e.stopPropagation();
+  if (typeof mwPartKey(mwCurrent) !== "number") mwPickPart(0);
+  location.hash = "#model/file";
+}
+function mwCard(t){
+  const [short, line] = mwRole(t.name);
+  return `<button type="button" class="mw-card${t.name === mwCurrent ? " on" : ""}" data-name="${esc(t.name)}" onclick="mwSelectTensor(this.dataset.name)">
+    <b>${esc(short)}</b><span>${esc(line)}</span><code>${esc(t.name.replace(/^blk\.\d+\./, ""))} · ${t.shape.join(" × ")}</code></button>`;
+}
+// Level 1 is the whole model: the way in, every block, the way out. Level 2
+// is the part that was clicked, as its tables grouped by what they do.
 function mwRenderWhere(){
-  const n = mwModel && mwModel.metadata.block_count;
-  const p = mwCurrent ? mwPartOf(mwCurrent) : {part: ""};
-  const hot = k => p.part === k ? "hot" : "";
-  const ttl = n ? (p.blk !== undefined ? "block " + (p.blk + 1) + " of " + n : n + " blocks") : "blocks";
-  const blkHot = p.part === "blk" ? "hot" : "";
-  mwEl("mw-where").innerHTML = `<div class="lbl-mono">the whole model, and where this table sits</div>
-  <svg class="mw-sch" viewBox="0 0 480 104" role="img" aria-label="embedding, then ${esc(ttl)} (attention, feed-forward), then output">
-    <rect class="${hot("emb")}" x="1" y="36" width="96" height="44" rx="8"/><text class="${hot("emb")}" x="49" y="63">embedding</text>
-    <path d="M101 58h20M114 51l7 7-7 7"/>
-    <rect class="ghost" x="134" y="12" width="232" height="80" rx="10"/><rect class="ghost" x="130" y="16" width="232" height="80" rx="10"/>
-    <rect class="${blkHot}" x="126" y="20" width="232" height="80" rx="10"/>
-    <text class="ttl ${blkHot}" x="242" y="40">${esc(ttl)}</text>
-    <rect class="${hot("attn")}" x="136" y="50" width="100" height="40" rx="7"/><text class="${hot("attn")}" x="186" y="75">attention</text>
-    <rect class="${hot("ffn")}" x="246" y="50" width="104" height="40" rx="7"/><text class="${hot("ffn")}" x="298" y="75">feed-forward</text>
-    <path d="M370 58h20M383 51l7 7-7 7"/>
-    <rect class="${hot("out")}" x="396" y="36" width="82" height="44" rx="8"/><text class="${hot("out")}" x="437" y="63">output</text>
-  </svg>
-  <p class="mw-soft">Tokens go in on the left, pass through ${n ? n : "the"} identical blocks one after another, and scores come out on the right. Each block has two steps: attention, then feed-forward.</p>`;
+  if (!mwModel || !mwEl("mw-map")) return;
+  const n = mwModel.metadata.block_count || 0, sel = mwPartKey(mwCurrent);
+  const arrow = `<svg class="mw-ic mw-map-arr" viewBox="0 0 34 34" aria-hidden="true"><path d="M4 17h24M20 9l8 8-8 8"/></svg>`;
+  let blks = "";
+  for (let i = 0; i < n; i++) blks += `<button type="button" class="mw-blk${sel === i ? " on" : ""}" title="block ${i + 1} of ${n}" aria-label="block ${i + 1} of ${n}" onclick="mwPickPart(${i})"></button>`;
+  mwEl("mw-map").innerHTML = `<div class="lbl-mono">the whole model. Click a part.</div>
+  <div class="mw-maprow">
+    <button type="button" class="mw-end${sel === "emb" ? " on" : ""}" onclick="mwPickPart('emb')"><b>the way in</b><span>tokens become numbers</span></button>
+    ${arrow}
+    <div class="mw-mid"><div class="mw-blks">${blks}</div><span class="mw-soft">${n} blocks, one after another. Every block does the same two steps with its own tables.</span></div>
+    ${arrow}
+    <button type="button" class="mw-end${sel === "out" ? " on" : ""}" onclick="mwPickPart('out')"><b>the way out</b><span>numbers become scores</span></button>
+  </div>`;
+  const tables = mwTablesOf(sel);
+  const group = (title, about, rows) => rows.length
+    ? `<div class="mw-step"><div class="mw-step-h"><b>${title}</b><span class="mw-soft">${about}</span></div><div class="mw-cards">${rows.map(mwCard).join("")}</div></div>` : "";
+  let h;
+  if (typeof sel === "number"){
+    const attn = tables.filter(t => /attn/.test(t.name)), ffn = tables.filter(t => /ffn/.test(t.name));
+    const rest = tables.filter(t => !/attn|ffn/.test(t.name));
+    h = `<h3>Block ${sel + 1} of ${n}</h3>` +
+      group("Step 1: attention", "each token looks back at the earlier tokens and takes in what it needs", attn) +
+      group("Step 2: feed-forward", "then each token's numbers are reworked on their own", ffn) +
+      group("Other", "", rest);
+  } else if (sel === "emb"){
+    h = `<h3>The way in</h3>` + group("Embedding", "each token is swapped for its row of numbers", tables);
+  } else if (sel === "out"){
+    h = `<h3>The way out</h3>` + group("Output", "the final numbers become a score for every token", tables);
+  } else {
+    h = `<h3>Other tables</h3>` + group("", "", tables);
+  }
+  mwEl("mw-block").innerHTML = h;
 }
 function mwRenderList(){
   if (!mwModel) return;
@@ -302,6 +367,7 @@ function mwRenderList(){
       `</details>`;
   }).join("");
   mwEl("mw-list").innerHTML = html || `<p class="mw-soft">No table matches.</p>`;
+  mwEl("mw-all-n").textContent = mwModel.tensors.length;
   mwEl("mw-hint").textContent = q ? shown + " of " + mwModel.tensors.length + " tables" :
     "Search by name or type. " + mwModel.tensors.length + " tables in all.";
 }
