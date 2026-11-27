@@ -256,14 +256,26 @@ def test_theme_toggle_is_wired():
     assert re.search(r"^function cycleTheme\(", _js().get("theme.js", ""), re.MULTILINE)
 
 
-def test_rail_links_carry_their_letter():
-    """Collapsed, the rail shows each item's first letter (from data-short);
-    the full name stays in aria-label for a screen reader and the tooltip."""
-    links = re.findall(r'(<a href="#[^"]*"[^>]*data-v="[^"]*"[^>]*>)<span class="lbl">([^<]+)</span>', _index())
+def test_the_folded_rail_is_a_drawer_with_full_names():
+    """Folded, the rail leaves the page and a menu button opens it as a drawer
+    (spec 048). It used to fold to a column of first letters, and sixteen pages
+    share nine letters. Every link keeps its full name for a screen reader."""
+    html, css, js = _index(), _style(), _js()["main.js"]
+    links = re.findall(r'(<a href="#[^"]*"[^>]*data-v="[^"]*"[^>]*>)<span class="lbl">([^<]+)</span>', html)
     assert len(links) == 15, f"expected 15 rail links with a .lbl label, found {len(links)}"
     for tag, label in links:
-        assert f'data-short="{label[0]}"' in tag, f"{label}: data-short must be its first letter"
         assert f'aria-label="{label}"' in tag, f"{label}: aria-label must be its full name"
+    assert "data-short" not in html + css + js, "the folded rail draws no letters"
+    opener = re.search(r'<button id="nav-open"[^>]*>', html)
+    assert opener, "the page header needs the menu button"
+    assert 'aria-label="Open the menu"' in opener.group(0) and 'aria-controls="nav"' in opener.group(0)
+    assert html.index('id="nav-open"') < html.index('id="title"'), "the menu button leads the page header"
+    rules = dict(_blocks(css))
+    assert "display:none" in rules[".rail.collapsed"].replace(" ", "")
+    assert "position:fixed" in rules[".rail.open"].replace(" ", "")
+    assert any(sel == ".rail:not(.open)" and "display:none" in body.replace(" ", "") for sel, body in _blocks(css)), (
+        "below 768px the rail is always folded")
+    assert '"Escape"' in js and "nav-scrim" in js, "Escape and a click on the scrim close the drawer"
 
 
 def test_rail_resize_and_model_line_are_gone():
