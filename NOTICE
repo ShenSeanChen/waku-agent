@@ -1,0 +1,59 @@
+waku-agent
+Copyright (c) 2026 Sean Chen (ShenSeanChen)
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE),
+except for the parts listed under "What this license does not cover" below.
+
+
+Earlier versions stay MIT
+-------------------------
+
+Until pull request #289, waku-agent was released under the MIT License.
+Every version released before that change (v0.1.8 and earlier, on PyPI and
+on GitHub), and every commit on main before it, remains available under the
+MIT License. Nothing here withdraws or narrows that grant.
+
+Contributions made before that change were made under the MIT License. They
+remain under their MIT terms, and they are incorporated into this
+Apache-2.0-licensed version with their notices kept. The copyright notice and
+permission notice they were made under are reproduced in full here, as the MIT
+License requires:
+
+    MIT License
+
+    Copyright (c) 2026 Sean Chen (ShenSeanChen)
+
+    Permission is hereby granted, free of charge, to any person obtaining a
+    copy of this software and associated documentation files (the "Software"),
+    to deal in the Software without restriction, including without limitation
+    the rights to use, copy, modify, merge, publish, distribute, sublicense,
+    and/or sell copies of the Software, and to permit persons to whom the
+    Software is furnished to do so, subject to the following conditions:
+
+    The above copyright notice and this permission notice shall be included in
+    all copies or substantial portions of the Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+    AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+    FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+    DEALINGS IN THE SOFTWARE.
+
+The git history records who wrote each of those contributions.
+
+
+What this license does not cover
+--------------------------------
+
+hosted/ is licensed under the Elastic License 2.0, not Apache-2.0. See
+hosted/LICENSE.
+
+The Waku design system, the Waku mark and the names "Waku" and "Waku Memory"
+belong to AutoManus Technologies, Inc. and are covered by LICENSE-BRAND. The
+Apache License grants no right in them; its section 6 says the same about
+trademarks.
+
+The bundled fonts in waku/ops/static/fonts/ are under the SIL Open Font
+License 1.1; each face's license sits beside it.

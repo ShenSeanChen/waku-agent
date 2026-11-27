@@ -20,9 +20,9 @@ switch on the Models page.
 
 ## Licensing
 
-**The code here is NOT MIT.** `hosted/` is licensed under the Elastic License
-2.0 — see [LICENSE](LICENSE). The rest of the repository stays MIT, including
-all of `waku/`, which is what PyPI ships.
+**The code here is NOT Apache-2.0.** `hosted/` is licensed under the Elastic
+License 2.0 — see [LICENSE](LICENSE). The rest of the repository is Apache-2.0
+([../LICENSE](../LICENSE)), including all of `waku/`, which is what PyPI ships.
 
 What that means in practice: **you may run this yourself, including for your
 own company, and you may read and modify it. You may not offer it to third

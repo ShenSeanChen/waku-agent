@@ -11,6 +11,7 @@
 !pyproject.toml
 !uv.lock
 !LICENSE
+!NOTICE
 !LICENSE-BRAND
 
 # Re-excluded INSIDE the admitted trees. Last match wins, so every line in

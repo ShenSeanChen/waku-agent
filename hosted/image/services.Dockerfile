@@ -22,7 +22,7 @@ RUN groupadd --gid 10001 waku \
  && useradd --uid 10001 --gid 10001 --no-create-home --shell /usr/sbin/nologin waku
 
 WORKDIR /app
-COPY pyproject.toml uv.lock LICENSE LICENSE-BRAND ./
+COPY pyproject.toml uv.lock LICENSE NOTICE LICENSE-BRAND ./
 # --no-install-project: building waku-agent itself would need waku/__init__.py
 # (the version, via [tool.hatch.version]) and README.md (the readme), and this
 # image's allowlist admits neither. The base dependencies -- anthropic, openai,

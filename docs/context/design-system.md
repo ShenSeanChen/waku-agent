@@ -16,7 +16,7 @@ this file before changing how anything looks.
 - **To get a new token, colour or primitive, open an issue** that describes
   the screen that needs it. A maintainer changes the master and syncs it. A PR
   that edits the copied files is declined.
-- The design files and the Waku mark are not MIT; see `LICENSE-BRAND`. A fork
+- The design files and the Waku mark are not Apache-2.0; see `LICENSE-BRAND`. A fork
   replaces them.
 
 ## Rules for CSS and inline styles
