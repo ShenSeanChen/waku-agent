@@ -22,6 +22,12 @@ workspace becomes the same "yes <code>" or "no <code>" a person types in
 Telegram, marked as a click. Whether that person may approve is decided when
 the worker reads it, not here.
 
+A watchdog checks the connection every WATCH_SECONDS and reconnects it when
+it is gone or silent, with one line in the log when it drops and one when it
+is back. slack_sdk reconnects on its own as well, but in the live check
+(2026-11-26) a short network drop left the listener deaf until a restart,
+and slack_sdk's own log lines go to a logger nothing prints.
+
   external_id   Slack's event_id, so a resent event is a no-op
   session_id    slack:<channel>:<thread>, so each thread keeps its own history
 
@@ -33,6 +39,9 @@ from __future__ import annotations
 
 import os
 import re
+import threading
+import time
+from collections.abc import Callable
 from pathlib import Path
 
 from waku.alwayson.events import Inbox
@@ -51,6 +60,10 @@ APP_SCOPE = "connections:write"
 # A button says yes or no, and its value is the request's 8-character code.
 CHOICES = {APPROVE_ACTION: "yes", REJECT_ACTION: "no"}
 _CODE_RE = re.compile(r"^[0-9a-f]{8}$")
+# How often the watchdog looks at the connection, and how long it may go
+# without Slack answering a ping. slack_sdk pings every 5 seconds.
+WATCH_SECONDS = 10.0
+STALE_SECONDS = 60.0
 
 
 def allowed_channels() -> set[str]:
@@ -114,15 +127,69 @@ def record_click(inbox: Inbox, payload: dict, *, team_id: str, channels: set[str
                  "reply_to": {"channel": channel, "thread_ts": thread}})
 
 
+class Watchdog:
+    """Keeps one Socket Mode connection alive. `check` is one look: a
+    connection that is closed, or that has not answered a ping in
+    STALE_SECONDS, is replaced. A failed attempt is tried again at the next
+    look, and the log says once that it dropped and once that it is back."""
+
+    def __init__(self, client, *, log: Callable[[str], None] = print,
+                 clock: Callable[[], float] = time.time) -> None:
+        self.client, self.log, self.clock = client, log, clock
+        self.up = True
+
+    def _alive(self) -> bool:
+        if not self.client.is_connected():
+            return False
+        # slack_sdk echoes the send time of its last ping back in the pong.
+        last = getattr(getattr(self.client, "current_session", None), "last_ping_pong_time", None)
+        return not isinstance(last, (int, float)) or self.clock() - last <= STALE_SECONDS
+
+    def check(self) -> None:
+        if self._alive():
+            if not self.up:
+                self.up = True
+                self.log("(slack) reconnected")
+            return
+        if self.up:
+            self.up = False
+            self.log("(slack) connection lost; reconnecting")
+        try:
+            if self.client.is_connected():
+                self.client.disconnect()   # open, and silent: drop it first
+            self.client.connect_to_new_endpoint()
+        except Exception:
+            return   # still offline; the next look tries again
+        if self._alive():
+            self.up = True
+            self.log("(slack) reconnected")
+
+    def run(self, stop: threading.Event, every: float = WATCH_SECONDS) -> None:
+        while not stop.wait(every):
+            try:
+                self.check()
+            except Exception as exc:
+                self.log(f"(slack) the connection check failed: {type(exc).__name__}")
+
+
 class Handle:
-    def __init__(self, client) -> None:
-        self.client = client
+    def __init__(self, client, watchdog: Watchdog | None = None) -> None:
+        self.client, self.watchdog = client, watchdog
+        self._stop = threading.Event()
+        self.thread: threading.Thread | None = None
+        if watchdog is not None:
+            self.thread = threading.Thread(target=watchdog.run, args=(self._stop,),
+                                           name="slack-watchdog", daemon=True)
+            self.thread.start()
 
     def stop(self) -> None:
+        self._stop.set()
+        if self.thread is not None:
+            self.thread.join(timeout=5)
         self.client.close()
 
 
-def start(inbox: Inbox) -> Handle | None:
+def start(inbox: Inbox, log: Callable[[str], None] = print) -> Handle | None:
     """Connect over Socket Mode, or return None when Slack is not configured.
     Raises MissingExtra when the tokens are set and the extra is not installed."""
     app_token, bot_token = os.getenv("SLACK_APP_TOKEN", ""), os.getenv("SLACK_BOT_TOKEN", "")
@@ -151,6 +218,6 @@ def start(inbox: Inbox) -> Handle | None:
 
     client.socket_mode_request_listeners.append(listener)
     client.connect()
-    print(f"(slack) listening for mentions in {len(channels)} allowed channel(s)"
-          + ("" if channels else ": set SLACK_ALLOWED_CHANNELS, or nobody is heard"))
-    return Handle(client)
+    log(f"(slack) listening for mentions in {len(channels)} allowed channel(s)"
+        + ("" if channels else ": set SLACK_ALLOWED_CHANNELS, or nobody is heard"))
+    return Handle(client, Watchdog(client, log=log))
