@@ -69,13 +69,13 @@ VIEWS.model = function(d, sub){
       </aside>
       <div class="mw-panel">
         <div id="mw-tensor"><p class="mw-soft">Reading the file header&hellip;</p></div>
-        <div class="mw-vocab">
-          <div class="mw-vocab-head"><h3>Vocabulary</h3><span class="mw-soft" id="mw-vocab-l"></span>
+        <details class="mw-vocab"><summary>The vocabulary: every token this model knows</summary>
+          <div class="mw-vocab-head"><span class="mw-soft" id="mw-vocab-l"></span>
             <span class="mw-grow"></span><span class="mw-soft">from id</span>
             <input id="mw-tstart" type="number" min="0" value="1000" onchange="mwLoadTokens()">
             ${uiButton("&larr;", {size: "sm", onclick: "mwPageTokens(-1)", title: "Previous page"})}${uiButton("&rarr;", {size: "sm", onclick: "mwPageTokens(1)", title: "Next page"})}</div>
           <div class="mw-tokens" id="mw-tokens"></div>
-        </div>
+        </details>
       </div>
     </div>
   </section>
@@ -90,8 +90,8 @@ VIEWS.model = function(d, sub){
       <div class="mw-st"><header><svg class="mw-ic" viewBox="0 0 40 40"><path d="M6 8h28v18H18l-8 7v-7H6z"/><path d="M12 14h16M12 20h10"/></svg><h4>text</h4></header>
         <div class="mw-body"><div id="mw-s-text" class="mw-s-text"></div></div></div>
       ${mwArrow}
-      <div class="mw-st"><header><svg class="mw-ic" viewBox="0 0 40 40"><rect x="4" y="14" width="9" height="12" rx="2"/><rect x="15.5" y="14" width="9" height="12" rx="2"/><rect x="27" y="14" width="9" height="12" rx="2"/></svg><h4>pieces</h4></header>
-        <div class="mw-body"><b class="mw-big" id="mw-s-pieces">&ndash;</b><div class="mw-sq" id="mw-s-sq"></div><span class="mw-soft">pieces in</span></div></div>
+      <div class="mw-st"><header><svg class="mw-ic" viewBox="0 0 40 40"><rect x="4" y="14" width="9" height="12" rx="2"/><rect x="15.5" y="14" width="9" height="12" rx="2"/><rect x="27" y="14" width="9" height="12" rx="2"/></svg><h4>tokens</h4></header>
+        <div class="mw-body"><b class="mw-big" id="mw-s-pieces">&ndash;</b><div class="mw-sq" id="mw-s-sq"></div><span class="mw-soft">tokens in: your words, plus the chat format around them</span></div></div>
       ${mwArrow}
       <div class="mw-st"><header><svg class="mw-ic" viewBox="0 0 40 40"><rect x="7" y="6" width="26" height="7" rx="1.5"/><rect x="7" y="16.5" width="26" height="7" rx="1.5"/><rect x="7" y="27" width="26" height="7" rx="1.5"/></svg><h4 id="mw-s-blocks-l">blocks</h4></header>
         <div class="mw-body"><svg class="mw-stack" id="mw-stack" viewBox="0 0 120 252"></svg></div></div>
@@ -101,15 +101,15 @@ VIEWS.model = function(d, sub){
       ${mwArrow}
       <div class="mw-st"><header><svg class="mw-ic" viewBox="0 0 40 40"><circle cx="20" cy="20" r="14"/><path d="M13 20.5l5 5 9-10"/></svg><h4>chosen</h4></header>
         <div class="mw-body"><div id="mw-chosen" class="mw-chosen none">&ndash;</div><div class="mw-chosen-p" id="mw-chosen-p">&nbsp;</div></div></div>
-      <div class="mw-loop"><span>again, with one more piece</span></div>
+      <div class="mw-loop"><span>again, with one more token</span></div>
     </div>
-    <div class="mw-caption" id="mw-caption"></div>
+    <ol class="mw-caps" id="mw-caps"></ol>
     <div class="mw-answer" id="mw-answer"></div>
     <div class="mw-ctl">
       ${uiButton("live", {size: "sm", onclick: "mwSetMode('live')", title: "Real speed", cls: "mw-m-live"})}
       ${uiButton("slow", {size: "sm", onclick: "mwSetMode('slow')", title: "Slow motion", cls: "mw-m-slow"})}
       <select id="mw-speed" aria-label="Slow motion speed" onchange="if(mwMode==='slow')mwSchedule()">
-        <option value="1500">1.5 s / piece</option><option value="700" selected>0.7 s / piece</option><option value="300">0.3 s / piece</option></select>
+        <option value="3000">3 s / token</option><option value="1500" selected>1.5 s / token</option><option value="700">0.7 s / token</option><option value="300">0.3 s / token</option></select>
       ${uiButton("pause", {size: "sm", onclick: "mwTogglePause()", title: "Pause (space)", cls: "mw-m-pause"})}
       ${uiButton("&larr;", {size: "sm", onclick: "mwStep(-1)", title: "Step back (left arrow)"})}
       ${uiButton("&rarr;", {size: "sm", onclick: "mwStep(1)", title: "Step forward (right arrow)"})}
@@ -118,13 +118,13 @@ VIEWS.model = function(d, sub){
     </div>
     <div class="mw-counters">
       <div><b id="mw-c-loops">0</b><span id="mw-c-loops-l">loops so far</span></div>
-      <div><b id="mw-c-tps">&ndash;</b><span>pieces per second, measured</span></div>
-      <div><b id="mw-c-prompt">&ndash;</b><span>pieces in the prompt</span></div>
+      <div><b id="mw-c-tps">&ndash;</b><span>tokens per second, measured</span></div>
+      <div><b id="mw-c-prompt">&ndash;</b><span>tokens in the prompt</span></div>
       <div><b id="mw-c-total">&ndash;</b><span>total time</span></div>
       <div><b id="mw-c-load">&ndash;</b><span>of it: getting the model ready</span></div>
     </div>
     <div id="mw-run-err"></div>
-    <p class="mw-soft mw-foot">The lighting shows the order of the steps, slowed down. The piece count includes the chat wrapper Ollama adds.</p>
+    <p class="mw-soft mw-foot">A token is a word or a piece of one. The lighting shows the order of the steps, slowed down.</p>
   </section>
 
   <section class="mw-pane" id="mw-p-lives">
@@ -142,8 +142,9 @@ VIEWS.model = function(d, sub){
       <div class="mw-pn"><svg class="mw-ic mw-ic-lg" viewBox="0 0 80 80"><rect x="20" y="20" width="40" height="40" rx="5"/><rect x="31" y="31" width="18" height="18" rx="2"/><path d="M28 20v-9M40 20v-9M52 20v-9M28 69v-9M40 69v-9M52 69v-9M20 28h-9M20 40h-9M20 52h-9M69 28h-9M69 40h-9M69 52h-9"/></svg>
         <h3>Chip</h3><span class="mw-soft" id="mw-gpu-l">does the multiplying</span>
         <b class="mw-chip" id="mw-chipname">&ndash;</b>
-        <b class="mw-huge" id="mw-ch-tps">&ndash;</b><span class="mw-soft" id="mw-ch-tps-l">pieces per second, after a run</span></div>
+        <b class="mw-huge" id="mw-ch-tps">&ndash;</b><span class="mw-soft" id="mw-ch-tps-l">tokens per second, after a run</span></div>
     </div>
+    <p class="mw-point" id="mw-point"></p>
     <div class="mw-actions">
       ${uiButton("Load into memory", {level: "primary", onclick: "mwLoadUnload(true)", cls: "mw-b-load"})}
       ${uiButton("Unload", {onclick: "mwLoadUnload(false)", cls: "mw-b-unload"})}
@@ -218,19 +219,22 @@ function mwChooseModel(name){ mwWanted = name; mwLoadModel(name); }
 function mwRedrawAll(){
   if (!mwModel) return;
   mwRenderFacts(); mwRenderList(); mwRenderWhere(); mwRenderTensor(); mwLoadTokens();
-  mwBuildStack(); mwRest(); mwRenderStorage(); mwRenderChip(); mwRenderMem();
+  mwBuildStack(); mwResetCaps(); mwRest(); mwRenderStorage(); mwRenderChip(); mwRenderMem();
 }
 
 /* ------------------------------------------------------------ 1. the file */
 function mwDescribe(name, cols){
   const n = name.toLowerCase();
-  if (n.startsWith("token_embd")) return "one row of " + mwCommas(cols) + " numbers per word-piece";
-  if (n.includes("norm")) return "normalisation scales";
-  if (n === "output.weight") return "scores for every possible next word-piece";
-  if (/attn_(q|k|v|output)/.test(n)) return "attention: which earlier words to look at";
-  if (/ffn_(up|down|gate)/.test(n)) return "feed-forward: transform each word's vector";
-  if (n.endsWith(".bias")) return "offsets added after a table is applied";
-  return "one of the model's tables of numbers";
+  if (n.startsWith("token_embd")) return "The way in. One row of " + mwCommas(cols) + " numbers for every token the model knows; a token enters the model as its row.";
+  if (n === "output.weight") return "The way out. Turns the final numbers into a score for every token the model knows.";
+  if (n.includes("norm")) return "Normalisation: keeps the numbers in a steady range before the next step.";
+  if (n.includes("attn_q")) return "Attention, the query: what this token is looking for among the earlier ones.";
+  if (n.includes("attn_k")) return "Attention, the key: what each token offers to be found by.";
+  if (n.includes("attn_v")) return "Attention, the value: what a token passes on once it is found.";
+  if (n.includes("attn_output")) return "Attention, the result: mixes what was gathered back into the token.";
+  if (/ffn_(up|down|gate)/.test(n)) return "Feed-forward: after attention, reworks each token's numbers on their own.";
+  if (n.endsWith(".bias")) return "Offsets added after a table is applied.";
+  return "One of the model's tables of numbers.";
 }
 function mwGroupOf(name){
   const m = /^blk\.(\d+)\./.exec(name);
@@ -261,7 +265,7 @@ function mwRenderWhere(){
   const hot = k => p.part === k ? "hot" : "";
   const ttl = n ? (p.blk !== undefined ? "block " + (p.blk + 1) + " of " + n : n + " blocks") : "blocks";
   const blkHot = p.part === "blk" ? "hot" : "";
-  mwEl("mw-where").innerHTML = `<div class="lbl-mono">where this table sits</div>
+  mwEl("mw-where").innerHTML = `<div class="lbl-mono">the whole model, and where this table sits</div>
   <svg class="mw-sch" viewBox="0 0 480 104" role="img" aria-label="embedding, then ${esc(ttl)} (attention, feed-forward), then output">
     <rect class="${hot("emb")}" x="1" y="36" width="96" height="44" rx="8"/><text class="${hot("emb")}" x="49" y="63">embedding</text>
     <path d="M101 58h20M114 51l7 7-7 7"/>
@@ -272,7 +276,8 @@ function mwRenderWhere(){
     <rect class="${hot("ffn")}" x="246" y="50" width="104" height="40" rx="7"/><text class="${hot("ffn")}" x="298" y="75">feed-forward</text>
     <path d="M370 58h20M383 51l7 7-7 7"/>
     <rect class="${hot("out")}" x="396" y="36" width="82" height="44" rx="8"/><text class="${hot("out")}" x="437" y="63">output</text>
-  </svg>`;
+  </svg>
+  <p class="mw-soft">Tokens go in on the left, pass through ${n ? n : "the"} identical blocks one after another, and scores come out on the right. Each block has two steps: attention, then feed-forward.</p>`;
 }
 function mwRenderList(){
   if (!mwModel) return;
@@ -289,7 +294,7 @@ function mwRenderList(){
   const curGroup = mwCurrent ? mwGroupOf(mwCurrent).key : "embedding";
   const html = [...groups.values()].sort((a, b) => a.order - b.order).map(G => {
     const open = q || G.key === curGroup || G.key === "embedding" || G.key === "blk.0";
-    return `<details ${open ? "open" : ""}><summary>${esc(G.key)}<span class="mw-meta">${G.items.length} tables, ${mwShort(G.count)}</span></summary>` +
+    return `<details ${open ? "open" : ""}><summary>${esc(mwGroupLabel(G.key))}<span class="mw-meta">${G.items.length} tables, ${mwShort(G.count)}</span></summary>` +
       G.items.map(t => `<button type="button" class="mw-row${t.name === mwCurrent ? " on" : ""}" data-name="${esc(t.name)}">
         <span class="nm">${esc(t.name)}</span><span class="ct">${mwCommas(t.count)}</span>
         <span class="sh">${t.shape.join(" × ")}, ${esc(t.type)}</span><span></span>
@@ -298,7 +303,13 @@ function mwRenderList(){
   }).join("");
   mwEl("mw-list").innerHTML = html || `<p class="mw-soft">No table matches.</p>`;
   mwEl("mw-hint").textContent = q ? shown + " of " + mwModel.tensors.length + " tables" :
-    mwModel.tensors.length + " tables, grouped by block";
+    "Search by name or type. " + mwModel.tensors.length + " tables in all.";
+}
+// "blk.7" is the file's name for the eighth of the model's identical blocks.
+function mwGroupLabel(key){
+  const n = mwModel && mwModel.metadata.block_count, m = /^blk\.(\d+)$/.exec(key);
+  if (m) return "block " + (Number(m[1]) + 1) + (n ? " of " + n : "") + " (" + key + ")";
+  return {embedding: "the way in (embedding)", output: "the way out (output)"}[key] || key;
 }
 function mwListClick(e){ const b = e.target.closest(".mw-row"); if (b) mwSelectTensor(b.dataset.name); }
 
@@ -329,7 +340,7 @@ function mwRenderTensor(){
   if (!hasCodes) mwAsCodes = false;
   const showCodes = hasCodes && (mwAsCodes || !d.values);
   h += `<div class="mw-bar2">${uiBadge("stored as " + esc(d.type), "value")}`;
-  if (hasCodes) h += `<label class="mw-toggle"><input type="checkbox" ${showCodes ? "checked" : ""} ${d.values ? "" : "disabled"} onchange="mwAsCodes=this.checked;mwRenderTensor()">as stored (${d.code_levels} levels)</label>`;
+  if (hasCodes) h += `<label class="mw-toggle"><input type="checkbox" ${showCodes ? "checked" : ""} ${d.values ? "" : "disabled"} onchange="mwAsCodes=this.checked;mwRenderTensor()">show the codes the file really stores</label>`;
   if (showCodes) h += `<span class="mw-legend">0 <i class="codes"></i> ${d.code_levels - 1}</span>`;
   else if (d.values) h += `<span class="mw-legend">negative <i class="signs"></i> positive</span>`;
   h += `</div>`;
@@ -344,11 +355,11 @@ function mwRenderTensor(){
         : `<td style="${mwCellStyle(v, max)}">${v === null ? "n/a" : v.toFixed(4)}</td>`).join("") + `</tr>`).join("") +
       `</tbody></table></div>`;
     h += `<p class="mw-meaning">One table is one grid of numbers. This model is <b>${mwCommas(mwModel.totals.tensor_count)}</b> of them.</p>`;
-    if (!showCodes) h += `<p>${uiLink("See it used &rarr;", "#model/run")}</p>`;
+    if (!showCodes) h += `<p>${uiLink("Watch these tables run a prompt &rarr;", "#model/run")}</p>`;
     h += `<p class="mw-soft">Showing the top-left <b>${d.rows} &times; ${d.cols}</b> of <b>${mwCommas(R)} &times; ${mwCommas(C)}</b>` +
       `.</p>`;
     if (showCodes && !d.values) h += uiNotice("warn", "These are the raw stored codes, not decoded numbers.");
-    else if (showCodes) h += `<p class="mw-soft">Each cell is one of <b>${d.code_levels} levels</b>: that is all the file stores per number.</p>`;
+    else if (showCodes) h += `<p class="mw-soft">To save space the file keeps each number as one of only <b>${d.code_levels} levels</b> (0 to ${d.code_levels - 1}), plus a scale for each small group. That is how a ${(mwModel.totals.file_size / 1e9).toFixed(1)} GB file holds ${mwShort(mwModel.totals.total_weights)} numbers.</p>`;
   } else {
     h += uiNotice("note", esc(d.note || "No numbers available for this table."));
   }
@@ -371,9 +382,9 @@ async function mwLoadTokens(){
   try {
     const d = await mwGet("tokens", {name: mwModel.name, start, count: MW_TOKENS_PER_PAGE});
     mwEl("mw-tstart").value = d.start;
-    mwEl("mw-vocab-l").textContent = mwCommas(d.total) + " word-pieces. Ġ marks a leading space.";
+    mwEl("mw-vocab-l").textContent = "Every token this model knows, " + mwCommas(d.total) + " of them, by number. Ġ marks a leading space.";
     mwEl("mw-tokens").innerHTML = d.tokens.map(t => `<span class="mw-tok"><i>${t.id}</i>${esc(t.text)}</span>`).join("") ||
-      `<span class="mw-soft">This file has no word-piece list.</span>`;
+      `<span class="mw-soft">This file has no token list.</span>`;
   } catch (e){ mwEl("mw-tokens").innerHTML = `<span class="mw-soft">${esc(e.message)}</span>`; }
 }
 function mwPageTokens(dir){
@@ -393,7 +404,7 @@ async function mwLoadModel(name){
   mwRenderFacts(); mwRenderList(); mwRenderWhere();
   if (mwCurrent) mwSelectTensor(mwCurrent);
   mwLoadTokens();
-  mwResetRun(); mwBuildStack(); mwRenderStorage(); mwPollPs();
+  mwResetCaps(); mwResetRun(); mwBuildStack(); mwRenderStorage(); mwPollPs();
 }
 
 /* ------------------------------------------------------------ 2. press enter */
@@ -422,21 +433,27 @@ let mwRun = null, mwCursor = -1, mwMode = "slow", mwTimer = null, mwAborter = nu
 // pick lands at 4.
 let mwPhase = 4, mwPassTimers = [];
 const mwStations = () => [...document.querySelectorAll("#mw-stations .mw-st")];
-function mwCaptionFor(i){
+// What each station does, in one sentence. All five stay on screen and the
+// lit one is marked, so nothing has to be read while it moves.
+function mwCaptions(){
   const m = (mwModel && mwModel.metadata) || {}, n = v => typeof v === "number" ? "<b>" + mwCommas(v) + "</b>" : "many";
   return [
-    "Your sentence is cut into word-pieces.",
-    "Each piece becomes a row of " + n(m.embedding_length) + " numbers.",
-    "Those numbers are multiplied through " + n(m.block_count) + " layers of tables. This is the model's whole job.",
-    "The last table gives every one of " + n(m.vocab_size) + " word-pieces a score. These are the top five.",
-    "One is picked and added to the sentence. Then it all runs again.",
-  ][i] || "";
+    "Your sentence is cut into tokens: words and pieces of words.",
+    "Each token is swapped for its row of " + n(m.embedding_length) + " numbers.",
+    "Those numbers pass through " + n(m.block_count) + " blocks of tables, one after another. This is the model's whole job.",
+    "The last table scores every one of the " + n(m.vocab_size) + " tokens it knows. These are the top five.",
+    "One is picked and added to the sentence. Then it all runs again for the next token.",
+  ];
 }
 function mwLight(i){
   mwStations().forEach((el, k) => el.classList.toggle("lit", k === i));
-  const c = mwEl("mw-caption");
-  if (c){ c.innerHTML = mwCaptionFor(i < 0 ? 0 : i); c.classList.toggle("dim", i < 0); }
+  const c = mwEl("mw-caps");
+  if (!c) return;
+  if (!c.children.length) c.innerHTML = mwCaptions().map(t => `<li>${t}</li>`).join("");
+  [...c.children].forEach((li, k) => li.classList.toggle("on", k === i));
 }
+// The captions quote the model's own sizes, so a new model redraws them.
+function mwResetCaps(){ const c = mwEl("mw-caps"); if (c) c.innerHTML = ""; }
 function mwStopPass(){ mwPassTimers.forEach(clearTimeout); mwPassTimers = []; const st = mwEl("mw-stations"); if (st) st.classList.remove("tick"); }
 function mwStartPass(dur){
   mwStopPass();
@@ -522,7 +539,7 @@ function mwRender2(){
   sc.max = Math.max(0, n - 1); sc.value = Math.max(0, mwCursor); sc.disabled = n < 2;
   mwEl("mw-pos").textContent = (mwCursor + 1) + " / " + n;
   mwEl("mw-c-loops").textContent = mwCommas(shown + 1);
-  const extra = f && f.eval_count > n ? " (+" + (f.eval_count - n) + " end piece)" : "";
+  const extra = f && f.eval_count > n ? " (+" + (f.eval_count - n) + " end token)" : "";
   mwEl("mw-c-loops-l").textContent = "loops so far" + (n ? " of " + mwCommas(n) + extra : "") + (mwRun.streaming ? " …" : "");
   const sec = (ns, d) => (ns / 1e9).toFixed(d) + "<small>s</small>";
   mwEl("mw-c-tps").innerHTML = f && f.eval_duration ? (f.eval_count / f.eval_duration * 1e9).toFixed(1) : "&ndash;";
@@ -537,7 +554,7 @@ function mwRender2(){
 }
 
 // Playback: the whole stream is recorded, and the cursor says which loop is on screen.
-function mwSpeed(){ return Number((mwEl("mw-speed") || {}).value || 700); }
+function mwSpeed(){ return Number((mwEl("mw-speed") || {}).value || 1500); }
 function mwSlowTick(){
   mwTimer = null;
   if (mwCursor < mwRun.tokens.length - 1){ mwCursor++; mwStartPass(mwSpeed() * 0.9); }
@@ -642,7 +659,7 @@ function mwRenderChip(){
   mwEl("mw-chipname").textContent = (mwMachine && mwMachine.chip) || "–";
   if (mwLastTps){
     mwEl("mw-ch-tps").textContent = mwLastTps.tps.toFixed(1);
-    mwEl("mw-ch-tps-l").textContent = "pieces per second, last run, " + mwLastTps.n + " pieces" + (mwModel && mwLastTps.model !== mwModel.name ? " (" + mwLastTps.model + ")" : "");
+    mwEl("mw-ch-tps-l").textContent = "tokens per second, last run, " + mwLastTps.n + " tokens" + (mwModel && mwLastTps.model !== mwModel.name ? " (" + mwLastTps.model + ")" : "");
   }
 }
 function mwRenderFoot(){
@@ -651,8 +668,16 @@ function mwRenderFoot(){
   el.textContent = "Memory in units of 1,073,741,824 bytes; file size in units of 1,000,000,000, as Finder shows it." +
     (m.ollama_version ? " Ollama " + m.ollama_version + "." : "");
 }
+// The one thing this tab is for: a model runs only where it fits in memory.
+function mwRenderPoint(){
+  const el = mwEl("mw-point"), total = mwMachine && mwMachine.memory_bytes;
+  if (!el || !mwModel || !total) return;
+  const file = mwModel.totals.file_size / 1e9, gb = total / MW_GIB;
+  el.innerHTML = `A model can only run once all of its numbers are in memory. This file is <b>${file.toFixed(1)} GB</b> and this computer has <b>${gb.toFixed(0)} GB</b>, so it ${file < gb * 0.9 ? "fits" : "does not fit"}. That is why size decides where a model can run: press Load and watch the bar fill.`;
+}
 function mwRenderMem(){
   if (!mwEl("mw-memstate")) return;
+  mwRenderPoint();
   const total = mwMachine && mwMachine.memory_bytes;
   mwEl("mw-memtotal").textContent = total ? (total / MW_GIB).toFixed(0) + " GB" : "";
   const m = mwPs && mwModel ? (mwPs.models || []).find(x => x.name === mwModel.name || x.model === mwModel.name) : null;
