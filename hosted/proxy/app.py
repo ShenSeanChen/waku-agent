@@ -133,6 +133,19 @@ def _answer(refused: Refused) -> web.Response:
     return web.json_response(refused.body(), status=refused.status)
 
 
+#: Bytes per token in the fallback estimate. English text runs about 4 bytes
+#: a token and JSON about 3; a CJK character is 3 bytes and about 1 token. Two
+#: keeps the estimate above the real count for all of them.
+ESTIMATE_BYTES_PER_TOKEN = 2
+
+
+def estimate_input_tokens(body: dict) -> int:
+    """An upper bound on a request's input tokens, for when count_tokens fails."""
+    payload = {k: body[k] for k in ("model", "messages", "system", "tools", "tool_choice") if k in body}
+    size = len(json.dumps(payload, ensure_ascii=False).encode("utf-8"))
+    return size // ESTIMATE_BYTES_PER_TOKEN + 1
+
+
 def _overloaded(message: str) -> Refused:
     # 529, which the SDK retries, rather than a 401 or a 500 that would read as
     # a bad key or a broken platform.
@@ -316,9 +329,14 @@ class MeteringProxy:
         model = body["model"]
         try:
             counted = await self._upstream.count_tokens(body)
-        except Exception as exc:  # any failure to count is a refusal to spend
-            _LOG.info("tenant=%s count_tokens failed: %s", tenant, exc)
-            raise _overloaded("The free tier could not size this call. Try again.") from None
+        except Exception as exc:
+            # A failed count used to refuse the call, and every phone and web
+            # chat turn failed with it (Sean, 2026-11-26). The reservation now
+            # uses an estimate that is always higher than the real count, so
+            # the cap still holds and the turn still runs.
+            counted = estimate_input_tokens(body)
+            _LOG.warning("tenant=%s count_tokens failed, reserving an estimate of %d: %s",
+                         tenant, counted, exc)
         worst = prices.worst_case(model, input_tokens=counted, max_tokens=body["max_tokens"])
         settled, reserved = self._ledger.spend(tenant, month)
         if capped and settled + reserved + worst > self._config.monthly_cap_usd:
