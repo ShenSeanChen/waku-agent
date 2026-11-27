@@ -64,9 +64,11 @@ ollama pull qwen3:8b
 WAKU_PROVIDER=local waku
 ```
 
-Your words stay on your machine. LM Studio, llama.cpp's server and vLLM work
-the same way: set `WAKU_LOCAL_BASE_URL` to the server's address, for example
-`http://localhost:1234/v1` for LM Studio. The model must support tool calls,
+Your words stay on your machine. LM Studio, llama.cpp's server, vLLM and
+Rapid-MLX work the same way: set `WAKU_LOCAL_BASE_URL` to the server's address,
+for example `http://localhost:1234/v1` for LM Studio. On a Mac with Apple
+Silicon, `rapid-mlx serve qwen3.5-4b-4bit --port 8000` serves a model that can
+call tools at `http://localhost:8000/v1`. The model must support tool calls,
 because every Waku turn offers tools; `llama3` does not, and the server
 refuses the turn.
 
