@@ -20,7 +20,10 @@ With your own app, a row whose target holds a "request" (spec 035) is drawn
 as Block Kit: the title, the reason and the link, the exact text to be
 posted, and two buttons, Approve and Reject. Each button's value is the
 request's 8-character code. `make` returns the posted message's ts, so the
-dispatcher can keep it."""
+dispatcher can keep it. Once the request is answered, a row with "update_ts"
+edits that same message: the buttons become one line, "Approved by <login>"
+or "Rejected by <login>", and the rest of the request stays. The hosted
+sender skips that edit (spec 041)."""
 
 from __future__ import annotations
 
@@ -29,6 +32,9 @@ from waku.alwayson.senders import Post, SendFailed, post_json
 from waku.alwayson.senders.format import slack_mrkdwn
 
 URL = "https://slack.com/api/chat.postMessage"
+# A row whose target holds "update_ts" edits that message instead. The bot
+# may edit its own messages with the `chat:write` scope it already has.
+UPDATE_URL = "https://slack.com/api/chat.update"
 HOSTED_PATH = "/slack/send"
 # Slack asks for messages under 4,000 characters, and the hosted relay takes
 # at most 8,000, so a hosted reply longer than this goes out in parts.
@@ -57,6 +63,11 @@ def request_blocks(request: dict) -> list[dict]:
     for start in range(0, len(body), SECTION_MAX_CHARS):
         blocks.append({"type": "section", "text": {
             "type": "plain_text", "text": body[start:start + SECTION_MAX_CHARS]}})
+    if decided := str(request.get("decided") or ""):
+        # Answered: one line says who decided, in place of the buttons.
+        blocks.append({"type": "context",
+                       "elements": [{"type": "plain_text", "text": decided}]})
+        return blocks
     blocks.append({"type": "actions", "block_id": f"waku_approval_{code}", "elements": [
         {"type": "button", "action_id": APPROVE_ACTION, "style": "primary",
          "text": {"type": "plain_text", "text": approve}, "value": code},
@@ -74,6 +85,14 @@ def _payload(message: Message, text: str) -> dict:
 
 def make(bot_token: str, post: Post = post_json):
     def send(message: Message) -> str:
+        if ts := message.target.get("update_ts"):
+            payload = {"channel": message.target.get("channel"), "ts": ts,
+                       "text": slack_mrkdwn(message.body),
+                       "blocks": request_blocks(message.target.get("request") or {})}
+            answer = post(UPDATE_URL, payload, {"Authorization": f"Bearer {bot_token}"})
+            if not answer.get("ok"):
+                raise SendFailed(f"Slack refused: {answer.get('error') or 'no reason'}")
+            return str(answer.get("ts") or ts)
         payload = _payload(message, slack_mrkdwn(message.body))
         if isinstance(request := message.target.get("request"), dict):
             payload["blocks"] = request_blocks(request)
@@ -91,6 +110,8 @@ def make_hosted(base_url: str, platform_token: str, post: Post = post_json):
     url = base_url.rstrip("/") + HOSTED_PATH
 
     def send(message: Message) -> None:
+        if message.target.get("update_ts"):
+            return   # the platform has no edit route yet (spec 041)
         body = slack_mrkdwn(message.body)
         for start in range(0, len(body), HOSTED_MAX_CHARS):
             answer = post(url, _payload(message, body[start:start + HOSTED_MAX_CHARS]),

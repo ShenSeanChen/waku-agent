@@ -250,6 +250,9 @@ def _fake_slack_sdk(monkeypatch, order):
         def connect(self):
             self.connected = True
 
+        def is_connected(self):
+            return self.connected
+
         def close(self):
             self.closed = True
 
@@ -295,6 +298,82 @@ def test_slack_listener_stores_the_mention_before_it_acknowledges(monkeypatch, i
     assert [row[1] for row in _rows(inbox)] == ["Ev900"]
     handle.stop()
     assert client.closed
+
+
+class DroppingClient:
+    """A Socket Mode client whose network can drop. Found in the live check
+    (2026-11-26): after a short drop the listener heard nothing until a
+    restart, and nothing was logged."""
+
+    def __init__(self, last_pong=None):
+        self.connected, self.network_up, self.connects = True, True, 0
+        self.current_session = SimpleNamespace(last_ping_pong_time=last_pong)
+
+    def is_connected(self):
+        return self.connected
+
+    def disconnect(self):
+        self.connected = False
+
+    def connect_to_new_endpoint(self, force=False):
+        self.connects += 1
+        if not self.network_up:
+            raise OSError("error connecting to slack.com")
+        self.connected = True
+        self.current_session = SimpleNamespace(last_ping_pong_time=None)
+
+
+def test_slack_watchdog_reconnects_after_a_drop_and_says_so():
+    from waku.alwayson.sources import slack
+
+    client, lines = DroppingClient(), []
+    watchdog = slack.Watchdog(client, log=lines.append, clock=lambda: 1000.0)
+    watchdog.check()
+    assert lines == [] and client.connects == 0, "a live connection is left alone"
+
+    client.connected, client.network_up = False, False
+    watchdog.check()
+    watchdog.check()
+    assert lines == ["(slack) connection lost; reconnecting"], "said once, not every check"
+    assert client.connects == 2, "it keeps trying while the network is down"
+
+    client.network_up = True
+    watchdog.check()
+    watchdog.check()
+    assert client.connected
+    assert lines == ["(slack) connection lost; reconnecting", "(slack) reconnected"]
+
+
+def test_slack_watchdog_replaces_a_connection_that_stopped_answering():
+    """A socket can stay open after the network under it went away. Slack
+    answers a ping every 5 seconds, so three missed answers mean it is gone.
+    The live check (2026-11-26) lost a click in a drop of a few seconds that a
+    one-minute limit never noticed."""
+    from waku.alwayson.sources import slack
+
+    client, lines = DroppingClient(last_pong=1000.0), []
+    watchdog = slack.Watchdog(client, log=lines.append, clock=lambda: 1000.0 + 10)
+    watchdog.check()
+    assert lines == [] and client.connects == 0
+    watchdog.clock = lambda: 1000.0 + slack.STALE_SECONDS + 1
+    watchdog.check()
+    assert client.connects == 1 and client.connected
+    assert lines == ["(slack) connection lost; reconnecting", "(slack) reconnected"]
+    assert slack.STALE_SECONDS <= 15 and slack.WATCH_SECONDS <= 3
+
+
+def test_slack_source_starts_a_watchdog_and_stops_it(monkeypatch, inbox):
+    from waku.alwayson.sources import slack
+
+    clients = _fake_slack_sdk(monkeypatch, [])
+    monkeypatch.setenv("SLACK_APP_TOKEN", "xapp-fake")
+    monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-fake")
+    monkeypatch.setenv("SLACK_ALLOWED_CHANNELS", "C1")
+    handle = slack.start(inbox, log=lambda line: None)
+    assert handle.watchdog.client is clients[0]
+    assert handle.thread.is_alive()
+    handle.stop()
+    assert not handle.thread.is_alive() and clients[0].closed
 
 
 def test_slack_source_is_off_without_both_tokens(monkeypatch, inbox):

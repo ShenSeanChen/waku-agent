@@ -69,6 +69,12 @@ _JSON_FIELDS = "number,title,author,updatedAt,url"
 # Issues have no such fields, and gh rejects a field the type lacks.
 _PR_LIST_FIELDS = _JSON_FIELDS + ",additions,deletions,changedFiles,isDraft"
 _CHECK_FIELDS = "name,state,bucket,workflow"
+# `pr view` also reads who reviewed the pull request and when its last commit
+# came (spec 035), so the PR desk skips one it reviewed already unless new
+# commits arrived after that review.
+_HISTORY_FIELDS = "reviews,commits"
+# The end of every review this agent posted (alwayson/senders/github.py).
+_OWN_REVIEW_RE = re.compile(r"<!-- waku:[^>]*-->\s*$")
 # `gh pr checks` exits 1 when a check failed and 8 when one is pending, and
 # prints its JSON either way.
 _OK_CODES: dict[str, tuple[int, ...]] = {"pr checks": (0, 1, 8)}
@@ -195,6 +201,29 @@ def _checks(out: str) -> str:
     return "\n".join(lines)
 
 
+def _history(argv: list[str]) -> str:
+    """Who reviewed a pull request and when its last commit came, as lines to
+    put under `pr view`, or "" when gh could not say."""
+    ok, out = _run([*argv, "--json", _HISTORY_FIELDS])
+    try:
+        data = json.loads(out) if ok else None
+    except json.JSONDecodeError:
+        data = None
+    if not isinstance(data, dict):
+        return ""
+    reviews = [r for r in data.get("reviews") or [] if isinstance(r, dict)]
+    lines = ["reviews:" if reviews else "reviews: none yet"]
+    for review in reviews:
+        own = (" (drafted by this agent)"
+               if _OWN_REVIEW_RE.search(str(review.get("body") or "")) else "")
+        lines.append(f"  {(review.get('author') or {}).get('login', '?')} "
+                     f"{review.get('state', '?')} {review.get('submittedAt', '?')}{own}")
+    commits = [c for c in data.get("commits") or [] if isinstance(c, dict)]
+    if commits:
+        lines.append(f"last commit: {commits[-1].get('committedDate', '?')}")
+    return "\n".join(lines)
+
+
 def list_prs(repo: str = "", limit: int = 10) -> tuple[bool, list[dict] | str]:
     """Open PRs as rows. Used directly by the gather workflow — no registry, no
     model in the loop, which is why gather works with the tool switched off."""
@@ -223,10 +252,12 @@ def gh_read(command: str, number: int = 0, repo: str = "", limit: int = 10) -> s
     if command == "pr checks":
         return _checks(out)
     if len(out) > _MAX_CHARS:
-        return out[:_MAX_CHARS] + (
+        out = out[:_MAX_CHARS] + (
             f"\n\n… truncated at {_MAX_CHARS} chars. Run `gh {command} {number}` "
             "in a terminal to read the rest."
         )
+    if command == "pr view" and (history := _history(argv)):  # type: ignore[arg-type]
+        out += "\n\n" + history
     return out
 
 

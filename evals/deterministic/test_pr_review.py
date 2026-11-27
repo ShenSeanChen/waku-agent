@@ -439,7 +439,7 @@ def _click(home, user="U0SEAN", action="waku_approve", code=None, action_ts="180
         "message": {"ts": "1800.0002", "thread_ts": "1800.0001"},
         "actions": [{"action_id": action, "value": code or REVIEW_HASH[:8],
                      "action_ts": action_ts}]},
-        team_id="T1", channels={"C0DEV"})
+        team_id="T1", channels={"C0DEV"}) is None
 
 
 def _executor(home):
@@ -536,6 +536,71 @@ def test_a_click_from_anyone_else_changes_nothing(home, conn, monkeypatch, roles
     assert model.runs == [], "an ignored click starts no run either"
     assert {r["status"] for r in conn.execute("SELECT status FROM events")} == {"done"}
     assert bool(permissions.calls) is asks_github
+    assert not [m for m in _slack.sent if m.idempotency_key.startswith("decided:")], (
+        "a refused click leaves the buttons for the person who may approve")
+
+
+@pytest.mark.parametrize("action, line", [
+    ("waku_approve", "Approved by ShenSeanChen"),
+    ("waku_reject", "Rejected by ShenSeanChen"),
+])
+def test_a_decided_request_loses_its_buttons(home, conn, monkeypatch, action, line):
+    """Found in the live check (2026-11-26): after Reject the request still
+    showed Approve and Reject, so the click looked like it did nothing. The
+    request message is edited in place to say who decided, and the line in
+    the thread stays."""
+    run_id, _gh, slack, _model, _ = _answer(home, conn, Clock(), monkeypatch,
+                                            {"ShenSeanChen": "admin"}, action=action)
+    (edit,) = [m for m in slack.sent if m.idempotency_key == f"decided:{run_id}"]
+    assert edit.target["channel"] == "C0DEV"
+    assert edit.target["update_ts"] == "1800.0002", "the message the click came from"
+    assert "thread_ts" not in edit.target
+    assert edit.target["request"]["decided"] == line
+    assert edit.target["request"]["title"] == "Review PR #428"
+    assert edit.body == line
+    assert [m for m in slack.sent if m.idempotency_key == f"answered:{run_id}"]
+
+
+def test_the_slack_sender_edits_a_decided_request_in_place():
+    from waku.alwayson.senders import slack
+
+    calls = []
+
+    def post(url, payload, headers):
+        calls.append((url, payload))
+        return {"ok": True, "ts": "1800.0002"}
+
+    fields = {**approvals.request("github_review", REVIEW, REVIEW_HASH).fields(),
+              "decided": "Rejected by ShenSeanChen"}
+    message = outbox.Message(7, "1", "slack", {"channel": "C0DEV", "update_ts": "1800.0002",
+                                               "request": fields},
+                             "Rejected by ShenSeanChen", "decided:1", "pending", 0,
+                             "2026-11-30T17:00:00+00:00", "")
+    assert slack.make("xoxb-test", post=post)(message) == "1800.0002"
+
+    ((url, payload),) = calls
+    assert url == "https://slack.com/api/chat.update"
+    assert (payload["channel"], payload["ts"]) == ("C0DEV", "1800.0002")
+    assert "thread_ts" not in payload
+    blocks = payload["blocks"]
+    assert not [b for b in blocks if b["type"] == "actions"], "the buttons are gone"
+    assert blocks[0]["text"]["text"].startswith("*Review PR #428*"), "the rest of it stays"
+    assert blocks[-1] == {"type": "context", "elements": [
+        {"type": "plain_text", "text": "Rejected by ShenSeanChen"}]}
+
+
+def test_the_hosted_slack_sender_leaves_a_decided_request_alone():
+    """Hosted Slack has no edit route yet (spec 041), so the edit is skipped
+    and the row is not retried."""
+    from waku.alwayson.senders import slack
+
+    calls = []
+    message = outbox.Message(7, "1", "slack", {"channel": "C0DEV", "update_ts": "1800.0002",
+                                               "request": {"decided": "Approved by x"}},
+                             "Approved by x", "decided:1", "pending", 0,
+                             "2026-11-30T17:00:00+00:00", "")
+    slack.make_hosted("http://10.88.0.1:8788", "t", post=lambda *a: calls.append(a))(message)
+    assert calls == []
 
 
 def test_a_typed_yes_does_not_answer_a_review_asked_in_slack(home, conn, monkeypatch):
@@ -563,14 +628,21 @@ def test_a_redelivered_click_is_one_event(home):
     assert _click(home) is False
 
 
-@pytest.mark.parametrize("change, why", [
-    ({"type": "view_submission"}, "not a button"),
-    ({"team": {"id": "T2"}}, "another workspace"),
-    ({"channel": {"id": "C9"}}, "a channel nobody allowed"),
-    ({"actions": [{"action_id": "other", "value": "abcd1234"}]}, "another button"),
-    ({"actions": [{"action_id": "waku_approve", "value": "--approve"}]}, "not a code"),
+@pytest.mark.parametrize("change, reason", [
+    ({"type": "view_submission"}, "it is not a button click"),
+    ({"team": {"id": "T2"}}, "it comes from another workspace"),
+    ({"channel": {"id": "C9"}}, "channel C9 is not in SLACK_ALLOWED_CHANNELS"),
+    ({"actions": [{"action_id": "other", "value": "abcd1234"}]},
+     "the button is not Approve or Reject"),
+    ({"actions": [{"action_id": "waku_approve", "value": "--approve"}]},
+     "the button carries no request code"),
+    ({"user": {}}, "it names no person"),
+    ({"message": {}}, "it names no message"),
 ])
-def test_a_click_that_is_not_an_answer_is_not_stored(home, change, why):
+def test_a_click_that_is_not_an_answer_is_not_stored(home, change, reason):
+    """Found in the live check (2026-11-26): a refused click said nothing, so
+    nobody could tell a wrong channel from a click that never arrived. The
+    reason names no token and quotes no message."""
     from waku.alwayson.events import Inbox
     from waku.alwayson.sources import slack
 
@@ -579,7 +651,53 @@ def test_a_click_that_is_not_an_answer_is_not_stored(home, change, why):
                "message": {"ts": "1800.0002", "thread_ts": "1800.0001"},
                "actions": [{"action_id": "waku_approve", "value": "abcd1234",
                             "action_ts": "1800.0100"}], **change}
-    assert slack.record_click(Inbox(home), payload, team_id="T1", channels={"C0DEV"}) is False, why
+    assert slack.record_click(Inbox(home), payload, team_id="T1", channels={"C0DEV"}) == reason
+
+
+def test_the_listener_logs_why_it_ignored_a_click(home, monkeypatch):
+    import sys
+    from types import SimpleNamespace
+
+    from waku.alwayson.events import Inbox
+    from waku.alwayson.sources import slack
+
+    class Client:
+        def __init__(self, app_token, web_client):
+            self.socket_mode_request_listeners = []
+
+        def connect(self):
+            pass
+
+        def is_connected(self):
+            return True
+
+        def close(self):
+            pass
+
+        def send_socket_mode_response(self, response):
+            pass
+
+    web = SimpleNamespace(auth_test=lambda: {"team_id": "T1"})
+    monkeypatch.setitem(sys.modules, "slack_sdk", SimpleNamespace())
+    monkeypatch.setitem(sys.modules, "slack_sdk.socket_mode",
+                        SimpleNamespace(SocketModeClient=Client))
+    monkeypatch.setitem(sys.modules, "slack_sdk.socket_mode.response",
+                        SimpleNamespace(SocketModeResponse=lambda envelope_id: envelope_id))
+    monkeypatch.setitem(sys.modules, "slack_sdk.web",
+                        SimpleNamespace(WebClient=lambda token: web))
+    monkeypatch.setenv("SLACK_APP_TOKEN", "xapp-fake")
+    monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-fake")
+    monkeypatch.setenv("SLACK_ALLOWED_CHANNELS", "C0DEV")
+    lines = []
+    handle = slack.start(Inbox(home), log=lines.append)
+    (listener,) = handle.client.socket_mode_request_listeners
+    click = {"type": "block_actions", "team": {"id": "T1"},
+             "user": {"id": "U0SEAN", "team_id": "T1"}, "channel": {"id": "C123"},
+             "message": {"ts": "1800.0002", "text": "secret words"},
+             "actions": [{"action_id": "waku_approve", "value": "abcd1234"}]}
+    listener(handle.client, SimpleNamespace(type="interactive", envelope_id="e1", payload=click))
+    handle.stop()
+    assert lines[-1] == "(slack) ignored a click: channel C123 is not in SLACK_ALLOWED_CHANNELS"
 
 
 def test_a_review_that_waits_is_reminded_and_expires_in_its_thread(home, conn, monkeypatch):
