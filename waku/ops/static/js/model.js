@@ -8,12 +8,11 @@
 //                 then a 16 x 16 corner of one table as real values or as
 //                 the 4-bit codes it is stored as; the full list of tables
 //                 and the vocabulary are folded below
-//   #model/run    run: first where the model lives (the file on disk, the
-//                 share of memory it holds now, the chip and the last
-//                 measured speed; Load and Unload are Ollama's keep_alive),
-//                 then one prompt, and for every token of the answer five
-//                 boxes light in order (text, tokens, blocks, top 5
-//                 candidates, chosen), played back slow, live or step by step
+//   #model/run    run: one line saying whether the model is in memory (Load
+//                 and Unload are Ollama's keep_alive), then one prompt, and
+//                 for every token of the answer five boxes light in order
+//                 (text, tokens, blocks, top 5 candidates, chosen), played
+//                 back slow, live or step by step
 //
 // Ported from the open-models video's standalone page. The page keeps its own
 // state in the mw* globals below, so the 5s refresh does not redraw it (see
@@ -82,31 +81,11 @@ VIEWS.model = function(d, sub){
   </section>
 
   <section class="mw-pane" id="mw-p-run">
-    <div class="mw-lives">
-      <div class="lbl-mono">before it can answer, the file has to be in memory</div>
-    <div class="mw-panels">
-      <div class="mw-pn"><svg class="mw-ic mw-ic-lg" viewBox="0 0 80 80"><rect x="10" y="16" width="60" height="48" rx="6"/><path d="M10 46h60"/><circle cx="58" cy="55" r="2.5"/><path d="M20 55h18"/><path d="M22 26h36M22 34h24"/></svg>
-        <h3>Storage</h3><span class="mw-soft">keeps the file when the power is off</span>
-        <b class="mw-huge" id="mw-st-size">&ndash;</b><span class="mw-soft">one file, on disk</span><code class="mw-path" id="mw-st-path"></code></div>
-      <div class="mw-flow" id="mw-flow"><svg viewBox="0 0 130 80"><path class="shaft" d="M6 40h108"/><path d="M96 20l22 20-22 20"/></svg></div>
-      <div class="mw-pn"><svg class="mw-ic mw-ic-lg" viewBox="0 0 80 80"><path d="M6 24h68v30H46l-3-4h-6l-3 4H6z"/><rect x="14" y="31" width="10" height="14" rx="1.5"/><rect x="28" y="31" width="10" height="14" rx="1.5"/><rect x="42" y="31" width="10" height="14" rx="1.5"/><rect x="56" y="31" width="10" height="14" rx="1.5"/><path d="M12 54v6M20 54v6M28 54v6M52 54v6M60 54v6M68 54v6"/></svg>
-        <h3>Memory</h3><span class="mw-soft">where the numbers must be to compute</span>
-        <b class="mw-huge off" id="mw-memstate">&ndash;</b>
-        <div class="mw-membar" id="mw-membar"><i></i></div>
-        <div class="mw-scale"><span>0</span><span id="mw-memtotal"></span></div>
-        <span class="mw-memsub" id="mw-memsub"></span></div>
-      <div class="mw-pn"><svg class="mw-ic mw-ic-lg" viewBox="0 0 80 80"><rect x="20" y="20" width="40" height="40" rx="5"/><rect x="31" y="31" width="18" height="18" rx="2"/><path d="M28 20v-9M40 20v-9M52 20v-9M28 69v-9M40 69v-9M52 69v-9M20 28h-9M20 40h-9M20 52h-9M69 28h-9M69 40h-9M69 52h-9"/></svg>
-        <h3>Chip</h3><span class="mw-soft" id="mw-gpu-l">does the multiplying</span>
-        <b class="mw-chip" id="mw-chipname">&ndash;</b>
-        <b class="mw-huge" id="mw-ch-tps">&ndash;</b><span class="mw-soft" id="mw-ch-tps-l">tokens per second, after a run below</span></div>
-    </div>
-    <p class="mw-point" id="mw-point"></p>
-    <div class="mw-actions">
-      ${uiButton("Load into memory", {level: "primary", onclick: "mwLoadUnload(true)", cls: "mw-b-load"})}
-      ${uiButton("Unload", {onclick: "mwLoadUnload(false)", cls: "mw-b-unload"})}
+    <div class="mw-status">
+      <div class="mw-status-t" id="mw-status-t"></div>
+      ${uiButton("Load", {size: "sm", onclick: "mwLoadUnload(true)", cls: "mw-b-load", title: "Load the model into memory"})}
+      ${uiButton("Unload", {size: "sm", onclick: "mwLoadUnload(false)", cls: "mw-b-unload", title: "Free the memory the model holds"})}
       <span class="mw-loadmsg" id="mw-loadmsg"></span>
-    </div>
-    <p class="mw-soft mw-foot" id="mw-foot3"></p>
     </div>
     <div class="mw-prompt">
       <input id="mw-prompt" type="text" value="The capital of France is" autocomplete="off" spellcheck="false" aria-label="Prompt"
@@ -165,7 +144,7 @@ function mwMount(){
   MW_TABS.forEach(([k]) => mwEl("mw-p-" + k).classList.toggle("on", k === mwTab));
   mwStartPolling();
   if (!mwRun) mwRun = mwNewRun("");
-  if (!mwMachine) mwGet("machine").then(m => { mwMachine = m; mwRenderChip(); mwRenderMem(); mwRenderFoot(); }).catch(() => {});
+  if (!mwMachine) mwGet("machine").then(m => { mwMachine = m; mwRenderMem(); }).catch(() => {});
   const start = () => {
     if (!mwModels.length){
       mwEl("mw-none").innerHTML = uiNotice("note", "No local model was found in Ollama's folder (~/.ollama/models). Install Ollama and pull a model, for example <code>ollama pull qwen3:8b</code>, then open this page again.");
@@ -222,7 +201,7 @@ function mwChooseModel(name){ mwWanted = name; mwLoadModel(name); }
 function mwRedrawAll(){
   if (!mwModel) return;
   mwRenderFacts(); mwRenderList(); mwRenderWhere(); mwRenderTensor(); mwLoadTokens();
-  mwBuildStack(); mwResetCaps(); mwRest(); mwRenderStorage(); mwRenderChip(); mwRenderMem();
+  mwBuildStack(); mwResetCaps(); mwRest(); mwRenderMem();
 }
 
 /* ------------------------------------------------------------ 1. the file */
@@ -307,10 +286,17 @@ function mwOpenBlock(e){
   if (typeof mwPartKey(mwCurrent) !== "number") mwPickPart(0);
   location.hash = "#model/file";
 }
-function mwCard(t){
+// One table as a card. A table's own steadying (norm) table rides on its
+// card as a small second button instead of taking a card of its own.
+function mwCard(t, norm){
   const [short, line] = mwRole(t.name);
-  return `<button type="button" class="mw-card${t.name === mwCurrent ? " on" : ""}" data-name="${esc(t.name)}" onclick="mwSelectTensor(this.dataset.name)">
-    <b>${esc(short)}</b><span>${esc(line)}</span><code>${esc(t.name.replace(/^blk\.\d+\./, ""))} · ${t.shape.join(" × ")}</code></button>`;
+  const on = t.name === mwCurrent, non = norm && norm.name === mwCurrent;
+  return `<div class="mw-card${on ? " on" : ""}"><button type="button" class="mw-card-b" data-name="${esc(t.name)}" title="${esc(t.name)}" onclick="mwSelectTensor(this.dataset.name)">
+    <b>${esc(short)}</b><span>${esc(line)}</span></button>${norm ? `<button type="button" class="mw-card-x${non ? " on" : ""}" data-name="${esc(norm.name)}" title="${esc(norm.name)}" onclick="mwSelectTensor(this.dataset.name)">+ its steadying table</button>` : ""}</div>`;
+}
+// The step's own norm table, as a small chip at the head of the step.
+function mwNormChip(t){
+  return t ? `<button type="button" class="mw-chipb${t.name === mwCurrent ? " on" : ""}" data-name="${esc(t.name)}" title="${esc(t.name)}" onclick="mwSelectTensor(this.dataset.name)">first, steady the numbers</button>` : "";
 }
 // Level 1 is the whole model: the way in, every block, the way out. Level 2
 // is the part that was clicked, as its tables grouped by what they do.
@@ -319,32 +305,42 @@ function mwRenderWhere(){
   const n = mwModel.metadata.block_count || 0, sel = mwPartKey(mwCurrent);
   const arrow = `<svg class="mw-ic mw-map-arr" viewBox="0 0 34 34" aria-hidden="true"><path d="M4 17h24M20 9l8 8-8 8"/></svg>`;
   let blks = "";
-  for (let i = 0; i < n; i++) blks += `<button type="button" class="mw-blk${sel === i ? " on" : ""}" title="block ${i + 1} of ${n}" aria-label="block ${i + 1} of ${n}" onclick="mwPickPart(${i})"></button>`;
+  for (let i = 0; i < n; i++) blks += `<button type="button" class="mw-blk${sel === i ? " on" : ""}" title="block ${i + 1} of ${n}" aria-label="block ${i + 1} of ${n}" onclick="mwPickPart(${i})">${sel === i ? i + 1 : ""}</button>`;
   mwEl("mw-map").innerHTML = `<div class="lbl-mono">the whole model. Click a part.</div>
   <div class="mw-maprow">
     <button type="button" class="mw-end${sel === "emb" ? " on" : ""}" onclick="mwPickPart('emb')"><b>the way in</b><span>tokens become numbers</span></button>
     ${arrow}
-    <div class="mw-mid"><div class="mw-blks">${blks}</div><span class="mw-soft">${n} blocks, one after another. Every block does the same two steps with its own tables.</span></div>
+    <div class="mw-mid"><div class="mw-blks">${blks}</div><div class="mw-blk-ends"><span>1</span><span class="mw-soft">${n} blocks, one after another. Every block does the same two steps with its own tables.</span><span>${n}</span></div></div>
     ${arrow}
     <button type="button" class="mw-end${sel === "out" ? " on" : ""}" onclick="mwPickPart('out')"><b>the way out</b><span>numbers become scores</span></button>
   </div>`;
   const tables = mwTablesOf(sel);
-  const group = (title, about, rows) => rows.length
-    ? `<div class="mw-step"><div class="mw-step-h"><b>${title}</b><span class="mw-soft">${about}</span></div><div class="mw-cards">${rows.map(mwCard).join("")}</div></div>` : "";
+  const find = re => tables.find(t => re.test(t.name));
+  const step = (title, about, chip, cards) => cards
+    ? `<div class="mw-step"><div class="mw-step-h"><b>${title}</b><span class="mw-soft">${about}</span>${chip}</div><div class="mw-cards">${cards}</div></div>` : "";
+  const plain = rows => rows.map(t => mwCard(t)).join("");
   let h;
   if (typeof sel === "number"){
-    const attn = tables.filter(t => /attn/.test(t.name)), ffn = tables.filter(t => /ffn/.test(t.name));
+    // Each norm table is shown with what it serves: the step's own as a chip,
+    // the query's and the key's on their cards.
+    const used = new Set();
+    const take = re => { const t = find(re); if (t) used.add(t.name); return t; };
+    const attnNorm = take(/attn_norm/), ffnNorm = take(/ffn_norm/), qNorm = take(/attn_q_norm/), kNorm = take(/attn_k_norm/);
+    const attn = tables.filter(t => /attn/.test(t.name) && !used.has(t.name));
+    const ffn = tables.filter(t => /ffn/.test(t.name) && !used.has(t.name));
     const rest = tables.filter(t => !/attn|ffn/.test(t.name));
-    h = `<h3>Block ${sel + 1} of ${n}</h3>` +
-      group("Step 1: attention", "each token looks back at the earlier tokens and takes in what it needs", attn) +
-      group("Step 2: feed-forward", "then each token's numbers are reworked on their own", ffn) +
-      group("Other", "", rest);
+    const attnCards = attn.map(t => mwCard(t, /attn_q\./.test(t.name) ? qNorm : /attn_k\./.test(t.name) ? kNorm : null)).join("");
+    h = `<h3>Block ${sel + 1} of ${n}</h3><div class="mw-steps">` +
+      step("Step 1: attention", "each token looks back at the earlier ones", mwNormChip(attnNorm), attnCards) +
+      `<svg class="mw-ic mw-map-arr" viewBox="0 0 34 34" aria-hidden="true"><path d="M4 17h24M20 9l8 8-8 8"/></svg>` +
+      step("Step 2: feed-forward", "then each token is reworked on its own", mwNormChip(ffnNorm), plain(ffn)) +
+      `</div>` + step("Other", "", "", plain(rest));
   } else if (sel === "emb"){
-    h = `<h3>The way in</h3>` + group("Embedding", "each token is swapped for its row of numbers", tables);
+    h = `<h3>The way in</h3>` + step("Embedding", "each token is swapped for its row of numbers", "", plain(tables));
   } else if (sel === "out"){
-    h = `<h3>The way out</h3>` + group("Output", "the final numbers become a score for every token", tables);
+    h = `<h3>The way out</h3>` + step("Output", "the final numbers become a score for every token", "", plain(tables));
   } else {
-    h = `<h3>Other tables</h3>` + group("", "", tables);
+    h = `<h3>Other tables</h3>` + step("", "", "", plain(tables));
   }
   mwEl("mw-block").innerHTML = h;
 }
@@ -474,7 +470,7 @@ async function mwLoadModel(name){
   mwRenderFacts(); mwRenderList(); mwRenderWhere();
   if (mwCurrent) mwSelectTensor(mwCurrent);
   mwLoadTokens();
-  mwResetCaps(); mwResetRun(); mwBuildStack(); mwRenderStorage(); mwPollPs();
+  mwResetCaps(); mwResetRun(); mwBuildStack(); mwPollPs();
 }
 
 /* ------------------------------------------------------------ 2. press enter */
@@ -712,7 +708,7 @@ function mwOnChunk(me, j){
   }
   if (j.done){
     me.final = j;
-    if (j.eval_count && j.eval_duration){ mwLastTps = {tps: j.eval_count / j.eval_duration * 1e9, n: j.eval_count, model: j.model}; mwRenderChip(); }
+    if (j.eval_count && j.eval_duration){ mwLastTps = {tps: j.eval_count / j.eval_duration * 1e9, n: j.eval_count, model: j.model}; mwRenderMem(); }
   }
   if (mwRun !== me || !mwEl("mw-stations")) return;
   if (mwMode === "live") mwCursor = me.tokens.length - 1;
@@ -721,59 +717,27 @@ function mwOnChunk(me, j){
 }
 
 /* ------------------------------------------------------------ 3. where it lives */
-function mwRenderStorage(){
-  if (!mwModel || !mwEl("mw-st-size")) return;
-  mwEl("mw-st-size").innerHTML = (mwModel.totals.file_size / 1e9).toFixed(2) + "<small>GB</small>";
-  mwEl("mw-st-path").textContent = mwModel.path;
-}
-function mwRenderChip(){
-  if (!mwEl("mw-chipname")) return;
-  mwEl("mw-chipname").textContent = (mwMachine && mwMachine.chip) || "–";
-  if (mwLastTps){
-    mwEl("mw-ch-tps").textContent = mwLastTps.tps.toFixed(1);
-    mwEl("mw-ch-tps-l").textContent = "tokens per second, last run, " + mwLastTps.n + " tokens" + (mwModel && mwLastTps.model !== mwModel.name ? " (" + mwLastTps.model + ")" : "");
-  }
-}
-function mwRenderFoot(){
-  const m = mwMachine, el = mwEl("mw-foot3");
-  if (!m || !el) return;
-  el.textContent = "Memory in units of 1,073,741,824 bytes; file size in units of 1,000,000,000, as Finder shows it." +
-    (m.ollama_version ? " Ollama " + m.ollama_version + "." : "");
-}
-// The one thing this tab is for: a model runs only where it fits in memory.
-function mwRenderPoint(){
-  const el = mwEl("mw-point"), total = mwMachine && mwMachine.memory_bytes;
-  if (!el || !mwModel || !total) return;
-  const file = mwModel.totals.file_size / 1e9, gb = total / MW_GIB;
-  el.innerHTML = `A model can only run once all of its numbers are in memory. This file is <b>${file.toFixed(1)} GB</b> and this computer has <b>${gb.toFixed(0)} GB</b>, so it ${file < gb * 0.9 ? "fits" : "does not fit"}. Size decides where a model can run. Press Load and watch the bar fill, then run a prompt below.`;
-}
+// One line at the top of Run: is the model in memory, how much it holds,
+// when Ollama will unload it, and the last measured speed.
 function mwRenderMem(){
-  if (!mwEl("mw-memstate")) return;
-  mwRenderPoint();
+  const el = mwEl("mw-status-t");
+  if (!el || !mwModel) return;
   const total = mwMachine && mwMachine.memory_bytes;
-  mwEl("mw-memtotal").textContent = total ? (total / MW_GIB).toFixed(0) + " GB" : "";
-  const m = mwPs && mwModel ? (mwPs.models || []).find(x => x.name === mwModel.name || x.model === mwModel.name) : null;
-  const state = mwEl("mw-memstate"), bar = mwEl("mw-membar").firstElementChild;
-  mwEl("mw-flow").className = "mw-flow" + (mwLoading ? " loading" : m ? " loaded" : "");
-  const gpu = "does the multiplying";
-  if (mwPsErr){ state.className = "mw-huge off"; state.textContent = "Ollama is off"; bar.style.width = "0"; mwEl("mw-memsub").textContent = ""; return; }
-  if (!m){
-    state.className = "mw-huge off"; state.textContent = mwLoading ? "loading…" : "not loaded";
-    bar.style.width = "0"; mwEl("mw-memsub").textContent = ""; mwEl("mw-gpu-l").textContent = gpu;
-    return;
+  const m = mwPs ? (mwPs.models || []).find(x => x.name === mwModel.name || x.model === mwModel.name) : null;
+  const parts = [];
+  if (mwPsErr) parts.push("Ollama is not running");
+  else if (!m) parts.push(mwLoading ? "loading into memory…" : "not in memory: the first run loads it, which takes a few seconds");
+  else {
+    parts.push("in memory: " + (m.size / MW_GIB).toFixed(1) + (total ? " of " + (total / MW_GIB).toFixed(0) : "") + " GB");
+    const left = Date.parse(m.expires_at) - Date.now();
+    if (Number.isFinite(left)){
+      if (left > 864e5) parts.push("stays loaded");
+      else if (left > 0){ const sec = Math.ceil(left / 1000); parts.push("unloads in " + Math.floor(sec / 60) + ":" + String(sec % 60).padStart(2, "0")); }
+      else parts.push("unloading…");
+    }
   }
-  state.className = "mw-huge";
-  state.innerHTML = (m.size / MW_GIB).toFixed(1) + "<small>GB" + (total ? " of " + (total / MW_GIB).toFixed(0) + ", " + (100 * m.size / total).toFixed(0) + "%" : "") + "</small>";
-  bar.style.width = total ? Math.min(100, 100 * m.size / total).toFixed(2) + "%" : "0";
-  const left = Date.parse(m.expires_at) - Date.now();
-  let sub = "";
-  if (Number.isFinite(left)){
-    if (left > 864e5) sub = "stays loaded";
-    else if (left > 0){ const s = Math.ceil(left / 1000); sub = "unloads in " + Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0"); }
-    else sub = "unloading…";
-  }
-  mwEl("mw-memsub").textContent = sub;
-  if (m.size) mwEl("mw-gpu-l").textContent = "holds " + (100 * (m.size_vram || 0) / m.size).toFixed(0) + "% of the loaded model";
+  if (mwLastTps) parts.push(mwLastTps.tps.toFixed(1) + " tokens/s");
+  el.innerHTML = `<b>${esc(mwModel.name)}</b>` + parts.map(t => `<span>${esc(t)}</span>`).join("");
 }
 async function mwPollPs(background){
   if (!mwEl("mw")) return;
@@ -798,7 +762,7 @@ async function mwLoadUnload(load){
   if (mwLoading || !mwModel) return;
   const msg = mwEl("mw-loadmsg");
   const btns = [...document.querySelectorAll(".mw-b-load, .mw-b-unload")];
-  msg.className = "mw-loadmsg"; msg.textContent = load ? "loading…" : "";
+  msg.className = "mw-loadmsg"; msg.textContent = "";
   mwLoading = load; btns.forEach(b => b.disabled = true); mwRenderMem();
   try {
     const j = await mwPost(load ? "load" : "unload", {model: mwModel.name});
