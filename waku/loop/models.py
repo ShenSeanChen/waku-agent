@@ -18,13 +18,18 @@ spend at all (rate-limited). The dashboard Settings tab lists the live catalog.
 from __future__ import annotations
 
 import json
+import logging
 import os
+import time
 import tomllib
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
 
 from waku.config import Settings
+
+log = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -300,6 +305,43 @@ def models_for(provider_name: str, model: str = "", small_model: str = "") -> tu
     return resolved[0] or default_model, resolved[1] or default_small_model
 
 
+def _build_raw_client(provider_name: str, provider: Provider, api_key: str,
+                      base_url: str | None, timeout: float):
+    """Instantiate the SDK or adapter client for one validated provider."""
+    if provider.kind == "anthropic":
+        import anthropic
+
+        kwargs: dict = {"api_key": api_key, "timeout": timeout}
+        if base_url:
+            kwargs["base_url"] = base_url
+        client = anthropic.Anthropic(**kwargs)
+        # Spec 011 B1: the hosted free tier's proxy is told which turn each
+        # call belongs to, and answers what the turn was charged.
+        return TurnTagged(client) if provider_name == PLATFORM else client
+    return OpenAICompatClient(api_key=api_key, base_url=base_url, timeout=timeout)
+
+
+def _build_fallback_target(name: str, timeout: float) -> FallbackTarget | None:
+    """Build a FallbackTarget for `name` if it is visible, has credentials, and
+    has a valid key; return None when not ready so unconfigured backups skip."""
+    provider = PROVIDERS.get(name)
+    if (provider is None or name == PLATFORM or provider.scoped_credentials
+            or not provider.is_visible() or not provider.has_credentials(name)):
+        return None
+    api_key = os.getenv(provider.key_env, "").strip()
+    if not api_key and provider.key_optional:
+        api_key = LOCAL_PLACEHOLDER_KEY
+    if not api_key:
+        return None
+    try:
+        api_key.encode("latin-1")
+    except UnicodeEncodeError:
+        return None
+    model, small_model = models_for(name)
+    client = _build_raw_client(name, provider, api_key, provider.configured_base_url(), timeout)
+    return FallbackTarget(name=name, client=client, model=model, small_model=small_model)
+
+
 def get_client(settings: Settings):
     """Build the client for settings.provider and fill in default model ids.
     Returns anything with .messages.create(...) in the Anthropic shape."""
@@ -350,18 +392,166 @@ def get_client(settings: Settings):
 
     # a hung network call must never freeze a turn silently
     timeout = float(os.getenv("WAKU_LLM_TIMEOUT", "120"))
+    primary = _build_raw_client(settings.provider, provider, api_key, base_url, timeout)
 
-    if provider.kind == "anthropic":
-        import anthropic
+    if settings.provider != PLATFORM and settings.fallback_providers:
+        seen = {settings.provider}
+        fallbacks: list[FallbackTarget] = []
+        for name in settings.fallback_providers:
+            if name in seen or name in settings.disabled_providers:
+                continue
+            seen.add(name)
+            if (target := _build_fallback_target(name, timeout)) is not None:
+                fallbacks.append(target)
+        if fallbacks:
+            primary_target = FallbackTarget(
+                name=settings.provider, client=primary,
+                model=settings.model, small_model=settings.small_model)
+            return FallbackClient(primary_target, fallbacks)
+    return primary
 
-        kwargs: dict = {"api_key": api_key, "timeout": timeout}
-        if base_url:
-            kwargs["base_url"] = base_url
-        client = anthropic.Anthropic(**kwargs)
-        # Spec 011 B1: the hosted free tier's proxy is told which turn each
-        # call belongs to, and answers what the turn was charged.
-        return TurnTagged(client) if settings.provider == PLATFORM else client
-    return OpenAICompatClient(api_key=api_key, base_url=base_url, timeout=timeout)
+
+#: HTTP status codes that trigger failover to the next configured provider.
+RETRYABLE_STATUSES = frozenset({429, 500, 502, 503, 504, 529})
+_LIMIT_WORDS = ("usage limit", "credit balance")
+#: Cooldown after a retryable failure so subsequent turns skip the downed target.
+FALLBACK_DOWN_SECONDS = 600.0
+
+
+def _is_retryable(exc: BaseException) -> bool:
+    """True for rate limits (429), server outages (5xx/529), quota exhaustion
+    on 400, and transport/timeout failures. False for malformed requests (400),
+    bad credentials (401/403), or missing models (404)."""
+    status = getattr(exc, "status_code", None)
+    if isinstance(status, int):
+        if status in RETRYABLE_STATUSES:
+            return True
+        if status == 400:
+            msg = str(exc).lower()
+            return any(word in msg for word in _LIMIT_WORDS)
+        return False
+    if isinstance(exc, (TimeoutError, ConnectionError)):
+        return True
+    name = type(exc).__name__
+    return "Connection" in name or "Timeout" in name
+
+
+@dataclass
+class FallbackTarget:
+    """One candidate provider in a FallbackClient chain."""
+
+    name: str
+    client: object
+    model: str
+    small_model: str
+    down_until: float = 0.0
+
+
+class _FallbackStream:
+    """Stream context manager that fails over before any text delta is yielded."""
+
+    def __init__(self, owner: FallbackClient, kwargs: dict) -> None:
+        self._owner = owner
+        self._kwargs = kwargs
+        self._active = None
+        self._active_cm = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        if self._active_cm is not None:
+            cm, self._active_cm = self._active_cm, None
+            return cm.__exit__(*exc)
+        return False
+
+    @property
+    def text_stream(self):
+        last_exc: BaseException | None = None
+        for target in self._owner._candidates():
+            call_kwargs = self._owner._rewrite_kwargs(target, self._kwargs)
+            yielded = False
+            cm = None
+            s = None
+            try:
+                cm = target.client.messages.stream(**call_kwargs)
+                s = cm.__enter__()
+                for delta in s.text_stream:
+                    if not yielded:
+                        yielded = True
+                        self._active_cm = cm
+                        self._active = s
+                    yield delta
+                # Stream completed cleanly (even with 0 deltas): keep cm open until __exit__.
+                self._active_cm = cm
+                self._active = s
+                return
+            except Exception as exc:
+                if yielded or not _is_retryable(exc):
+                    if s is not None:
+                        self._active_cm = cm
+                        self._active = s
+                    raise
+                if s is not None and cm is not None:
+                    cm.__exit__(type(exc), exc, exc.__traceback__)
+                self._active_cm = None
+                self._active = None
+                self._owner._mark_down(target, exc)
+                last_exc = exc
+        if last_exc is not None:
+            raise last_exc
+
+    def get_final_message(self):
+        if self._active is None:
+            raise RuntimeError("get_final_message called before stream succeeded")
+        return self._active.get_final_message()
+
+
+class FallbackClient:
+    """Tries primary first, failing over to configured backup providers on
+    429/5xx/connection errors and cooling down the failed target."""
+
+    def __init__(self, primary: FallbackTarget, fallbacks: list[FallbackTarget], *,
+                 monotonic: Callable[[], float] = time.monotonic) -> None:
+        self._primary = primary
+        self._targets = [primary, *fallbacks]
+        self._monotonic = monotonic
+        self.messages = SimpleNamespace(create=self._create, stream=self._stream)
+
+    def _candidates(self) -> list[FallbackTarget]:
+        now = self._monotonic()
+        ready = [t for t in self._targets if now >= t.down_until]
+        return ready or list(self._targets)
+
+    def _mark_down(self, target: FallbackTarget, exc: BaseException) -> None:
+        target.down_until = self._monotonic() + FALLBACK_DOWN_SECONDS
+        log.warning("Provider '%s' failed (%s); cooling down for %ds",
+                    target.name, exc, int(FALLBACK_DOWN_SECONDS))
+
+    def _rewrite_kwargs(self, target: FallbackTarget, kwargs: dict) -> dict:
+        if target is self._primary:
+            return kwargs
+        requested = kwargs.get("model")
+        is_small = (requested and requested == self._primary.small_model
+                    and self._primary.small_model != self._primary.model)
+        return {**kwargs, "model": target.small_model if is_small else target.model}
+
+    def _create(self, **kwargs):
+        last_exc: BaseException | None = None
+        for target in self._candidates():
+            call_kwargs = self._rewrite_kwargs(target, kwargs)
+            try:
+                return target.client.messages.create(**call_kwargs)
+            except Exception as exc:
+                if not _is_retryable(exc):
+                    raise
+                self._mark_down(target, exc)
+                last_exc = exc
+        assert last_exc is not None
+        raise last_exc
+
+    def _stream(self, **kwargs):
+        return _FallbackStream(self, kwargs)
 
 
 # The hosted free tier's provider row (providers.toml), whose endpoint is the
