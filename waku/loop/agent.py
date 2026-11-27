@@ -209,6 +209,10 @@ def run_loop(
         # ---- act: execute each requested tool; observe: feed results back
         tool_results = []
         for call in tool_uses:
+            # Spec 039 E1: say a tool has started before it runs, so a client
+            # can show "Searching your memories" instead of an empty screen.
+            # The `tool` event below follows with the same call_id.
+            notify("tool_start", {"tool": call.name, "call_id": call.id})
             started = time.perf_counter()
             deny, extra = before_tool(call.name, call.input) if before_tool else (None, "")
             if deny is not None:
