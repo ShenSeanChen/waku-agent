@@ -83,6 +83,37 @@ def error_text(exc: BaseException) -> str:
     return f"{type(exc).__name__}: {exc}"
 
 
+# Spec 039 B3: Anthropic's five-minute prompt-cache breakpoint.
+CACHE_BREAKPOINT = {"type": "ephemeral"}
+
+
+def cached_system(system: str, prefix: str) -> str | list[dict]:
+    """`system` as Anthropic text blocks with one cache breakpoint at the end
+    of `prefix`, or `system` unchanged when there is no prefix or the prompt
+    does not start with it. Anthropic renders the tools before the system
+    prompt, so the breakpoint caches the tool schemas and the prefix both."""
+    if not prefix or not system.startswith(prefix):
+        return system
+    blocks = [{"type": "text", "text": prefix, "cache_control": dict(CACHE_BREAKPOINT)}]
+    if rest := system[len(prefix):]:
+        blocks.append({"type": "text", "text": rest})
+    return blocks
+
+
+def _usage(response) -> dict:
+    """A call's tokens for the `llm` event: input, output, and the prompt-cache
+    reads and writes, which are zero for a provider that reports none."""
+    usage = response.usage
+
+    def count(name: str) -> int:
+        value = getattr(usage, name, 0)
+        return value if isinstance(value, int) and not isinstance(value, bool) else 0
+
+    return {"in": count("input_tokens"), "out": count("output_tokens"),
+            "cache_read": count("cache_read_input_tokens"),
+            "cache_write": count("cache_creation_input_tokens")}
+
+
 @dataclass
 class LoopResult:
     reply: str
@@ -138,6 +169,7 @@ def run_loop(
     stream: bool = False,
     trim: Callable[[list[dict]], None] | None = None,
     before_tool: Callable[[str, dict], tuple[str | None, str]] | None = None,
+    cache_prefix: str = "",
 ) -> LoopResult:
     """Run one agent turn. `messages` is mutated in place — after the call it
     contains the full working memory of the turn (assistant thoughts, tool
@@ -156,8 +188,15 @@ def run_loop(
     `before_tool`, when given, is asked before each tool call (spec 021's
     PreToolUse). It returns (a reason to refuse, or None; context to add).
     A refused call does not run, and the model reads the reason as its
-    result. The loop does not know where the answer came from."""
+    result. The loop does not know where the answer came from.
+
+    `cache_prefix`, when given and the system prompt starts with it, is sent
+    as its own text block with a prompt-cache breakpoint (spec 039 B3), so
+    every call of the turn after the first reads the tools and that prefix
+    from the cache. Only a provider that takes Anthropic's `cache_control`
+    is given one."""
     notify = observer or (lambda kind, ev: None)
+    prompt = cached_system(system, cache_prefix)
     result = LoopResult(reply="")
     can_stream = stream and hasattr(client.messages, "stream")
 
@@ -171,7 +210,7 @@ def run_loop(
         if can_stream:
             try:
                 with client.messages.stream(
-                    model=model, system=system, messages=messages,
+                    model=model, system=prompt, messages=messages,
                     tools=tools.schemas(), max_tokens=max_tokens,
                 ) as s:
                     for delta in s.text_stream:
@@ -188,13 +227,13 @@ def run_loop(
         if response is None:
             response = client.messages.create(
                 model=model,
-                system=system,
+                system=prompt,
                 messages=messages,
                 tools=tools.schemas(),
                 max_tokens=max_tokens,
             )
         notify("llm", {"iteration": iteration, "stop_reason": response.stop_reason,
-                       "usage": {"in": response.usage.input_tokens, "out": response.usage.output_tokens}})
+                       "usage": _usage(response)})
 
         # the assistant's turn (text and/or tool requests) joins working memory
         messages.append({"role": "assistant", "content": response.content})
@@ -237,12 +276,13 @@ def run_loop(
     # in `messages`, so ask once more with tools off for an answer from it,
     # rather than throwing it away. If that call fails, say so the old way.
     result.limit_reached = True
-    result.reply = _final_answer(client, model, system, messages, tools, max_tokens,
+    result.reply = _final_answer(client, model, prompt, messages, tools, max_tokens,
                                  notify, trim, max_iterations + 1) or LIMIT_REPLY
     return result
 
 
-def _final_answer(client, model: str, system: str, messages: list[dict], tools: ToolRegistry,
+def _final_answer(client, model: str, system: str | list[dict], messages: list[dict],
+                  tools: ToolRegistry,
                   max_tokens: int, notify: Observer, trim, iteration: int) -> str:
     """The one tools-off call after max_iterations: its text, or "" when it
     failed or wrote none. The tool definitions are still sent, because
@@ -250,9 +290,12 @@ def _final_answer(client, model: str, system: str, messages: list[dict], tools: 
     "none" is what stops the model calling one."""
     if trim is not None:
         trim(messages)
+    note = f"\n\n{LIMIT_NOTE}"
+    final_system = ([*system, {"type": "text", "text": note}] if isinstance(system, list)
+                    else system + note)
     try:
         response = client.messages.create(
-            model=model, system=f"{system}\n\n{LIMIT_NOTE}", messages=messages,
+            model=model, system=final_system, messages=messages,
             tools=tools.schemas(), tool_choice={"type": "none"}, max_tokens=max_tokens)
     except Exception as exc:
         log.warning("the final answer after the iteration limit failed: %s", error_text(exc))
@@ -261,7 +304,7 @@ def _final_answer(client, model: str, system: str, messages: list[dict], tools: 
     # and the receipt counts it apart; final_answer is the flag to look for
     notify("llm", {"iteration": iteration, "kind": "final", "final_answer": True,
                    "stop_reason": response.stop_reason,
-                   "usage": {"in": response.usage.input_tokens, "out": response.usage.output_tokens}})
+                   "usage": _usage(response)})
     text = [b for b in response.content if b.type == "text"]
     if text:
         messages.append({"role": "assistant", "content": text})
