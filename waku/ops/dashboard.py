@@ -1654,6 +1654,15 @@ class Handler(BaseHTTPRequestHandler):
             self._send(embed_page(self.headers.get(EMBED_ORIGINS_HEADER),
                                   embed_theme(urlparse(self.path).query)),
                        "text/html; charset=utf-8", no_cache=True)
+        elif self.path.startswith("/api/weights/"):
+            # Spec 046: the Model page reads the local model's file and asks
+            # the Ollama on this machine what it holds. Read-only; hosted blocks it.
+            from urllib.parse import parse_qs, urlparse
+
+            from waku.ops import weights
+
+            q = {k: v[0] for k, v in parse_qs(urlparse(self.path).query).items()}
+            self._send_json(*weights.answer_get(q.get("what", ""), q))
         elif self.path.startswith("/static/"):
             self._serve_static(self.path)
         else:
@@ -1668,6 +1677,47 @@ class Handler(BaseHTTPRequestHandler):
             return
         ctype = STATIC_TYPES.get(target.suffix, "application/octet-stream")
         self._send(target.read_bytes(), ctype, no_cache=True)
+
+    def _weights_post(self, length: int) -> None:
+        """Spec 046: run one prompt on the local model and relay Ollama's
+        stream line by line. It is the only action. The run is relayed, not
+        buffered, so the page lights each piece as it arrives; closing the
+        page's request closes the connection to Ollama, which stops the run."""
+        from waku.ops import weights
+
+        try:
+            body = json.loads(self.rfile.read(length) or "{}")
+        except ValueError:
+            body = {}
+        body = body if isinstance(body, dict) else {}
+        if body.get("action") != "run":
+            self._send_json(404, {"error": "not found"})
+            return
+        name = str(body.get("model") or "")
+        if name not in {m["name"] for m in weights.list_models()}:
+            self._send_json(404, {"error": f"model {name!r} is not installed in Ollama"})
+            return
+        try:
+            conn, resp = weights.ollama("POST", "/api/generate",
+                                        weights.run_request(name, str(body.get("prompt") or "")))
+        except OSError as e:
+            self._send_json(502, {"error": f"Ollama is not reachable: {e}"})
+            return
+        try:
+            if resp.status != 200:
+                self._send_json(502, {"error": resp.read().decode("utf-8", "replace")[:300] or "Ollama error"})
+                return
+            self.send_response(200)
+            self.send_header("Content-Type", "application/x-ndjson; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            while line := resp.readline():
+                self.wfile.write(line)
+                self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError):
+            pass  # the page went away mid-run; closing below stops Ollama
+        finally:
+            conn.close()
 
     def do_POST(self):
         if self._foreign_host():
@@ -1685,6 +1735,9 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == "/api/voice":
             raw = self.rfile.read(length)
             self._send(json.dumps(transcribe_audio(raw)).encode(), "application/json")
+            return
+        if self.path.startswith("/api/weights/"):
+            self._weights_post(length)
             return
         # /api/chat/stream streams harness events (SSE) as the turn runs.
         if self.path == "/api/events":

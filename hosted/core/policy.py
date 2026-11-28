@@ -85,6 +85,9 @@ PLUGIN_REFUSED = ("Plugins are not available on hosted Waku. A hosted container'
 # decision, so its routes are blocked until it is made.
 CONNECTORS_BLOCKED = ("Connectors are not available on hosted Waku. A hosted "
                       "container's servers are set up when you sign in.")
+# Spec 046: the Model page reads a model file and the Ollama beside it.
+WEIGHTS_BLOCKED = ("Looking inside a model only works on your own machine, with "
+                   "Ollama installed.")
 PLUGIN_COMMAND = "/plugin"
 CHAT_ROUTES = ("/api/chat", "/api/chat/stream")
 PLATFORM_FIELDS_REFUSED = ("The hosted free tier's key and endpoint are set by the "
@@ -187,6 +190,9 @@ DECISIONS: dict[str, str] = {
     "/api/connectors/approve": BLOCK,
     "/api/connectors/snooze": BLOCK,
     "/api/connectors/sign_in": BLOCK,
+    # spec 046: a local model's file and the Ollama on the same machine. A
+    # tenant container has neither, and nothing here should read its disk
+    "/api/weights/": BLOCK,
 }
 
 BLOCK_MESSAGES: dict[str, str] = {
@@ -211,6 +217,7 @@ BLOCK_MESSAGES: dict[str, str] = {
     "/api/connectors/approve": CONNECTORS_BLOCKED,
     "/api/connectors/snooze": CONNECTORS_BLOCKED,
     "/api/connectors/sign_in": CONNECTORS_BLOCKED,
+    "/api/weights/": WEIGHTS_BLOCKED,
 }
 
 # Substrings no path may contain. The query is split off first, so a percent

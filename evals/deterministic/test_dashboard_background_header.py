@@ -141,6 +141,11 @@ BACKGROUND_AWARE = {
     "hosted.js": {
         "loadHostedSlack": r'fetch\("/hosted/slack",\s*background\s*\?\s*\{headers:\s*BG\}\s*:\s*undefined\)',
     },
+    # spec 046: the Model page asks Ollama every 2s what is loaded, through
+    # its one GET wrapper
+    "model.js": {
+        "mwGet": r'background\s*\?\s*\{headers:\s*BG\}\s*:\s*undefined',
+    },
 }
 
 def _read(name: str) -> str:
@@ -306,6 +311,10 @@ NETWORK_CALLERS = {
     ("views.js", "saveConnection"): "user",
     ("views.js", "testConnection"): "user",
     ("views.js", "saveProvider"): "user",
+    # spec 046, the LLM page: its one GET wrapper (the 2s poll passes true)
+    # and the Run button
+    ("model.js", "mwGet"): "background",
+    ("model.js", "mwStartRun"): "user",
 }
 
 # The other ways a browser can put bytes on the wire, denied by name. This is
@@ -390,6 +399,14 @@ DECLARED_TIMERS = {
         {'() => { btn.textContent = orig; btn.classList.remove("copied"); }'},
     ("util.js", "copyMsg", "setTimeout"):
         {'() => { btn.textContent = orig; btn.classList.remove("copied"); }'},
+    # spec 046, the Model page. Filling the page in once its markup is in place:
+    ("model.js", "<top level>", "setTimeout"): {"mwMount"},
+    # the five stations lighting in order, and the playback cursor: repaint only
+    ("model.js", "mwStartPass", "setTimeout"): {"fn"},
+    ("model.js", "mwSchedule", "setTimeout"): {"mwSlowTick", "mwLiveTick"},
+    # what Ollama holds in memory, every 2s while the page is open (mwPsTick
+    # calls mwPollPs(true)), and the unload countdown's repaint
+    ("model.js", "mwStartPolling", "setInterval"): {"mwPsTick", "mwMemTick"},
 }
 
 
