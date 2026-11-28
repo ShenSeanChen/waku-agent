@@ -12,18 +12,17 @@
 <nav id="nav" class="rail">
   <div class="r-top"><a class="r-home" href="https://waku.one" target="_blank"
       rel="noopener noreferrer" title="waku.one"><i class="mark" aria-hidden="true"></i><span
-      class="r-name">WAKU</span></a>
-    <button id="nav-collapse" class="r-chev" aria-label="Collapse the sidebar" aria-expanded="true">&#8249;</button></div>
+      class="r-name">WAKU</span></a></div>
   <div class="r-grp">System</div>
-  <a href="#overview" data-v="overview" data-short="O" aria-label="Overview"><span class="lbl">Overview</span></a>
-  <a href="#model" data-v="model" data-short="L" aria-label="LLM"><span class="lbl">LLM</span></a>
-  <a href="#gateway" data-v="gateway" data-short="G" aria-label="Gateway"><span class="lbl">Gateway</span><span class="n" id="n-gw"></span></a>
-  <a href="#loop" data-v="loop" data-short="L" aria-label="Loop"><span class="lbl">Loop</span><span class="n" id="n-loop"></span></a>
-  <a href="#graph" data-v="graph" data-short="G" aria-label="Graph"><span class="lbl">Graph</span><span class="n" id="n-graph"></span></a>
-  <a href="#memory" data-v="memory" data-short="M" aria-label="Memory"><span class="lbl">Memory</span><span class="n" id="n-mem"></span></a>
-  <a href="#tools" data-v="tools" data-short="T" aria-label="Tools"><span class="lbl">Tools</span><span class="n" id="n-tools"></span></a>
-  <a href="#observability" data-v="observability" data-short="O" aria-label="Observability"><span class="lbl">Observability</span><span class="n" id="n-obs"></span></a>
-  <a href="#evals" data-v="evals" data-short="E" aria-label="Evals"><span class="lbl">Evals</span></a>
+  <a href="#overview" data-v="overview" aria-label="Overview"><span class="lbl">Overview</span></a>
+  <a href="#model" data-v="model" aria-label="LLM"><span class="lbl">LLM</span></a>
+  <a href="#gateway" data-v="gateway" aria-label="Gateway"><span class="lbl">Gateway</span><span class="n" id="n-gw"></span></a>
+  <a href="#loop" data-v="loop" aria-label="Loop"><span class="lbl">Loop</span><span class="n" id="n-loop"></span></a>
+  <a href="#graph" data-v="graph" aria-label="Graph"><span class="lbl">Graph</span><span class="n" id="n-graph"></span></a>
+  <a href="#memory" data-v="memory" aria-label="Memory"><span class="lbl">Memory</span><span class="n" id="n-mem"></span></a>
+  <a href="#tools" data-v="tools" aria-label="Tools"><span class="lbl">Tools</span><span class="n" id="n-tools"></span></a>
+  <a href="#observability" data-v="observability" aria-label="Observability"><span class="lbl">Observability</span><span class="n" id="n-obs"></span></a>
+  <a href="#evals" data-v="evals" aria-label="Evals"><span class="lbl">Evals</span></a>
   <!-- Arena gets its own section. It was one row under System with the two
        races behind sub-tabs, on the reasoning that "Models" must not appear
        twice in the nav. It appears twice now, on purpose, because the two
@@ -33,23 +32,26 @@
        a whole half of the page behind a sub-tab cost more than the repetition
        ever did. -->
   <div class="r-grp">Arena</div>
-  <a href="#compare/models" data-v="compare" data-sub="models" data-short="M" aria-label="Model race"><span class="lbl">Model race</span></a>
-  <a href="#compare/memory" data-v="compare" data-sub="memory" data-short="M" aria-label="Memory race"><span class="lbl">Memory race</span></a>
-  <a href="#judgment" data-v="judgment" data-short="J" aria-label="Judgment race"><span class="lbl">Judgment race</span></a>
+  <a href="#compare/models" data-v="compare" data-sub="models" aria-label="Model race"><span class="lbl">Model race</span></a>
+  <a href="#compare/memory" data-v="compare" data-sub="memory" aria-label="Memory race"><span class="lbl">Memory race</span></a>
+  <a href="#judgment" data-v="judgment" aria-label="Judgment race"><span class="lbl">Judgment race</span></a>
   <div class="r-grp">Setup</div>
-  <a href="#models" data-v="models" data-short="M" aria-label="Models"><span class="lbl">Models</span></a>
-  <a href="#connections" data-v="connections" data-short="C" aria-label="Connections"><span class="lbl">Connections</span></a>
-  <a href="#settings" data-v="settings" data-short="B" aria-label="Behaviour"><span class="lbl">Behaviour</span></a>
-  <a href="#sql" data-v="sql" data-short="S" aria-label="SQL console"><span class="lbl">SQL console</span></a>
+  <a href="#models" data-v="models" aria-label="Models"><span class="lbl">Models</span></a>
+  <a href="#connections" data-v="connections" aria-label="Connections"><span class="lbl">Connections</span></a>
+  <a href="#settings" data-v="settings" aria-label="Behaviour"><span class="lbl">Behaviour</span></a>
+  <a href="#sql" data-v="sql" aria-label="SQL console"><span class="lbl">SQL console</span></a>
   <div class="r-bottom">
     <a class="r-gh" href="https://github.com/ShenSeanChen/waku-agent" target="_blank" rel="noopener noreferrer">GitHub</a>
     <a class="r-gh r-one" href="https://waku.one" target="_blank" rel="noopener noreferrer">waku.one</a>
     <button id="theme-toggle" onclick="cycleTheme()"></button>
   </div>
 </nav>
+<div id="nav-scrim" class="nav-scrim"></div>
 <main>
   <header class="pagehead">
-    <div class="ph-row"><h1 id="title">Overview</h1><div id="ph-actions" class="ph-actions"></div></div>
+    <div class="ph-row"><button id="nav-open" type="button" class="btn btn-tertiary nav-open" aria-label="Hide the menu"
+        aria-expanded="true" aria-controls="nav"><svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true"
+        fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M3 5.5h14M3 10h14M3 14.5h14"/></svg></button><h1 id="title">Overview</h1><div id="ph-actions" class="ph-actions"></div></div>
     <div class="sub" id="sub"></div>
   </header>
   <div id="view"></div>

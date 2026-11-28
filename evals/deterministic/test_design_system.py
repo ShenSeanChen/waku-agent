@@ -256,14 +256,29 @@ def test_theme_toggle_is_wired():
     assert re.search(r"^function cycleTheme\(", _js().get("theme.js", ""), re.MULTILINE)
 
 
-def test_rail_links_carry_their_letter():
-    """Collapsed, the rail shows each item's first letter (from data-short);
-    the full name stays in aria-label for a screen reader and the tooltip."""
-    links = re.findall(r'(<a href="#[^"]*"[^>]*data-v="[^"]*"[^>]*>)<span class="lbl">([^<]+)</span>', _index())
+def test_one_menu_button_shows_or_hides_the_rail():
+    """One button, left of the page title, shows or hides the rail (spec 048):
+    beside the page or gone in a wide window, a drawer over the page below
+    768px. The rail used to fold to a column of first letters, and sixteen
+    pages share nine letters. Every link keeps its full name for a screen
+    reader."""
+    html, css, js = _index(), _style(), _js()["main.js"]
+    links = re.findall(r'(<a href="#[^"]*"[^>]*data-v="[^"]*"[^>]*>)<span class="lbl">([^<]+)</span>', html)
     assert len(links) == 16, f"expected 16 rail links with a .lbl label, found {len(links)}"
     for tag, label in links:
-        assert f'data-short="{label[0]}"' in tag, f"{label}: data-short must be its first letter"
         assert f'aria-label="{label}"' in tag, f"{label}: aria-label must be its full name"
+    assert "data-short" not in html + css + js, "the hidden rail draws no letters"
+    assert "nav-collapse" not in html + css + js, "one control: the rail has no chevron of its own"
+    opener = re.search(r'<button id="nav-open"[^>]*>', html)
+    assert opener, "the page header needs the menu button"
+    assert 'aria-controls="nav"' in opener.group(0) and "aria-expanded" in opener.group(0)
+    assert html.index('id="nav-open"') < html.index('id="title"'), "the menu button leads the page header"
+    rules = dict(_blocks(css))
+    assert "display:none" in rules[".rail.collapsed"].replace(" ", "")
+    assert "position:fixed" in rules[".rail.open"].replace(" ", ""), "below 768px the shown rail is a drawer"
+    assert "display:none" in rules[".rail:not(.open)"].replace(" ", ""), "below 768px the rail starts hidden"
+    assert '"Escape"' in js and "nav-scrim" in js, "Escape and a click on the scrim close the drawer"
+    assert '"Hide the menu"' in js and '"Show the menu"' in js, "the button names what a click will do"
 
 
 def test_rail_resize_and_model_line_are_gone():

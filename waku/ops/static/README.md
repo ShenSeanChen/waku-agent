@@ -6,6 +6,9 @@ files to change the UI; edit `dashboard.py` to change the server/API.
 
 - `index.html` — the shell (sidebar nav, `<main>`, chat dock) + the ordered
   `<script>` tags.
+  One menu button in the page header (`#nav-open`) shows or hides the sidebar:
+  beside the page or gone in a wide window, a drawer over the page below 768px
+  (spec 048; `wireChrome` in `main.js`).
 - `embed.html` — the chat column alone, served at `/embed/chat` for waku.one to
   frame (spec 008). It loads `util`, `theme`, `ui`, `blocks`, `render`, `dock` and
   `embed.js`, which stands in for `main.js`.
