@@ -264,7 +264,7 @@ def test_one_menu_button_shows_or_hides_the_rail():
     reader."""
     html, css, js = _index(), _style(), _js()["main.js"]
     links = re.findall(r'(<a href="#[^"]*"[^>]*data-v="[^"]*"[^>]*>)<span class="lbl">([^<]+)</span>', html)
-    assert len(links) == 15, f"expected 15 rail links with a .lbl label, found {len(links)}"
+    assert len(links) == 16, f"expected 16 rail links with a .lbl label, found {len(links)}"
     for tag, label in links:
         assert f'aria-label="{label}"' in tag, f"{label}: aria-label must be its full name"
     assert "data-short" not in html + css + js, "the hidden rail draws no letters"
