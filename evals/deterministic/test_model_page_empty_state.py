@@ -13,8 +13,8 @@ import re
 from pathlib import Path
 
 STATIC = Path(__file__).resolve().parents[2] / "waku" / "ops" / "static"
-JS = (STATIC / "js" / "model.js").read_text()
-CSS = (STATIC / "style.css").read_text()
+JS = (STATIC / "js" / "model.js").read_text(encoding="utf-8")
+CSS = (STATIC / "style.css").read_text(encoding="utf-8")
 
 
 def _empty_state() -> str:
