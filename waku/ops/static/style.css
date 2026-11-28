@@ -1176,6 +1176,9 @@ main h3{font-family:var(--face-mono);font-size:var(--text-xs);color:var(--text-f
    Three tabs: the file, press Enter, where it lives. Everything is prefixed
    mw- so it cannot meet another view's class. The amber accent marks the one
    thing to look at: the selected table, the lit station, the chosen piece. */
+/* With no local model the page is the notice alone: no tabs, picker or empty panes. */
+.mw.mw-empty .mw-top,.mw.mw-empty .mw-pane{display:none}
+.mw-none-step{display:flex;flex-wrap:wrap;align-items:center;gap:var(--space-2);margin-top:var(--space-2)}
 .mw-top{display:flex;align-items:flex-end;gap:var(--space-4);flex-wrap:wrap}
 .mw-top .tabs{flex:1}
 .mw-pick{display:flex;align-items:center;gap:var(--space-2);margin-bottom:var(--space-4)}
