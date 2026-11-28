@@ -132,6 +132,22 @@ VIEWS.model = function(d, sub){
 
 /* Called after the page's markup is in place, and again on every tab change
    (main.js does not rebuild this view on the 5s refresh). */
+// The model this page suggests to someone who has none, and opens first when
+// it is there. Small enough for a 16 GB computer.
+const MW_SUGGESTED = "qwen3.5:9b";
+
+// What a person with no local model sees: the two steps, each one click.
+// The link goes to Ollama's own download page; the button copies the command
+// to paste into a terminal. Nothing is downloaded or run from here.
+function mwNoModelHtml(){
+  const cmd = "ollama pull " + MW_SUGGESTED;
+  return `No local model was found in Ollama's folder (~/.ollama/models). Two steps, then open this page again.
+    <div class="mw-none-step"><span>1. Install Ollama.</span>
+      <a class="link" href="https://ollama.com/download" target="_blank" rel="noopener noreferrer">Download Ollama</a></div>
+    <div class="mw-none-step"><span>2. In a terminal, download a model:</span> <code>${cmd}</code>
+      ${uiButton("Copy", {level: "tertiary", size: "sm", onclick: "copyMsg(this)", title: "Copy the command", attrs: `data-text="${cmd}"`})}</div>`;
+}
+
 function mwMount(){
   if (!mwEl("mw")) return;
   MW_TABS.forEach(([k]) => mwEl("mw-p-" + k).classList.toggle("on", k === mwTab));
@@ -139,12 +155,13 @@ function mwMount(){
   if (!mwRun) mwRun = mwNewRun("");
   if (!mwMachine) mwGet("machine").then(m => { mwMachine = m; mwRenderMem(); }).catch(() => {});
   const start = () => {
+    mwEl("mw").classList.toggle("mw-empty", !mwModels.length);
     if (!mwModels.length){
-      mwEl("mw-none").innerHTML = uiNotice("note", "No local model was found in Ollama's folder (~/.ollama/models). Install Ollama and pull a model, for example <code>ollama pull qwen3:8b</code>, then open this page again.");
+      mwEl("mw-none").innerHTML = uiNotice("note", mwNoModelHtml());
       return;
     }
     mwFillPicker();
-    const pick = mwModels.find(m => m.name === mwWanted) || mwModels.find(m => m.name === "qwen3:8b") || mwModels[0];
+    const pick = mwModels.find(m => m.name === mwWanted) || mwModels.find(m => m.name === MW_SUGGESTED) || mwModels.find(m => m.name === "qwen3:8b") || mwModels[0];
     if (mwModel && mwModel.name === pick.name) mwRedrawAll(); else mwLoadModel(pick.name);
   };
   if (mwModels) { start(); return; }
